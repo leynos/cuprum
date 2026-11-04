@@ -114,8 +114,8 @@ into builders, and `str` is a member of `ArgValue`.
 ### Corrections to earlier records
 
 This ADR corrects two statements in the 2026-09-25 addendum to
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md), which are left in
-place because accepted ADR text is append-only:
+[ADR-007](adr-0007-subprocess-execution-module-boundaries.md), which are left
+in place because accepted ADR text is append-only:
 
 - That addendum lists `_ArgValue` as belonging to `cuprum/sh/argv.py`. The
   alias is now public and named `ArgValue`.

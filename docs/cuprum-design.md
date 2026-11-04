@@ -589,7 +589,7 @@ result is returned unchanged, two present text streams produce a captured copy,
 and an unavailable stream raises `ValueError`. This also prevents an uncaptured
 diagnostic from being silently replaced with `""`. The decision and its
 compatibility limits are recorded in
-[ADR-024](adr-024-captured-command-output-types.md).
+[ADR-024](adrs/adr-0024-captured-command-output-types.md).
 
 `CapturedResult` is constructed only when both settled payloads are decoded
 text. A run that captures one stream and not the other, or whose
@@ -599,7 +599,7 @@ the record's `path` rather than in the payload, and the narrowed class cannot
 say so without inventing an empty string. A default `RunOutputOptions()` run
 captures both streams in full, so it is unaffected; the restriction and its
 consequences are recorded in
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md).
 
 The `RunOutputOptions | None` overload accepts variables that may hold either
 explicit options or `None` and returns `CommandResult`. Its broader return type
@@ -761,7 +761,7 @@ capture. The invariants that follow from that:
 
 `ExecEvent.capture_mode` names which of the two a run used, so telemetry can
 distinguish them; see [execution events](#71-execution-events) below and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
 
 ### 6.2 `cuprum.sh` – Safe Facade
 
@@ -1199,12 +1199,12 @@ ______________________________________________________________________
 
 ## 7. Observability and Logging
 
-[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines an opt-in redaction
-policy at export boundaries. Raw execution observations remain available to
-trusted consumers; configured logging, tracing, argv-derived presentation
-titles, and explicitly wrapped observers receive sanitized projections.
-Execution inputs and captured results remain unchanged, and metric labels
-retain their bounded vocabulary.
+[ADR-023](adrs/adr-0023-opt-in-telemetry-redaction.md) defines an opt-in
+redaction policy at export boundaries. Raw execution observations remain
+available to trusted consumers; configured logging, tracing, argv-derived
+presentation titles, and explicitly wrapped observers receive sanitized
+projections. Execution inputs and captured results remain unchanged, and metric
+labels retain their bounded vocabulary.
 
 Cuprum provides primitives to make command execution observable in a structured
 way.
@@ -1460,7 +1460,7 @@ completed native cleanup and one observation of
 metrics are unlabelled and emitted only on completion. `RustPumpDeclineReason`
 bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
 counters without extending the closed `ExecPhase` contract. See
-[ADR-008](adr-008-rust-pump-observation-channel.md).
+[ADR-008](adrs/adr-0008-rust-pump-observation-channel.md).
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
 observation channel, not an extension of `ExecEvent`. A caller registers the
@@ -1545,8 +1545,8 @@ worker with a byte-bounded queue shared by stdout and stderr. Saturated chunks
 are dropped from presentation and reported; capture remains complete. The
 worker has a bounded shutdown drain and reports output left queued or in flight
 as undelivered if it must be abandoned. See
-[ADR-025](adr-025-bounded-output-delivery.md) for the delivery, ownership, and
-failure contract.
+[ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the delivery,
+ownership, and failure contract.
 
 Command and pipeline configuration keep their destination resolution and
 partial-setup cleanup local to their execution modules because each path owns
@@ -1669,7 +1669,7 @@ that stream's payload is `None`, and the file is the only place its text is
 kept. A single-command text run whose payloads are not both decoded text is
 therefore reported as a `CommandResult` rather than the narrowed
 `CapturedResult`, which promises two strings; see
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md).
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md).
 
 The sink seam is asynchronous, `absorb` and `finalize` included, because
 retention is the child's output and a file-backed capture cannot retain a chunk
@@ -1686,7 +1686,7 @@ write before teardown closes and unlinks the file underneath it. The two
 in-memory policies answer without suspending, which costs a coroutine step per
 chunk and keeps one protocol for the drain rather than a policy test between
 two. The leaf module and the protocol change it serves are recorded in the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-10-18.
 
 A storage failure is absorbed rather than raised: a failure to retain output is
@@ -2057,7 +2057,7 @@ implemented with the following decisions:
   child details, but its `settled(error)` event still records the terminal and
   failure counters with the effective mode. The typed policy and its
   composition rules are specified in
-  [ADR-018](adr-018-typed-environment-policies.md).
+  [ADR-018](adrs/adr-0018-typed-environment-policies.md).
 - **Capture mode:** every event carries `ExecEvent.capture_mode`, naming how the
   execution reports its captures: `CaptureMode.TEXT` for a decoded run and
   `CaptureMode.BYTES` for one started with `run_bytes()` or `run_bytes_sync()`.
@@ -2077,7 +2077,7 @@ implemented with the following decisions:
   identical in every counter and span attribute, leaving a timeout or teardown
   failure unattributable to the mode that hit it. The byte-preserving capture
   path the mode names is the addendum of 2026-10-01 in
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
 - **Timing:** `ExecEvent.timestamp` uses wall-clock time (`time.time()`), while
   `ExecEvent.duration_s` uses a monotonic measurement (`time.perf_counter()`)
   between subprocess spawn and subprocess exit.
@@ -2295,8 +2295,8 @@ preserving the `SafeCmd.run()` execution contract:
   that module stays within the Pylint module ceiling, and
   `_subprocess_execution` re-exports `_spawn_subprocess`, so callers and
   monkeypatch targets resolve the same name as before. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured payloads and settled
@@ -2323,8 +2323,8 @@ preserving the `SafeCmd.run()` execution contract:
   monkeypatch targets resolve the same names as before. This boundary exists to
   keep `_subprocess_execution` within the Pylint module ceiling once the
   idle-heartbeat wiring joined the stream configs; see the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-16.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
   validation and normalization, the `_IdleSchedule` state machine that decides
   when a keepalive is due, the `_IdleMonitor` watchdog task, its start/stop
@@ -2363,8 +2363,8 @@ preserving the `SafeCmd.run()` execution contract:
   termination that lets it reach EOF. It was split out of `_subprocess_wait`,
   which re-exports its names, so the single-command run, the line-stream
   coordinator, and the timeout test modules keep one import path. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
   failure rather than on the child's exit: `_await_exit_or_writer_failure`
   waits on the exit wait and the stdin writer together and returns the exit
@@ -2375,8 +2375,8 @@ preserving the `SafeCmd.run()` execution contract:
   module namespace. It was split out of `_subprocess_wait`, which re-exports
   the name, so the single-command run, the line-stream coordinator, and the
   timeout test modules keep one import path. See the
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
-  2026-09-27.
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-09-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside
@@ -2551,7 +2551,125 @@ public command APIs or creates subprocesses. This separation keeps the timeout
 and stdin lifecycles independently testable without altering observable
 execution, cancellation, timeout, or event semantics. The accepted rationale
 and alternatives are recorded in
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md).
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md).
+
+### 8.1.6 Detached command launch
+
+Every entry point described above owns its child: `run()` and `lines()` wait
+for exit and reconcile the streams, a timeout terminates the child, and an
+`OWN_GROUP` run tears down the group it created. That ownership is the reason
+the managed surface is safe to offer, and it is also why none of it can express
+"start this program and let it outlive me". A caller who drops a
+`RunningCommand` handle does not detach anything — the child was never handed
+over, so it keeps running as an untracked child of the launcher and no receipt
+names it.
+
+`SafeCmd.launch_detached()` and `SafeCmd.launch_detached_sync()` are therefore
+a separate entry point rather than a flag on the existing ones. A detach flag
+would have to answer the capture, echo, timeout, and process-group questions
+differently inside the runner, and every answer would be a managed execution
+default that some other caller depends on. The separate entry point leaves the
+managed surface untouched and makes the ownership change legible at the call
+site, which is the property a reviewer of a consuming codebase most needs.
+
+The launch keeps everything that selects *what* runs: the allowlist check
+against the current scope, the executable binding, the argument vector, the
+environment overlay and its mode, and the working directory are resolved by the
+same helpers a managed run uses. What changes is the lifecycle. The child is
+spawned with `start_new_session=True`, so it leads its own POSIX session and
+process group; its three standard streams are the kernel's null device, so it
+holds no launcher-owned pipe and reads end-of-file on stdin; and the process
+object is a private `Popen` subclass whose finalizer does nothing, so dropping
+it neither warns about the worker nor reclaims it.
+
+For screen readers: The following sequence diagram follows one synchronous
+detached launch from the caller to the worker. `SafeCmd` delegates to
+`_launch_detached`, which runs the allowlist check, the platform guard, the
+executable resolution, and the executable binding in that order, then calls
+`_spawn_detached`. The spawn starts the worker with its standard streams on the
+kernel's null device and a new POSIX session, and hands back a private `Popen`
+object once `exec` succeeds and a PID exists. `_launch_detached` builds the
+`DetachedLaunch` receipt from that object. Once the receipt reaches the caller,
+the worker is the caller's to terminate and reap.
+
+Figure 10: Detached launch sequence, from `launch_detached_sync` through the
+spawn to the caller-owned receipt
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant SafeCmd
+    participant LaunchCore as _launch_detached
+    participant Spawn as _spawn_detached
+    participant Worker
+
+    Caller->>SafeCmd: launch_detached_sync(context)
+    SafeCmd->>LaunchCore: _launch_detached(cmd, context)
+    LaunchCore->>LaunchCore: _enforce_allowlist(cmd)
+    LaunchCore->>LaunchCore: _ownership_spawn_kwargs(OWN_GROUP)
+    LaunchCore->>LaunchCore: _resolve_executable_for(cmd, cwd)
+    LaunchCore->>LaunchCore: _bound_executable(program, path)
+    LaunchCore->>Spawn: _spawn_detached(argv, env, cwd, start_new_session)
+    Spawn->>Worker: Popen with DEVNULL streams and new session
+    Worker-->>Spawn: exec succeeds, pid
+    Spawn-->>LaunchCore: _DetachedPopen
+    LaunchCore->>LaunchCore: DetachedLaunch(pid, program, executable)
+    LaunchCore-->>SafeCmd: DetachedLaunch receipt
+    SafeCmd-->>Caller: ownership transferred
+    Note over Caller,Worker: Caller terminates and reaps the worker
+```
+
+On success the caller receives a `DetachedLaunch` receipt carrying the worker's
+actual PID, program, and resolved executable path. The receipt is a name, not a
+handle: it retains no transports, descriptors, tasks, or event-loop
+registrations, so the launcher can exit, or drop its event loop, without
+affecting the worker. Termination and reaping pass to the caller at that point,
+which is why the launch reports no readiness signal — a worker that fails after
+its first instruction is still a successful launch, and only the worker can say
+otherwise.
+
+The transfer boundary is the one place where cancellation has to be defined.
+The awaitable entry point yields once before returning the receipt, and a
+cancellation landing on that yield abandons the launch: cuprum kills the
+worker's process group and reaps it before re-raising `CancelledError`, so a
+cancelled caller is never left with an untracked child. Before the spawn there
+is nothing to abandon; after the receipt is returned, the worker is the
+caller's. A `Popen` constructor that raises after the fork is the same case
+seen from the child's side: the spawn holds the partially constructed object,
+kills the child it created, and reaps it before the error propagates. A
+platform without POSIX process groups is refused before a child exists, and a
+start-up failure surfaces as the underlying error rather than as a receipt. The
+accepted rationale, the rejected alternatives, and the residual limits — PID
+reuse, the zombie window while the launcher lives, and host-level cleanup after
+a launcher crash — are recorded in
+[ADR-028](adrs/adr-0028-detached-command-launch.md).
+
+For screen readers: The following state diagram shows the outcomes of a
+detached launch. Validation ends either in refusal, before any child exists, or
+in a spawn. A spawn that fails during `exec` ends in the start-up failure
+reported to the caller. A spawn that succeeds enters the transfer-pending
+state: a receipt returned to the caller makes the worker caller-owned, while a
+failure while building the receipt or a cancellation at that boundary abandons
+the worker, which cuprum kills and reaps. Every path ends with no child, a
+reported error, or a worker the caller owns.
+
+Figure 11: Detached launch outcomes, from validation to a caller-owned worker
+or a stopped one
+
+```mermaid
+stateDiagram-v2
+    [*] --> Validating
+    Validating --> Refused: allowlist or POSIX check fails
+    Validating --> Spawning: checks pass
+    Spawning --> StartupFailed: exec or spawn fails
+    Spawning --> TransferPending: worker started
+    TransferPending --> Abandoned: receipt construction or cancellation fails
+    TransferPending --> CallerOwned: DetachedLaunch returned
+    Abandoned --> [*]: kill process group and reap
+    Refused --> [*]: no child created
+    StartupFailed --> [*]: underlying error
+    CallerOwned --> [*]: caller terminates and reaps
+```
 
 ### 8.2 Pipelines and Structured Concurrency
 
@@ -2624,7 +2742,7 @@ ended the run, so closing afterwards would record the aggregate — an `error`
 annotation standing in for a timeout — and a drain that raised would skip the
 close entirely. The module was split out of `cuprum/sh.py` to resolve a
 file-level CodeScene `Low Cohesion` finding; see the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-19.
 
 Error propagation policy (to be finalized, but roughly):
@@ -2647,7 +2765,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 10: Fail-fast termination selection via the `_stages_to_terminate`
+Figure 12: Fail-fast termination selection via the `_stages_to_terminate`
 reducer
 
 ```mermaid
@@ -2846,7 +2964,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 11: Concurrent execution flow with allowlist validation and semaphore
+Figure 13: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -2892,7 +3010,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 12: Fail-fast mode cancellation behaviour
+Figure 14: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -3072,7 +3190,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 13: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 15: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -3335,11 +3453,12 @@ should treat it as a set of behavioural contracts and design constraints rather
 than a rigid class diagram, and should favour boring, explicit implementations
 over cleverness—especially in the type‑system and configuration layers.
 
-[ADR-009](adr-009-enforce-oxford-spelling-in-source.md) governs en-GB-oxendict
-spelling for identifiers and source prose; the repository spelling gate
-enforces that policy. [ADR-011](adr-011-audited-rust-boundaries.md) governs the
-separation between safe stream policy and the audited native resource boundary.
-The inventory and verification status are maintained in
+[ADR-009](adrs/adr-0009-enforce-oxford-spelling-in-source.md) governs
+en-GB-oxendict spelling for identifiers and source prose; the repository
+spelling gate enforces that policy.
+[ADR-011](adrs/adr-0011-audited-rust-boundaries.md) governs the separation
+between safe stream policy and the audited native resource boundary. The
+inventory and verification status are maintained in
 [Rust boundary verification](rust-boundary-verification.md).
 
 ______________________________________________________________________
@@ -3428,12 +3547,15 @@ reader chunks split between `\r` and `\n`; at EOF or before a non-LF byte it
 remains line data. The limiter never sees the capture buffer: complete child
 output remains owned by `_drain()`'s capture path. Text sinks receive complete
 characters through the configured incremental decoder, while sinks exposing
-`.buffer` receive the kept raw bytes and marker bytes. The marker follows the
-configured encoding and error policy, using an ASCII-compatible fallback when
-the preferred ellipsis cannot be represented; `None` leaves the existing
-unbounded echo path unchanged. For a positive bound too small for a complete
-marker or CRLF terminator, it abbreviates the marker or omits the terminator to
-preserve the inclusive bound.
+`.buffer` receive the kept raw bytes and marker bytes. The text-sink prefix
+search is linear in the retained bytes: it records the last safe source and
+encoded lengths and copies each prefix once, and every marker-adjustment pass
+re-runs that linear search under the loop's fixed pass ceiling. The marker
+follows the configured encoding and error policy, using an ASCII-compatible
+fallback when the preferred ellipsis cannot be represented; `None` leaves the
+existing unbounded echo path unchanged. For a positive bound too small for a
+complete marker or CRLF terminator, it abbreviates the marker or omits the
+terminator to preserve the inclusive bound.
 
 At the former 4 KiB setting, a 1 GiB data stream required approximately 262,000
 parent-side read iterations. At the tuned setting, the same stream requires
@@ -3610,7 +3732,7 @@ and re-resolves the timeout in the task that pulls it, so a scope entered after
 `lines()` returns can still refuse the spawn (transitioning straight to
 `Refused`) or shorten its deadline.
 
-Figure 14: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 16: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -3646,7 +3768,7 @@ actually ran under. Only then does `_start_line_stream_run()` spawn the
 subprocess and its consumers. Once streaming, the run ends either by publishing
 the `CommandResult` or by closing through `aclose()` or cancellation.
 
-Figure 15: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+Figure 17: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
 through deferred authorization and spawning to completion or close
 
 ```mermaid
@@ -3668,7 +3790,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 16: Line observation fan-out from decoded output to lifecycle events,
+Figure 18: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3697,7 +3819,7 @@ the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 17: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 19: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -3866,31 +3988,32 @@ and incomplete trailing bytes are handled.
 
 ```mermaid
 flowchart TD
-    A[Start decode_utf8_replace] --> B[Attempt from_utf8 on pending]
-    B -->|Ok| C[Append entire valid string to output]
-    C --> D[Clear pending]
-    D --> E[Stop loop]
+    A[Start decode_utf8_replace] --> B[Set scan offset to zero]
+    B --> C[Attempt from_utf8 on pending from offset]
+    C -->|Ok| D[Append entire valid string to output]
+    D --> E[Clear pending]
+    E --> F[Stop]
 
-    B -->|Err Utf8Error| F[Get valid_up_to and error_len]
-    F --> G[append_valid_prefix using valid_up_to]
+    C -->|Err Utf8Error| G[Get valid_up_to and error_len]
+    G --> H[append_valid_prefix using valid_up_to]
 
-    G --> H{error_len is Some}
-    H -->|Yes| I[Push replacement char U+FFFD to output]
-    I --> J[Drain valid_up_to + error_len bytes from pending]
-    J --> K{pending is empty}
-    K -->|Yes| E
-    K -->|No| B
+    H --> I{error_len is Some}
+    I -->|Yes| J[Push replacement char U+FFFD to output]
+    J --> K[Advance offset by valid_up_to + error_len]
+    K --> L{offset reached end of pending}
+    L -->|Yes| E
+    L -->|No| C
 
-    H -->|No| L[Handle incomplete sequence]
-    L --> M{final_chunk is true}
-    M -->|Yes| N[Push replacement char U+FFFD]
-    N --> O[Clear pending]
-    O --> E
+    I -->|No| M[Note incomplete sequence at offset + valid_up_to]
+    M --> N{final_chunk is true}
+    N -->|Yes| O[Push replacement char U+FFFD]
+    O --> P[Clear pending]
+    P --> F
 
-    M -->|No| P{valid_up_to > 0}
-    P -->|Yes| Q[Drain valid_up_to bytes from pending]
-    Q --> E
-    P -->|No| E
+    N -->|No| Q{tail start is greater than zero}
+    Q -->|Yes| R[Drain the consumed prefix once, keep the tail]
+    R --> F
+    Q -->|No| F
 ```
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
@@ -3930,9 +4053,9 @@ back to PyO3's `ErrorKind` mapping rather than fabricating one.
 
 `Stream` wraps `PumpError` rather than copying its variants into the boundary
 enum. That keeps `cuprum-streams` the single owner of the safe stream policy, as
-[ADR-011](adr-011-audited-rust-boundaries.md) requires, and avoids a parallel
-taxonomy that could drift from the engine's. Module-initialization and PyO3
-argument-extraction failures stay outside the conversion: they are not
+[ADR-011](adrs/adr-0011-audited-rust-boundaries.md) requires, and avoids a
+parallel taxonomy that could drift from the engine's. Module-initialization and
+PyO3 argument-extraction failures stay outside the conversion: they are not
 stream-domain failures, and PyO3 already maps them to the right classes.
 
 ### 13.4 Fallback Strategy
@@ -4392,7 +4515,7 @@ compile-fail doctest for each, on the `mod pump_machine` declaration in
 widened, even to `pub(crate)`. Compile-time contracts are doctests and ordinary
 test code rather than `trybuild` cases, so that none is compiled by a nested
 build inside a timed test
-([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
+([ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md)).
 
 `io_utils::classify_write` is the adapter between the two halves. It collapses
 `WriteOutcome` and the non-fatal error partition into the machine's two-variant
@@ -4419,7 +4542,7 @@ wheels, alongside a source distribution (sdist):
 - Windows: x86_64.
 
 Windows arm64 is deferred to a later 0.2.0 beta; see
-[ADR-016](adr-016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md) and roadmap item 8.5.1.
 
 A pure Python wheel is always published alongside native wheels to ensure
 fallback availability on platforms without native wheel support. Cuprum does
@@ -4446,7 +4569,7 @@ then receives only the names it lacks, and a re-run of the same tag is safe to
 repeat because nothing is ever overwritten. A name the two destinations already
 hold with different bytes fails publication and leaves the release a draft
 until an administrator removes the offending asset. See
-[ADR-017](adr-017-release-pipeline.md) for the full job graph, the
+[ADR-017](adrs/adr-0017-release-pipeline.md) for the full job graph, the
 reconciliation algorithm, and its telemetry.
 
 Contributors building from source require a Rust toolchain (rustc 1.85+, cargo)
@@ -4685,8 +4808,8 @@ the benchmark pytest module by default, while dedicated commands run benchmarks:
 The throughput runner also supports `--dry-run` for deterministic plan JSON
 generation without invoking `hyperfine`, used by behavioural smoke tests.
 
-See ADR-001 (`docs/adr-001-rust-extension.md`) for detailed design decisions
-and alternatives considered.
+See ADR-001 (`docs/adrs/adr-0001-rust-extension.md`) for detailed design
+decisions and alternatives considered.
 
 ### 13.10 Owned running-command handle
 
@@ -4999,7 +5122,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 18: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 20: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -5029,7 +5152,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 19: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 21: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid
@@ -5088,12 +5211,12 @@ never-awaited warning. Neither can interrupt the cleanup the operation is
 performing.
 
 The same reasoning that closed `ExecPhase` to pump routing
-([ADR-008](adr-008-rust-pump-observation-channel.md)) closes it here. The
-channel is separate because `ExecEvent` consumers match their phases
+([ADR-008](adrs/adr-0008-rust-pump-observation-channel.md)) closes it here.
+The channel is separate because `ExecEvent` consumers match their phases
 exhaustively and their hook exceptions propagate, so a new phase would start
 raising inside code that was correct when it was written. A caller who does not
 register a control hook sees no behavioural change at all. The decision itself
-is recorded in [ADR-019](adr-019-control-observation-channel.md).
+is recorded in [ADR-019](adrs/adr-0019-control-observation-channel.md).
 
 The span needs no new channel, and must not get one. A control operation is
 part of its run's story rather than a run of its own, so it is recorded as a
@@ -5105,8 +5228,8 @@ had already exited, or a stop whose reaping outlives the run's own span — so a
 self-owned control span would either outlive the execution it describes and
 report a duration the run never had, or have to be parented across two channels
 to be placed correctly. Those are the same two objections
-[ADR-010](adr-010-rust-pump-hop-span.md) raised for executor-hop spans, and
-they resolve the same way.
+[ADR-010](adrs/adr-0010-rust-pump-hop-span.md) raised for executor-hop spans,
+and they resolve the same way.
 `TracingHook.record_event_on(exec_id, name, attributes)` is the seam;
 `record_control_events(hook)` is the join. Two registrations are needed and
 both are explicit. The projection itself — the bounded attribute set, and the

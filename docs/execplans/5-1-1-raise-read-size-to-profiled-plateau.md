@@ -531,8 +531,8 @@ This task is complete only when:
   must record the interpreter explicitly.
 
 - Observation: the roadmap's edit-site citation is wrong.
-  Evidence: `docs/roadmap.md:236` and `docs/adr-001-rust-extension.md:14` cite
-  `cuprum/_streams.py:14`, which is the close of a module docstring. The
+  Evidence: `docs/roadmap.md:236` and `docs/adrs/adr-0001-rust-extension.md:14`
+  cite `cuprum/_streams.py:14`, which is the close of a module docstring. The
   constant is at `cuprum/_streams_pump.py:23`. Impact: correct both citations
   as part of this work.
 
@@ -882,7 +882,7 @@ This task is complete only when:
   plateau value and amend the roadmap gate to the measured figure with its
   interval; (b) note that ADR-002 scopes its 20% bar to a component graduating
   from prototype to default `auto` dispatch
-  (`docs/adr-002-additional-rust-components.md:277-283`), which a Python
+  (`docs/adrs/adr-0002-additional-rust-components.md:277-283`), which a Python
   constant change is not, making the bar a roadmap choice rather than an ADR
   requirement; (c) stack with step 5.2 and gate the combined change.
   Registering these now removes the temptation to relitigate the threshold
@@ -1057,14 +1057,15 @@ Terms:
   complete by this implementation.
 - `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §1 (Table 3) supplies the
   prior measurement and the 16-64 KiB range.
-- `docs/adr-002-additional-rust-components.md` Proposal 3 (lines 176-191)
+- `docs/adrs/adr-0002-additional-rust-components.md` Proposal 3 (lines 176-191)
   sanctions buffer tuning conditional on profile data. Its acceptance
   thresholds (lines 278-289) supply the 20% and 5% bars, and scope the 20% bar
   to component graduation. Its status is Proposed, not Accepted; the roadmap
   treats it as binding and this plan follows the roadmap.
 - `docs/cuprum-design.md` §13.1 and §13.5 are the design sections of record.
-- `docs/adr-008-rust-pump-observation-channel.md` constrains only by excluding
-  buffer and throughput counters from the public API; this plan adds none.
+- `docs/adrs/adr-0008-rust-pump-observation-channel.md` constrains only by
+  excluding buffer and throughput counters from the public API; this plan adds
+  none.
 
 There is no Terms of Reference document in this repository.
 
@@ -1493,8 +1494,8 @@ Read first: `AGENTS.md` for gates and conventions;
 `docs/documentation-style-guide.md` for Markdown and ADR rules;
 `docs/developers-guide.md` "Canonical stream-drain loop" and "Profiling harness
 overview"; `docs/cuprum-design.md` §13; the profiling baseline;
-`docs/adr-002-additional-rust-components.md` Proposal 3 and its thresholds; and
-`.rules/python-00.md` with `.rules/python-typing.md`.
+`docs/adrs/adr-0002-additional-rust-components.md` Proposal 3 and its
+thresholds; and `.rules/python-00.md` with `.rules/python-typing.md`.
 
 Skills: `execplans` when revising this plan; `python-router` then `hypothesis`
 for the property tests and `python-testing` for the behavioural scenario;

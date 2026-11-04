@@ -29,6 +29,7 @@ SAMPLED_JOBS: typ.Final = (
     ("ci.yml", "lint-test"),
     ("ci.yml", "typecheck-test"),
     ("ci.yml", "extension-tests"),
+    ("ci.yml", "modern-stable"),
     ("ci.yml", "coverage"),
     ("coverage-main.yml", "coverage-upload"),
 )

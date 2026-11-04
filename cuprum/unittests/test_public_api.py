@@ -397,6 +397,11 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         ("SafeCmd.start", "RunningCommand"),
         ("SafeCmd.run_bytes", "BytesCommandResult"),
         ("SafeCmd.run_bytes_sync", "BytesCommandResult"),
+        # The detached entry points name their receipt for the same reason:
+        # a caller annotating a launch site must be able to resolve it at
+        # runtime, not only under a type checker.
+        ("SafeCmd.launch_detached", "DetachedLaunch"),
+        ("SafeCmd.launch_detached_sync", "DetachedLaunch"),
         ("Pipeline.run", "PipelineResult"),
         ("Pipeline.run_sync", "PipelineResult"),
         ("Pipeline.run_bytes", "BytesPipelineResult"),

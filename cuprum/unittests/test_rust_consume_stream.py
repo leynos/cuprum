@@ -58,6 +58,34 @@ _CONSUME_SETTINGS = settings(
     max_examples=50,
 )
 
+#: Malformed and valid vectors pinning each replacement and boundary path.
+#:
+#: The overlong, surrogate, and beyond-maximum scalars are rejected by every
+#: conforming UTF-8 decoder. The truncated rows pin the end-of-input
+#: replacement, and the valid scalars pin that neighbouring malformed rows did
+#: not widen replacement onto well-formed input. The long invalid run keeps a
+#: payload that crosses many read boundaries well below the pipe capacity, so
+#: every case can be written before the consumer starts.
+_MALFORMED_VECTORS: tuple[tuple[str, bytes], ...] = (
+    ("overlong_two_byte", b"\xc0\x80"),
+    ("overlong_three_byte", b"\xe0\x80\x80"),
+    ("surrogate", b"\xed\xa0\x80"),
+    ("above_max_scalar", b"\xf4\x90\x80\x80"),
+    ("lone_continuation", b"\x80\x80\x80"),
+    ("invalid_run", b"\xff" * 4096),
+    ("alternating_ascii_invalid", b"a\xff" * 512),
+    ("truncated_two_byte_eof", b"ok\xe2"),
+    ("truncated_three_byte_eof", b"ok\xe2\x82"),
+    ("truncated_four_byte_eof", b"ok\xf0\x9f\x98"),
+    ("valid_two_byte", b"na\xc3\xafve"),
+    ("valid_three_byte", b"snow \xe2\x98\x83"),
+    ("valid_four_byte", b"grin \xf0\x9f\x98\x80"),
+)
+
+#: Buffer sizes spanning single-byte reads, multibyte straddles, and buffers
+#: larger than the payload.
+_MALFORMED_BUFFER_SIZES: tuple[int, ...] = (1, 2, 3, 4, 5, 7, 4096, 65536)
+
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
     reason="raw Windows handles cannot establish the synchronous native-I/O capability",
@@ -160,6 +188,51 @@ class TestRustConsumeStream:
         assert output == expected, (
             f"expected decoded output to match Python replace semantics ({test_id})"
         )
+
+    @pytest.mark.parametrize(
+        ("vector_id", "payload"),
+        _MALFORMED_VECTORS,
+        ids=[vector_id for vector_id, _ in _MALFORMED_VECTORS],
+    )
+    @pytest.mark.parametrize("buffer_size", _MALFORMED_BUFFER_SIZES)
+    def test_malformed_vectors_match_python_replace(
+        self,
+        rust_streams: ModuleType,
+        vector_id: str,
+        payload: bytes,
+        buffer_size: int,
+    ) -> None:
+        """Cross malformed vectors with read boundaries against Python.
+
+        Parameters
+        ----------
+        rust_streams : ModuleType
+            The Rust streams module fixture.
+        vector_id : str
+            Test case identifier for parameterization.
+        payload : bytes
+            The vector to consume.
+        buffer_size : int
+            Buffer size passed to the extension. Small sizes force multibyte
+            sequences and replacements to straddle read boundaries.
+
+        Notes
+        -----
+        Each case runs twice. The decoder holds no state between calls, so a
+        repeat run cheaply rules out output that depends on allocation reuse or
+        on the order in which earlier calls ran.
+        """
+        expected = payload.decode("utf-8", errors="replace")
+        for attempt in (1, 2):
+            output = self._consume(
+                rust_streams,
+                payload,
+                buffer_size=buffer_size,
+            )
+            assert output == expected, (
+                f"{vector_id} with buffer_size={buffer_size} (attempt {attempt}) "
+                "must match Python's UTF-8 replace semantics"
+            )
 
     @_CONSUME_SETTINGS
     @given(payload=_DECODE_PAYLOADS, buffer_size=_DECODE_BUFFER_SIZES)

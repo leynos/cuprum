@@ -6,7 +6,7 @@ Accepted on 2026-06-10 and amended on 2026-09-05. Cuprum adds `interrogate` as
 a third Python lint tier that enforces complete docstring coverage across the
 Python estate: the `cuprum` package, `tests`, `benchmarks`, `scripts`, and the
 root `conftest.py`. This extends the two-tier policy recorded in
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md).
+[ADR-003: Two-tier Python linting](adr-0003-two-tier-python-linting.md).
 
 ## Date
 

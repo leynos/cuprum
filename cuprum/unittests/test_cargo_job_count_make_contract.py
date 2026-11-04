@@ -17,7 +17,18 @@ import pytest
 
 from tests.helpers.docs import repo_root
 
-_RECIPE_TARGETS = ("test-rust", "test-python", "lint-clippy", "lint-whitaker")
+_RECIPE_TARGETS = (
+    "test-rust",
+    "test-python",
+    "lint-clippy",
+    "lint-whitaker",
+    "modern-stable-cargo-check",
+    "modern-stable-clippy",
+    "modern-stable-test",
+    "modern-stable-doc",
+    "modern-stable-doctest",
+    "modern-stable-develop",
+)
 
 
 def _make(*arguments: str, caller_jobs: str | None = None) -> str:

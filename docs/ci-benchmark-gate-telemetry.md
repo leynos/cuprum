@@ -255,9 +255,9 @@ artefact.
 
 ## Related records
 
-- [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
+- [ADR-014: Durable benchmark-gate telemetry](adrs/adr-0014-benchmark-gate-telemetry-sink.md)
   records the superseding storage decision and consequences.
-- [ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+- [ADR-017: Attested, reconciled release pipeline](adrs/adr-0017-release-pipeline.md)
   reuses this same fail-open, bounded-label JSONL pattern for release
   publication telemetry.
 - [GitHub's artefact storage guidance][github-artefacts] defines the hosted

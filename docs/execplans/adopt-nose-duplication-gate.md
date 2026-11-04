@@ -127,7 +127,7 @@ repository rather than re-derived here.
       opened draft pull request
       [#510](https://github.com/leynos/cuprum/pull/510). Not merged.
 - [x] (2026-10-02) Rebasing onto `main` found that number taken by
-      [ADR-018: Typed environment policies](../../docs/adr-018-typed-environment-policies.md),
+      [ADR-018: Typed environment policies](../../docs/adrs/adr-0018-typed-environment-policies.md),
       so this branch's record was renumbered to ADR-019 across
       `docs/contents.md`, the developer guide and the ADR-003 addendum.
 - [x] (2026-10-14) A later replay onto `main` found ADR-019 and ADR-020 both
@@ -138,7 +138,7 @@ repository rather than re-derived here.
 - [x] (2026-10-14) The rebuild onto `main` at `8c78a5b77` reached the same
       collision a third time: `main` had claimed ADR-021 for its own
       process-group record. The duplication record moved to
-      [ADR-022](../../docs/adr-022-adopt-nose-duplication-gate.md), and the
+      [ADR-022](../../docs/adrs/adr-0022-adopt-nose-duplication-gate.md), and the
       same four files were renumbered again. The ADR numbers of *other*
       records are unaffected; only this branch's moving record changed.
 - [x] (2026-10-02) Widened two allow entries and added a third after the
@@ -508,12 +508,12 @@ the polarity of the remaining condition is part of the extraction.
   reference's number is not reused.
 - **ADR identifier amended at rebase (2026-10-02).** The premise above was
   true when written, but `main` then landed
-  [ADR-018: Typed environment policies](../../docs/adr-018-typed-environment-policies.md)
+  [ADR-018: Typed environment policies](../../docs/adrs/adr-0018-typed-environment-policies.md)
   independently, so two records claimed 018. `main`'s is merged and older, so
   it keeps the number and this branch's record was renumbered to
-  [ADR-022](../../docs/adr-022-adopt-nose-duplication-gate.md). The reasoning
-  above is retained as the record of what was decided at the time; only the
-  number changed.
+  [ADR-022](../../docs/adrs/adr-0022-adopt-nose-duplication-gate.md). The
+  reasoning above is retained as the record of what was decided at the time;
+  only the number changed.
 - **Detector scope.** `roots = ["cuprum"]` with an exclusion for the package's
   own unit tests, following Cuprum's existing production-Python idiom
   (`SKYLOS_PRODUCTION_TARGETS ?= cuprum`,

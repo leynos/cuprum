@@ -223,9 +223,10 @@ The practical consequence is that adding prose to a document near the per-file
 ceiling can withdraw liveness credit from symbols that document has named for a
 long time. `docs/developers-guide.md` is not near that ceiling but past it — it
 crossed on 2026-09-21 — so the coverage timeout material this branch needed to
-record lives in [Coverage timeout tiers](coverage-timeout-tiers.md) instead: a
-guide that is skipped documents nothing, and the content is a CI-configuration
-topic that sits naturally beside [CI cache ownership](ci-cache-ownership.md).
+record lives in [Coverage timeout tiers](../coverage-timeout-tiers.md) instead:
+a guide that is skipped documents nothing, and the content is a
+CI-configuration topic that sits naturally beside
+[CI cache ownership](../ci-cache-ownership.md).
 
 A `SKY-U001` reported after a docs-only change is therefore a question about
 the symbol, not a finding to silence. Check which of three cases applies.
@@ -265,7 +266,7 @@ above now describe the direct PyPy invocation: the remaining toolchain pin is
 `PYLINT_VERSION` itself, maintained like any other pinned lint tool.
 
 [ADR-004: Interrogate docstring-coverage gate]:
-  adr-004-interrogate-docstring-gate.md
+  adr-0004-interrogate-docstring-gate.md
 
 ## Addendum (2026-09-26): a verified PyPy runtime for the classic pass
 
@@ -349,4 +350,4 @@ ADR-022 remains the decision record for the duplication gate's scope,
 provisioning, and exception policy.
 
 [ADR-022: Adopt a nose code-duplication gate]:
-  adr-022-adopt-nose-duplication-gate.md
+  adr-0022-adopt-nose-duplication-gate.md

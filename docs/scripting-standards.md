@@ -852,7 +852,7 @@ preinstalled `python3` rather than `uv run`. `publish-pypi` in
 credential and must resolve no third-party package, from PyPI or elsewhere,
 while that credential is live; every network call these scripts might otherwise
 make instead stays in the workflow's own `curl` and `gh` steps. See
-[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+[ADR-017: Attested, reconciled release pipeline](adrs/adr-0017-release-pipeline.md)
 for the full rationale. This exception is confined to those seven modules; no
 other script in the repository departs from the Cyclopts, Cuprum, and Python
 defaults above without documenting the integration constraint inline, as the

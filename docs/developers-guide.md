@@ -6,23 +6,23 @@ of truth for day-to-day contributor expectations. For the system design, see the
 [design document](cuprum-design.md); for where code lives, see the
 [repository layout](repository-layout.md). Accepted architectural decisions are:
 
-- [ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
-- [ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md)
-- [ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md)
-- [ADR-005: Unify Rust availability probe](adr-005-unified-rust-availability-probe.md)
-- [ADR-006: Split cuprum/context.py into a context package](adr-006-context-package-split.md)
-- [ADR-007: Subprocess execution module boundaries](adr-007-subprocess-execution-module-boundaries.md)
-- [ADR-009: Enforce Oxford spelling in source](adr-009-enforce-oxford-spelling-in-source.md)
-- [ADR-010: Rust-pump executor-hop spans](adr-010-rust-pump-hop-span.md)
-- [ADR-011: Audited Rust safety boundaries](adr-011-audited-rust-boundaries.md)
-- [ADR-013: Opt-in GitHub Actions presentation sink](adr-013-opt-in-github-actions-presentation-sink.md)
-- [ADR-014: Durable benchmark-gate telemetry](adr-014-benchmark-gate-telemetry-sink.md)
-- [ADR-015: Actions-runner integration harness](adr-015-actions-runner-integration-harness.md)
-- [ADR-016: Stable-ABI native wheels](adr-016-stable-abi-native-wheels.md)
-- [ADR-022: Adopt a nose code-duplication gate](adr-022-adopt-nose-duplication-gate.md)
-- [ADR-023: Opt-in telemetry redaction](adr-023-opt-in-telemetry-redaction.md)
-- [ADR-024: Type captured command output](adr-024-captured-command-output-types.md)
-- [ADR-026: Narrow captured results only for complete text](adr-026-narrowed-results-only-for-complete-text-capture.md)
+- [ADR-002: Additional Rust components](adrs/adr-0002-additional-rust-components.md)
+- [ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md)
+- [ADR-004: Interrogate docstring-coverage gate](adrs/adr-0004-interrogate-docstring-gate.md)
+- [ADR-005: Unify Rust availability probe](adrs/adr-0005-unified-rust-availability-probe.md)
+- [ADR-006: Split cuprum/context.py into a context package](adrs/adr-0006-context-package-split.md)
+- [ADR-007: Subprocess execution module boundaries](adrs/adr-0007-subprocess-execution-module-boundaries.md)
+- [ADR-009: Enforce Oxford spelling in source](adrs/adr-0009-enforce-oxford-spelling-in-source.md)
+- [ADR-010: Rust-pump executor-hop spans](adrs/adr-0010-rust-pump-hop-span.md)
+- [ADR-011: Audited Rust safety boundaries](adrs/adr-0011-audited-rust-boundaries.md)
+- [ADR-013: Opt-in GitHub Actions presentation sink](adrs/adr-0013-opt-in-github-actions-presentation-sink.md)
+- [ADR-014: Durable benchmark-gate telemetry](adrs/adr-0014-benchmark-gate-telemetry-sink.md)
+- [ADR-015: Actions-runner integration harness](adrs/adr-0015-actions-runner-integration-harness.md)
+- [ADR-016: Stable-ABI native wheels](adrs/adr-0016-stable-abi-native-wheels.md)
+- [ADR-022: Adopt a nose code-duplication gate](adrs/adr-0022-adopt-nose-duplication-gate.md)
+- [ADR-023: Opt-in telemetry redaction](adrs/adr-0023-opt-in-telemetry-redaction.md)
+- [ADR-024: Type captured command output](adrs/adr-0024-captured-command-output-types.md)
+- [ADR-026: Narrow captured results only for complete text](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md)
 
 The
 [Rust boundary verification and unsafe inventory](rust-boundary-verification.md)
@@ -43,8 +43,8 @@ streams are both `str`. The capture records are passed to both constructions.
 is constructed. A missing stream on this path logs the operation, text mode,
 stream, program, and execution ID without rendering command output, then raises
 the existing execution-invariant error.
-[ADR-026](adr-026-narrowed-results-only-for-complete-text-capture.md) records
-why the narrowed class is restricted this way.
+[ADR-026](adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md)
+records why the narrowed class is restricted this way.
 
 `SafeCmd.run` and `run_sync` mirror that runtime boundary in their overloads:
 omitted `output` and `output=None` return `CapturedResult`; an explicit
@@ -922,7 +922,7 @@ The coverage lanes also carry four nested timeout tiers, and the whole suite
 runs under the outermost of them.
 [Coverage timeout tiers](coverage-timeout-tiers.md) records each tier, the
 value it holds, and why no Rust test is bounded by a nested build
-([ADR-027](adr-027-compile-contracts-in-the-build-graph.md)).
+([ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md)).
 
 ### Concurrency
 
@@ -1123,8 +1123,8 @@ bound test for every plain stanza lives there too, and
 
 ## Linux debug-build acceleration
 
-[ADR-012](adr-012-linux-dev-fast-routing.md) records the routing boundary and
-its compatibility rationale.
+[ADR-012](adrs/adr-0012-linux-dev-fast-routing.md) records the routing boundary
+and its compatibility rationale.
 
 Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
 verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
@@ -1221,6 +1221,78 @@ single invocation rather than editing the committed profile. Pass
 `--config 'profile.dev.debug=2'` to Cargo, optionally with
 `--config 'profile.dev.incremental=true'`, or set `CARGO_PROFILE_DEV_DEBUG=2`
 in the environment.
+
+## Modern-stable Rust validation
+
+Modern-stable validation is pinned to Rust/Cargo `1.99.1`. The Makefile owns
+this selection independently of `rust/rust-toolchain.toml`, which continues to
+pin Rust `1.85.0`. CI installs the modern toolchain with the minimal profile
+and Clippy without changing the default toolchain. A modern-stable pass does
+not prove the MSRV, and `--locked` does not change that.
+
+`make modern-stable-check` verifies the pin, then runs workspace check, Clippy,
+tests, documentation, and doctests in that order.
+`make modern-stable-extension` verifies the pin, rebuilds the PyO3 extension
+through Maturin, and runs the existing extension-gated suite.
+`make modern-stable` runs those two aggregates sequentially. Cargo work uses
+the dedicated `rust/target/modern-stable` directory and `--locked`; the route
+retains `-C codegen-units=1` as its only Rust compiler flag. Each command
+starts from an environment with `RUSTC`, `CARGO_ENCODED_RUSTFLAGS`,
+`CARGO_ENCODED_RUSTDOCFLAGS`, and `CARGO_BUILD_WARNINGS` removed, so ambient
+caller settings cannot replace the route's compiler, rustdoc flags, or warning
+policy. The toolchain guard selects Cargo through `RUSTUP_TOOLCHAIN` alone,
+which is the same mechanism the recipes use.
+
+The check, Clippy, test, and Maturin routes use `CARGO_BUILD_WARNINGS=deny` on
+Cargo 1.97 or later. Cargo applies that setting to warnings from local
+packages; the rustdoc probe also found that it makes a warn-level Rustdoc lint
+on a local package fatal. This observation does not broaden the migration:
+modern documentation and doctest commands keep `RUSTDOC_FLAGS`, including
+`-D warnings`, which denies rustdoc lints on both runs, and omit Cargo's
+warning variable. The nightly doctest route retains its separate nightly-only
+flags. Existing dev-fast, MSRV, Whitaker, release, coverage, verification, and
+wheel routes keep their current toolchain and warning policy. The Linux
+dev-fast warning policy is unchanged.
+
+The observed negative controls and the route inventory live in
+[`modern-stable-validation.md`](modern-stable-validation.md). A toolchain bump
+must update the Makefile pin, the `modern-stable` CI job, this guide, and the
+toolchain-pin contract. Also update each hard-coded pin in:
+
+- `tests/helpers/ci_runners.py`, which lists the expected cache family.
+- `tests/test_ci_modern_stable_contract.py`.
+- `tests/helpers/cargo_warning_fixture.py`, which owns the fixture pin.
+- `cuprum/unittests/test_modern_stable_make_contract.py`.
+- `docs/ci-cache-ownership.md`, which records the writer table.
+- `docs/modern-stable-validation.md`, which records the pin and its evidence.
+- `docs/adr-012-linux-dev-fast-routing.md`, which names the pin.
+- `AGENTS.md`, which names the pin in the `make modern-stable` guidance.
+
+The shared cache-key renderer reads `compiler-version` from the CI job; it does
+not hold the toolchain pin, so a pin-only change does not require editing the
+renderer. Change it only if the cache-key shape changes. The Cargo registry key
+remains unchanged. The evidence document must record the new compiler and Cargo
+versions and rerun the warning, cache-freshness, extension, and lockfile
+controls. This Linux route is POSIX-oriented; it does not add Windows or macOS
+runtime evidence.
+
+The warning fixture's availability query takes its toolchain, its probe, and
+its executable locator as parameters; it never reads a selection from `PATH` or
+the ambient environment itself. It probes Cargo through an injected
+`RUSTUP_TOOLCHAIN` entry rather than a `+toolchain` argument, because the `+`
+form is a rustup proxy feature that a direct Cargo binary ignores. Unit tests
+inject a probe and a locator, so they can settle a complete toolchain, a
+mismatched compiler, a missing Clippy, a non-zero probe, a timed-out probe, and
+an unstartable probe without that toolchain being installed. The query answers
+in two kinds of result: a missing executable or a failed query is an
+unavailable toolchain, while a probe fault raises `ToolchainProbeError`, or
+`ToolchainProbeTimeoutError` for one that outlived its bound, so a scheduling
+failure cannot masquerade as absence. `require_toolchain()` holds the skipping
+policy: a missing toolchain and a timed-out probe both skip locally and fail
+under `CUPRUM_REQUIRE_MODERN_STABLE=1`, because a loaded host must not fail a
+local run while CI still reports the toolchain it could not use. A probe that
+cannot be started propagates instead, because a located executable that will
+not run is a broken environment rather than a missing toolchain.
 
 ## Tar and rsync builder helpers
 
@@ -1713,7 +1785,7 @@ and capture, argv titles can disclose secrets to job-log readers.
 When `RunOutputOptions.sink` is set, both runners owe the sink's session a
 close on every terminal path. The shared mechanics live in
 `cuprum/_sink_lifecycle.py`; the contract (see
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md)):
+[ADR-013](adrs/adr-0013-opt-in-github-actions-presentation-sink.md)):
 
 - `_SinkBracket.open` opens the session *before* any subprocess starts — from
   `_command_session_start` for a single command and from
@@ -2124,6 +2196,105 @@ a member of its own group. Without that, a signal sent down the wrong route
 presents as a hang rather than as a failed assertion, and the diagnostic is
 lost.
 
+## Detached command launch internals
+
+`SafeCmd.launch_detached()` and `launch_detached_sync()` transfer a child's
+lifetime to the caller. The feature is two modules, split by what they own:
+
+| Module                       | Responsibility                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_detached_launch.py` | The `DetachedLaunch` receipt, the launch core, the ownership boundary, and the two `SafeCmd` entry points contributed as `_DetachedLaunchEntryPoints`.        |
+| `cuprum/_detached_spawn.py`  | `_DetachedPopen` and `_spawn_detached`: the one place a detached child is created, and the one place `subprocess.Popen`'s finalizer is replaced with a no-op. |
+
+*Table 1: Modules that implement detached command launch.*
+
+Both entry points are thin spellings of `_launch_detached`, which is a plain
+synchronous function: it enforces the allowlist, reads the platform gate through
+`_ownership_spawn_kwargs(ProcessGroupPolicy.OWN_GROUP)`, resolves the
+executable with `_resolve_executable_for` and `_bound_executable`, spawns, and
+builds the receipt. The platform keyword is read rather than assumed so the
+spawn cannot request session isolation the gate would refuse, and
+`_bound_executable` is the same fallback rule the managed spawn reaches through
+`_StageObservation.argv0`, so the two paths cannot disagree about what runs.
+
+### The transfer boundary
+
+Ownership changes hands when the receipt is returned, so everything between the
+spawn returning and the receipt reaching the caller belongs to the launch.
+`_launch_detached` wraps the receipt construction in `except BaseException` and
+calls `_abandon_detached`, which kills the worker's group and reaps it. A
+signal or injected failure at that point therefore ends a child nobody can name
+yet, rather than leaving it running.
+
+The window inside the spawn is covered by `_spawn_detached` itself. It builds
+the process object in two steps, so a `Popen` constructor that raises after the
+fork still leaves a reference to reclaim; `_reclaim_partial_spawn` confirms the
+child is this process's unreaped child, signals its group or the child itself
+depending on whether `setsid` has run, and reaps it before the exception
+propagates.
+
+The asynchronous spelling adds one suspension point after the transfer:
+`await asyncio.sleep(0)`. A cancellation requested while the launch was running
+cannot be delivered until the coroutine yields, and CPython cancels the task
+even if the coroutine would otherwise return normally. Yielding immediately
+after the transfer gives that cancellation a place to land while cuprum still
+holds the PID; if it lands there, the same `_abandon_detached` stops the worker
+and the cancellation is re-raised. Without that yield the caller would be
+reported as cancelled while the worker it never received kept running.
+
+The synchronous entry point has no suspension point and therefore calls the
+core directly. Neither spelling checks `asyncio.get_running_loop()`, so the
+sync spelling is safe inside a running loop and no event loop has to exist for
+either.
+
+### Why the process object is a private `Popen`
+
+`_DetachedPopen` overrides exactly one method: `__del__`, which does nothing.
+`Popen.__del__` assumes the object still owns its child: it reports a
+still-running child as a `ResourceWarning`, polls the child and reaps it if it
+has already exited, and appends the object to `subprocess._active`, where a
+later `Popen` construction polls it again. Each is a terminal act of ownership,
+and by the time the object is dropped the launch has given that ownership away.
+Spawning, the error-pipe report that turns a failed `exec` into an exception,
+and the closing of parent-side descriptors remain `Popen`'s, so a missing or
+unexecutable file fails a detached launch exactly as it fails a managed spawn.
+
+`_spawn_detached` pins all three streams to `subprocess.DEVNULL`,
+`close_fds=True`, and `shell=False`. The last is not configurable: the argv is
+already a validated command, and no detached spelling accepts a command string.
+
+### Verification
+
+The resolution rules are proved with the spawn recorded rather than a real
+child: `cuprum/unittests/test_detached_launch.py` compares the recorded `argv`,
+environment, working directory, and accessor results with what a managed run
+would resolve, including the shared `_bound_executable` fallback. The ownership
+boundary is proved in `cuprum/unittests/test_detached_launch_lifecycle.py`,
+which drives the spawn double into cancelling its own task and asserts that the
+worker was abandoned, drives a real worker through the same boundary and
+asserts that it was killed and reaped, and interrupts the `Popen` constructor
+after the fork to assert that the child it created is reclaimed. That module
+also drops the process object and asserts that no `ResourceWarning` is raised
+and the worker keeps running.
+
+Survival of the launcher cannot be observed from inside the launcher, so
+`tests/helpers/detached_process.py` runs a launcher in a separate interpreter
+and `tests/behaviour/test_detached_launch_harness.py` reads back what the
+worker wrote. The worker reports through a JSON file because a detached launch
+gives it no stream to report on, and then keeps publishing a heartbeat file so
+a case can prove that it is still making progress. Each case enters
+`_launched`, which stops the recorded worker however the case ends, including a
+failure while the launcher is still publishing its receipt or report. One case
+runs the launcher through `asyncio.run(launch_detached())` and waits for
+heartbeat updates after the loop has closed; the receipt records which entry
+point ran, so the case cannot pass by silently using the synchronous spelling.
+The recorder that stands in for the spawn in the unit modules rewrites
+`cuprum._detached_launch._spawn_detached`, so a recorded launch that reached
+`_abandon_detached` would signal the fake PID it reports. `record_spawns`
+therefore installs a guard there that fails the case instead; a case that
+expects abandonment replaces it with `record_abandonment`, which patches the
+same attribute afterwards.
+
 ## Timeout and fail-fast reducer verification
 
 The temporal, branch-heavy subprocess-timeout and pipeline-cleanup paths are
@@ -2370,7 +2541,7 @@ increments once for each such outcome, including a successful submission.
 Windows handle values, errno values, exception types, exception messages, and
 tracebacks are never metric labels. Observer failures are logged and do not
 alter the successful fallback or the caller's cancellation.
-[ADR-008](adr-008-rust-pump-observation-channel.md) records the decision.
+[ADR-008](adrs/adr-0008-rust-pump-observation-channel.md) records the decision.
 
 #### Pump hook failure policy
 
@@ -2661,6 +2832,22 @@ read size held by the private `ContextVar`. Profiling scopes each worker with
 the consume and pipeline pump paths without changing public runtime
 configuration.
 
+### Bounded echo copy-volume regression
+
+`_encode_prefix` in `cuprum/_echo_truncation.py` must stay linear in the line
+it is given: the text-sink path records the last safe source and encoded
+lengths and copies each prefix once, and each marker-adjustment pass re-runs
+that linear search. `cuprum/unittests/test_echo_truncation_cost.py` guards the
+contract without wall-clock timing by counting copied bytes directly. A
+duck-typed stand-in for the source line records every slice it is given, and a
+module-local shadow of `bytes` counts conversions from a `bytearray` or
+`memoryview` while excluding the per-byte `bytes((byte,))` decode probe. The
+shadow is a callable rather than a type, so an `isinstance(..., bytes)` check
+added to the module would fail the test loudly. Every measurement asserts a
+non-zero counter first, and the bounds are stated as ratios — one line against
+eight, and a bound against four times that bound — so a faster machine cannot
+weaken the regression.
+
 ### Byte-exact capture mode
 
 The `run_bytes()` entry points on `SafeCmd` and `Pipeline` are not separate
@@ -2721,8 +2908,8 @@ must keep the buffer raw so byte mode stays available to it. A new mode value
 must be added to `CaptureMode` rather than spelled as a literal, since the
 value is a metric label and a log field that operators filter on. The `on_line`
 rejection is policy, not capability — the drain itself honours the combination;
-see [ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the module
-boundaries it belongs to, and the
+see [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) for the
+module boundaries it belongs to, and the
 [binary output section](users-guide.md#binary-output) of the users' guide.
 
 A stream that was never attached is the one payload the drain does not render:
@@ -2779,8 +2966,8 @@ runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
 loop, while text runs keep `config.errors`, so a strict text run still raises
 from echo exactly as it did before byte mode existed. See
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md). Capture receives
-each raw chunk independently of the echo decoder, and
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md). Capture
+receives each raw chunk independently of the echo decoder, and
 `cuprum._capture_decode._render` renders the accumulator's retained bytes as
 text or bytes at finalization.
 
@@ -2922,12 +3109,12 @@ derive from `_LockedStore` and implement `_clear()` while its lock is held.
 `cuprum/unittests/test_adapter_projection.py` pins this contract with
 Hypothesis properties and redacted per-phase syrupy snapshots.
 
-[ADR-023](adr-023-opt-in-telemetry-redaction.md) defines the scope and trust
-boundary for opt-in redaction. `cuprum/redaction.py` owns `RedactionPolicy`,
-which normalizes caller-supplied literal and compiled pattern rules. It gathers
-matches from the original text, merges overlapping or adjacent spans, and
-inserts the configured mask without rescanning it. The inert default adds no
-rules and changes no output; it does not infer secrets.
+[ADR-023](adrs/adr-0023-opt-in-telemetry-redaction.md) defines the scope and
+trust boundary for opt-in redaction. `cuprum/redaction.py` owns
+`RedactionPolicy`, which normalizes caller-supplied literal and compiled
+pattern rules. It gathers matches from the original text, merges overlapping or
+adjacent spans, and inserts the configured mask without rescanning it. The
+inert default adds no rules and changes no output; it does not infer secrets.
 
 The policy returns an immutable `ExecEvent` copy with selected text fields
 redacted. It does not change the raw event, executed argv, child environment,
@@ -3060,10 +3247,10 @@ affects hand-built event streams.
 
 ## Rust-pump executor-hop span boundary
 
-[ADR-010](adr-010-rust-pump-hop-span.md) defines the separate, opt-in tracing
-surface for Rust-pump executor hops. Keep it separate from the `PumpEvent`
-channel: pump events describe routing and cleanup observations, while hop spans
-cover the lifetime of one scheduled native transfer.
+[ADR-010](adrs/adr-0010-rust-pump-hop-span.md) defines the separate, opt-in
+tracing surface for Rust-pump executor hops. Keep it separate from the
+`PumpEvent` channel: pump events describe routing and cleanup observations,
+while hop spans cover the lifetime of one scheduled native transfer.
 
 The implementation is split by responsibility:
 
@@ -3294,7 +3481,7 @@ subprocess module boundaries (among them `cuprum/_subprocess_execution.py`,
 `cuprum/_subprocess_stdin.py`, `cuprum/_subprocess_timeout.py`, and
 `cuprum/_subprocess_wait.py`) and concurrent execution are covered in
 [Cuprum design](cuprum-design.md) §8.1.5 (with
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md)) and §8.3.1
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md)) and §8.3.1
 respectively, and are not repeated here.
 
 Runtime (`cuprum/`):
@@ -3374,7 +3561,7 @@ Test helpers:
 `rust_consume_stream` is implemented, tested, and exported, but production
 consumes currently go through the pure-Python `_consume_stream` function until
 Phase 2 is complete. Integration is deferred to
-[ADR-002: Additional Rust components](adr-002-additional-rust-components.md)
+[ADR-002: Additional Rust components](adrs/adr-0002-additional-rust-components.md)
 (Phase 2). The rationale is to defer consume-side dispatch until the ADR-002
 Phase 2 stack is complete, including dispatcher wiring, the Python fallback
 path, and parity/property coverage.
@@ -3575,9 +3762,9 @@ maturin build --release --manylinux 2_28 \
 maturin action and builds one `cp312-abi3` wheel each for Linux x86_64 and
 aarch64, macOS x86_64 and arm64, and Windows x86_64. The `abi3-py312` feature on
 `pyo3` makes each wheel load on CPython 3.12 and every later version; see
-[ADR-016](adr-016-stable-abi-native-wheels.md). `verify-wheel-install` checks
-the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor equal to
-`requires-python` in `pyproject.toml`.
+[ADR-016](adrs/adr-0016-stable-abi-native-wheels.md). `verify-wheel-install`
+checks the Linux x86_64 wheel on both 3.12 and 3.14. Keep the feature's floor
+equal to `requires-python` in `pyproject.toml`.
 
 ### Verifying a wheel pair
 
@@ -3611,7 +3798,7 @@ concurrency group with `cancel-in-progress: false`: a re-pushed tag queues
 behind the running release rather than cancelling it part-way through the
 upload, so the queued run starts from a complete state that reconciliation can
 safely repeat. See
-[ADR-017: Attested, reconciled release pipeline](adr-017-release-pipeline.md)
+[ADR-017: Attested, reconciled release pipeline](adrs/adr-0017-release-pipeline.md)
 for the decision record behind the job graph below.
 
 The workflow grants nothing at the top level (`permissions: {}`), and each job
@@ -3836,16 +4023,16 @@ CodeScene token check in `coverage-main.yml`, which renders only `true` or
 Each job/phase writes one bounded JSONL record through
 `.github/actions/release-telemetry`, following the same fail-open pattern as
 [CI benchmark-gate telemetry](ci-benchmark-gate-telemetry.md)
-([ADR-014](adr-014-benchmark-gate-telemetry-sink.md)). The metric is
+([ADR-014](adrs/adr-0014-benchmark-gate-telemetry-sink.md)). The metric is
 `release_phase_outcomes_total`, schema version 2, labelled with `operation`
 (`check_version`, `attest`, `draft_release`, `publish_pypi`, `github_upload`,
 `publish_release`), `outcome` (`success`, `failure`, `skipped`),
 `failure_category`, `retry_bucket`, `verification_failure_bucket` (`0`, `1`,
 `2-5`, `6+`), `elapsed_bucket`, and `http_status_class`; `run_id`,
 `run_attempt`, `tag`, and `recorded_at` are metadata outside `labels`. See
-[ADR-017](adr-017-release-pipeline.md#telemetry) for the original label
+[ADR-017](adrs/adr-0017-release-pipeline.md#telemetry) for the original label
 vocabulary and
-[its addendum](adr-017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
+[its addendum](adrs/adr-0017-release-pipeline.md#telemetry-and-verifier-retry-outcomes)
 for schema version 2 and `verification_failure_bucket`. The draft phase counts
 failed per-asset verifier outcomes in that bucket, even when PyPI already holds
 those names and the release can continue without recovery.
@@ -3931,6 +4118,13 @@ Run the pytest-benchmark microbenchmarks, which write
 ```bash
 make benchmark-micro
 ```
+
+Its `consume-invalid-utf8` group feeds 64 KiB, 256 KiB, and 1 MiB all-invalid
+payloads through a pipe to `cuprum._streams_rs.rust_consume_stream`, with
+`buffer_size` equal to the payload size so the consumer never caps reads below
+what the kernel delivers. Pipe capacity and writer scheduling still decide how
+the payload is split, so this measures end-to-end throughput through the
+consumer loop rather than any single read.
 
 Run the hyperfine end-to-end throughput benchmarks, which write
 `dist/benchmarks/pipeline-throughput.json`:
@@ -5159,23 +5353,31 @@ status, bounds, excluded targets, and trusted assumptions are recorded in
 available or compatible is a blocker rather than a passing skip.
 
 The final native Kani boundary run passed 7 harnesses with 0 failures in
-`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 11
-harnesses passed, covered by the current result in
-`/tmp/issue379-round24-kani.log`. The native ownership proofs enumerate two
-exits; the repeated-borrow harness restricts borrows to three and uses
-`#[kani::unwind(4)]`. Production progress proofs use symbolic `usize`
-count/capacity and `u64` total/remaining/written values. Safe pump proofs use
-symbolic `PumpState`, `usize` read lengths, and `u64` write counts; the
-three-step proof uses `#[kani::unwind(4)]`. UTF-8 proofs use fixed three- and
-four-byte arrays, with unwind bounds 5 for the first four harnesses and 4 for
-the final prefix harness. These are bounded results, not an unbounded proof.
-The pinned `make boundary-miri` target runs separate Miri invocations for
-`cuprum-native-io` and `cuprum-streams`. The observed results were 13 native
-tests passed with zero ignored and 67 stream tests passed with zero ignored.
-Miri interprets the stream crate's pure fallback read/write progress and
-short-I/O policy, deterministic retry/error classification, UTF-8 decoder chunk
-handling, progress accounting, and the `with_owned_writer` normal/error drop
-crossing through an in-memory writer. No Miri UB check is disabled.
+`/tmp/issue379-round27-kani-native.log`; the safe-policy/decoder run has 12
+harnesses. The native ownership proofs enumerate two exits; the repeated-borrow
+harness restricts borrows to three and uses `#[kani::unwind(4)]`. Production
+progress proofs use symbolic `usize` count/capacity and `u64`
+total/remaining/written values. Safe pump proofs use symbolic `PumpState`,
+`usize` read lengths, and `u64` write counts; the three-step proof uses
+`#[kani::unwind(4)]`. UTF-8 proofs combine fixed three- and four-byte payloads
+with symbolic three-byte payloads, with unwind bound 5 for the fixed-payload,
+error-step, and bounded-pending harnesses, and 4 for the final prefix harness.
+Three symbolic bytes keep CBMC's model of `run_utf8_validation` tractable while
+still producing every incomplete-tail length the decoder retains; a four-byte
+symbolic payload exhausted the solver's memory. The error-step harness proves
+that a definite error advances the scan by at least one byte and never past the
+remaining slice, while the bounded-pending harness proves that non-final
+decoding retains at most one incomplete sequence and final decoding retains
+none. These are bounded results, not an unbounded proof and not a complexity
+proof; the native scaling regression in
+`rust/cuprum-streams/src/utf8_scaling_tests.rs` protects the linear-time
+contract. The pinned `make boundary-miri` target runs separate Miri invocations
+for `cuprum-native-io` and `cuprum-streams`. The observed results were 13
+native tests passed with zero ignored and 79 stream tests passed with zero
+ignored. Miri interprets the stream crate's pure fallback read/write progress
+and short-I/O policy, deterministic retry/error classification, UTF-8 decoder
+chunk handling, progress accounting, and the `with_owned_writer` normal/error
+drop crossing through an in-memory writer. No Miri UB check is disabled.
 
 The stream run compiles out tests requiring real pipes or descriptors:
 `consume_snapshot_tests`'s four fixed decoder tests and two property tests; the
@@ -5581,6 +5783,20 @@ that expose pure behaviour. The UTF-8 decoder tests generate arbitrary byte
 vectors and chunk split points, then compare the decoded output with
 `String::from_utf8_lossy` as the oracle.
 
+The UTF-8 decoder does a bounded amount of work per byte in each buffered read:
+it scans with a moving offset, never re-validates bytes it has already
+consumed, and compacts only the at-most-three-byte incomplete tail. That
+matters because `rust_consume_stream` decodes lower-trust bytes, so a chunk of
+invalid UTF-8 is adversarial input rather than a programming error.
+`rust/cuprum-streams/src/utf8_scaling_tests.rs` guards the contract by
+comparing the minimum decode time for 32 KiB and 256 KiB malformed workloads;
+it is compiled out under Miri and Kani, where wall-clock measurement is
+meaningless. The all-invalid case in
+`benchmarks/test_stream_microbenchmarks.py` measures end-to-end pipe throughput
+at 64 KiB, 256 KiB, and 1 MiB with `buffer_size` equal to the payload size; it
+is opt-in with `CUPRUM_RUN_BENCHMARKS=1` and runs through
+`make benchmark-micro`.
+
 When a property fails, proptest writes the shrunk case to a seed file under
 `rust/cuprum-rust/proptest-regressions/`. Commit that file: it re-runs the
 failing case ahead of the generated ones, so the same regression cannot return
@@ -5610,11 +5826,13 @@ text diff rather than a boolean failure.
 
 These Rust-side cases are not the only coverage of these categories, and it is
 worth knowing why they carry the load. `TestRustConsumeStream` in
-`cuprum/unittests/test_rust_consume_stream.py` already defines Python/Rust
-boundary tests over the same four inputs — ASCII, multibyte UTF-8 split across
-a read boundary, invalid UTF-8, and an incomplete trailing sequence — each case
-calls `rust_consume_stream` and compares the result against Python's own
-replacement decoding, `payload.decode("utf-8", errors="replace")`.
+`cuprum/unittests/test_rust_consume_stream.py` also defines Python/Rust
+boundary tests over named malformed vectors — overlong encodings, a surrogate,
+a scalar above U+10FFFF, lone continuation bytes, invalid runs, truncated 2-,
+3-, and 4-byte sequences at end of input, and valid 2-, 3-, and 4-byte scalars.
+Each vector is crossed with buffer sizes from one byte to 64 KiB and run twice;
+every case calls `rust_consume_stream` and compares the result against Python's
+own replacement decoding, `payload.decode("utf-8", errors="replace")`.
 
 Those cases do now execute in CI — see
 [Building the extension for tests](#building-the-extension-for-tests) — but
@@ -5834,24 +6052,24 @@ follow-up once `#124` lands.
 
 Table 1: modules gated on the compiled extension
 
-| Module                                                  | Covers                                                                                                                                                               |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                     |
-| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the four replacement scenarios that are the end-to-end regression coverage for `#105` and the I/O-error boundary case |
-| `test_rust_streams_boundary_property.py`                | the rejection boundary: invalid buffer sizes and descriptors                                                                                                         |
-| `test_rust_streams_roundtrip_property.py`               | randomized payloads over a real pipe, and that omitting `buffer_size` equals the explicit default                                                                    |
-| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                    |
-| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                            |
-| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                         |
-| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                          |
-| `test_rust_errno_windows.py`                            | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                             |
-| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                      |
-| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                           |
-| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                           |
-| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                       |
-| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                   |
-| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                               |
-| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                        |
+| Module                                                  | Covers                                                                                                                                                                           |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_rust_streams.py`                                  | the Rust-backed pump entry point                                                                                                                                                 |
+| `test_rust_consume_stream.py`                           | the Rust-backed consume entry point, including the malformed-vector and buffer-size matrix that is the end-to-end regression coverage for `#105` and the I/O-error boundary case |
+| `test_rust_streams_boundary_property.py`                | the rejection boundary: invalid buffer sizes and descriptors                                                                                                                     |
+| `test_rust_streams_roundtrip_property.py`               | randomized payloads over a real pipe, and that omitting `buffer_size` equals the explicit default                                                                                |
+| `test_rust_stream_native_order.py`                      | the compiled boundary's validation order, asserted by calling `cuprum._rust_backend_native` directly rather than through the shim                                                |
+| `test_rust_extension.py`                                | extension availability and module surface                                                                                                                                        |
+| `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                                     |
+| `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                                      |
+| `test_rust_errno_windows.py`                            | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                                         |
+| `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                                  |
+| `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                                       |
+| `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                                       |
+| `tests/behaviour/test_rust_streams_behaviour.py`        | the consumer-facing pump and consume scenarios                                                                                                                                   |
+| `tests/behaviour/test_rust_streams_errors_behaviour.py` | the exception category each native failure maps to                                                                                                                               |
+| `tests/behaviour/test_rust_extension_behaviour.py`      | availability agreeing with the installed native module                                                                                                                           |
+| `tests/behaviour/test_stream_backend_pipeline.py`       | pipelines dispatched through the Rust backend                                                                                                                                    |
 
 The behavioural modules are listed for the same reason as the unit ones: their
 extension-dependent scenarios skip in the ordinary test jobs, so they were
@@ -5907,7 +6125,7 @@ The workspace cannot forbid unsafe code globally: `cuprum-native-io` and
 `cuprum-rust` are the audited syscall and FFI boundaries. `cuprum-streams`
 keeps its explicit crate-level prohibition, which the boundary contract checks.
 The
-[ADR-011 addendum](adr-011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
+[ADR-011 addendum](adrs/adr-0011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records why that source-level contract complements the shared lint tables. The
 The Rust 1.85.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
 `RUSTFMT_TOOLCHAIN=nightly-2026-05-28` provides `rustfmt`. Linux debug Rustdoc,
@@ -5991,8 +6209,8 @@ same interpreter, Skylos runs the strict production dead-code scan sixth, and
 the blocking nose code-duplication gate runs seventh.
 
 The decisions are recorded in
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) and
-[ADR-004: Interrogate docstring-coverage gate](adr-004-interrogate-docstring-gate.md).
+[ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md) and
+[ADR-004: Interrogate docstring-coverage gate](adrs/adr-0004-interrogate-docstring-gate.md).
 The short version is:
 
 - Ruff owns fast feedback and the primary rule set, including docstring style.
@@ -6134,8 +6352,8 @@ duplication families remain. Findings name every member as a
 each location it named, followed by the witness kind and refactoring value, so
 a finding can be pasted directly into a refactoring task or coding-agent
 prompt. The tool choice, settings, and exception policy follow
-[ADR-022](adr-022-adopt-nose-duplication-gate.md), which adopts the decision
-already recorded as ADR-021 in `leynos/episodic` at revision
+[ADR-022](adrs/adr-0022-adopt-nose-duplication-gate.md), which adopts the
+decision already recorded as ADR-021 in `leynos/episodic` at revision
 `d9e5ac0d254f375e2986f52d91a3b88c117c833b` rather than rerunning a detector
 comparison here.
 
@@ -6416,8 +6634,8 @@ Documentation is a liveness signal, and it has a silent size ceiling. A
 `SKY-U001` that appears after a docs-only change may mean the documentation
 crossed that ceiling rather than that the symbol died; check whether the symbol
 still has a runtime caller before silencing it.
-[ADR-003: Two-tier Python linting](adr-003-two-tier-python-linting.md) records
-the ceilings and what to do about them.
+[ADR-003: Two-tier Python linting](adrs/adr-0003-two-tier-python-linting.md)
+records the ceilings and what to do about them.
 
 The Skylos Makefile contract is parsed by the pinned `makeutil` executable in
 `test_skylos_lint_contract.py`; `make test` verifies that the parser is
@@ -6661,7 +6879,7 @@ The canonical lint configuration lives in `pyproject.toml`:
 
 When changing lint policy, update both `pyproject.toml` and this guide. If the
 change alters the architecture of the lint gate, update
-[ADR-003](adr-003-two-tier-python-linting.md) as well.
+[ADR-003](adrs/adr-0003-two-tier-python-linting.md) as well.
 
 ### Ruff `ASYNC` (flake8-async) policy
 
@@ -6689,7 +6907,7 @@ family:
   carries no suppression. The deadline itself stays caller-owned: the wait
   helpers apply it with `asyncio.timeout()` rather than taking a `timeout`
   parameter of their own (see
-  [ADR-007](adr-007-subprocess-execution-module-boundaries.md)).
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md)).
 - **Test scaffolding (`per-file-ignore`).** `ASYNC109` and `ASYNC240` are
   ignored through `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` for
   two modules — `cuprum/unittests/test_observe_stdin_early_close.py` and
@@ -7088,7 +7306,7 @@ verdict the table says `unknown` rather than `false`: recording `false` would
 assert "no performance-relevant changes", which is a claim nothing measured.
 
 Each non-cancelled run also persists a durable observation, per
-[ADR-014](adr-014-benchmark-gate-telemetry-sink.md); the
+[ADR-014](adrs/adr-0014-benchmark-gate-telemetry-sink.md); the
 [telemetry contract](ci-benchmark-gate-telemetry.md) owns its schema.
 
 The workflow declares `concurrency: ci-${{ github.ref }}` with
@@ -7145,7 +7363,8 @@ need `act` 0.2.89 and a Docker or rootless Podman runtime. The target refuses
 to skip when CI demands them, and
 `.github/workflows/benchmark-gate-harness.yml` runs it weekly on GitHub-hosted
 `ubuntu-latest`, never the paid one.
-[ADR-015](adr-015-actions-runner-integration-harness.md) owns the design; the
+[ADR-015](adrs/adr-0015-actions-runner-integration-harness.md) owns the design;
+the
 [local validation guide](local-validation-of-github-actions-with-act-and-pytest.md)
 owns the contract and pins.
 
@@ -7286,7 +7505,7 @@ Some Rust contracts hold only at compile time, so no runtime test can observe
 them. They are compiled inside the ordinary build graph rather than by a nested
 Cargo build, because a nested build inside a timed test queues behind the
 host-wide compiler admission pool, and no per-test timeout can bound that queue.
-[ADR-027](adr-027-compile-contracts-in-the-build-graph.md) records the
+[ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md) records the
 decision and the `trybuild` timeouts that prompted it.
 
 - **Compile-pass cases** are ordinary doctests. The `PyO3` macro shapes,
@@ -7725,8 +7944,8 @@ decisions teardown makes about a single process — what a signal is delivered
 to, and what a completed teardown waits for. The two idle-heartbeat modules,
 `cuprum/_idle_heartbeat.py` and `cuprum/_idle_diagnostic.py`, are private to
 the same seam. See [Cuprum design](cuprum-design.md) §8.1.5 and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) for the accepted
-rationale and compatibility constraints.
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) for the
+accepted rationale and compatibility constraints.
 
 Bounded output has a parallel ownership seam: `_bounded_delivery.py` owns the
 shared byte-bounded FIFO and its daemon worker; `_command_execution_config.py`
@@ -7735,8 +7954,8 @@ and `_pipeline_config.py` resolve destinations and retain setup ownership;
 and `_sink_lifecycle.py` serializes presentation-session close after active
 writes. `_daemon_thread.py` bridges only these bounded teardown operations
 without depending on the event loop's shared default executor. See
-[ADR-025](adr-025-bounded-output-delivery.md) for the queue, loss, and shutdown
-contract.
+[ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the queue, loss, and
+shutdown contract.
 
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
@@ -7831,9 +8050,12 @@ tests that monkeypatch them by module path resolve the same names as before:
   consumes their output stays in `cuprum._line_iteration`.
   `cuprum/sh/bytes_entry_points.py` holds `run_bytes` and `run_bytes_sync` as a
   `__slots__ = ()` mixin that `SafeCmd` inherits, exactly as
-  `cuprum/_process_handle/owned_start.py` contributes `SafeCmd.start`. Both
-  splits exist to keep `safe_cmd` under the module ceiling without changing a
-  public signature: the byte mixin deliberately omits
+  `cuprum/_process_handle/owned_start.py` contributes `SafeCmd.start`.
+  `cuprum/_detached_launch.py` contributes `launch_detached` and
+  `launch_detached_sync` the same way, through `_DetachedLaunchEntryPoints`,
+  because a detached launch shares the managed resolution rules without sharing
+  their ownership. All three splits exist to keep `safe_cmd` under the module
+  ceiling without changing a public signature: the byte mixin deliberately omits
   `from __future__ import annotations`, because those methods are public and
   `typing.get_type_hints` evaluates their annotations eagerly.
 - `cuprum/adapters/logging_adapter.py` re-exports `_build_extra` and
@@ -7852,7 +8074,7 @@ change to how one `_StreamConfig` is assembled or how its consumer task is
 created belongs in `_subprocess_streams`. The split is what keeps the execution
 module under the Pylint module ceiling now that the idle-heartbeat wiring
 reaches into the stream configs; see the
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) addendum of
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
 
@@ -7985,8 +8207,9 @@ still waited on rather than leaving observer tasks stranded. The two entry
 points `_execute_with_hooks` and `_finalize_prepared_command_failure` are
 re-exported from `cuprum/_command_internals.py` with unchanged object identity,
 so `cuprum.sh`, `cuprum.sh.safe_cmd`, and the tests that import them are
-unchanged. See the [ADR-007](adr-007-subprocess-execution-module-boundaries.md)
-addendum of 2026-10-11.
+unchanged. See the
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
+2026-10-11.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
@@ -8615,8 +8838,8 @@ with no before-spawn snapshot, which selects the child's own figure and leaves
 the aggregate fallback unreachable rather than measuring it late.
 
 See [Cuprum design](cuprum-design.md) §13.10 for the accepted rationale, and
-[ADR-007](adr-007-subprocess-execution-module-boundaries.md) — including its
-addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) — including
+its addenda of 2026-10-11 and 2026-10-13 — for the module boundaries and the
 private-import compatibility rules the handle's split preserves.
 
 ## Subprocess timeout observability

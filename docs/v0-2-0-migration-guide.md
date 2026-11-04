@@ -944,10 +944,10 @@ they were absent. Passing anything but a `bool` for either flag raises
 `ValueError`. Capture, echo destinations, exit codes, and the returned
 `CommandResult` are unchanged in every case. The flags are a spelling of the
 adapter decision in
-[ADR-013](adr-013-opt-in-github-actions-presentation-sink.md), which records
-why they construct the sink instead of teaching the execution layer workflow
-commands. For custom destinations and titles, and deliberate local activation,
-see the
+[ADR-013](adrs/adr-0013-opt-in-github-actions-presentation-sink.md), which
+records why they construct the sink instead of teaching the execution layer
+workflow commands. For custom destinations and titles, and deliberate local
+activation, see the
 [GitHub Actions presentation section](users-guide.md#present-output-in-github-actions)
 in the users' guide, which covers the
 [group and annotate flags](users-guide.md#group-and-annotate-flags) and
@@ -1032,7 +1032,7 @@ platform, and is the default there as everywhere else.
 `ExecutionContext`, so an existing import line such as
 `from cuprum import ExecutionContext, sh` only needs `ProcessGroupPolicy` added
 to it. The decision and its alternatives are recorded in
-[ADR-021](adr-021-process-group-ownership.md).
+[ADR-021](adrs/adr-0021-process-group-ownership.md).
 
 ### Aggregate Python stream-operation observation
 
