@@ -218,7 +218,13 @@ def _emit_observe_hook(
             },
         )
         raise _ExecEventEmissionError(exc, scheduled) from exc
-    if inspect.isawaitable(result):
+    # ``None`` is the only result a synchronous hook returns and a native
+    # coroutine the only one an ``async def`` returns, so the general test runs
+    # only for the remaining shapes. This path is entered once per observed
+    # line, so the two exact checks keep it off the hot path.
+    if result is None:
+        return
+    if type(result) is types.CoroutineType or inspect.isawaitable(result):
         _schedule_observe_hook_task(result, event, scheduled)
 
 
