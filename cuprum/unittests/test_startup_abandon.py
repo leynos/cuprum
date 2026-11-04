@@ -45,6 +45,7 @@ from cuprum.unittests._startup_abandon_support import (
     _is_fd_open,
     _is_running,
     _kill_descendant,
+    _posix_only,
     _recorded_pid,
     _spawn_output_pipe_holder,
     _spawn_output_pipe_holder_fallback,
@@ -200,6 +201,7 @@ _SPAWN_ROUTES = (
 )
 
 
+@_posix_only
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_abandon_releases_output_pipes_a_descendant_keeps_open(
     tmp_path: pathlib.Path,
@@ -222,7 +224,10 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
 
     The descendant is asserted to still be running when the descriptors are
     read, so a case that passed because the descendant had exited cannot be
-    mistaken for one that released the pipes.
+    mistaken for one that released the pipes. That assertion and the cleanup
+    that follows it are POSIX signals, so the case is scoped to POSIX: Windows
+    documents ``os.kill(pid, 0)`` as terminating the process it is asked about
+    and has no ``SIGKILL``.
     """
 
     async def run_case() -> None:

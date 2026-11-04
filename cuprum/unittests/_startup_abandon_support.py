@@ -25,6 +25,8 @@ import sys
 import time
 import typing as typ
 
+import pytest
+
 from cuprum import ScopeConfig, scoped, sh
 from cuprum._constants import STDERR_STREAM, STDOUT_STREAM
 from cuprum._pipeline_types import _ExecutionHooks, _StageObservation
@@ -44,12 +46,22 @@ __all__ = [
     "_is_fd_open",
     "_is_running",
     "_kill_descendant",
+    "_posix_only",
     "_recorded_pid",
     "_spawn_output_pipe_holder",
     "_spawn_output_pipe_holder_fallback",
     "_spawn_sleeper",
     "_wait_for_pid_file",
 ]
+
+#: The inherited-pipe case decides liveness with ``os.kill(pid, 0)`` and cleans
+#: up with ``SIGKILL``. Windows documents the first as terminating the process
+#: it is asked about, not merely testing it, and has no ``SIGKILL``; the case
+#: therefore belongs to the platform whose signals it speaks.
+_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the liveness probe and descendant cleanup are POSIX signals",
+)
 
 #: Spawns a descendant that inherits this child's output pipes, records its
 #: pid at ``sys.argv[1]``, and then waits to be signalled. The descendant asks
