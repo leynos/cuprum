@@ -33,7 +33,13 @@ if typ.TYPE_CHECKING:
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="the guard relies on POSIX descriptor duplication",
+    reason=(
+        "the scenarios depend on a write to a closed pipe raising "
+        "BrokenPipeError, the only failure the guard acts on; that "
+        "closed-pipe behaviour has been verified on POSIX only, so Windows "
+        "is skipped rather than asserting an outcome the platform has not "
+        "been observed to produce"
+    ),
 )
 
 # A probe killed rather than reaped by the scenario only needs long enough for
