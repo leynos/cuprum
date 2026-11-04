@@ -190,6 +190,23 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   `test_observe_hook_dispatch_properties.py` pass 9 tests, and the behaviour
   scenario passes all 5 example rows. Nothing outside `_emit_exec_event` and
   its docstring changed.
+- [x] (2026-11-04) EP-M2 follow-up: `cs delta` against `71aaf3eb` reported
+  four findings in the EP-M1 test doubles — Code Duplication in
+  `_observe_hook_dispatch_support.py`, and Code Duplication, Complex Method,
+  and Bumpy Road Ahead in `test_observe_hook_dispatch_properties.py`. A
+  separate refactor commit collapses the eight record-and-return or
+  record-and-raise hook bodies into `_recording_hook` and `_raising_hook`
+  (bound per shape with `functools.partial`), gives the two seeded-fault
+  dispatchers one `_schedule_when` body selected by a predicate, and replaces
+  the nested log-field loops with `_extra_mismatch`, `_first_mismatch`, and
+  `_scheduled_record_mismatch`. The focused suites still pass: 9 tests across
+  the two dispatch modules and all 5 behaviour rows.
+- [x] (2026-11-04) EP-M2 follow-up: the same delta also flagged
+  `_emit_exec_event` at cyclomatic complexity 9, the rule's threshold, which
+  the result guard introduced. Folded the two failure handlers into one
+  `except BaseException` that delegates logging to `_warn_hook_failure`, which
+  removes a decision point without adding hot-path work.
+  `cs delta 71aaf3eb HEAD` now reports "No issues found in checked changes."
 - [ ] EP-M3: frame-census command implemented and tested.
 - [ ] EP-M4: dispatch microbenchmark added.
 - [ ] EP-M5: profiler and timing evidence collected; evidence document
@@ -290,6 +307,16 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   passed under `PYTEST_ADDOPTS='--timeout=600'`, the doctest case taking 351.00
   s, almost all of it waiting for a compile slot. Impact: the EP-M1 gates ran
   with the raised timeout; no test added by this change is slow in itself.
+- Observation: a `cs delta` claim written into the EP-M2 commit message was
+  false. It said the delta against `71aaf3eb` reported nothing for
+  `cuprum/_observability.py`; re-running it against that commit showed a
+  Complex Method finding, `_emit_exec_event` at cyclomatic complexity 9 against
+  a threshold of 9. The claim had been read from an EP-M1-era run, before the
+  result guard added its second conditional. Impact: the commit message was
+  reworded (its tree is unchanged, so the EP-M1 and EP-M2 gate evidence still
+  certifies the same trees), and the complexity was fixed in a follow-up
+  commit. Lesson: re-run the delta after the change it is meant to certify, and
+  cite the commit it was run against.
 
 ## Decision log
 
