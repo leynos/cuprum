@@ -145,8 +145,16 @@ async def _iter_line_events(
             requested_timeout=requested_timeout,
             open_sink=open_sink,
         )
-        async for event in _stream_line_events(started):
-            yield event
+        # Close the inner generator deterministically: a close at ``yield``
+        # suspends it rather than ending it, leaving the event loop to finalize
+        # it later. It holds no resource today, but the teardown here is meant
+        # to be deterministic, and this keeps it so if that changes.
+        events = _stream_line_events(started)
+        try:
+            async for event in events:
+                yield event
+        finally:
+            await events.aclose()
         result = await started.result_future
         _publish_line_completion(started.execution, result)
         yield result
