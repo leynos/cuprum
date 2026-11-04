@@ -22,6 +22,32 @@ _CARGO_HOME_CONFIG_FILES = (
     "credentials",
     "credentials.toml",
 )
+_WRITE_BITS = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+
+
+def _without_write_bits(_path: Path, mode: int) -> int:
+    """Return a mode with every write permission removed."""
+    return mode & ~_WRITE_BITS
+
+
+def _with_owner_access(path: Path, mode: int) -> int:
+    """Return a mode granting the owner write, and traversal for directories."""
+    additions = stat.S_IWUSR
+    if path.is_dir():
+        additions |= stat.S_IXUSR
+    return mode | additions
+
+
+def _adjust_tree_permissions(
+    root: Path,
+    adjustment: cabc.Callable[[Path, int], int],
+) -> None:
+    """Apply one permission change deepest-first, skipping symbolic links."""
+    paths = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+    for path in (*paths, root):
+        if path.is_symlink():
+            continue
+        path.chmod(adjustment(path, stat.S_IMODE(path.stat().st_mode)))
 
 
 def seed_cargo_home(
@@ -192,41 +218,32 @@ def make_tree_read_only(root: Path) -> None:
     root : Path
         Snapshot root whose regular files and directories become read-only.
 
-    Raises
-    ------
-    OSError
-        If an entry cannot be inspected or its permissions cannot be changed.
-    """  # ruff: ignore[docstring-extraneous-exception] - filesystem errors propagate from Path.stat and Path.chmod.
-    paths = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
-    for path in (*paths, root):
-        if path.is_symlink():
-            continue
-        mode = stat.S_IMODE(path.stat().st_mode)
-        path.chmod(mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+    Notes
+    -----
+    A snapshot that cannot be protected must not be published, so a ``chmod``
+    failure propagates as ``OSError`` rather than being retried or ignored.
+    """
+    _adjust_tree_permissions(root, _without_write_bits)
 
 
 def make_tree_writable(root: Path) -> None:
     """Restore owner write and traversal permissions on a private copy.
+
+    This is :func:`make_tree_read_only` in reverse, applied only to a run-local
+    copy. Directories regain owner execute as well, so the copy can still be
+    traversed and eventually removed.
 
     Parameters
     ----------
     root : Path
         Run-local Cargo home whose entries are made writable by its owner.
 
-    Raises
-    ------
-    OSError
-        If an entry cannot be inspected or its permissions cannot be changed.
-    """  # ruff: ignore[docstring-extraneous-exception] - filesystem errors propagate from Path.stat and Path.chmod.
-    paths = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
-    for path in (*paths, root):
-        if path.is_symlink():
-            continue
-        mode = stat.S_IMODE(path.stat().st_mode)
-        additions = stat.S_IWUSR
-        if path.is_dir():
-            additions |= stat.S_IXUSR
-        path.chmod(mode | additions)
+    Notes
+    -----
+    A copy left half-writable would fail later and less clearly, so an
+    inspection or ``chmod`` failure propagates as ``OSError`` immediately.
+    """
+    _adjust_tree_permissions(root, _with_owner_access)
 
 
 def reject_tree_symlinks(root: Path, error_type: type[Exception]) -> None:
@@ -248,3 +265,27 @@ def reject_tree_symlinks(root: Path, error_type: type[Exception]) -> None:
     if linked_paths:
         msg = f"Cargo cache trees must not contain symlinks: {linked_paths[0]}"
         raise error_type(msg)
+
+
+def _require_real_directory(
+    path: Path,
+    error_type: type[Exception],
+    description: str,
+) -> None:
+    """Reject a path that is a symlink or is not a real directory."""
+    if path.is_symlink() or not path.is_dir():
+        msg = f"{description} must be a real directory: {path}"
+        raise error_type(msg)
+
+
+def _prepare_run_home(run_root: Path, error_type: type[Exception]) -> Path:
+    """Create a top-level run directory and return its unused ``cargo-home``."""
+    run_root.mkdir(parents=True, exist_ok=True)
+    if run_root.is_symlink():
+        msg = f"run root must not be a symlink: {run_root}"
+        raise error_type(msg)
+    run_home = run_root / "cargo-home"
+    if run_home.exists() or run_home.is_symlink():
+        msg = f"run-local Cargo home already exists: {run_home}"
+        raise error_type(msg)
+    return run_home

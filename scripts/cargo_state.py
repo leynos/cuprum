@@ -13,7 +13,9 @@ import typing as typ
 from pathlib import Path
 
 from scripts.cargo_cache_tree import (
+    _prepare_run_home,
     _prune_registry_archives,
+    _require_real_directory,
     selected_registry_archives,
 )
 from scripts.cargo_cache_tree import (
@@ -379,18 +381,9 @@ def create_run_cargo_home(snapshot: Path, run_root: Path) -> Path:
     OSError
         If the run home cannot be created or copied.
     """  # ruff: ignore[docstring-extraneous-exception] - filesystem errors propagate from directory creation and copying.
-    if snapshot.is_symlink() or not snapshot.is_dir():
-        msg = f"Cargo snapshot must be a real directory: {snapshot}"
-        raise CargoStatePreparationError(msg)
+    _require_real_directory(snapshot, CargoStatePreparationError, "Cargo snapshot")
     _reject_tree_symlinks_impl(snapshot, CargoStatePreparationError)
-    run_root.mkdir(parents=True, exist_ok=True)
-    if run_root.is_symlink():
-        msg = f"run root must not be a symlink: {run_root}"
-        raise CargoStatePreparationError(msg)
-    run_home = run_root / "cargo-home"
-    if run_home.exists() or run_home.is_symlink():
-        msg = f"run-local Cargo home already exists: {run_home}"
-        raise CargoStatePreparationError(msg)
+    run_home = _prepare_run_home(run_root, CargoStatePreparationError)
     shutil.copytree(snapshot, run_home)
     _make_tree_writable(run_home)
     return run_home

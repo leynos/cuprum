@@ -54,20 +54,36 @@ def require_grouped_selector_drives_pytest(
         if command_program(words) == pytest_program
     ]
 
-    consumes_intersection = any(
-        " ".join(binding[2:]) == expected_filter and "$$@" in invocation
-        for invocation_position, invocation in invocations
-        for binding_position, binding in bindings
-        if binding_position < invocation_position
-        and not any(
-            binding_position < later_position < invocation_position
-            for later_position, _later_words in bindings
-        )
-    )
     require(
-        condition=consumes_intersection,
+        condition=_consumes_intersection(bindings, invocations, expected_filter),
         message=(
             f"the grouped pytest branch must pass `$$@` from its final `set -- "
             f"{expected_filter}` binding to `{pytest_program}`"
         ),
+    )
+
+
+def _consumes_intersection(
+    bindings: list[tuple[int, tuple[str, ...]]],
+    invocations: list[tuple[int, tuple[str, ...]]],
+    expected_filter: str,
+) -> bool:
+    """Return whether pytest consumes the last ``set --`` before it."""
+    return any(
+        " ".join(binding[2:]) == expected_filter
+        and "$$@" in invocation
+        and _is_final_binding_before(bindings, binding_at, invocation_at)
+        for invocation_at, invocation in invocations
+        for binding_at, binding in bindings
+    )
+
+
+def _is_final_binding_before(
+    bindings: list[tuple[int, tuple[str, ...]]],
+    position: int,
+    limit: int,
+) -> bool:
+    """Return whether the binding at ``position`` is the last one before ``limit``."""
+    return position < limit and not any(
+        position < later < limit for later, _words in bindings
     )

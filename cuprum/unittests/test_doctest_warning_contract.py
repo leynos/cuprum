@@ -165,38 +165,8 @@ def test_doctest_calls_are_offline_bounded_and_group_owned(
         crate, rustdoc_flags=None, prepared_run=RecordingPreparedRun()
     )
 
-    arguments, context = calls[0]
     assert result.exit_code == 0, "the command result must pass through"
-    assert arguments == command_arguments[0], (
-        "the captured invocation must match its command"
-    )
-    assert "--offline" in arguments, "scratch workspace routes must stay offline"
-    assert "--frozen" not in arguments, (
-        "scratch workspace routes must not require a lockfile"
-    )
-    assert context.timeout == DOCTEST_CALL_TIMEOUT_SECONDS, (
-        "each scratch Cargo invocation must have its own finite timeout"
-    )
-    assert context.process_group is ProcessGroupPolicy.OWN_GROUP, (
-        "each invocation must terminate Cargo descendants on expiry"
-    )
-    assert context.env is not None, "Cargo must receive an explicit environment overlay"
-    assert context.env_mode is EnvMode.REPLACE, (
-        "ambient variables such as RUSTDOCFLAGS must not leak into the child"
-    )
-    assert context.env["CARGO_NET_OFFLINE"] == "true", (
-        "offline mode must reach Cargo through the environment too"
-    )
-    assert context.env["CARGO_BUILD_JOBS"] == "8", (
-        "the doctest helper must preserve caller-selected Cargo parallelism"
-    )
-    assert context.env["CARGO_TARGET_DIR"] == str(tmp_path / "target"), (
-        "both routes for one scratch crate must share its target directory"
-    )
-    assert len(recorded_phases) == 1, "the helper must record exactly one phase"
-    assert recorded_phases[0][0] == "doctest_workload", (
-        "the helper must record the timed Cargo workload"
-    )
+    _require_doctest_call_contract(calls, recorded_phases, command_arguments, tmp_path)
 
 
 def test_doctest_mark_encloses_both_call_watchdogs() -> None:
@@ -259,4 +229,44 @@ def test_pinned_doctest_route_rejects_a_warning(
     )
     assert "-D deprecated" in corrected_diagnostics, (
         "rustdoc must deny the displayed doctest warning"
+    )
+
+
+def _require_doctest_call_contract(
+    calls: list[tuple[tuple[str, ...], sh.ExecutionContext]],
+    recorded_phases: list[tuple[str, float]],
+    command_arguments: list[tuple[str, ...]],
+    tmp_path: Path,
+) -> None:
+    """Assert the recorded invocation's arguments, bounds, and environment."""
+    arguments, context = calls[0]
+    assert arguments == command_arguments[0], (
+        "the captured invocation must match its command"
+    )
+    assert "--offline" in arguments, "scratch workspace routes must stay offline"
+    assert "--frozen" not in arguments, (
+        "scratch workspace routes must not require a lockfile"
+    )
+    assert context.timeout == DOCTEST_CALL_TIMEOUT_SECONDS, (
+        "each scratch Cargo invocation must have its own finite timeout"
+    )
+    assert context.process_group is ProcessGroupPolicy.OWN_GROUP, (
+        "each invocation must terminate Cargo descendants on expiry"
+    )
+    assert context.env is not None, "Cargo must receive an explicit environment overlay"
+    assert context.env_mode is EnvMode.REPLACE, (
+        "ambient variables such as RUSTDOCFLAGS must not leak into the child"
+    )
+    assert context.env["CARGO_NET_OFFLINE"] == "true", (
+        "offline mode must reach Cargo through the environment too"
+    )
+    assert context.env["CARGO_BUILD_JOBS"] == "8", (
+        "the doctest helper must preserve caller-selected Cargo parallelism"
+    )
+    assert context.env["CARGO_TARGET_DIR"] == str(tmp_path / "target"), (
+        "both routes for one scratch crate must share its target directory"
+    )
+    assert len(recorded_phases) == 1, "the helper must record exactly one phase"
+    assert recorded_phases[0][0] == "doctest_workload", (
+        "the helper must record the timed Cargo workload"
     )

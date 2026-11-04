@@ -181,19 +181,23 @@ class _RustPumpWriterHandoffModel(_WriterHandoffInvariantMixin, RuleBasedStateMa
         if self._stage == "restored":
             return (_Transition("resume reader", self._resume_reader),)
         if self._stage == "resumed":
-            transitions = [
-                _Transition("close original writer", self._close_original_writer)
-            ]
-            if self._duplicate_owner == "closed" and not self._reused_slot_open:
-                transitions.append(
-                    _Transition(
-                        "reuse released descriptor slot",
-                        self._reuse_released_descriptor_slot,
-                    )
-                )
-            return tuple(transitions)
+            return self._resumed_transitions()
         msg = f"unsupported cleanup stage: {self._stage}"
         raise AssertionError(msg)
+
+    def _resumed_transitions(self) -> tuple[_Transition, ...]:
+        """Close the original writer and optionally reuse a released slot."""
+        transitions = [
+            _Transition("close original writer", self._close_original_writer)
+        ]
+        if self._duplicate_owner == "closed" and not self._reused_slot_open:
+            transitions.append(
+                _Transition(
+                    "reuse released descriptor slot",
+                    self._reuse_released_descriptor_slot,
+                )
+            )
+        return tuple(transitions)
 
     @rule(data=st.data())
     def advance(self, data: DataObject) -> None:
