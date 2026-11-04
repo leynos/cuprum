@@ -264,134 +264,56 @@ def _marked_coroutine_function(
     return inspect.markcoroutinefunction(hook)
 
 
-def _future(calls: list[ExecEvent], _raised: list[BaseException]) -> ExecHook:
-    """Return a hook whose result is a completed ``asyncio.Future``."""
-
-    def hook(event: ExecEvent) -> asyncio.Future[None]:
-        """Record the event and return a completed future."""
-        calls.append(event)
-        future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        future.set_result(None)
-        return future
-
-    return hook
+def _completed_future() -> asyncio.Future[None]:
+    """Return a future that is already done, so awaiting it ends at once."""
+    future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    future.set_result(None)
+    return future
 
 
-def _generator_coroutine(
+def _recording_hook(
     calls: list[ExecEvent],
     _raised: list[BaseException],
+    *,
+    produce: cabc.Callable[[], object],
 ) -> ExecHook:
-    """Return a hook whose result is a ``@types.coroutine`` generator."""
+    """Return a hook that records its event and returns ``produce()``.
 
-    def hook(event: ExecEvent) -> cabc.Awaitable[None]:
-        """Record the event and return a generator-based awaitable."""
+    The stand-in result may sit outside the declared contract — a plain value
+    or a non-coroutine awaitable — because tolerating those shapes is what the
+    dispatcher must do.
+
+    Returns
+    -------
+    ExecHook
+        A hook that records the event it receives and returns the produced
+        stand-in result.
+    """
+
+    def hook(event: ExecEvent) -> object:
+        """Record the event and return the stand-in result."""
         calls.append(event)
-        return _yield_once()
+        return produce()
 
-    return hook
-
-
-def _awaitable_object(
-    calls: list[ExecEvent],
-    _raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook whose result defines ``__await__``."""
-
-    def hook(event: ExecEvent) -> _AwaitableResult:
-        """Record the event and return an ``__await__`` object."""
-        calls.append(event)
-        return _AwaitableResult()
-
-    return hook
-
-
-def _mock_result(calls: list[ExecEvent], _raised: list[BaseException]) -> ExecHook:
-    """Return a hook whose result is a plain ``Mock``."""
-
-    def side_effect(event: ExecEvent) -> mock.Mock:
-        """Record the event and return a plain mock."""
-        calls.append(event)
-        return mock.Mock()
-
-    return mock.Mock(side_effect=side_effect)
-
-
-def _magic_mock_result(
-    calls: list[ExecEvent],
-    _raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook whose result is a ``MagicMock``."""
-
-    def side_effect(event: ExecEvent) -> mock.MagicMock:
-        """Record the event and return a magic mock."""
-        calls.append(event)
-        return mock.MagicMock()
-
-    return mock.MagicMock(side_effect=side_effect)
-
-
-def _raising(
-    calls: list[ExecEvent],
-    raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook that raises an ordinary ``Exception``."""
-
-    def hook(event: ExecEvent) -> None:
-        """Record the event, then raise an ordinary exception."""
-        calls.append(event)
-        error = _HookError("hook failed")
-        raised.append(error)
-        raise error
-
-    return hook
-
-
-def _raising_fatal(
-    calls: list[ExecEvent],
-    raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook that raises a non-``Exception`` ``BaseException``."""
-
-    def hook(event: ExecEvent) -> None:
-        """Record the event, then raise a non-``Exception`` error."""
-        calls.append(event)
-        error = _FatalHookError("fatal hook failure")
-        raised.append(error)
-        raise error
-
-    return hook
-
-
-def _raising_cancelled(
-    calls: list[ExecEvent],
-    raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook that raises ``CancelledError``."""
-
-    def hook(event: ExecEvent) -> None:
-        """Record the event, then raise ``CancelledError``."""
-        calls.append(event)
-        error = asyncio.CancelledError()
-        raised.append(error)
-        raise error
-
-    return hook
-
-
-def _check_raises(
-    calls: list[ExecEvent],
-    _raised: list[BaseException],
-) -> ExecHook:
-    """Return a hook whose result makes ``inspect.isawaitable`` raise."""
-
-    def hook(event: ExecEvent) -> _RaisingClass:
-        """Record the event and return a result that breaks the check."""
-        calls.append(event)
-        return _RaisingClass()
-
-    # The result is deliberately outside the declared contract: the point is
-    # that the awaitable check itself raises on it.
     return typ.cast("ExecHook", hook)
+
+
+def _raising_hook(
+    calls: list[ExecEvent],
+    raised: list[BaseException],
+    *,
+    make_error: cabc.Callable[[], BaseException],
+) -> ExecHook:
+    """Return a hook that records its event, then raises ``make_error()``."""
+
+    def hook(event: ExecEvent) -> None:
+        """Record the event, then raise the stand-in error."""
+        calls.append(event)
+        error = make_error()
+        raised.append(error)
+        raise error
+
+    return hook
 
 
 type _Factory = cabc.Callable[
@@ -416,15 +338,24 @@ _FACTORIES: dict[str, _Factory] = {
     "async_mock": _async_mock,
     "autospec_async": _autospec_async,
     "marked_coroutine_function": _marked_coroutine_function,
-    "future": _future,
-    "generator_coroutine": _generator_coroutine,
-    "awaitable_object": _awaitable_object,
-    "mock_result": _mock_result,
-    "magic_mock_result": _magic_mock_result,
-    "raising": _raising,
-    "raising_fatal": _raising_fatal,
-    "raising_cancelled": _raising_cancelled,
-    "check_raises": _check_raises,
+    "future": functools.partial(_recording_hook, produce=_completed_future),
+    "generator_coroutine": functools.partial(_recording_hook, produce=_yield_once),
+    "awaitable_object": functools.partial(_recording_hook, produce=_AwaitableResult),
+    "mock_result": functools.partial(_recording_hook, produce=mock.Mock),
+    "magic_mock_result": functools.partial(_recording_hook, produce=mock.MagicMock),
+    "raising": functools.partial(
+        _raising_hook,
+        make_error=functools.partial(_HookError, "hook failed"),
+    ),
+    "raising_fatal": functools.partial(
+        _raising_hook,
+        make_error=functools.partial(_FatalHookError, "fatal hook failure"),
+    ),
+    "raising_cancelled": functools.partial(
+        _raising_hook,
+        make_error=asyncio.CancelledError,
+    ),
+    "check_raises": functools.partial(_recording_hook, produce=_RaisingClass),
 }
 
 HOOK_KINDS: tuple[str, ...] = tuple(_FACTORIES)
