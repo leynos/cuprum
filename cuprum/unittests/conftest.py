@@ -7,7 +7,9 @@ declares the matching pytest marker for symbolic helper-property checks.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import typing as typ
 
 import hypothesis_crosshair_provider  # ruff: ignore[unused-import]  # Registers CrossHair backend provider on import.
@@ -174,6 +176,16 @@ def identity_pipeline() -> tuple[Pipeline, frozenset[Program]]:
         "import sys; sys.stdout.write(sys.stdin.read())",
     )
     return pipeline, frozenset([ECHO, python_program])
+
+
+@pytest.fixture
+def pipe_write_fd() -> cabc.Iterator[int]:
+    """Yield the write end of a fresh pipe and close both ends afterwards."""
+    with contextlib.ExitStack() as stack:
+        read_fd, write_fd = os.pipe()
+        stack.callback(os.close, read_fd)
+        stack.callback(os.close, write_fd)
+        yield write_fd
 
 
 def _sample(
