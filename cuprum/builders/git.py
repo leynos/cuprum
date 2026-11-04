@@ -71,7 +71,9 @@ def git_checkout(
     ref : str
         Revision to check out.
     create_branch : bool
-        When True, create a new branch at the reference.
+        When True, ``ref`` names a new branch created at ``HEAD``. With
+        ``force``, an existing branch of that name is reset to ``HEAD``
+        instead of the creation failing.
     detach : bool
         When True, check out in detached HEAD state.
     force : bool
