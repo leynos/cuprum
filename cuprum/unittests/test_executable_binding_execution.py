@@ -389,6 +389,38 @@ def test_an_allowlisted_basename_does_not_admit_an_unlisted_program(
     )
 
 
+def test_a_direct_path_binding_with_an_allowlisted_basename_is_refused(
+    tmp_path: Path,
+) -> None:
+    """A stored path sharing an allowlisted basename is refused too.
+
+    The resolver-binding witness above catches a basename-keyed rule because
+    such a rule must call the resolver to learn the basename, so its zero-call
+    count exposes it. A rule applied to a stored path needs no resolver call,
+    so only a direct binding can witness that form. Here the bound path is a
+    working script named ``echo`` while the logical program it is bound to,
+    ``ls``, is catalogued but unlisted; a basename-keyed rule would admit and
+    run the script, so the refusal is what discriminates.
+    """
+    approved = _write_script(tmp_path / str(ECHO), _APPROVED)
+    catalogue, (echo_prog, unlisted) = _catalogue_for(ECHO, LS)
+    allowlist = frozenset([echo_prog])
+
+    assert approved.name == str(ECHO), (
+        f"the bound path's basename must match the allowlisted program, "
+        f"got {approved.name!r}"
+    )
+    assert echo_prog in allowlist, "the allowlist must contain the basename's program"
+    assert unlisted not in allowlist, "the bound logical program must be unlisted"
+
+    with (
+        scoped(ScopeConfig(allowlist=allowlist)),
+        bind_executable(unlisted, str(approved)),
+        pytest.raises(ForbiddenProgramError, match=str(LS)),
+    ):
+        _run_capturing(sh.make(unlisted, catalogue=catalogue)())
+
+
 def test_a_pipeline_refused_at_a_later_stage_resolves_no_stage(
     tmp_path: Path,
 ) -> None:

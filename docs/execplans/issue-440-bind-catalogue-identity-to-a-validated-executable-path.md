@@ -72,7 +72,10 @@ to the child. The allowlist admits or refuses a command by its logical
 that decision.
 `test_an_allowlisted_basename_does_not_admit_an_unlisted_program` witnesses the
 refusal of an unlisted program whose bound executable is named for an
-allowlisted program. It does not witness rejection of an unapproved path.
+allowlisted program, and
+`test_a_direct_path_binding_with_an_allowlisted_basename_is_refused` witnesses
+the same refusal for a stored path, which a basename check could reach without
+calling a resolver. Neither witnesses rejection of an unapproved path.
 
 ## Constraints
 
@@ -3027,20 +3030,23 @@ escalation, not a workaround.
   instruction that this is prose, not a production or test gap. Date/Author:
   2026-10-10, implementing agent.
 - Decision: acceptance clause 1 is re-prescribed around a basename-matching
-  refusal, and a new unit test supplies that witness, rather than reopening
-  issue #440 or changing production behaviour. Rationale: the shipped behaviour
-  was already correct — the allowlist refuses the logical program before the
+  refusal, and new unit tests supply that witness, rather than reopening issue
+  #440 or changing production behaviour. Rationale: the shipped behaviour was
+  already correct — the allowlist refuses the logical program before the
   resolver runs — so there was no production defect to fix. The defect was in
   the evidence: the clause's original arrangement (bind `sccache`, keep
   `sccache` off the allowlist) is satisfied by any implementation that refuses
   every unlisted program, so it could not distinguish the basename-keyed
-  workaround the issue rejects. The new test binds an unlisted program to a
-  working executable whose basename is an allowlisted program's name, which a
-  basename-keyed rule would admit. Considered and rejected: a behavioural
-  scenario in `catalogue.feature` (the question is which key admission uses,
-  which reads more directly as a unit test), and replacing the existing refusal
-  tests (they witness a separate constraint and remain valid). Date/Author:
-  2026-11-03, implementing agent.
+  workaround the issue rejects. The new tests bind an unlisted program to a
+  working executable whose basename is an allowlisted program's name, once
+  through a resolver and once through a stored path; a basename-keyed rule
+  would admit both. The two forms are kept because a basename check on a stored
+  path needs no resolver call, so the resolver-binding form alone would not
+  observe it. Considered and rejected: a behavioural scenario in
+  `catalogue.feature` (the question is which key admission uses, which reads
+  more directly as a unit test), and replacing the existing refusal tests (they
+  witness a separate constraint and remain valid). Date/Author: 2026-11-03,
+  implementing agent.
 
 ## Outcomes & retrospective
 
@@ -3060,14 +3066,22 @@ explained by the binding having been honoured. That arrangement describes the
 *positive* working-impostor test,
 `test_a_bound_program_runs_the_bound_file_not_the_catalogued_one`, and not a
 refusal. A refusal that a basename-keyed rule would not share is witnessed
-separately by `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`.
+separately by `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`
+for a resolver binding and by
+`test_a_direct_path_binding_with_an_allowlisted_basename_is_refused` for a
+stored path.
 
 Each acceptance clause is discharged by a named test or a named documentation
-section. Basename rejection is discharged by
-`test_an_allowlisted_basename_does_not_admit_an_unlisted_program`, in which the
-bound executable's basename is allowlisted while the bound logical program is
-not, so an admission rule keyed on the basename would run it — a shape the
-unlisted-program witnesses below cannot distinguish. An unapproved logical
+section. Basename rejection is discharged by two tests, because the two binding
+forms reach a basename check differently. In
+`test_an_allowlisted_basename_does_not_admit_an_unlisted_program` the bound
+executable's basename is allowlisted while the bound logical program is not,
+and the resolver's zero-call count catches a rule that would have to resolve to
+learn the basename. In
+`test_a_direct_path_binding_with_an_allowlisted_basename_is_refused` the same
+arrangement uses a stored path, which a basename check can inspect without
+calling a resolver, so the refusal itself is the discriminator. Both are shapes
+the unlisted-program witnesses below cannot distinguish. An unapproved logical
 program is separately refused before its resolver runs
 (`test_a_bound_but_unlisted_program_is_refused_without_resolving`, asserting a
 recorded call count of zero, plus the `catalogue.feature` scenario "A binding
@@ -3329,14 +3343,16 @@ O3 — Resolution ordering: enforcement precedes resolution.
   *arrangement* is itself witnessed by
   `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`, which
   binds an unlisted program to a working executable whose basename matches the
-  allowlisted one: zero calls there cannot be explained by a basename-keyed
-  rule, because such a rule would admit and run it. The pipeline path carries
-  its own pair, because ordering inside one stage's observation is not the same
-  property as ordering *across* stages:
-  `test_a_pipeline_refused_at_a_later_stage_resolves_no_stage` binds an allowed
-  first stage and a forbidden later one with a counting resolver on each and
-  asserts `ForbiddenProgramError` with **both** counters at zero. A mutation
-  probe that interleaved enforcement with resolution made it fail with
+  allowlisted one. For a resolver binding, zero calls cannot be explained by a
+  basename-keyed rule because that rule would need the resolver to learn the
+  basename. A stored path needs no resolver call, so
+  `test_a_direct_path_binding_with_an_allowlisted_basename_is_refused`
+  witnesses that form. The pipeline path carries its own pair, because ordering
+  inside one stage's observation is not the same property as ordering *across*
+  stages: `test_a_pipeline_refused_at_a_later_stage_resolves_no_stage` binds an
+  allowed first stage and a forbidden later one with a counting resolver on
+  each and asserts `ForbiddenProgramError` with **both** counters at zero. A
+  mutation probe that interleaved enforcement with resolution made it fail with
   `the permitted stage's resolver must not run for a refused pipeline, ran 1
   times`,
   which is precisely the interleaving it exists to catch — the direct refusal
@@ -3738,13 +3754,18 @@ each is asserted by a named test:
    basename is allowlisted. The discriminating arrangement catalogues two
    programs, allowlists one, and binds the *unlisted* program to a working
    executable whose basename is the allowlisted program's name. Expect
-   `ForbiddenProgramError` naming the unlisted program, with the resolver never
-   called. The weaker form — bind `Program("sccache")` to `/opt/.../sccache`
-   and keep `sccache` off the allowlist — is satisfied by any implementation
-   that refuses every unlisted program, whether or not it understands
-   basenames, so it cannot detect basename-keyed admission. Witnessed by
-   `test_an_allowlisted_basename_does_not_admit_an_unlisted_program`. This is
-   the issue's explicit rejection requirement.
+   `ForbiddenProgramError` naming the unlisted program. The weaker form — bind
+   `Program("sccache")` to `/opt/.../sccache` and keep `sccache` off the
+   allowlist — is satisfied by any implementation that refuses every unlisted
+   program, whether or not it understands basenames, so it cannot detect
+   basename-keyed admission. Both binding forms are witnessed, because a
+   basename check reaches them differently:
+   `test_an_allowlisted_basename_does_not_admit_an_unlisted_program` binds
+   through a resolver and additionally requires the resolver never to run,
+   which catches a rule that would have to resolve to learn the basename;
+   `test_a_direct_path_binding_with_an_allowlisted_basename_is_refused` binds a
+   stored path, which needs no resolver call, so its refusal is the
+   discriminator. This is the issue's explicit rejection requirement.
 2. A configured approved path runs exactly. Bind an allowlisted logical
    program to a script whose catalogued name resolves to a different, working
    script, and assert the child's own `sys.argv[0]` report names the bound file
