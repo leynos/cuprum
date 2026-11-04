@@ -22,7 +22,6 @@ live in ``cuprum.sh.pipeline_output``. They are re-exported here because
 # introspected with ``typing.get_type_hints``, so annotations are evaluated
 # eagerly and every name they use is a genuine runtime import. Only the forward
 # references to ``SafeCmd`` are quoted.
-import asyncio
 import dataclasses as dc
 import typing as typ
 
@@ -37,6 +36,7 @@ from cuprum._pipeline_internals import _MIN_PIPELINE_STAGES, _run_pipeline
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._sink_lifecycle import _outcome_for_error
 from cuprum._subprocess_context import _resolve_timeout
+from cuprum.sh._sync_entry import _run_sync
 from cuprum.sh.execution import ExecutionContext
 from cuprum.sh.output import RunOutputOptions
 from cuprum.sh.pipeline_output import (
@@ -203,7 +203,11 @@ class Pipeline:
         context: ExecutionContext | None = None,
         **deprecated_flags: typ.Unpack[_DeprecatedOutputFlags],
     ) -> PipelineResult:
-        """Execute the pipeline synchronously via ``asyncio.run``.
+        """Execute the pipeline synchronously on a loop this call owns.
+
+        The call creates and closes a fresh event loop, so it cannot run while
+        another event loop is running in the calling thread. Await :meth:`run`
+        from async code instead.
 
         Parameters
         ----------
@@ -227,6 +231,9 @@ class Pipeline:
 
         Raises
         ------
+        RunningEventLoopError
+            If an event loop is already running in the calling thread. The
+            error names :meth:`run` as the asynchronous alternative.
         ValueError
             If ``output`` is combined with deprecated flags, or if it names a
             ``stdin``/``stdout``/``stderr`` target, which pipeline stages do
@@ -237,8 +244,10 @@ class Pipeline:
             If execution exceeds the effective timeout.
         """  # ruff: ignore[docstring-extraneous-exception] - public exceptions propagate through run()
         out = _resolve_pipeline_output(output, deprecated_flags)
-        return asyncio.run(
-            self.run(output=out, timeout=timeout, context=context),
+        return _run_sync(
+            lambda: self.run(output=out, timeout=timeout, context=context),
+            entry_point="run_sync()",
+            async_alternative="run()",
         )
 
     async def run_bytes(
@@ -319,7 +328,11 @@ class Pipeline:
         timeout: float | None = None,
         context: ExecutionContext | None = None,
     ) -> BytesPipelineResult:
-        """Execute the pipeline synchronously, capturing its output as bytes.
+        """Execute the pipeline synchronously on a loop this call owns.
+
+        The call creates and closes a fresh event loop, so it cannot run while
+        another event loop is running in the calling thread. Await
+        :meth:`run_bytes` from async code instead.
 
         Parameters
         ----------
@@ -341,6 +354,9 @@ class Pipeline:
 
         Raises
         ------
+        RunningEventLoopError
+            If an event loop is already running in the calling thread. The
+            error names :meth:`run_bytes` as the asynchronous alternative.
         ValueError
             If ``output.on_line`` is set.
         PermissionError
@@ -349,8 +365,10 @@ class Pipeline:
             If execution exceeds the effective timeout.
 
         """  # ruff: ignore[docstring-extraneous-exception] - ValueError and the public exceptions propagate through the bytes entry point
-        return asyncio.run(
-            self.run_bytes(output=output, timeout=timeout, context=context),
+        return _run_sync(
+            lambda: self.run_bytes(output=output, timeout=timeout, context=context),
+            entry_point="run_bytes_sync()",
+            async_alternative="run_bytes()",
         )
 
 

@@ -965,17 +965,8 @@ members = [
 reason = "Two platform predicates whose bodies are both the `os.name != \"nt\"` test. The docstrings name different limitations — Windows Proactor overlapped handles cannot take synchronous native I/O, and Windows accepts only its own terminate/kill pairs — and each predicate sits beside the error it guards so the answer cannot drift. Both names are monkeypatch seams the tests patch by name. This is the platform-guard idiom an earlier entry already records."
 
 [[tool.duplication_gate.allow]]
-members = [
-    "cuprum/sh/bytes_entry_points.py::run_bytes_sync",
-    "cuprum/sh/safe_cmd.py::run_sync",
-]
-reason = "Two synchronous wrappers that are each one `asyncio.run(...)` over an async twin. The matched text is the public signature and its four keywords written out; a shared `_run_sync(awaitable)` would be a pure delegate that deletes the signatures the public API documents, the same shape the `__or__` entry above records. Re-keyed — the bytes twin moved from `safe_cmd.py` to `bytes_entry_points.py` when this branch split the module past the 400-line ceiling — rather than deleted, because the duplication moved with it."
-[[tool.duplication_gate.allow]]
-members = [
-    "cuprum/sh/pipeline.py",
-    "cuprum/sh/safe_cmd.py",
-]
-reason = "Three one-line `asyncio.run` wrappers spread across the two command types. Each gives one async entry point a synchronous twin with its own documented signature and its own return type; the matched text is the signature, not a shared implementation."
+unit = "cuprum/sh/pipeline.py"
+reason = "The text and bytes pipeline entry points repeat two shapes inside one module. `run()` and `run_bytes()` share the execution bracket that awaits `_run_pipeline` and, on any `BaseException`, closes the sink bracket with the run's outcome before re-raising; `run_sync()` and `run_bytes_sync()` share the keyword-only signature and the `_run_sync(...)` call that guards the async twin. The bracket is the one exit path every pipeline run must take, and the sync wrappers are the public signatures the API documents. The differing piece is which result narrower validates the run; threading that narrower through a helper would replace two explicit public methods with a delegate whose callers cannot read it, and folding the two wrappers together would take a mode flag. The `__or__` family in this module keeps its own precise entry above."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -1052,10 +1043,6 @@ reason = "Two modules whose import prologue repeats: the same five-name `from cu
 [[tool.duplication_gate.allow]]
 members = ["cuprum/_pipeline_finalize.py", "cuprum/_command_finalization.py"]
 reason = "The same prologue in the pipeline and command finalization modules: an `_observability` import of the two shutdown helpers (`_drain_tasks_during_cleanup`, `_wait_for_exec_hook_tasks`) that every finalizer needs to stop hook tasks, before each declares its `TYPE_CHECKING` block. Two modules, two different result families, one dependency surface; import declarations cannot be shared, for the reason the import-family entries above record. The finalization ordering below the imports is where the two deliberately part company."
-
-[[tool.duplication_gate.allow]]
-members = ["cuprum/sh/bytes_entry_points.py", "cuprum/sh/pipeline.py", "cuprum/sh/safe_cmd.py"]
-reason = "Three synchronous entry points that end in an `asyncio.run(...)` over an async twin with the same four keywords. The matched text is the tail of the public method — the call and its forwarded arguments — not a shared implementation; a shared `_run_sync(awaitable)` would be a pure delegate that deletes the signatures the public API documents, the shape the `__or__` entry above records. The fragments carry no name, so this entry is keyed by whole module: `bytes_entry_points.py` is where this branch's split moved `run_bytes_sync`, and `pipeline.py ~ safe_cmd.py` is the pair `main` already reports at the same tail."
 
 [[tool.duplication_gate.allow]]
 members = ["cuprum/sh/stdio.py::path_value", "cuprum/sh/stdio.py::fd_value"]
