@@ -184,7 +184,12 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   the committed worktree tree: `check-fmt`, `typecheck`, `lint`, `test`,
   `markdownlint`, and `nixie`, all green; the two host faults met while running
   them are recorded in `Surprises & discoveries`.
-- [ ] EP-M2: result-guarded dispatch implemented; red tests green.
+- [x] (2026-11-04) EP-M2: result-guarded dispatch implemented under Option A.
+  Both `xfail` markers are removed and the focused suites are green:
+  `test_observe_hook_dispatch.py` and
+  `test_observe_hook_dispatch_properties.py` pass 9 tests, and the behaviour
+  scenario passes all 5 example rows. Nothing outside `_emit_exec_event` and
+  its docstring changed.
 - [ ] EP-M3: frame-census command implemented and tested.
 - [ ] EP-M4: dispatch microbenchmark added.
 - [ ] EP-M5: profiler and timing evidence collected; evidence document
