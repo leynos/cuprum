@@ -293,6 +293,7 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     def rewrite(
         _program: str, _args: tuple[str, ...], _workspace: Path
     ) -> tuple[int, str]:
+        """Fail the guarded run as though it had rewritten the lockfile."""
         error = faults._LockfileRewriteError(
             "changed the copied lockfile", "kani output"
         )
