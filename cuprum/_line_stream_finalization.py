@@ -63,9 +63,29 @@ class _LineIterationState:
     coordinator: asyncio.Task[None] | None = None
 
 
+def _result_outranks_teardown(
+    result: CommandResult,
+    teardown_failure: BaseException | None,
+) -> bool:
+    """Whether the run's own result says more than a teardown failure does.
+
+    A result with nothing else wrong is the whole story. A failed result also
+    wins: the run's exit status is its verdict, and ``error`` would hide it.
+    A clean result next to a teardown failure does not win, because the caller
+    saw the failure and must not be left with a success annotation.
+
+    Returns
+    -------
+    bool
+        ``True`` when the result should supply the terminal outcome.
+    """
+    return teardown_failure is None or result.exit_code != 0
+
+
 def _line_stream_outcome(
     result: CommandResult | None,
     failure: BaseException | None,
+    teardown_failure: BaseException | None = None,
 ) -> sinks.SessionOutcome:
     """Map how a line stream ended onto its session's terminal outcome.
 
@@ -85,14 +105,21 @@ def _line_stream_outcome(
     non-zero exit behind the same detail. A genuine error around the result
     still wins, because it says the run did not finish cleanly.
 
-    Reaching both ``None`` means a close landed before the run produced either
-    outcome. That is cancellation for the same reason an explicitly closed
-    stream is: the caller asked to stop, and no child ever reported.
+    A teardown failure outranks a clean result: the caller saw it, so a run
+    that exited zero must not be annotated as successful. It does not outrank
+    a result the run itself reported as failed, because that is the run's own
+    verdict and ``error`` would hide its exit status behind the cleanup error.
+
+    Reaching all three ``None`` means a close landed before the run produced
+    either outcome. That is cancellation for the same reason an explicitly
+    closed stream is: the caller asked to stop, and no child ever reported.
     """
     if failure is not None and not isinstance(failure, GeneratorExit):
         return _outcome_for_error(failure)
-    if result is not None:
+    if result is not None and _result_outranks_teardown(result, teardown_failure):
         return _outcome_for_result(result)
+    if teardown_failure is not None:
+        return _outcome_for_error(teardown_failure)
     return sinks.SessionOutcome(outcome=TerminalOutcome.CANCELLED)
 
 
@@ -215,13 +242,28 @@ async def _settle_line_iteration(
     half-built run must release the session its opener created. It is also the
     last writer, so the release and the group close land after every mirrored
     line.
+
+    Reconciliation can fail after the run itself succeeded — an observe hook
+    scheduled as a task is surfaced only when teardown drains it. That failure
+    is part of how the stream ended, so it reaches the close outcome instead of
+    leaving the adapter to annotate a run the caller saw fail as a success. It
+    ranks below a result the run itself reported, so a failed child keeps its
+    own exit status rather than being relabelled as a teardown error.
     """
+    teardown_failure: BaseException | None = None
     try:
         await _reconcile_and_close(state, tracking, result, failure)
+    except BaseException as error:  # a cancellation is a teardown outcome too
+        teardown_failure = error
+        raise
     finally:
         await _shielded_cleanup(
             tracking.sink_bracket.aclose(
-                outcome=_line_stream_outcome(result, failure),
+                outcome=_line_stream_outcome(
+                    result,
+                    failure,
+                    teardown_failure,
+                ),
             ),
         )
 
