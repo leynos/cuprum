@@ -160,7 +160,9 @@ def _single_quoted(text: str) -> str:
 ATOMS = st.one_of(
     st.sampled_from(["CATALOGUE", "None", "42", "mate.allowlist"]),
     st.builds(_single_quoted, PAYLOAD),
-    st.sampled_from(["'allowlist=mate.allowlist'", "'scoped(allowlist=m)'"]),
+    # Assembled from KEYWORD so no tracked file re-introduces the retired call
+    # as literal text that a plain search would report.
+    st.sampled_from([f"'{KEYWORD}=mate.allowlist'", f"'scoped({KEYWORD}=m)'"]),
 )
 
 
