@@ -1410,7 +1410,19 @@ failure and replaces the requested status with 120. The guard is the
 per-process complement to `BrokenPipePolicy`, which governs cuprum's echo
 writes during a run.
 
-- [x] 16.1. Install a process-level guard that preserves the requested status.
+### 16.1. Install and prove the process-level guard
+
+This step answers whether the guard preserves the requested status without
+changing how unrelated streams are treated.
+
+- [x] 16.1.1. Install an idempotent `install_exit_status_guard()` hook with no
+  import-time side effect.
+  - Success: one registration survives concurrent callers, the hook flushes
+    each standard stream, acts only on `BrokenPipeError`, leaves `None`,
+    healthy, and deliberately closed streams alone, and never raises.
+- [x] 16.1.2. Prove status preservation across a real closed pipe.
+  - Success: guarded statuses 0 and 3 survive a closed reader, an unguarded
+    control reproduces 120, and the ordering rules and limits are documented.
   - Completion evidence (2026-10-30): `cuprum/exit_status_guard.py` exports
     `install_exit_status_guard()`, one idempotent `atexit` registration with no
     import-time side effect. The hook flushes `sys.stdout` and `sys.stderr`
