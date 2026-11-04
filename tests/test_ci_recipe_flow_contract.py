@@ -31,6 +31,11 @@ from tests.helpers.recipe_flow import (
     require_selector_drives_pytest,
     require_selector_is_consumed,
 )
+from tests.helpers.recipe_read import (
+    command_program,
+    command_segments,
+    recipe_tokens,
+)
 from tests.helpers.suite_selection import SELECTOR
 
 #: The pytest invocation the recipe must route the selector into. The variable
@@ -206,6 +211,33 @@ def test_individual_targets_filter_grouped_invocations() -> None:
     ), "every individual pytest process must deselect all grouped modules"
 
 
+def test_grouped_invocation_keeps_shared_builds_on_one_worker() -> None:
+    """Grouped modules share session-scoped builds, so xdist must honour the group.
+
+    The modules named in `PYTEST_GROUPED_TARGETS` build distributions once per
+    session. Under the default `load` scheduler, xdist duplicates that
+    session-scoped fixture in every worker, so each worker repeats the build and
+    the module's budget pays for work another worker already did. The tests carry
+    an `xdist_group` marker; it only takes effect when the invocation selects
+    `--dist loadgroup`.
+    """
+    commands = command_segments(recipe_tokens(recipe_of("test-python")))
+    grouped_invocations = [
+        " ".join(words)
+        for _position, words in commands
+        if command_program(words) == f"$({PYTEST_INVOCATION})"
+        and "PYTEST_GROUPED_DESELECT" not in " ".join(words)
+    ]
+
+    assert grouped_invocations, "the grouped pytest branch must invoke pytest"
+    assert any(
+        "--dist loadgroup" in invocation for invocation in grouped_invocations
+    ), (
+        "the grouped branch must run with --dist loadgroup so xdist_group markers "
+        "keep the shared distribution build on one worker"
+    )
+
+
 @pytest.mark.parametrize(
     ("fault", "expected"),
     [
@@ -224,7 +256,9 @@ def test_grouped_selector_must_reach_pytest(
     grouped_binding = (
         "set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS));"
     )
-    grouped_invocation = '$(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?;'
+    grouped_invocation = (
+        '$(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?;'
+    )
     match fault:
         case "wrong intersection":
             recipe = recipe.replace(
@@ -344,7 +378,12 @@ def test_clean_removes_retained_boundary_run_roots() -> None:
     invocation may be active, and the workflow archives the directory after
     its step completes.
     """
-    recipe = recipe_of("clean")
+    commands = command_segments(recipe_tokens(recipe_of("clean")))
+    removals = tuple(
+        words for _start, words in commands if command_program(words) == "rm"
+    )
 
     for runs in (".cache/boundary-contract/runs", ".cache/boundary-faults/runs"):
-        assert runs in recipe, f"make clean must remove {runs}"
+        assert any(runs in word for words in removals for word in words), (
+            f"make clean must remove {runs} in an rm command the shell runs"
+        )

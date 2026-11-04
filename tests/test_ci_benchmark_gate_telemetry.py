@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 from tests.helpers.benchmark_gate_telemetry import (
@@ -20,6 +21,10 @@ if typ.TYPE_CHECKING:
 #: name is the contract: a reader looking for the annotation in `ci.yml` finds
 #: it by this string, so a rename is a change to the observable surface.
 RECORD_FAILURE_WARNING = "Warn when the benchmark gate record could not be written"
+
+#: Matches the artefact uploader pinned to a full 40-character lowercase hex
+#: commit SHA. The SHA value is not asserted: Dependabot owns revision updates.
+UPLOADER_RE = re.compile(r"^actions/upload-artifact@[0-9a-f]{40}$")
 
 
 def test_decision_logs_need_no_external_service(workflow_data: Workflow) -> None:
@@ -47,9 +52,9 @@ def test_decision_logs_need_no_external_service(workflow_data: Workflow) -> None
 def test_archive_retention_and_fail_open_contract(workflow_data: Workflow) -> None:
     """Archive one log per attempt without changing benchmark admission."""
     archive = step_named(workflow_data, CHANGES_JOB, UPLOAD_STEP)
-    assert archive.get("uses") == (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-    ), "reuse the repository's pinned artefact uploader"
+    uses = archive.get("uses")
+    assert isinstance(uses, str), "the uploader reference must be a string"
+    assert UPLOADER_RE.match(uses), "reuse the repository's pinned artefact uploader"
     assert archive.get("continue-on-error") is True, "upload failure must fail open"
     condition = str(archive.get("if", ""))
     for required in (

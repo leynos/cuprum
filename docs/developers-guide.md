@@ -3153,12 +3153,17 @@ telemetry architecture and its design rationale are recorded in the
 ### Build and test worker controls
 
 `make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
-worker count to enable xdist explicitly. Set `CARGO_BUILD_JOBS=N` to bound
-Cargo's build parallelism; `make` passes it through unchanged, and Cargo uses
-every core when it is unset. Set `TEST_JOBS=N` for the test-thread count, which
-nextest takes as `--test-threads` and the `cargo test` fallback takes after
-`--`. `BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no
-longer sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
+worker count to enable xdist explicitly. The grouped branch, which runs the
+modules in `PYTEST_GROUPED_TARGETS`, always passes `--dist loadgroup`: those
+modules share session-scoped distribution builds and carry an `xdist_group`
+marker, so a positive worker count keeps every consumer of one shared build on
+a single worker instead of repeating the build once per worker. Set
+`CARGO_BUILD_JOBS=N` to bound Cargo's build parallelism; `make` passes it
+through unchanged, and Cargo uses every core when it is unset. Set
+`TEST_JOBS=N` for the test-thread count, which nextest takes as
+`--test-threads` and the `cargo test` fallback takes after `--`.
+`BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no longer
+sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
 
 ## Tracing adapter span lifecycle
 
@@ -7507,11 +7512,14 @@ manual chore.
 Contract tests may still verify the *shape* of a reusable-workflow caller. Each
 call into `leynos/shared-actions` must use an immutable, lowercase 40-character
 commit SHA. Tests must not prescribe a particular SHA value: Dependabot owns
-revision updates. Calls do not have to share one revision; a workflow may pin
-an action to the commit that provides the behaviour and compatibility that
-workflow needs. For example, the coverage workflow can retain a newer
-`generate-coverage` pin for baseline compatibility while its other shared
-actions use a different validated commit.
+revision updates. The same shape rule covers third-party actions pinned in
+workflow steps, such as `actions/upload-artifact`: a contract test asserts the
+`actions/<name>@<40 lowercase hex>` form rather than a literal revision, so a
+Dependabot bump does not fail the suite. Calls do not have to share one
+revision; a workflow may pin an action to the commit that provides the
+behaviour and compatibility that workflow needs. For example, the coverage
+workflow can retain a newer `generate-coverage` pin for baseline compatibility
+while its other shared actions use a different validated commit.
 
 - Do assert the workflow references the correct reusable workflow path.
 - Do assert that every shared-action call uses a full, lowercase 40-character

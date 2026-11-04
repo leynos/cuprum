@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import errno
 import stat
 import typing as typ
 from types import SimpleNamespace
 
-from scripts import cargo_state
+import pytest
+
+from scripts import cargo_run_home, cargo_state
 from scripts.tests.cargo_state_support import create_repository
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def test_run_homes_receive_current_caller_settings_but_never_credentials(
@@ -163,4 +164,37 @@ def test_run_homes_are_independent_copies_and_preserve_job_settings(
     )
     assert first_environment["CARGO_BUILD_JOBS"] == "9", (
         "run setup must not override caller-selected Cargo parallelism"
+    )
+
+
+def test_a_failed_copy_removes_the_partial_read_only_run_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial copy must not leave read-only files behind a full disk."""
+    snapshot = tmp_path / "snapshot"
+    seeded = snapshot / "registry/cache/crate"
+    seeded.parent.mkdir(parents=True)
+    seeded.write_text("archive", encoding="utf-8")
+    for path in (snapshot, *snapshot.rglob("*")):
+        path.chmod(path.stat().st_mode & ~0o222)
+
+    def fail_after_copying(source: Path, destination: Path) -> Path:
+        """Mimic a partial copy that inherited the snapshot's read-only modes."""
+        destination.mkdir(parents=True)
+        mirrored = destination / "registry/cache/crate"
+        mirrored.parent.mkdir(parents=True)
+        mirrored.write_bytes((source / "registry/cache/crate").read_bytes())
+        for path in (mirrored.parent, mirrored):
+            path.chmod(path.stat().st_mode & ~0o222)
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(cargo_run_home.shutil, "copytree", fail_after_copying)
+    run_root = tmp_path / "run"
+
+    with pytest.raises(OSError, match="No space left"):
+        cargo_state.create_run_cargo_home(snapshot, run_root)
+
+    assert not (run_root / "cargo-home").exists(), (
+        "a half-populated read-only home must not survive a failed copy"
     )

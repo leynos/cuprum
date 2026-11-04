@@ -15,6 +15,8 @@ if typ.TYPE_CHECKING:
     from tests.helpers.distribution_artefacts import DistributionArtefactFactory
 
 
+# The build factory is session-scoped, so every consumer must share one worker.
+@pytest.mark.xdist_group("distribution-artefacts")
 @pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_retains_native_workspace(

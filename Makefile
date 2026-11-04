@@ -706,7 +706,7 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 	done
 	@set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
 	if [ "$$#" -gt 0 ]; then \
-	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) "$$@" || exit $$?; \
+	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
 	fi
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so

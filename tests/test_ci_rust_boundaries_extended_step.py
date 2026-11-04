@@ -12,6 +12,7 @@ of what ``make`` did.
 from __future__ import annotations
 
 import os
+import re
 import typing as typ
 
 import pytest
@@ -25,6 +26,10 @@ if typ.TYPE_CHECKING:
 WORKFLOW = "rust-boundaries.yml"
 JOB = "extended"
 STEP = "Execute extended verification"
+
+#: Matches the artefact uploader pinned to a full 40-character lowercase hex
+#: commit SHA. The SHA value is not asserted: Dependabot owns revision updates.
+UPLOADER_RE = re.compile(r"^actions/upload-artifact@[0-9a-f]{40}$")
 
 
 def _run(
@@ -133,9 +138,11 @@ def test_kani_fault_sensitivity_logs_are_archived() -> None:
     assert archive.get("if") == "always() && matrix.check == 'kani'", (
         "fault logs must be archived even when the Kani step fails"
     )
-    assert archive.get("uses") == (
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
-    ), "the archive must use the pinned artefact uploader"
+    uses = archive.get("uses")
+    assert isinstance(uses, str), "the uploader reference must be a string"
+    assert UPLOADER_RE.match(uses), (
+        "the archive must use the artefact uploader pinned to a commit SHA"
+    )
     inputs = archive.get("with")
     assert isinstance(inputs, dict), "the archive must declare its inputs"
     assert inputs.get("name") == (

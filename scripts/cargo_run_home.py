@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import typing as typ
 
@@ -59,11 +60,21 @@ def create_run_cargo_home(
     _require_real_directory(snapshot, CargoStatePreparationError, "Cargo snapshot")
     reject_tree_symlinks(snapshot, CargoStatePreparationError)
     run_home = _prepare_run_home(run_root, CargoStatePreparationError)
-    shutil.copytree(snapshot, run_home)
-    # Snapshots are read-only, and an older one may still carry settings from
-    # before published snapshots excluded them. Restore write access before
-    # dropping any copied settings, then apply the caller's current ones.
-    make_tree_writable(run_home)
+    try:
+        shutil.copytree(snapshot, run_home)
+        # Snapshots are read-only, and an older one may still carry settings from
+        # before published snapshots excluded them. Restore write access before
+        # dropping any copied settings, then apply the caller's current ones.
+        make_tree_writable(run_home)
+    except BaseException:
+        # copytree mirrors the snapshot's read-only modes even when it fails
+        # part-way, so a half-populated home cannot be removed by the callers'
+        # best-effort cleanup. Restore write access first, then drop it, so a
+        # full disk is not left holding the space that caused the failure.
+        with contextlib.suppress(OSError):
+            make_tree_writable(run_home)
+        shutil.rmtree(run_home, ignore_errors=True)
+        raise
     remove_cargo_settings(run_home)
     if source_cargo_home is not None:
         copy_cargo_settings(

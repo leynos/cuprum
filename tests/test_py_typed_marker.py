@@ -58,6 +58,7 @@ def _wheel_marker(wheel_path: Path) -> str | None:
 
 
 # The test budget includes the first lazy build and its archive assertions.
+@pytest.mark.xdist_group("distribution-artefacts")
 @pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_wheel_ships_the_pep561_marker(
@@ -87,6 +88,7 @@ def test_wheel_ships_the_pep561_marker(
 
 
 # The test budget includes the first lazy build and its archive assertions.
+@pytest.mark.xdist_group("distribution-artefacts")
 @pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
