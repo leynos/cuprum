@@ -207,7 +207,14 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   `except BaseException` that delegates logging to `_warn_hook_failure`, which
   removes a decision point without adding hot-path work.
   `cs delta 71aaf3eb HEAD` now reports "No issues found in checked changes."
-- [ ] EP-M3: frame-census command implemented and tested.
+- [x] (2026-11-04) EP-M3: frame census implemented as
+  `benchmarks/summarize_hot_path_frames.py` and tested by
+  `cuprum/unittests/test_hot_path_frame_census.py`. The targeted suites pass
+  (11 tests, including the brute-force recount property), `ruff`,
+  `interrogate`, classic pylint, DF12 pylint, and `ty` are clean on both new
+  files, and the CLI was smoke-tested end to end. Documented under "Profiling
+  harness overview" in `docs/developers-guide.md`. Two defects in the draft
+  were found by the tests and fixed (see `Surprises & discoveries`).
 - [ ] EP-M4: dispatch microbenchmark added.
 - [ ] EP-M5: profiler and timing evidence collected; evidence document
   written.
@@ -317,6 +324,16 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   certifies the same trees), and the complexity was fixed in a follow-up
   commit. Lesson: re-run the delta after the change it is meant to certify, and
   cite the commit it was run against.
+- Observation: the EP-M3 census draft carried two defects that its own tests
+  caught before the commit. Its `_weigh` helper skipped the stacks that *had*
+  the anchor instead of the ones that lacked it, so `target_weight` read zero
+  for every capture and `target_weight_outside_anchor` absorbed the anchored
+  samples; the rename from `invert_anchor` to `require_anchor` states the
+  predicate the caller actually needs. Separately, `parse_spec` used
+  `str.partition`, which accepts `emit_line@path@extra` as a location of
+  `path@extra`, while the two-separator test requires rejection. Impact: both
+  are fixed in the EP-M3 commit; the brute-force recount test is what made the
+  first one visible, and it stays as the guard.
 
 ## Decision log
 
