@@ -142,15 +142,14 @@ def _redirect_stream(name: str, stream: typ.TextIO) -> None:
         setattr(sys, name, _NullTextSink())
         return
     try:
-        null_descriptor = os.open(os.devnull, os.O_WRONLY)
-        try:
-            os.dup2(null_descriptor, descriptor)
-        finally:
-            # If the kernel handed back the stream's own number, that number
-            # was free, so opening the null device already redirected it and
-            # closing it here would undo the redirect.
+        with contextlib.ExitStack() as stack:
+            null_descriptor = os.open(os.devnull, os.O_WRONLY)
             if null_descriptor != descriptor:
-                os.close(null_descriptor)
+                # If the kernel handed back the stream's own number, that
+                # number was free, so opening the null device already
+                # redirected it and closing it here would undo the redirect.
+                stack.callback(os.close, null_descriptor)
+            os.dup2(null_descriptor, descriptor)
     except _DESCRIPTOR_FAILURES:
         setattr(sys, name, _NullTextSink())
 
