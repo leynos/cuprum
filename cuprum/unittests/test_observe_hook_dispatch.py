@@ -3,7 +3,7 @@
 Roadmap 5.2.2 asks that known-sync hooks dispatch without per-line awaitable
 detection while every awaitable shape keeps being scheduled. These examples
 observe the dispatcher directly: a spy counts ``inspect.isawaitable`` calls
-made *from* ``_emit_exec_event`` only, so asyncio or pytest plugin traffic
+made *from* ``_emit_observe_hook`` only, so asyncio or pytest plugin traffic
 cannot inflate or mask the count.
 """
 
@@ -20,7 +20,7 @@ import warnings
 import pytest
 
 from cuprum import ECHO
-from cuprum._observability import _emit_exec_event
+from cuprum._observability import _emit_exec_event, _emit_observe_hook
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
@@ -49,7 +49,7 @@ def _event(phase: str = "plan") -> ExecEvent:
 def _install_spy(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     """Patch ``inspect.isawaitable`` and return the results it was asked about.
 
-    Only calls whose immediate caller is ``_emit_exec_event`` are recorded, so
+    Only calls whose immediate caller is ``_emit_observe_hook`` are recorded, so
     the count is attributable to the dispatcher under test.
 
     Returns
@@ -62,7 +62,7 @@ def _install_spy(monkeypatch: pytest.MonkeyPatch) -> list[object]:
 
     def spy(obj: object) -> bool:
         """Record the argument when the dispatcher is the caller."""
-        if sys._getframe(1).f_code is _emit_exec_event.__code__:
+        if sys._getframe(1).f_code is _emit_observe_hook.__code__:
             seen.append(obj)
         return real(obj)
 
@@ -70,10 +70,6 @@ def _install_spy(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     return seen
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="5.2.2 result-guarded dispatch not yet implemented",
-)
 def test_none_results_never_reach_isawaitable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -89,10 +85,6 @@ def test_none_results_never_reach_isawaitable(
     assert not seen, "a None result must never reach inspect.isawaitable"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="5.2.2 result-guarded dispatch not yet implemented",
-)
 def test_native_coroutines_never_reach_isawaitable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
