@@ -32,9 +32,7 @@ def cargo_environment(
         pinned to the caller's configured or default Rustup home.
     """
     environment = dict(os.environ if caller_environment is None else caller_environment)
-    environment["CARGO_HOME"] = str(cargo_home)
-    environment["RUSTUP_HOME"] = _pinned_rustup_home(environment)
-    return environment
+    return _cargo_environment(cargo_home, _pinned_rustup_home(environment), environment)
 
 
 def _caller_cargo_home(environment: cabc.Mapping[str, str]) -> Path:

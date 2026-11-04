@@ -283,6 +283,33 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     )
 
 
+def test_a_lockfile_rewrite_archives_output_before_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guarded run that rewrites its lockfile must still leave diagnostics."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+
+    def rewrite(
+        _program: str, _args: tuple[str, ...], _workspace: Path
+    ) -> tuple[int, str]:
+        error = faults._LockfileRewriteError(
+            "changed the copied lockfile", "kani output"
+        )
+        raise error
+
+    monkeypatch.setattr(faults, "_run", rewrite)
+    with pytest.raises(faults._LockfileRewriteError):
+        faults._check(
+            faults._Check("kani-control", "cargo", ("kani", "--package", "x")),
+            tmp_path,
+            logs,
+        )
+    assert (logs / "kani-control.log").read_text(encoding="utf-8") == "kani output", (
+        "the verifier output must be archived before the rewrite failure propagates"
+    )
+
+
 def test_a_control_that_fails_closed_is_not_accepted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

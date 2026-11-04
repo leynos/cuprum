@@ -243,8 +243,8 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             dir=request.snapshot_root,
         )
     )
-    lockfile = request.repository_root / "rust/Cargo.lock"
-    lockfile_digest = _sha256(lockfile)
+    manifest = request.repository_root / "rust/Cargo.toml"
+    lockfile = manifest.parent / "Cargo.lock"
     try:
         _seed_cargo_home_impl(
             request.source_cargo_home,
@@ -252,29 +252,14 @@ def _create_snapshot(request: _SnapshotPreparation) -> PreparedCargoSnapshot:
             CargoStatePreparationError,
             selected_archives=selected_registry_archives(lockfile),
         )
-        fetch_environment = _cargo_environment(
-            temporary_path,
-            request.rustup_home,
-            request.caller_environment,
+        _fetch_locked(
+            manifest,
+            _cargo_environment(
+                temporary_path,
+                request.rustup_home,
+                request.caller_environment,
+            ),
         )
-        fetch_environment["CARGO_NET_OFFLINE"] = "false"
-        fetch_arguments = (
-            "fetch",
-            "--locked",
-            "--manifest-path",
-            str(request.repository_root / "rust/Cargo.toml"),
-        )
-        result = _run_cargo(
-            fetch_arguments,
-            request.repository_root / "rust",
-            fetch_environment,
-        )
-        if result.exit_code != 0:
-            msg = f"cargo fetch --locked failed with exit code {result.exit_code}"
-            raise CargoStatePreparationError(msg)
-        if _sha256(lockfile) != lockfile_digest:
-            msg = "cargo fetch changed rust/Cargo.lock despite --locked"
-            raise CargoStatePreparationError(msg)
 
         _reject_tree_symlinks_impl(temporary_path, CargoStatePreparationError)
         _prune_registry_archives(temporary_path, lockfile)
@@ -338,24 +323,39 @@ def fetch_workspace_dependencies(
     if not lockfile.is_file():
         msg = f"locked Cargo preparation requires {lockfile}"
         raise CargoStatePreparationError(msg)
-    lockfile_digest = _sha256(lockfile)
     environment = dict(os.environ if caller_environment is None else caller_environment)
-    fetch_environment = cargo_environment(cargo_home, environment)
-    fetch_environment["CARGO_NET_OFFLINE"] = "false"
     started = time.monotonic()
+    _fetch_locked(manifest, cargo_environment(cargo_home, environment))
+    return time.monotonic() - started
+
+
+def _fetch_locked(manifest: Path, environment: cabc.Mapping[str, str]) -> None:
+    """Fetch one workspace's locked dependencies and reject rewritten inputs.
+
+    Network access is enabled only for this preparation call so Cargo can
+    populate the cache, while the digest comparison afterwards proves
+    ``--locked`` held.
+
+    Raises
+    ------
+    CargoStatePreparationError
+        If Cargo fails or the fetch changes the manifest's sibling lockfile.
+    """
+    lockfile = manifest.parent / "Cargo.lock"
+    lockfile_digest = _sha256(lockfile)
+    fetch_environment = dict(environment)
+    fetch_environment["CARGO_NET_OFFLINE"] = "false"
     result = _run_cargo(
         ("fetch", "--locked", "--manifest-path", str(manifest)),
         manifest.parent,
         fetch_environment,
     )
-    elapsed = time.monotonic() - started
     if result.exit_code != 0:
         msg = f"cargo fetch --locked failed with exit code {result.exit_code}"
         raise CargoStatePreparationError(msg)
     if _sha256(lockfile) != lockfile_digest:
-        msg = f"cargo fetch changed {lockfile.name} despite --locked"
+        msg = f"cargo fetch changed {lockfile.name} during locked preparation"
         raise CargoStatePreparationError(msg)
-    return elapsed
 
 
 def create_run_cargo_home(snapshot: Path, run_root: Path) -> Path:

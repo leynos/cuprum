@@ -71,6 +71,15 @@ class BoundaryFaultError(RuntimeError):
         self.log_path = log_path
 
 
+class _LockfileRewriteError(RuntimeError):
+    """Report a verifier that rewrote its lockfile, retaining its output."""
+
+    def __init__(self, message: str, output: str) -> None:
+        """Carry the verifier's diagnostic stream with the rewrite failure."""
+        super().__init__(message)
+        self.output = output
+
+
 def read_tool_pins() -> ToolPins:
     """Read the pinned Kani and Verus versions from the repository.
 
@@ -207,13 +216,14 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
     )
     with scoped(ScopeConfig(allowlist=frozenset({executable}))):
         result = command(*invocation.command_arguments).run_sync(context=context)
+    output = (result.stdout or "") + (result.stderr or "")
     if (
         invocation.lockfile is not None
         and _sha256(invocation.lockfile) != invocation.lockfile_digest
     ):
         msg = f"cargo kani changed the copied lockfile: {invocation.lockfile}"
-        raise RuntimeError(msg)
-    return result.exit_code, (result.stdout or "") + (result.stderr or "")
+        raise _LockfileRewriteError(msg, output)
+    return result.exit_code, output
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -228,15 +238,20 @@ class _Check:
 
 def _check(check: _Check, workspace: Path, logs: Path) -> None:
     """Archive a control or require the specific counterexample diagnostic."""
-    code, output = _run(check.program, check.args, workspace)
-    (logs / f"{check.name}.log").write_text(output, encoding="utf-8")
+    log_path = logs / f"{check.name}.log"
+    try:
+        code, output = _run(check.program, check.args, workspace)
+    except _LockfileRewriteError as error:
+        log_path.write_text(error.output, encoding="utf-8")
+        raise
+    log_path.write_text(output, encoding="utf-8")
     passed = (
         code == 0
         if check.expected_failure is None
         else code != 0 and check.expected_failure in output
     )
     if not passed:
-        raise BoundaryFaultError(check.name, code, logs / f"{check.name}.log")
+        raise BoundaryFaultError(check.name, code, log_path)
 
 
 def main() -> None:
