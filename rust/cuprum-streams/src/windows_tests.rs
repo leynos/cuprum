@@ -92,3 +92,52 @@ fn public_consume_stream_decodes_synchronous_pipe_bytes() {
         "consume must decode the full UTF-8 stream",
     );
 }
+
+/// A broken Windows writer is non-fatal and the pump still drains the source.
+///
+/// This pins two Windows-specific assumptions the Unix regression cannot: that
+/// `WriteFile` against a pipe whose reader has closed reports an error whose
+/// `ErrorKind` is `BrokenPipe` rather than a fatal condition, and that the
+/// winning drain arm then reads the source to EOF. A wrong error kind would
+/// surface here as a failed pump instead of a zero-byte success.
+#[test]
+fn public_pump_drains_the_reader_after_the_writer_breaks() {
+    let (source_reader, source_writer) =
+        synchronous_pipe().expect("source synchronous pipe creation should succeed");
+    let (sink_reader, sink_writer) =
+        synchronous_pipe().expect("sink synchronous pipe creation should succeed");
+
+    let payload = b"payload-written-after-the-downstream-hangs-up";
+    let written = write_once(source_writer.as_synchronous_borrowed(), payload)
+        .expect("source write should succeed");
+    assert_eq!(
+        usize::try_from(written).expect("write count should fit usize"),
+        payload.len(),
+        "source pipe must accept the complete payload",
+    );
+    // Close the source writer so the pump's read loop can reach EOF.
+    drop(source_writer);
+    // Close the sink reader so every pump write fails with a broken pipe.
+    drop(sink_reader);
+
+    let transferred = pump_stream(
+        source_reader.as_synchronous_borrowed(),
+        sink_writer,
+        buffer_size(8).expect("buffer size should be valid"),
+    )
+    .expect("a broken downstream pipe must not fail the pump");
+
+    assert_eq!(
+        transferred, 0,
+        "no bytes reach a downstream that hung up before the first write",
+    );
+
+    // A pump that drained the source leaves nothing behind; one that abandoned
+    // it mid-read leaves the payload for this read to find.
+    let remaining = read_to_eof(&source_reader).expect("drained source read should succeed");
+    assert!(
+        remaining.is_empty(),
+        "the pump must drain the upstream reader to EOF after the writer breaks, found {} bytes",
+        remaining.len(),
+    );
+}
