@@ -525,6 +525,13 @@ of `BrokenPipePolicy` and of the application itself. It observes CPython's
 finalization order, and `os._exit` skips finalization, so neither a different
 interpreter nor an immediate exit is protected.
 
+The guard's closed-pipe behaviour has been verified on POSIX only. The
+behavioural scenarios depend on a write to a closed pipe raising
+`BrokenPipeError`, and that has not been observed on Windows. The guard itself
+uses only `os.dup2`, which is documented on Windows as well, so it is not
+restricted to POSIX; the Windows outcome is unverified rather than refused, and
+the scenarios are skipped there until it is observed.
+
 ### Quiet children
 
 A long build or download can go quiet for minutes, and a silent terminal is
