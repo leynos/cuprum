@@ -3820,9 +3820,11 @@ make benchmark-micro
 ```
 
 Its `consume-invalid-utf8` group feeds 64 KiB, 256 KiB, and 1 MiB all-invalid
-payloads straight to `cuprum._streams_rs.rust_consume_stream`, with
-`buffer_size` equal to the payload size, so one decoded chunk exposes the shape
-that previously caused quadratic work.
+payloads through a pipe to `cuprum._streams_rs.rust_consume_stream`, with
+`buffer_size` equal to the payload size so the consumer never caps reads below
+what the kernel delivers. Pipe capacity and writer scheduling still decide how
+the payload is split, so this measures end-to-end throughput through the
+consumer loop rather than any single read.
 
 Run the hyperfine end-to-end throughput benchmarks, which write
 `dist/benchmarks/pipeline-throughput.json`:
@@ -5490,9 +5492,10 @@ invalid UTF-8 is adversarial input rather than a programming error.
 comparing the minimum decode time for 32 KiB and 256 KiB malformed workloads;
 it is compiled out under Miri and Kani, where wall-clock measurement is
 meaningless. The all-invalid case in
-`benchmarks/test_stream_microbenchmarks.py` measures the same shape at 64 KiB,
-256 KiB, and 1 MiB with `buffer_size` equal to the payload size; it is opt-in
-with `CUPRUM_RUN_BENCHMARKS=1` and runs through `make benchmark-micro`.
+`benchmarks/test_stream_microbenchmarks.py` measures end-to-end pipe throughput
+at 64 KiB, 256 KiB, and 1 MiB with `buffer_size` equal to the payload size; it
+is opt-in with `CUPRUM_RUN_BENCHMARKS=1` and runs through
+`make benchmark-micro`.
 
 When a property fails, proptest writes the shrunk case to a seed file under
 `rust/cuprum-rust/proptest-regressions/`. Commit that file: it re-runs the

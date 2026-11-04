@@ -160,15 +160,17 @@ def test_benchmark_consume_invalid_utf8(
     rust_streams: ModuleType,
     payload_bytes: int,
 ) -> None:
-    """Benchmark one buffered read of an all-invalid UTF-8 payload.
+    """Benchmark end-to-end consumption of an all-invalid UTF-8 payload.
 
     A large payload cannot be written to a pipe before the consumer starts
     without blocking, so a writer thread feeds it while the extension reads.
-    The buffer size equals the payload size, so every read takes as much of the
-    malformed run as the kernel delivers at once: the shape that previously
-    triggered quadratic work. Each case asserts the decoded text still matches
-    Python's ``replace`` semantics, so the benchmark cannot silently measure a
-    decoder that returns the wrong answer quickly.
+    The buffer size equals the payload size, so the consumer's own buffering
+    never caps a read below what the kernel delivers. Pipe capacity and writer
+    scheduling still decide how the payload is split, so this measures
+    throughput through the whole consumer loop rather than any single read.
+    Each case asserts the decoded text still matches Python's ``replace``
+    semantics, so the benchmark cannot silently measure a decoder that returns
+    the wrong answer quickly.
     """
     payload = b"\xff" * payload_bytes
     expected = payload.decode("utf-8", errors="replace")
