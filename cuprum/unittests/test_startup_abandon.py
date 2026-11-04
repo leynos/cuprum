@@ -201,6 +201,16 @@ _SPAWN_ROUTES = (
 )
 
 
+def _assert_descriptors_released(descriptors: cabc.Sequence[int | None]) -> None:
+    """Assert every captured stream's parent-side descriptor is closed."""
+    for fd in descriptors:
+        assert fd is not None
+        assert not _is_fd_open(fd), (
+            f"descriptor {fd} must be closed before the event loop is torn "
+            "down, even though no end-of-file arrived"
+        )
+
+
 @_posix_only
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_abandon_releases_output_pipes_a_descendant_keeps_open(
@@ -271,12 +281,7 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
                 "the descendant must still hold the pipes when the "
                 "descriptors are read, or this case proves nothing"
             )
-            for fd in descriptors:
-                assert fd is not None
-                assert not _is_fd_open(fd), (
-                    f"descriptor {fd} must be closed before the event loop "
-                    "is torn down, even though no end-of-file arrived"
-                )
+            _assert_descriptors_released(descriptors)
         finally:
             _kill_descendant(_recorded_pid(pid_file))
 
