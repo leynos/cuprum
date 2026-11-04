@@ -93,14 +93,21 @@ def _assert_lease_frames(
         f"the group must open before any echoed output; got {value!r}"
     )
     release = f"::{_stop_token(value)}::\n"
-    assert value.index(_LEASE_PREFIX) < value.index(release), (
+    lease_open = value.index(_LEASE_PREFIX)
+    release_start = value.index(release)
+    assert lease_open < release_start, (
         f"the lease must be released after it was opened; got {value!r}"
     )
+    # The runner ignores workflow commands only between the lease line and its
+    # release, so each child line must sit inside that window: after the lease
+    # finished opening, and before the release begins.
+    lease_end = value.index("\n", lease_open) + 1
     for line in child_outputs:
-        assert line in value, f"the child's {line!r} must be echoed; got {value!r}"
-        assert value.index(line) < value.index(release), (
-            f"{line!r} must precede the lease release so the runner ignores it; "
-            f"got {value!r}"
+        position = value.find(line)
+        assert position >= 0, f"the child's {line!r} must be echoed; got {value!r}"
+        assert lease_end <= position < release_start, (
+            f"{line!r} must land between the lease and its release so the runner "
+            f"ignores it; got {value!r}"
         )
     assert value.rindex("::endgroup::\n") > value.index(release), (
         f"the session's own endgroup must follow the lease release; got {value!r}"
