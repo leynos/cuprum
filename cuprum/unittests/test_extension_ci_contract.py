@@ -249,7 +249,7 @@ def test_lint_job_uses_shared_tooling_installers(workflow_data: Workflow) -> Non
         "use-sccache": "false",
     }
     assert project_toolchain.get("with") == {
-        "toolchain": "1.85.0",
+        "toolchain": "1.87.0",
         "cache-provider": "external",
         "use-sccache": "false",
     }

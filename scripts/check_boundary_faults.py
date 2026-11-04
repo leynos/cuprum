@@ -181,7 +181,7 @@ def _invocation(
         "CARGO_TARGET_DIR": str(target_directory),
         "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
         "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
-        "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
+        "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.87.0",
     })
     if program != "cargo":
         return _Invocation(args, environment)

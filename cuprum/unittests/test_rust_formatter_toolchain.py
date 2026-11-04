@@ -17,7 +17,7 @@ _SETUP_RUST = (
     f"leynos/shared-actions/.github/actions/setup-rust@{_SHARED_ACTION_REVISION}"
 )
 _FORMATTER_TOOLCHAIN = RUSTFMT_TOOLCHAIN
-_PROJECT_TOOLCHAIN = "1.85.0"
+_PROJECT_TOOLCHAIN = "1.87.0"
 _FORMATTER_FIXTURE_SKIPS = {
     ("rust/cuprum-native-io/src/ownership_tests.rs", "descriptor_guard"),
     ("rust/cuprum-streams/src/io_utils/tests.rs", "pipe"),

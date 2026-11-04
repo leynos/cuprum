@@ -76,7 +76,7 @@ Each compile-fail case is a `compile_fail,EXXXX` doctest that shares its doc
 comment with a positive control: a doctest of the same shape without the
 violation, which must compile. The two do different work on different
 toolchains. Nightly rustdoc, which the dev-fast route of `make test` uses,
-checks that the named error occurs. Stable rustdoc, including the pinned 1.85.0
+checks that the named error occurs. Stable rustdoc, including the pinned 1.87.0
 that CI uses for the native-contract matrix and the coverage lane, accepts the
 code without checking it: on 2026-10-25 a snippet that failed with `E0308` but
 pinned `E0603` passed on both stable and 1.85.0 and failed on

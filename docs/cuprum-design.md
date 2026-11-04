@@ -4594,7 +4594,7 @@ until an administrator removes the offending asset. See
 [ADR-017](adrs/adr-0017-release-pipeline.md) for the full job graph, the
 reconciliation algorithm, and its telemetry.
 
-Contributors building from source require a Rust toolchain (rustc 1.85+, cargo)
+Contributors building from source require a Rust toolchain (rustc 1.87+, cargo)
 in addition to Python. The `maturin develop` command builds and installs the
 extension in development mode.
 

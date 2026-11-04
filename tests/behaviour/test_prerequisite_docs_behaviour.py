@@ -110,11 +110,11 @@ def when_read_troubleshooting_guidance(troubleshooting_section: str) -> str:
 # -- Then steps (prerequisites) ------------------------------------------------
 
 
-@then("it mentions Rust 1.85 or later")
+@then("it mentions Rust 1.87 or later")
 def then_mentions_rust_version(read_prerequisites: str) -> None:
     """Assert the guide mentions the correct Rust version."""
-    assert "1.85" in read_prerequisites, (
-        f"expected '1.85' to be present in read_prerequisites: {read_prerequisites!r}"
+    assert "1.87" in read_prerequisites, (
+        f"expected '1.87' to be present in read_prerequisites: {read_prerequisites!r}"
     )
 
 

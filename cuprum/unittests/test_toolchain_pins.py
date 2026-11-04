@@ -366,9 +366,9 @@ def test_mdtablefix_uses_its_pinned_prebuilt_installer() -> None:
     assert isinstance(toolchain_configuration, dict), (
         "the Install project Rust toolchain CI mapping must declare a with field"
     )
-    assert toolchain_configuration.get("toolchain") == "1.85.0", (
+    assert toolchain_configuration.get("toolchain") == "1.87.0", (
         "the Install project Rust toolchain CI mapping must keep with.toolchain "
-        "at 1.85.0"
+        "at 1.87.0"
     )
 
     environment = job.get("env")
