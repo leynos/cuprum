@@ -7950,6 +7950,21 @@ without depending on the event loop's shared default executor. See
 [ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the queue, loss, and
 shutdown contract.
 
+A process-level complement sits outside those run-owned seams. CPython flushes
+`sys.stdout` and `sys.stderr` after every `atexit` callback, so a reader that
+closes before shutdown turns the requested exit status into 120.
+`cuprum/exit_status_guard.py` owns the opt-in `install_exit_status_guard()`
+entry point: one idempotent `atexit` registration, a flush per standard stream,
+and a redirect — `dup2` onto the null device, or a discarding sink when the
+stream has no descriptor or the redirect fails — only for `BrokenPipeError`.
+Any other failure is contained per stream and reported, best effort, on
+`sys.stderr`, so one stream's unexpected defect neither escapes the hook nor
+costs the other stream its guard. Keep the hook independent of the echo path
+and of `BrokenPipePolicy`, which cover writes during a run; the guard covers
+the interpreter's final flush after it. Its unit tests use stream doubles, and
+`tests/behaviour/test_exit_status_guard_pipe.py` proves the real-pipe contract,
+including a control that reproduces status 120.
+
 Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
 incremental encoder, and deciding which failures are the producer's — belongs in

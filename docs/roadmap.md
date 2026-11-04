@@ -1400,3 +1400,38 @@ owns the worker afterwards, and where the guarantees stop.
   - Success: the guide's example is executed by the behavioural suite, and the
     guide states that detachment is never inferred and that managed defaults are
     unchanged.
+
+## 16. Opt-in exit-status guard for a closed output pipe (issue `#671`)
+
+Idea: a command-line tool that relays a child's output still chooses its own
+exit status. CPython flushes the standard streams after every `atexit`
+callback, so a reader that closes before shutdown makes `Py_FinalizeEx` report
+failure and replaces the requested status with 120. The guard is the
+per-process complement to `BrokenPipePolicy`, which governs cuprum's echo
+writes during a run.
+
+### 16.1. Install and prove the process-level guard
+
+This step answers whether the guard preserves the requested status without
+changing how unrelated streams are treated.
+
+- [x] 16.1.1. Install an idempotent `install_exit_status_guard()` hook with no
+  import-time side effect.
+  - Success: one registration survives concurrent callers, the hook flushes
+    each standard stream, acts only on `BrokenPipeError`, leaves `None`,
+    healthy, and deliberately closed streams alone, and never raises.
+- [x] 16.1.2. Prove status preservation across a real closed pipe.
+  - Success: guarded statuses 0 and 3 survive a closed reader, an unguarded
+    control reproduces 120, and the ordering rules and limits are documented.
+  - Completion evidence (2026-10-30): `cuprum/exit_status_guard.py` exports
+    `install_exit_status_guard()`, one idempotent `atexit` registration with no
+    import-time side effect. The hook flushes `sys.stdout` and `sys.stderr`
+    and, only for `BrokenPipeError`, points an existing descriptor at the null
+    device or replaces a descriptorless stream with a discarding sink; `None`,
+    healthy, and deliberately closed streams are left alone, and the hook never
+    raises. Unit tests cover each branch, including a concurrent install and a
+    fresh-interpreter import check, and
+    `tests/behaviour/test_exit_status_guard_pipe.py` proves statuses 0 and 3
+    survive a real closed pipe while an unguarded control reproduces 120. The
+    users' guide, design document §7.4, and developers' guide record the
+    ordering rules and limits.

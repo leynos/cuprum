@@ -468,6 +468,9 @@ start:
   [Run commands concurrently](users-guide.md#run-commands-concurrently).
 - Validated builders for git, rsync, and tar in `cuprum.builders`; see
   [Wrap commands in project builders](users-guide.md#wrap-commands-in-project-builders).
+- An opt-in shutdown guard, `cuprum.install_exit_status_guard()`, that
+  preserves the exit status through a closed output pipe; see
+  [Preserve the exit status through a closed pipe](users-guide.md#preserve-the-exit-status-through-a-closed-pipe).
 
 The sections that follow cover the remaining additions.
 

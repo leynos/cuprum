@@ -1550,6 +1550,22 @@ as undelivered if it must be abandoned. See
 [ADR-025](adrs/adr-0025-bounded-output-delivery.md) for the delivery,
 ownership, and failure contract.
 
+Output ownership also has a process-level complement outside any run. CPython
+flushes `sys.stdout` and `sys.stderr` after every `atexit` callback, so a
+reader that leaves before shutdown makes the final flush fail and replaces the
+requested exit status with 120. `cuprum.install_exit_status_guard()` registers
+one `atexit` callback that flushes both standard streams and, only for
+`BrokenPipeError`, points an existing descriptor at the null device, or
+replaces the dead stream with a discarding sink when it has no usable
+descriptor or the redirection itself fails. It is deliberately separate from
+`BrokenPipePolicy`: that policy governs echo writes during a run, while the
+guard governs the interpreter's own flush after the run has ended. The hook
+never raises, is idempotent, has no import-time side effect, and leaves `None`,
+healthy, and deliberately closed streams untouched. A flush that fails for any
+reason other than `BrokenPipeError` is contained at the per-stream boundary and
+reported, best effort, on `sys.stderr`, so an unexpected defect is not masked
+while the remaining stream is still guarded.
+
 Command and pipeline configuration keep their destination resolution and
 partial-setup cleanup local to their execution modules because each path owns
 different context and failure inputs. Shared session ownership and serialized
