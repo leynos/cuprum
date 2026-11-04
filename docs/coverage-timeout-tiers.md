@@ -173,8 +173,8 @@ runner with more queueing, and the pytest mark stays 60 s above the largest
 configured cap. The 49.1 s Maturin wheel was measured in the grouped session;
 the 38.6 s sample used a separate empty target; in both, compiled objects were
 already available to the compiler cache. The 163 s sample rebuilt the native
-extension from an empty target, but a later gate run waited behind up to 123
-compiler-admission requests and overran a 600 s Maturin bound. The native
+extension from an empty target, but a later gate run waited behind 67 and then
+123 compiler-admission requests and overran a 600 s Maturin bound. The native
 watchdog therefore remains the finite end-to-end bound inherited from the
 pre-factory contract, not the measured workload, because the coordinator
 exposes no workload lease that could exclude that queue. This was a

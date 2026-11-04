@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
     from tests.helpers.prepared_cargo_run import PreparedCargoRun
 
 from scripts.tests.boundary_harness_support import copy_boundary_repository
+from tests.helpers.makefile import recipe_of
 
 SAFE_SOURCE = "//! Safe target.\n#![forbid(unsafe_code)]\n"
 CARGO_METADATA_CALLS_PER_SYMLINK_TEST = 2
@@ -373,3 +374,18 @@ def test_compile_targets_reject_invalid_direct_construction(
     """Direct construction rejects malformed Cargo target collections."""
     with pytest.raises(error_type, match=expected_error):
         CompileTargets(names)
+
+
+def test_clean_removes_retained_boundary_run_roots() -> None:
+    """`make clean` removes the run evidence both boundary harnesses retain.
+
+    Each harness keeps a copied workspace under `.cache` for diagnostics, so
+    without an explicit cleanup path repeated local runs grow that directory
+    without bound. The harnesses do not prune during a run: a concurrent
+    invocation may be active, and the workflow archives the directory after
+    its step completes.
+    """
+    recipe = recipe_of("clean")
+
+    for runs in (".cache/boundary-contract/runs", ".cache/boundary-faults/runs"):
+        assert runs in recipe, f"make clean must remove {runs}"

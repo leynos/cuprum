@@ -42,10 +42,11 @@ _MATURIN_SUBCOMMANDS: dict[_Format, str] = {
 _BUILD_TIMEOUT_ENVIRONMENT_VARIABLE = "CUPRUM_PACKAGING_BUILD_TIMEOUT"
 # Maturin compiles the native extension from a cold target. A fresh wheel build
 # measured 163 s on a loaded developer host on 2026-10-30, but that is workload
-# time, not a safe budget: one gate run waited behind 67 compiler-admission
-# requests and overran 600 s. No workload lease exists to exclude that queue, so
-# the native frontend keeps the 3600 s end-to-end watchdog inherited from its
-# pre-factory contract. The uv frontend only packages Python and stays at 180 s.
+# time, not a safe budget: one gate run waited behind 67 and then 123
+# compiler-admission requests and overran 600 s. No workload lease exists to
+# exclude that queue, so the native frontend keeps the 3600 s end-to-end
+# watchdog inherited from its pre-factory contract. The uv frontend only
+# packages Python and stays at 180 s.
 _DEFAULT_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
     "uv": 180,
     "maturin": 3600,

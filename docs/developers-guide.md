@@ -5063,17 +5063,18 @@ watchdog defaults to 180 seconds for uv and 3600 seconds for Maturin, whose
 cold target compiles the native extension; either can be raised with
 `CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue headroom. A
 cold Maturin wheel build measured 163 seconds on a loaded developer host on
-2026-10-30, but a gate run then waited behind 67 compiler-admission requests
-and overran a 600-second bound. Because the coordinator exposes no workload
-lease, the native watchdog stays at the finite end-to-end bound inherited from
-the pre-factory contract rather than at the measured workload. The packaging
-consumer mark is derived from the largest frontend bound with a 60-second
-margin. This timeout remains an end-to-end watchdog, not an execution-only
-budget. The snapshot key follows the Cargo lockfile, toolchain, Cargo version,
-and runner scope. Do not hand the snapshot itself to Cargo: Cargo coordinates
-cache access only within one home, and offline mode does not remove those locks.
-`CARGO_BUILD_JOBS` remains caller-owned. CPU, memory, and the host-wide
-compiler-admission limit remain separate resource constraints.
+2026-10-30, but a gate run then waited behind 67 and then 123
+compiler-admission requests and overran a 600-second bound. Because the
+coordinator exposes no workload lease, the native watchdog stays at the finite
+end-to-end bound inherited from the pre-factory contract rather than at the
+measured workload. The packaging consumer mark is derived from the largest
+frontend bound with a 60-second margin. This timeout remains an end-to-end
+watchdog, not an execution-only budget. The snapshot key follows the Cargo
+lockfile, toolchain, Cargo version, and runner scope. Do not hand the snapshot
+itself to Cargo: Cargo coordinates cache access only within one home, and
+offline mode does not remove those locks. `CARGO_BUILD_JOBS` remains
+caller-owned. CPU, memory, and the host-wide compiler-admission limit remain
+separate resource constraints.
 
 Target directories are keyed by build configuration: the route, toolchain
 fragment, Rust flags, and doctest Rustdoc flags all enter the key, so two
@@ -5518,8 +5519,12 @@ Unix adapters retain their direct syscall and buffer contracts.
 `make boundary-faults` archives controls and deliberate fault failures for the
 scheduled `extended` job. Each run writes per-command output under
 `.cache/boundary-faults/runs/run-<id>/logs/`, and the workflow archives the
-whole run directory. The final run passed its controls and detected all four
-mutations; see `/tmp/issue379-round27-faults.log`.
+whole run directory. Run roots are retained deliberately: the harnesses do not
+prune during a run, because a concurrent invocation may be active and the
+workflow archives the directory after the step completes. `make clean` removes
+`.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The final
+run passed its controls and detected all four mutations; see
+`/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 

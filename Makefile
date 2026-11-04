@@ -475,10 +475,17 @@ develop: build $(DEVELOP_DEV_FAST_PREREQUISITE) ## Build the native extension in
 build-release: ## Build artefacts (sdist & wheel)
 	python -m build --sdist --wheel
 
+# `clean` also removes the boundary harnesses' per-run evidence. Each
+# `boundary-contract` and `boundary-faults` invocation keeps a copied workspace
+# under `.cache` for diagnostics, so repeated local runs accumulate them. The
+# harnesses deliberately do not prune during a run: a concurrent invocation may
+# be active, and the workflow archives the whole runs directory after its step
+# completes.
 clean: ## Remove build artefacts
 	rm -rf build dist *.egg-info \
 	  .mypy_cache .pytest_cache .coverage coverage.* \
-	  lcov.info htmlcov .venv
+	  lcov.info htmlcov .venv \
+	  .cache/boundary-contract/runs .cache/boundary-faults/runs
 	find . -type d -name '__pycache__' -print0 | xargs -0 -r rm -rf
 	rm -f .typos-oxendict-base.json .typos-oxendict-base.toml
 	cd $(RUST_DIR) && $(CARGO) clean
