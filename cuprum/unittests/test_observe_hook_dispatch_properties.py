@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import functools
 import logging
 import types
 import typing as typ
@@ -190,6 +191,45 @@ def _task_mismatch(
     return None
 
 
+def _extra_mismatch(
+    label: str,
+    record: logging.LogRecord,
+    expected: cabc.Mapping[str, object],
+) -> str | None:
+    """Return the first structured field of ``record`` that ``expected`` rejects."""
+    for key, value in expected.items():
+        actual = getattr(record, key, None)
+        if actual != value:
+            return f"{label} {key}={actual!r}, expected {value!r}"
+    return None
+
+
+def _first_mismatch(mismatches: cabc.Iterable[str | None]) -> str | None:
+    """Return the first real mismatch, if any."""
+    return next((mismatch for mismatch in mismatches if mismatch is not None), None)
+
+
+def _scheduled_record_mismatch(
+    index: int,
+    record: logging.LogRecord,
+    event: ExecEvent,
+) -> str | None:
+    """Check one scheduling record's level, logger, and structured fields."""
+    if record.levelno != logging.DEBUG:
+        return "a scheduling record must be DEBUG"
+    if record.name != "cuprum._observability":
+        return f"scheduling record logger {record.name!r}"
+    return _extra_mismatch(
+        "scheduling record",
+        record,
+        {
+            "cuprum_phase": event.phase,
+            "cuprum_program": str(event.program),
+            "cuprum_scheduled_task_count": index,
+        },
+    )
+
+
 def _scheduled_log_mismatch(
     records: cabc.Sequence[logging.LogRecord],
     expectation: DispatchExpectation,
@@ -206,23 +246,10 @@ def _scheduled_log_mismatch(
             f"{len(scheduled)} scheduling records, "
             f"expected {len(expectation.scheduled)}"
         )
-    for index, record in enumerate(scheduled, start=1):
-        if record.levelno != logging.DEBUG:
-            return "a scheduling record must be DEBUG"
-        if record.name != "cuprum._observability":
-            return f"scheduling record logger {record.name!r}"
-        expected_extra = {
-            "cuprum_phase": event.phase,
-            "cuprum_program": str(event.program),
-            "cuprum_scheduled_task_count": index,
-        }
-        for key, value in expected_extra.items():
-            if getattr(record, key, None) != value:
-                return (
-                    f"scheduling record {key}={getattr(record, key, None)!r}, "
-                    f"expected {value!r}"
-                )
-    return None
+    return _first_mismatch(
+        _scheduled_record_mismatch(index, record, event)
+        for index, record in enumerate(scheduled, start=1)
+    )
 
 
 def _failure_log_mismatch(
@@ -248,19 +275,16 @@ def _failure_log_mismatch(
         return "a failure record must be WARNING"
     if record.exc_info is None or record.exc_info[0] is not type(expectation.error):
         return "a failure record must carry the raised exception type"
-    expected_extra = {
-        "cuprum_phase": event.phase,
-        "cuprum_program": str(event.program),
-        "cuprum_error_type": type(expectation.error).__name__,
-        "cuprum_scheduled_task_count": len(expectation.scheduled),
-    }
-    for key, value in expected_extra.items():
-        if getattr(record, key, None) != value:
-            return (
-                f"failure record {key}={getattr(record, key, None)!r}, "
-                f"expected {value!r}"
-            )
-    return None
+    return _extra_mismatch(
+        "failure record",
+        record,
+        {
+            "cuprum_phase": event.phase,
+            "cuprum_program": str(event.program),
+            "cuprum_error_type": type(expectation.error).__name__,
+            "cuprum_scheduled_task_count": len(expectation.scheduled),
+        },
+    )
 
 
 def _log_mismatch(
@@ -346,42 +370,36 @@ def test_dispatch_matches_specification(
     asyncio.run(run())
 
 
-def _schedule_every_non_none(
+def _schedule_when(
     hooks: tuple[ExecHook, ...],
     event: ExecEvent,
+    *,
+    should_schedule: cabc.Callable[[object], bool],
 ) -> list[asyncio.Task[None]]:
-    """Schedule every non-``None`` result, as a deliberately wrong dispatcher."""
+    """Dispatch under a caller-supplied predicate, for seeded-fault tests."""
     scheduled: list[asyncio.Task[None]] = []
     for hook in hooks:
         result = hook(event)
-        if result is not None:
-            scheduled.append(
-                asyncio.create_task(
-                    _await_awaitable(result, event.phase),
-                    name=f"cuprum.observe.{event.phase}",
-                )
-            )
-    return scheduled
-
-
-def _schedule_native_coroutines_only(
-    hooks: tuple[ExecHook, ...],
-    event: ExecEvent,
-) -> list[asyncio.Task[None]]:
-    """Schedule only native coroutines, as a deliberately wrong dispatcher."""
-    scheduled: list[asyncio.Task[None]] = []
-    for hook in hooks:
-        result = hook(event)
-        if type(result) is types.CoroutineType:
-            scheduled.append(
-                asyncio.create_task(
-                    _await_awaitable(result, event.phase),
-                    name=f"cuprum.observe.{event.phase}",
-                )
-            )
-        else:
+        if not should_schedule(result):
             _close_result(result)
+            continue
+        scheduled.append(
+            asyncio.create_task(
+                _await_awaitable(typ.cast("cabc.Awaitable[None]", result), event.phase),
+                name=f"cuprum.observe.{event.phase}",
+            )
+        )
     return scheduled
+
+
+def _is_not_none(result: object) -> bool:
+    """Accept every non-``None`` result: one seeded fault."""
+    return result is not None
+
+
+def _is_native_coroutine(result: object) -> bool:
+    """Accept only a native coroutine: the other seeded fault."""
+    return type(result) is types.CoroutineType
 
 
 def test_specification_rejects_every_non_none_scheduled() -> None:
@@ -390,7 +408,7 @@ def test_specification_rejects_every_non_none_scheduled() -> None:
     async def run() -> None:
         """Observe the mismatch the wrong dispatcher must produce."""
         mismatch = await _mismatch(
-            _schedule_every_non_none,
+            functools.partial(_schedule_when, should_schedule=_is_not_none),
             ["sync_value"],
             _event("plan"),
             (),
@@ -407,7 +425,7 @@ def test_specification_rejects_native_coroutines_only() -> None:
         """Observe a mismatch for each awaitable the wrong dispatcher drops."""
         for kind in ("future", "generator_coroutine", "awaitable_object"):
             mismatch = await _mismatch(
-                _schedule_native_coroutines_only,
+                functools.partial(_schedule_when, should_schedule=_is_native_coroutine),
                 [kind],
                 _event("plan"),
                 (),
