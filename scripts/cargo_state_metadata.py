@@ -30,7 +30,10 @@ def default_snapshot_root() -> Path:
         The versioned snapshot-cache directory under ``XDG_CACHE_HOME`` or
         the user's default cache directory.
     """
-    cache_home = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    # A set-but-empty variable is not a cache directory. Falling back keeps the
+    # snapshot root absolute instead of resolving it inside the repository.
+    configured = os.environ.get("XDG_CACHE_HOME")
+    cache_home = Path(configured) if configured else Path.home() / ".cache"
     return cache_home / "cuprum" / "cargo-snapshots-v3"
 
 

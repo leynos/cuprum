@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-import os
 import shutil
 import tempfile
 import time
 import typing as typ
 from pathlib import Path
 
+from scripts.cargo_environment import cargo_environment
 from scripts.cargo_state import (
     create_run_cargo_home,
     default_snapshot_root,
@@ -54,8 +54,7 @@ def offline_cargo_environment(
     if not cargo_home.is_dir() or cargo_home.is_symlink():
         msg = f"prepared run-local Cargo home is unavailable: {cargo_home}"
         raise FileNotFoundError(msg)
-    environment = dict(os.environ if caller_environment is None else caller_environment)
-    environment["CARGO_HOME"] = str(cargo_home)
+    environment = cargo_environment(cargo_home, caller_environment)
     environment["CARGO_TARGET_DIR"] = str(target_directory)
     environment["CARGO_NET_OFFLINE"] = "true"
     return environment

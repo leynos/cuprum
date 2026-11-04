@@ -22,3 +22,19 @@ def test_default_snapshot_root_uses_the_shared_cache_location(
     assert cargo_state.default_snapshot_root() == (
         tmp_path / "cuprum" / "cargo-snapshots-v3"
     ), "Cargo routes must share the same snapshot-root definition"
+
+
+def test_an_empty_cache_home_still_yields_an_absolute_snapshot_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A set-but-empty XDG_CACHE_HOME must not make the root repository-relative."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CACHE_HOME", "")
+
+    root = cargo_state.default_snapshot_root()
+
+    assert root == tmp_path / ".cache" / "cuprum" / "cargo-snapshots-v3", (
+        "an empty XDG_CACHE_HOME must fall back to the default cache directory"
+    )
+    assert root.is_absolute(), "the snapshot root must never resolve relatively"
