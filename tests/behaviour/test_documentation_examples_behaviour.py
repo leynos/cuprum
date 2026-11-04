@@ -41,7 +41,13 @@ def test_the_scripting_standards_document_is_gated() -> None:
     assert "docs/scripting-standards.md" in DOCUMENTS, (
         "docs/scripting-standards.md is not registered for example gating"
     )
-    missing = SCRIPTING_STANDARDS_EXAMPLES - {name for name, _ in EXAMPLES}
+    # Parse the named document rather than the combined set: an example that
+    # moved to another document, or that became illustrative here, still has
+    # a name in EXAMPLES and would otherwise satisfy this check.
+    path = "docs/scripting-standards.md"
+    text = (ROOT / path).read_text(encoding="utf-8")
+    published = {name for name, _ in _parse_examples(path, text)}
+    missing = SCRIPTING_STANDARDS_EXAMPLES - published
     assert not missing, f"scripting standards examples are not gated: {sorted(missing)}"
 
 
