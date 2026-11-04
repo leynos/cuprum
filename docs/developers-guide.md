@@ -1830,14 +1830,40 @@ Tests for the bound are split by level.
 cancellation isolation, and the composed callback with a patched ceiling (patch
 `cuprum._line_callbacks._OBSERVE_TASK_CEILING`, never the shared constant). Its
 Hypothesis property compares the failure finalization reports with and without
-pruning over success, failure, cancellation, and pending sequences.
-`cuprum/unittests/test_line_observe_backpressure.py` runs a real child writing
-20,000 lines with capture off and spies on `_StageObservation._emit_event`,
-recording `len(observation.pending_tasks)` after each emission to measure the
-high-water mark. Gated async hooks hold tasks open, which is what lets the
-tests assert saturation, the child pausing, and lossless ordered resumption.
-Install the spy through `monkeypatch` so a failing test cannot leave the
-dispatcher wrapped for the rest of the session.
+pruning over success, failure, cancellation, and pending sequences. Its
+capacity-wait case releases exactly one held task and asserts the waiter
+returns while the other two stay unfinished; the settled task is pruned from
+the shared list in place, so hold task references rather than list indices when
+asserting on it. That is what distinguishes `FIRST_COMPLETED` from a gather.
+
+The real-child cases share their scaffolding in
+`cuprum/unittests/test_line_observe_support.py`: the chatty child and pipeline
+builders, the observe hooks, the `_emit_event` spy, and the delivery assertion.
+The spy records `len(observation.pending_tasks)` after each emission to measure
+the high-water mark, and `monkeypatch` installs it so a failing test cannot
+leave the dispatcher wrapped for the rest of the session.
+
+`test_line_observe_backpressure.py` runs the hook matrix — fast, slow, blocked,
+and failing hooks over 20,000, 2,000, 5,000, and 600 lines — twice: once with
+capture on and once with capture off. The uncaptured run is the regression
+configuration, and it registers a no-op `on_line` sink because cuprum folds a
+stream that nothing consumes to DEVNULL; without the sink no line event would
+be emitted and the test would pass vacuously. The blocked case proves delivery
+pauses at saturation and resumes losslessly; the timeout case proves a blocked
+observer holds final completion rather than being abandoned.
+
+`test_line_observe_pipeline_backpressure.py` makes both pipeline stages flood
+their own stderr, so two producers dispatch line events concurrently. It
+asserts one shared pending-task list object across both stages and a single
+bounded high-water mark, which a per-stage bound would not produce.
+
+`test_line_observe_child_backpressure.py` distinguishes reader-side
+backpressure from child-write backpressure. The child writes 4,000 lines of 1
+KiB each — well past any pipe buffer — and flushes a progress marker to a side
+file every 50 lines. While the observer is gated shut the marker stops
+advancing, which is evidence the child is blocked in `write` because the parent
+stopped reading, rather than merely slow to produce. Releasing the gate lets it
+finish, and the last marker reads `done`.
 
 ### Presentation-sink session lifecycle
 
