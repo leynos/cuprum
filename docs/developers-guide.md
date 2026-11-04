@@ -7761,25 +7761,26 @@ The implementation boundaries are deliberately narrow:
 
 Table 1: Line-observation implementation boundaries
 
-| Module                                                                                                                                                          | Responsibility                                                                                                                                                                                                     |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cuprum/_line_stream/`                                                                                                                                          | Package namespace for selected helpers re-exported by `__init__.py`; helper rows identify package exports where relevant.                                                                                          |
-| `cuprum/_line_stream/authorization.py`                                                                                                                          | Re-checks the allowlist and re-resolves the deadline in the consuming context, and closes a refused run's delivery worker.                                                                                         |
-| `cuprum/_line_stream/coordinator.py`                                                                                                                            | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.                                                                        |
-| `cuprum/_line_stream/telemetry.py`                                                                                                                              | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                                                                                     |
-| `cuprum/_line_stream/line_queue.py`                                                                                                                             | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                                                                                    |
-| `cuprum/_line_stream/spawn.py`                                                                                                                                  | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                                                                              |
-| `cuprum/_line_stream/drain.py`                                                                                                                                  | Drains a line stream's settled consumers once the child has exited.                                                                                                                                                |
-| `cuprum/_line_stream/captures.py`                                                                                                                               | Finalizes line-stream capture records; `_finalize_line_stream_captures` is re-exported by package `__init__.py`.                                                                                                   |
-| `cuprum/_line_stream/reader_wait.py`                                                                                                                            | Owns `_await_consumers` and `_first_reader_failure`; both are re-exported by package `__init__.py`.                                                                                                                |
-| `cuprum/_line_stream/result_assembly.py`                                                                                                                        | Owns `_assemble_line_stream_result`; the coordinator imports it directly and supplies `_wait_for_line_stream_exit`; it is not re-exported.                                                                         |
-| `cuprum/_line_iteration.py`                                                                                                                                     | Exposes `LineStream`, owns the deferred re-authorization in `_iter_line_events`, starts plan and before hooks when iteration begins, and reconciles the coordinator and observe-hook tasks on every iterator exit. |
-| `cuprum/_line_callbacks.py`                                                                                                                                     | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                                                                           |
-| `cuprum/_subprocess_streams.py`                                                                                                                                 | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                                                                                 |
-| `cuprum/_execution_tracking.py`                                                                                                                                 | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                                                                                    |
-| `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`, `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                                                                            |
-| `cuprum/_process_lifecycle.py`                                                                                                                                  | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                                                                                  |
-| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py`                                                                                            | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                                                                            |
+| Module                                                                                                                                                          | Responsibility                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cuprum/_line_stream/`                                                                                                                                          | Package namespace for selected helpers re-exported by `__init__.py`; helper rows identify package exports where relevant.                                                                             |
+| `cuprum/_line_stream/authorization.py`                                                                                                                          | Re-checks the allowlist and re-resolves the deadline in the consuming context, and closes a refused run's delivery worker.                                                                            |
+| `cuprum/_line_stream/coordinator.py`                                                                                                                            | Owns subprocess start, exit wait, teardown, and coordinator/result hand-off; tests patch this module to replace those steps' collaborators.                                                           |
+| `cuprum/_line_stream/telemetry.py`                                                                                                                              | Owns the correlated lifecycle telemetry types emitted for one line-stream run.                                                                                                                        |
+| `cuprum/_line_stream/line_queue.py`                                                                                                                             | Owns the queue item type, its capacity, the spawned-run record, and the sink/hook wrappers that feed the queue.                                                                                       |
+| `cuprum/_line_stream/spawn.py`                                                                                                                                  | Builds and, on failure, unwinds one unstarted line-stream run before it is handed back to its caller.                                                                                                 |
+| `cuprum/_line_stream/drain.py`                                                                                                                                  | Drains a line stream's settled consumers once the child has exited.                                                                                                                                   |
+| `cuprum/_line_stream/captures.py`                                                                                                                               | Finalizes line-stream capture records; `_finalize_line_stream_captures` is re-exported by package `__init__.py`.                                                                                      |
+| `cuprum/_line_stream/reader_wait.py`                                                                                                                            | Owns `_await_consumers` and `_first_reader_failure`; both are re-exported by package `__init__.py`.                                                                                                   |
+| `cuprum/_line_stream/result_assembly.py`                                                                                                                        | Owns `_assemble_line_stream_result`; the coordinator imports it directly and supplies `_wait_for_line_stream_exit`; it is not re-exported.                                                            |
+| `cuprum/_line_iteration.py`                                                                                                                                     | Exposes `LineStream`, owns the deferred re-authorization in `_iter_line_events`, starts plan and before hooks when iteration begins, and closes its inner event generator deterministically.          |
+| `cuprum/_line_stream_finalization.py`                                                                                                                           | Settles a line stream: reconciles the coordinator, drains observe-hook tasks, closes the delivery worker, and maps how iteration ended onto the session's terminal outcome before the shielded close. |
+| `cuprum/_line_callbacks.py`                                                                                                                                     | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                                                              |
+| `cuprum/_subprocess_streams.py`                                                                                                                                 | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                                                                    |
+| `cuprum/_execution_tracking.py`                                                                                                                                 | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                                                                       |
+| `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`, `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                                                               |
+| `cuprum/_process_lifecycle.py`                                                                                                                                  | Supplies shielded process termination and teardown used when a line stream ends early or expires.                                                                                                     |
+| `cuprum/_pipeline_config.py` and `cuprum/_pipeline_stage_streams.py`                                                                                            | Normalize pipeline output options and attach line observation to the final and stderr stage consumers while preserving pipeline wiring.                                                               |
 
 Changes to line delivery should keep both public entry points on the shared
 consumer path. Changes to termination or task ownership belong in the shared
@@ -7843,6 +7844,62 @@ repository-root conftest, so a test module must not import a fixture from the
 support module: import only the helpers it calls and let the plugin supply
 `spawn_recorder`. Annotation-only names such as `_SpawnRecorder` belong in the
 test module's `TYPE_CHECKING` block.
+
+### The line stream's presentation-sink lifecycle
+
+A `run()` opens its presentation session eagerly, in `_prepare_owned_command`:
+a command run has no lazy boundary at which the caller could still abandon it,
+so the bracket spans preparation, spawn, and every terminal path. Pipelines
+match that shape: `_prepare_pipeline_config` opens one bracket before any stage
+starts, because the pipeline's framing is a single session around the whole
+pipeline. `SafeCmd.lines()` is different. Its stream may be built and never
+iterated, and its first pull happens in whichever task the caller chooses, so
+the session opens at the first pull and not when the stream is constructed.
+
+The opener is `_line_iteration_sink_opener` in `cuprum/sh/line_options.py`. It
+re-runs `_enforce_allowlist` for the command and only then calls
+`tracking.sink_bracket.open_session`, so a program refused at the first pull
+writes no group and takes no `::stop-commands::` lease. The pre-flight refusals
+in `lines()` (`_reject_line_iteration_conflicts` and the prepare-time allowlist
+check) run earlier still, before a lazy stream exists. `open_sink` also runs
+before the execution bundle is built in `_start_line_iteration`, because the
+bundle resolves its destinations from the session; a later refusal from
+`_refresh_line_stream_execution` therefore lands inside an open frame, and the
+finalizer closes it without any child line in between.
+
+One `_SinkBracket` spans preparation and iteration. `SafeCmd.lines()` builds it;
+`open_sink` opens its session exactly once; `_LineIterationState` carries it
+to the finalizer. The bracket enforces both ends of the take-once contract:
+`open_session` raises on a second open, and `_take_session` transfers the
+session out exactly once, so a repeated close cannot frame the run again.
+`open_session` records `bounded_delivery` and `delivery_grace_s`, because only
+the opener knows which delivery worker the run will actually start.
+
+`cuprum/_line_stream_finalization.py` owns settlement. `_settle_line_iteration`
+runs on every exit — exhaustion, `aclose()` after a `break`, timeout,
+cancellation, and a setup failure — and enforces one order:
+
+1. reconcile the coordinator and publish a genuine iteration failure;
+2. drain the pending observe-hook tasks, aggregating a hook failure with the
+   failure that ended iteration;
+3. close the run's delivery worker off-loop;
+4. close the sink session, shielded, as the last writer.
+
+Closing the worker first keeps mirrored lines inside the framing, and the
+session close is outside every guard so a refused or half-built run still
+releases the frame its opener created. `_line_stream_outcome` then maps the
+ending onto `SessionOutcome`: a genuine iteration failure wins; otherwise the
+run's own result wins unless a teardown failure accompanied a clean exit
+(`_result_outranks_teardown`); then the teardown failure; otherwise `CANCELLED`.
+`GeneratorExit` is the ordinary shape of closing the generator after the
+terminal yield, so it is never a failure.
+
+Coverage follows the same boundaries. `test_line_stream_sink_framing.py` drives
+a real child and asserts every child line sits between lease acquisition and
+release. `test_line_stream_teardown_outcome.py` pairs a teardown failure with a
+successful and a failed child, and `test_line_stream_settlement_stateful.py`
+models the close-once rule, the worker-before-session order, the observer
+publication, and the outcome precedence over generated endings.
 
 ### The per-stream line-event emitter
 
