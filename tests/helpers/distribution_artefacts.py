@@ -1,4 +1,12 @@
-"""Build and cache distribution artefacts for one pytest session."""
+"""Build and cache distribution artefacts for one pytest session.
+
+The factory is split into a read-only query and an explicit command. Asking
+where an artefact lives, :meth:`DistributionArtefactFactory.artefact_path`,
+touches no directory, no clock, and no child process; asking for it to exist,
+:meth:`DistributionArtefactFactory.build_artefact`, owns every side effect.
+Both share one cache, so a second consumer observes the first build's success
+or its retained diagnostic instead of rebuilding.
+"""
 
 from __future__ import annotations
 
@@ -11,15 +19,23 @@ from pathlib import Path
 
 import pytest
 
-from cuprum import (
-    ProcessGroupPolicy,
-    Program,
-    ProgramCatalogue,
-    ScopeConfig,
-    scoped,
-    sh,
-)
+from cuprum import Program
 from scripts.cargo_state import cargo_environment
+from tests.helpers.distribution_build import (
+    ArtefactFileSystem,
+    Backend,
+    BuildFailure,
+    BuildOutcome,
+    BuildRequest,
+    Format,
+    PackagingFrontend,
+    PathFileSystem,
+    ScopedCommandRunner,
+    SubprocessFrontend,
+    configured_build_timeouts,
+    distribution_test_timeout_seconds,
+    failure_from_exception,
+)
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -27,130 +43,100 @@ if typ.TYPE_CHECKING:
 
     from tests.helpers.prepared_cargo_run import PreparedCargoRun
 
-type _Backend = typ.Literal["uv", "maturin"]
-type _Format = typ.Literal["wheel", "sdist"]
-type _BuildKey = tuple[_Backend, _Format]
-
-_ARCHIVE_SUFFIXES: dict[_Format, str] = {
-    "wheel": "*.whl",
-    "sdist": "*.tar.gz",
-}
-_MATURIN_SUBCOMMANDS: dict[_Format, str] = {
-    "wheel": "build",
-    "sdist": "sdist",
-}
-_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE = "CUPRUM_PACKAGING_BUILD_TIMEOUT"
-# Maturin compiles the native extension from a cold target. A fresh wheel build
-# measured 163 s on a loaded developer host on 2026-10-30, but that is workload
-# time, not a safe budget: one gate run waited behind 67 and then 123
-# compiler-admission requests and overran 600 s. No workload lease exists to
-# exclude that queue, so the native frontend keeps the 3600 s end-to-end
-# watchdog inherited from its pre-factory contract. The uv frontend only
-# packages Python and stays at 180 s. `CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise
-# either bound but never lowers a backend below its default.
-_DEFAULT_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
-    "uv": 180,
-    "maturin": 3600,
-}
-_BUILD_TIMEOUT_MARGIN_SECONDS = 60
-
-
-def _configured_build_timeout_seconds(value: str | None, *, backend: _Backend) -> int:
-    """Return the backend default or a larger positive override.
-
-    The override exists to add queue headroom, so it can only raise a bound.
-    Applying a shared value such as ``600`` to both backends would otherwise
-    lower the native watchdog that has already expired under compiler-admission
-    queueing.
-
-    Returns
-    -------
-    int
-        The effective end-to-end watchdog in seconds.
-
-    Raises
-    ------
-    ValueError
-        If the override is not a positive integer.
-    """
-    if value is None:
-        return _DEFAULT_BUILD_TIMEOUT_SECONDS[backend]
-    try:
-        timeout_seconds = int(value)
-    except ValueError as error:
-        msg = f"{_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive integer"
-        raise ValueError(msg) from error
-    if timeout_seconds <= 0:
-        msg = f"{_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE} must be a positive integer"
-        raise ValueError(msg)
-    return max(_DEFAULT_BUILD_TIMEOUT_SECONDS[backend], timeout_seconds)
-
-
-DISTRIBUTION_BUILD_TIMEOUT_SECONDS: dict[_Backend, int] = {
-    backend: _configured_build_timeout_seconds(
-        os.environ.get(_BUILD_TIMEOUT_ENVIRONMENT_VARIABLE), backend=backend
-    )
-    for backend in ("uv", "maturin")
-}
-DISTRIBUTION_TEST_TIMEOUT_SECONDS = (
-    max(DISTRIBUTION_BUILD_TIMEOUT_SECONDS.values()) + _BUILD_TIMEOUT_MARGIN_SECONDS
+__all__ = (
+    "ArtefactNotBuiltError",
+    "DistributionArtefactFactory",
+    "DistributionArtefactSettings",
+    "configured_build_timeouts",
+    "distribution_test_timeout_seconds",
 )
 
-
-@dc.dataclass(frozen=True, slots=True)
-class _BuildFailure:
-    """Preserve a failed build's original diagnostics for later consumers."""
-
-    diagnostic: str
+type _BuildKey = tuple[Backend, Format]
 
 
-type _BuildOutcome = Path | _BuildFailure
+class ArtefactNotBuiltError(LookupError):
+    """Report a read-only lookup of an artefact this session has not built."""
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _FactorySettings:
-    """Carry paths and caller environment for one pytest artefact session."""
+class DistributionArtefactSettings:
+    """Carry the paths and injected collaborators for one artefact session."""
 
     repository_root: Path
     artefacts_root: Path
     target_root: Path
-    command_environment: cabc.Mapping[str, str]
-    timings_path: Path
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _BuildRequest:
-    """Describe one frontend invocation and its isolated output locations."""
-
-    backend: _Backend
-    archive_format: _Format
-    repository_root: Path
-    destination: Path
     environment: cabc.Mapping[str, str]
+    timings_path: Path
+    frontend: PackagingFrontend
+    filesystem: ArtefactFileSystem
+    clock: cabc.Callable[[], float] = time.monotonic
 
 
 class DistributionArtefactFactory:
     """Build each backend and format once, retaining success or failure."""
 
-    def __init__(self, settings: _FactorySettings) -> None:
-        """Configure this invocation-local cache and its scratch directory."""
+    def __init__(self, settings: DistributionArtefactSettings) -> None:
+        """Configure this invocation-local cache and its injected collaborators."""
         self._settings = settings
-        self._command_environment = dict(settings.command_environment)
-        self._outcomes: dict[_BuildKey, _BuildOutcome] = {}
+        self._environment = dict(settings.environment)
+        self._outcomes: dict[_BuildKey, BuildOutcome] = {}
 
-    def __call__(self, backend: _Backend, archive_format: _Format) -> Path:
-        """Return one cached distribution, building it lazily on first use."""
+    def artefact_path(self, backend: Backend, archive_format: Format) -> Path:
+        """Return a built archive without creating, running, or recording anything.
+
+        Returns
+        -------
+        Path
+            The archive this invocation already built for the key.
+
+        Raises
+        ------
+        ArtefactNotBuiltError
+            If nothing has built this key in the current pytest invocation.
+
+        Notes
+        -----
+        A cached build failure surfaces as ``RuntimeError`` carrying the
+        diagnostic the build first reported.
+        """
+        outcome = self._outcomes.get((backend, archive_format))
+        if outcome is None:
+            msg = (
+                f"{backend} {archive_format} has not been built in this pytest "
+                "invocation; call build_artefact() first"
+            )
+            raise ArtefactNotBuiltError(msg)
+        return require_archive(outcome)
+
+    def build_artefact(self, backend: Backend, archive_format: Format) -> Path:
+        """Build one archive when absent and return its cached path.
+
+        Returns
+        -------
+        Path
+            The archive for this key, built now or reused from the cache.
+
+        Notes
+        -----
+        A failed build raises ``RuntimeError`` carrying the original
+        diagnostic. The failure is cached, so a later consumer sees the same
+        explanation instead of a fresh attempt.
+        """
         key = (backend, archive_format)
-        cached = self._outcomes.get(key)
-        if cached is not None:
-            return _require_archive(cached)
+        outcome = self._outcomes.get(key)
+        if outcome is None:
+            outcome = self._build(key)
+        return require_archive(outcome)
 
+    def _build(self, key: _BuildKey) -> BuildOutcome:
+        """Create the output directories, run the frontend, and cache its outcome."""
+        backend, archive_format = key
         destination = self._settings.artefacts_root / backend / archive_format
-        destination.mkdir(parents=True, exist_ok=True)
-        started = time.monotonic()
+        self._settings.filesystem.prepare(destination)
+        started = self._settings.clock()
         try:
-            outcome = _build_distribution(
-                _BuildRequest(
+            outcome = self._settings.frontend(
+                BuildRequest(
                     backend=backend,
                     archive_format=archive_format,
                     repository_root=self._settings.repository_root,
@@ -159,27 +145,29 @@ class DistributionArtefactFactory:
                 )
             )
         except Exception as error:  # ruff: ignore[blind-except] - memoize ordinary build failures and their diagnostics
-            outcome = _exception_failure(backend, archive_format, error)
-        self._record_build_duration(backend, archive_format, time.monotonic() - started)
+            outcome = failure_from_exception(backend, archive_format, error)
+        self._record_build_duration(
+            backend, archive_format, self._settings.clock() - started
+        )
         self._outcomes[key] = outcome
-        return _require_archive(outcome)
+        return outcome
 
     def _build_environment(
         self,
-        backend: _Backend,
-        archive_format: _Format,
+        backend: Backend,
+        archive_format: Format,
     ) -> dict[str, str]:
-        """Select the target directory for one compatible packaging route."""
-        environment = self._command_environment.copy()
+        """Create the target directory and select it for one packaging route."""
+        environment = self._environment.copy()
         target = self._settings.target_root / f"distribution-{backend}-{archive_format}"
-        target.mkdir(parents=True, exist_ok=True)
+        self._settings.filesystem.prepare(target)
         environment["CARGO_TARGET_DIR"] = str(target)
         return environment
 
     def _record_build_duration(
         self,
-        backend: _Backend,
-        archive_format: _Format,
+        backend: Backend,
+        archive_format: Format,
         seconds: float,
     ) -> None:
         """Append one non-secret build duration to this pytest invocation."""
@@ -189,93 +177,18 @@ class DistributionArtefactFactory:
             "format": archive_format,
             "seconds": seconds,
         }
-        with self._settings.timings_path.open("a", encoding="utf-8") as output:
-            output.write(json.dumps(record) + "\n")
-
-
-def _build_distribution(request: _BuildRequest) -> _BuildOutcome:
-    """Run one frontend and require exactly one archive of the requested kind."""
-    program = Program("uv")
-    catalogue = ProgramCatalogue.from_programs(
-        program,
-        name="distribution-artefact-tests",
-        documentation_locations=("docs/developers-guide.md",),
-    )
-    command = sh.make(program, catalogue=catalogue)
-    arguments = _distribution_arguments(
-        request.backend, request.archive_format, request.destination
-    )
-    with scoped(ScopeConfig(allowlist=frozenset({program}))):
-        result = command(*arguments).run_sync(
-            context=sh.ExecutionContext(
-                cwd=request.repository_root,
-                env=dict(request.environment),
-                timeout=DISTRIBUTION_BUILD_TIMEOUT_SECONDS[request.backend],
-                process_group=ProcessGroupPolicy.OWN_GROUP,
-            )
+        self._settings.filesystem.append_line(
+            self._settings.timings_path, json.dumps(record)
         )
 
-    if result.exit_code != 0:
-        diagnostic = (
-            f"{request.backend} {request.archive_format} build failed "
-            f"with {result.exit_code}; stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
-        return _BuildFailure(diagnostic)
 
-    archives = sorted(
-        request.destination.glob(_ARCHIVE_SUFFIXES[request.archive_format])
-    )
-    if len(archives) != 1:
-        diagnostic = (
-            f"{request.backend} {request.archive_format} build must produce exactly "
-            f"one {_ARCHIVE_SUFFIXES[request.archive_format]} archive, "
-            f"found {[archive.name for archive in archives]}"
-        )
-        return _BuildFailure(diagnostic)
-    return archives[0]
-
-
-def _exception_failure(
-    backend: _Backend,
-    archive_format: _Format,
-    error: Exception,
-) -> _BuildFailure:
-    """Retain timeout streams as well as the exception's diagnostic."""
-    diagnostic = (
-        f"{backend} {archive_format} build raised {type(error).__name__}: {error}"
-    )
-    stdout = getattr(error, "stdout", None)
-    stderr = getattr(error, "stderr", None)
-    if stdout:
-        diagnostic += f"\nstdout: {_decode_diagnostic(stdout)}"
-    if stderr:
-        diagnostic += f"\nstderr: {_decode_diagnostic(stderr)}"
-    return _BuildFailure(diagnostic)
-
-
-def _decode_diagnostic(value: str | bytes) -> str:
-    """Render one captured stream without assuming its subprocess encoding."""
-    return value.decode(errors="replace") if isinstance(value, bytes) else value
-
-
-def _distribution_arguments(
-    backend: _Backend,
-    archive_format: _Format,
-    destination: Path,
-) -> tuple[str, ...]:
-    """Return the pinned frontend's command for one archive format."""
-    if backend == "uv":
-        return ("build", f"--{archive_format}", "--out-dir", str(destination))
-    return (
-        "run",
-        "maturin",
-        _MATURIN_SUBCOMMANDS[archive_format],
-        "--manifest-path",
-        "rust/cuprum-rust/Cargo.toml",
-        "--out",
-        str(destination),
-    )
+def require_archive(outcome: BuildOutcome) -> Path:
+    """Return a successful archive or raise its original build diagnostic."""
+    match outcome:
+        case BuildFailure(diagnostic=diagnostic):
+            raise RuntimeError(diagnostic)
+        case Path() as archive:
+            return archive
 
 
 @pytest.fixture(scope="session")
@@ -293,25 +206,21 @@ def distribution_artefact_factory(
     DistributionArtefactFactory
         The lazy session cache for source archives and wheels.
     """
-    repository_root = repo_root()
-    artefacts_root = tmp_path_factory.mktemp("distribution-artefacts")
     environment = cargo_environment(prepared_cargo_run.cargo_home)
     environment["CARGO_NET_OFFLINE"] = "true"
+    filesystem = PathFileSystem()
     return DistributionArtefactFactory(
-        _FactorySettings(
-            repository_root=repository_root,
-            artefacts_root=artefacts_root,
+        DistributionArtefactSettings(
+            repository_root=repo_root(),
+            artefacts_root=tmp_path_factory.mktemp("distribution-artefacts"),
             target_root=prepared_cargo_run.target_root,
-            command_environment=environment,
+            environment=environment,
             timings_path=prepared_cargo_run.timings_path,
+            frontend=SubprocessFrontend(
+                runner=ScopedCommandRunner(Program("uv")),
+                build_timeouts=configured_build_timeouts(os.environ),
+                filesystem=filesystem,
+            ),
+            filesystem=filesystem,
         )
     )
-
-
-def _require_archive(outcome: _BuildOutcome) -> Path:
-    """Return a successful archive or raise its original build diagnostic."""
-    match outcome:
-        case _BuildFailure(diagnostic=diagnostic):
-            raise RuntimeError(diagnostic)
-        case Path() as archive:
-            return archive

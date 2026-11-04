@@ -20,6 +20,7 @@ against a syrupy snapshot, so the marker cannot arrive in that wheel unrecorded.
 
 from __future__ import annotations
 
+import os
 import tarfile
 import typing as typ
 import zipfile
@@ -27,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers.distribution_artefacts import DISTRIBUTION_TEST_TIMEOUT_SECONDS
+from tests.helpers.distribution_artefacts import distribution_test_timeout_seconds
 
 if typ.TYPE_CHECKING:
     from tests.helpers.distribution_artefacts import DistributionArtefactFactory
@@ -59,7 +60,7 @@ def _wheel_marker(wheel_path: Path) -> str | None:
 
 # The test budget includes the first lazy build and its archive assertions.
 @pytest.mark.xdist_group("distribution-artefacts")
-@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
+@pytest.mark.timeout(distribution_test_timeout_seconds(os.environ), func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_wheel_ships_the_pep561_marker(
     backend: typ.Literal["uv", "maturin"],
@@ -73,7 +74,7 @@ def test_wheel_ships_the_pep561_marker(
     *content*, which decides whether a type checker reads the annotations at
     all or reads them as a partial stub.
     """
-    wheel_path = distribution_artefact_factory(backend, "wheel")
+    wheel_path = distribution_artefact_factory.build_artefact(backend, "wheel")
     marker = _wheel_marker(wheel_path)
 
     assert marker is not None, (
@@ -89,7 +90,7 @@ def test_wheel_ships_the_pep561_marker(
 
 # The test budget includes the first lazy build and its archive assertions.
 @pytest.mark.xdist_group("distribution-artefacts")
-@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
+@pytest.mark.timeout(distribution_test_timeout_seconds(os.environ), func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_ships_the_pep561_marker(
     backend: typ.Literal["uv", "maturin"],
@@ -101,7 +102,7 @@ def test_source_distribution_ships_the_pep561_marker(
     cuprum cuprum`` builds from the sdist, so the marker must travel in the
     archive that build unpacks.
     """
-    archive_path = distribution_artefact_factory(backend, "sdist")
+    archive_path = distribution_artefact_factory.build_artefact(backend, "sdist")
 
     with tarfile.open(archive_path) as archive:
         # Both frontends nest the tree under a single ``cuprum-<version>/``

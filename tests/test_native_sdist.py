@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import tarfile
 import typing as typ
 from pathlib import Path
 
 import pytest
 
-from tests.helpers.distribution_artefacts import DISTRIBUTION_TEST_TIMEOUT_SECONDS
+from tests.helpers.distribution_artefacts import distribution_test_timeout_seconds
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -17,14 +18,15 @@ if typ.TYPE_CHECKING:
 
 # The build factory is session-scoped, so every consumer must share one worker.
 @pytest.mark.xdist_group("distribution-artefacts")
-@pytest.mark.timeout(DISTRIBUTION_TEST_TIMEOUT_SECONDS, func_only=True)
+@pytest.mark.timeout(distribution_test_timeout_seconds(os.environ), func_only=True)
 @pytest.mark.parametrize("backend", ["uv", "maturin"])
 def test_source_distribution_retains_native_workspace(
     backend: typ.Literal["uv", "maturin"],
     distribution_artefact_factory: DistributionArtefactFactory,
 ) -> None:
     """Every crate source and lockfile survives packaging without build output."""
-    with tarfile.open(distribution_artefact_factory(backend, "sdist")) as archive:
+    sdist = distribution_artefact_factory.build_artefact(backend, "sdist")
+    with tarfile.open(sdist) as archive:
         members = {Path(name).parts[1:] for name in archive.getnames()}
     workspace = repo_root() / "rust"
     expected: set[tuple[str, ...]] = {
