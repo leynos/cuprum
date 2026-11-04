@@ -18,6 +18,7 @@ import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - isolates import side effects.
 import sys
 import threading
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,9 @@ from cuprum.unittests._exit_status_guard_doubles import (
     _SelfDescriptorOs,
     assert_points_at_devnull,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 @pytest.fixture(autouse=True)
@@ -118,63 +122,33 @@ def test_descriptorless_dead_stream_is_replaced(
     assert sink.flush() is None, "flushing the null sink must do nothing"
 
 
-def test_proxy_without_fileno_method_is_replaced(
+@pytest.mark.parametrize(
+    "make_dead_stdout",
+    [
+        pytest.param(_ProxyWithoutFileno, id="no-fileno-attribute"),
+        pytest.param(
+            lambda: _FakeStream(
+                flush_error=BrokenPipeError("reader left"),
+                fileno_error=ValueError("proxy is closed"),
+            ),
+            id="closed-proxy",
+        ),
+        pytest.param(_ProxyReturningNoDescriptor, id="fileno-returns-none"),
+        pytest.param(_ProxyWithNonCallableFileno, id="fileno-not-callable"),
+    ],
+)
+def test_dead_stream_without_a_usable_descriptor_is_replaced(
     monkeypatch: pytest.MonkeyPatch,
+    make_dead_stdout: cabc.Callable[[], object],
 ) -> None:
-    """A dead proxy with no ``fileno`` at all gets the descriptorless fallback."""
-    monkeypatch.setattr(sys, "stdout", _ProxyWithoutFileno())
+    """Every way a proxy can decline a descriptor yields the null sink."""
+    monkeypatch.setattr(sys, "stdout", make_dead_stdout())
     monkeypatch.setattr(sys, "stderr", _FakeStream())
 
     exit_status_guard._guard_standard_streams()
 
     assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
-        "a proxy without fileno must be replaced by the null sink"
-    )
-
-
-def test_dead_stream_that_reports_itself_closed_is_replaced(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A ``fileno`` that refuses with ``ValueError`` still gets the sink."""
-    dead = _FakeStream(
-        flush_error=BrokenPipeError("reader left"),
-        fileno_error=ValueError("proxy is closed"),
-    )
-    monkeypatch.setattr(sys, "stdout", dead)
-    monkeypatch.setattr(sys, "stderr", _FakeStream())
-
-    exit_status_guard._guard_standard_streams()
-
-    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
-        "a closed proxy must be replaced by the null sink"
-    )
-
-
-def test_dead_stream_reporting_no_descriptor_is_replaced(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A ``fileno`` returning ``None`` is not a usable descriptor."""
-    monkeypatch.setattr(sys, "stdout", _ProxyReturningNoDescriptor())
-    monkeypatch.setattr(sys, "stderr", _FakeStream())
-
-    exit_status_guard._guard_standard_streams()
-
-    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
-        "a proxy with no descriptor value must be replaced by the null sink"
-    )
-
-
-def test_proxy_with_non_callable_fileno_is_replaced(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A ``fileno`` attribute that is not callable is a descriptor failure."""
-    monkeypatch.setattr(sys, "stdout", _ProxyWithNonCallableFileno())
-    monkeypatch.setattr(sys, "stderr", _FakeStream())
-
-    exit_status_guard._guard_standard_streams()
-
-    assert isinstance(sys.stdout, exit_status_guard._NullTextSink), (
-        "a proxy with a non-callable fileno must be replaced by the null sink"
+        "a dead stream without a usable descriptor must become the null sink"
     )
 
 
