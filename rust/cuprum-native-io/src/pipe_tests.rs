@@ -1,10 +1,9 @@
 //! Constructor semantics for the standard-library-backed pipe.
 //!
-//! These are real-resource tests: they exercise OS endpoints, so they are
-//! excluded from Miri by the boundary target's selection rather than being
-//! interpreted. Every blocking read runs on a spawned thread and returns
-//! through a channel with a deadline, so a lost EOF fails the test instead of
-//! hanging the suite.
+//! These are real-resource tests: they exercise OS endpoints, so the module is
+//! compiled out under Miri. Every blocking read runs on a spawned thread and
+//! returns through a channel with a deadline, so a lost EOF fails the test
+//! instead of hanging the suite.
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;

@@ -271,7 +271,11 @@ pub(crate) fn fd_is_exec_inheritable(fd: i32) -> io::Result<bool> {
 
 #[cfg(test)]
 mod ownership_tests;
-#[cfg(test)]
+// The stream crate compiles real-descriptor tests out under Miri because they
+// need real pipes. These need the same, and Miri's isolation also puts the
+// descriptor observations (`fcntl`) out of reach, so exclude them for the same
+// reason rather than letting them fail on a missing shim.
+#[cfg(all(test, not(miri)))]
 mod pipe_tests;
 #[cfg(windows)]
 mod windows;
