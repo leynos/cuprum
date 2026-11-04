@@ -193,7 +193,7 @@ pub fn splice_once(
 /// `library/std/src/sys/anonymous_pipe/windows.rs`, not public `std`
 /// guarantees: `pipe`'s own documentation says the platform mechanism "may
 /// change in the future". `pipe_tests` pins the close-on-exec and
-/// non-inheritance consequences, and [`windows::synchronous_pipe`] relies on
+/// non-inheritance consequences, and the Windows `synchronous_pipe` relies on
 /// the Windows half of this behaviour when it establishes its capability. A
 /// compiler bump must re-check both source files.
 ///
