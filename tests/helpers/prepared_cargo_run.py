@@ -43,9 +43,13 @@ class PreparedCargoRun:
         self.timings_path = run_root / "timings.jsonl"
         self.record_phase("dependency_preparation", preparation_seconds)
 
-    def target_directory(self, configuration: str) -> Path:
-        """Return one invocation-local target path for a compatible build shape."""
-        target = self.target_root / configuration
+    def target_path(self, configuration: str) -> Path:
+        """Return a build configuration's target path without creating it."""
+        return self.target_root / configuration
+
+    def prepare_target_directory(self, configuration: str) -> Path:
+        """Create and return a build configuration's invocation-local target."""
+        target = self.target_path(configuration)
         target.mkdir(parents=True, exist_ok=True)
         return target
 
@@ -58,7 +62,7 @@ class PreparedCargoRun:
         """Copy caller settings and select this run's home and target directory."""
         environment = cargo_environment(self.cargo_home)
         environment["CARGO_TARGET_DIR"] = str(
-            self.target_directory(target_configuration)
+            self.prepare_target_directory(target_configuration)
         )
         if offline:
             environment["CARGO_NET_OFFLINE"] = "true"
