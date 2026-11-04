@@ -2,105 +2,27 @@
 
 from __future__ import annotations
 
-import ast
 import re
 import sys
-from pathlib import Path
 
 import pytest
 
 from cuprum import ExecutionContext, Program, ProgramCatalogue, sh
-
-ROOT = Path(__file__).resolve().parents[2]
-DOCUMENTS = (
-    "README.md",
-    "docs/users-guide.md",
-    "docs/v0-2-0-migration-guide.md",
+from tests.behaviour._documentation_examples_support import (
+    DOCUMENTS,
+    EXAMPLES,
+    ROOT,
+    _parse_examples,
 )
-MARKER = re.compile(r"<!-- (tested|shell)-example: ([a-z0-9-]+) -->")
-# Python fences must execute; shell fences (installation commands, for
-# example) are published for copying and are never run by this suite.
-LANGUAGES = {"tested": "python", "shell": "shell"}
-# Both CommonMark fence characters open a block, so neither can hide an
-# example from marker validation.
-FENCE_DELIMITERS = ("```", "~~~")
 
+SCRIPTING_STANDARDS_EXAMPLES = frozenset({
+    "catalogue-definition",
+    "scoped-catalogue",
+    "scoped-scope-config",
+    "capture-output",
+    "safe-globbing",
+})
 
-def _has_outcome_assertion(code: str) -> bool:
-    """Return whether ``code`` contains an executable ``assert`` statement."""
-    return any(isinstance(node, ast.Assert) for node in ast.walk(ast.parse(code)))
-
-
-def _consume_fence(
-    path: str, lines: list[str], index: int, marker: tuple[str, str]
-) -> tuple[int, list[tuple[str, str]]]:
-    """Validate the marked fence opening at ``index`` and consume it.
-
-    Returns
-    -------
-    tuple[int, list[tuple[str, str]]]
-        The index of the first line after the closing fence, and the tested
-        example the fence holds, if any.
-    """
-    kind, name = marker
-    opening = lines[index]
-    delimiter = opening[:3]
-    assert opening == f"{delimiter}{LANGUAGES[kind]}", (
-        f"{path}:{index + 1}: expected {LANGUAGES[kind]} fence for {kind} example"
-    )
-    start = index + 1
-    closing = (
-        number for number in range(start, len(lines)) if lines[number] == delimiter
-    )
-    end = next(closing, None)
-    assert end is not None, f"{path}:{start}: unterminated fence"
-    if kind != "tested":
-        return end + 1, []
-    code = "\n".join(lines[start:end]) + "\n"
-    assert _has_outcome_assertion(code), f"{path}:{start}: example has no outcome check"
-    return end + 1, [(name, code)]
-
-
-def _parse_examples(path: str, text: str) -> list[tuple[str, str]]:
-    """Return a document's tested Python examples, rejecting uncovered fences."""
-    examples: list[tuple[str, str]] = []
-    lines = text.splitlines()
-    pending: tuple[str, str] | None = None
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        marker = MARKER.fullmatch(line)
-        if marker is not None:
-            assert pending is None, f"{path}:{index + 1}: marker without a fence"
-            pending = (marker.group(1), marker.group(2))
-        elif line.lstrip().startswith(FENCE_DELIMITERS):
-            assert pending is not None, f"{path}:{index + 1}: unmarked fence"
-            index, found = _consume_fence(path, lines, index, pending)
-            examples.extend(found)
-            pending = None
-            continue
-        else:
-            assert pending is None or not line, (
-                f"{path}:{index + 1}: marker is not beside a fence"
-            )
-        index += 1
-    assert pending is None, f"{path}: marker without a fence"
-    return examples
-
-
-def _documented_examples() -> list[tuple[str, str]]:
-    """Load every tested example across the published documents."""
-    examples: list[tuple[str, str]] = []
-    for path in DOCUMENTS:
-        text = (ROOT / path).read_text(encoding="utf-8")
-        examples.extend(_parse_examples(path, text))
-    names = [name for name, _ in examples]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    assert not duplicates, f"duplicate examples: {duplicates}"
-    return examples
-
-
-EXAMPLES = _documented_examples()
 PYTHON = sh.make(
     Program(sys.executable),
     catalogue=ProgramCatalogue.from_programs(sys.executable, name="documentation"),
@@ -114,10 +36,146 @@ def test_published_example_behaves_as_documented(name: str, code: str) -> None:
     assert result.ok, f"{name} failed:\n{result.stdout}\n{result.stderr}"
 
 
+def test_the_scripting_standards_document_is_gated() -> None:
+    """The imported standards document is registered and its examples are gated."""
+    assert "docs/scripting-standards.md" in DOCUMENTS, (
+        "docs/scripting-standards.md is not registered for example gating"
+    )
+    # Parse the named document rather than the combined set: an example that
+    # moved to another document, or that became illustrative here, still has
+    # a name in EXAMPLES and would otherwise satisfy this check.
+    path = "docs/scripting-standards.md"
+    text = (ROOT / path).read_text(encoding="utf-8")
+    published = {name for name, _ in _parse_examples(path, text)}
+    missing = SCRIPTING_STANDARDS_EXAMPLES - published
+    assert not missing, f"scripting standards examples are not gated: {sorted(missing)}"
+
+
 def test_shell_examples_are_published_but_not_executed() -> None:
     """A marked shell fence is accepted without joining the executed set."""
     text = "<!-- shell-example: install -->\n\n```shell\npip install cuprum\n```\n"
     assert not _parse_examples("doc.md", text), "shell example was queued to run"
+
+
+def test_illustrative_examples_are_published_but_not_executed() -> None:
+    """An illustrative fence in any language is accepted without being run."""
+    text = (
+        "- `workflow`: needs a prepared runner environment.\n"
+        "<!-- illustrative-example: workflow -->\n"
+        "```yaml\n- name: Build\n```\n"
+    )
+    assert not _parse_examples("doc.md", text), "illustrative example was queued to run"
+
+
+def test_a_wrapped_bullet_states_its_reason() -> None:
+    """A reason that wraps onto continuation lines still justifies exclusion."""
+    text = (
+        "- `build`:\n"
+        "  needs a prepared runner and a checkout.\n"
+        "<!-- illustrative-example: build -->\n"
+        "```yaml\n- name: Build\n```\n"
+    )
+    assert not _parse_examples("doc.md", text), "wrapped reason was not accepted"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "<!-- illustrative-example: unexplained -->\n```yaml\n- name: Build\n```\n",
+            id="no-prose",
+        ),
+        pytest.param(
+            "Building happens elsewhere.\n"
+            "<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="name-only-inside-a-longer-word",
+        ),
+        pytest.param(
+            "- `build`:\n<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="bullet-names-the-example-without-a-reason",
+        ),
+        pytest.param(
+            "- build\n<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="name-only-bullet-without-a-code-span",
+        ),
+        pytest.param(
+            "The build example needs a prepared runner.\n"
+            "<!-- illustrative-example: build -->\n"
+            "```yaml\n- name: Build\n```\n",
+            id="reason-away-from-a-bullet",
+        ),
+    ],
+)
+def test_illustrative_examples_require_a_documented_reason(text: str) -> None:
+    """An exclusion the document's prose does not name fails the gate."""
+    with pytest.raises(AssertionError, match="has no documented exclusion reason"):
+        _parse_examples("doc.md", text)
+
+
+def test_indented_markers_and_fences_are_recognized() -> None:
+    """A tested fence nested in a list item keeps its Python, dedented."""
+    text = (
+        "  <!-- tested-example: nested -->\n"
+        "  ```python\n"
+        "  value = 1\n"
+        "  assert value == 1\n"
+        "  ```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("nested", "value = 1\nassert value == 1\n")
+    ], "an indented tested example must be dedented into valid Python"
+
+
+def test_short_indented_body_lines_lose_their_indentation() -> None:
+    """A body line indented less than the fence keeps no stray indentation."""
+    text = (
+        "  <!-- tested-example: partial -->\n"
+        "  ```python\n"
+        " value = 1\n"
+        "  assert value == 1\n"
+        "  ```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("partial", "value = 1\nassert value == 1\n")
+    ], "a shallower body line must not stay indented"
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    [
+        pytest.param("    ```", id="four-spaces"),
+        pytest.param("\t```", id="tab"),
+    ],
+)
+def test_indented_fence_lines_stay_inside_the_example(body_line: str) -> None:
+    """Indentation of three columns or more keeps a fence line inside the example."""
+    text = (
+        "<!-- tested-example: quoted -->\n"
+        "```python\n"
+        'text = """\n'
+        f"{body_line}\n"
+        '"""\n'
+        'assert "```" in text\n'
+        "```\n"
+    )
+    assert _parse_examples("doc.md", text) == [
+        ("quoted", f'text = """\n{body_line}\n"""\nassert "```" in text\n')
+    ], "an indented fence line must not end the example early"
+
+
+def test_a_longer_fence_needs_an_equally_long_closer() -> None:
+    """A four-backtick fence is not closed by a three-backtick line inside it."""
+    text = (
+        "- `workflow`: needs a prepared runner.\n"
+        "<!-- illustrative-example: workflow -->\n"
+        "````yaml\n"
+        "```\n"
+        "````\n"
+    )
+    assert not _parse_examples("doc.md", text), "the inner fence closed the example"
 
 
 def test_tested_examples_are_returned_in_document_order() -> None:

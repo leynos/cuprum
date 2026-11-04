@@ -62,19 +62,26 @@ does not use `CapturedResult`.
 ## Published documentation examples
 
 `tests/behaviour/test_documentation_examples_behaviour.py` checks every fenced
-code block in `README.md`, `docs/users-guide.md`, and the 0.2.0 migration
-guide. An HTML comment on the line before each fence, separated from it by at
-most blank lines, declares what kind of block it is:
+code block in `README.md`, `docs/users-guide.md`, the 0.2.0 migration guide, and
+`docs/scripting-standards.md`. An HTML comment on the line before each fence,
+separated from it by at most blank lines, declares what kind of block it is:
 
 - `<!-- tested-example: name -->` must precede a `python` fence. The suite
   executes that code, and the code must contain at least one `assert` that
   checks the documented outcome.
 - `<!-- shell-example: name -->` must precede a `shell` fence. It is for
   commands that readers copy, such as installation, and the suite never runs it.
+- `<!-- illustrative-example: name -->` may precede a fence in any declared
+  language. It is for an example whose project-specific imports, external
+  executables, or side effects make execution unsuitable for the documentation
+  gate. The document must state why each illustrative example is excluded in a
+  bullet that names the example and gives a reason; the suite rejects an
+  illustrative marker that no such bullet covers.
 
-A fence with no marker, or with a marker for the other kind of block, fails the
+A fence with no marker, or with a marker for the wrong kind of block, fails the
 suite. That way a Python example cannot be marked as a shell example to avoid
-being run.
+being run, and an illustrative example has to justify its exclusion in the
+document itself.
 
 Separately, the contract tests that assert on documentation prose read whole
 sections through `tests/helpers/markdown.py::extract_markdown_subsection`,

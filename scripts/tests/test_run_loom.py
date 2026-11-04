@@ -9,10 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from cuprum import Program, UnknownProgramError, sh
 from cuprum.sh import CommandResult, SafeCmd
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import contextlib
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -117,6 +119,9 @@ class LoomDriver(typ.Protocol):
 
     def _selected_bounds(self, arguments: _LoomCliOptions) -> _LoomBounds | None:
         """Validate a complete command-line override."""
+
+    def _catalogue_scope(self) -> contextlib.AbstractContextManager[object]:
+        """Enter the scope that admits the Loom tool catalogue."""
 
 
 @pytest.fixture(name="loom_driver")
@@ -322,6 +327,17 @@ def test_selected_bounds_returns_a_complete_positive_override(
         bounds.max_branches,
         bounds.max_threads,
     ) == (1, 2, 3), "the shared validator must preserve every override value"
+
+
+def test_catalogue_scope_admits_only_the_loom_tools(loom_driver: LoomDriver) -> None:
+    """The driver's scope resolves its own tools and rejects every other program."""
+    with loom_driver._catalogue_scope():
+        command = sh.make(Program("cargo"))("+1.85.0", "--version")
+        assert command.project.name == "loom-driver", (
+            "inside its own scope the driver must resolve its own catalogue"
+        )
+        with pytest.raises(UnknownProgramError):
+            sh.make(Program("definitely-not-a-loom-tool"))
 
 
 def test_run_loom_rejects_an_unknown_mode(loom_driver: LoomDriver) -> None:
