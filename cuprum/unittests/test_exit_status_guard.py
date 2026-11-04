@@ -178,18 +178,44 @@ def test_both_dead_streams_are_guarded_independently(
         pytest.param(OSError("device unreachable"), id="other-oserror"),
     ],
 )
-def test_non_broken_pipe_failures_leave_the_stream_untouched(
+def test_unexpected_failures_are_reported_and_leave_the_stream_alone(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
-    """Only ``BrokenPipeError`` means the reader is gone."""
+    """An error other than a closed reader is reported, not concealed."""
     stream = _FakeStream(flush_error=error, descriptor=0)
+    report = io.StringIO()
     monkeypatch.setattr(sys, "stdout", stream)
-    monkeypatch.setattr(sys, "stderr", _FakeStream())
+    monkeypatch.setattr(sys, "stderr", report)
 
     exit_status_guard._guard_standard_streams()
 
-    assert sys.stdout is stream, "a different defect must not be masked"
+    assert sys.stdout is stream, "a different defect must not be redirected"
+    message = report.getvalue()
+    assert "stdout" in message, "the report must name the stream"
+    assert f"{type(error).__name__}: {error}" in message, (
+        "the report must name the failure"
+    )
+
+
+def test_an_escaping_error_still_guards_the_other_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``BaseException`` from one stream must not skip the other stream."""
+    stdout = _FakeStream(flush_error=SystemExit(7))
+    stderr = _FakeStream(
+        flush_error=BrokenPipeError("reader left"),
+        fileno_error=io.UnsupportedOperation("no descriptor"),
+    )
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setattr(sys, "stderr", stderr)
+
+    exit_status_guard._guard_standard_streams()
+
+    assert sys.stdout is stdout, "an unexpected failure must not redirect the stream"
+    assert isinstance(sys.stderr, exit_status_guard._NullTextSink), (
+        "the stream after the failure must still be guarded"
+    )
 
 
 def test_dup2_failure_falls_back_to_the_null_sink(

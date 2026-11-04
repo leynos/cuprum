@@ -15,8 +15,10 @@ from __future__ import annotations
 import contextlib
 import dataclasses as dc
 import os
+import selectors
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - a real pipe is the boundary under test.
 import sys
+import time
 import typing as typ
 
 import pytest
@@ -46,6 +48,7 @@ pytestmark = pytest.mark.skipif(
 # the signal and the kernel's own teardown.
 _REAP_SECONDS = 5.0
 _CPYTHON_STATUS = 120
+_READ_CHUNK_BYTES = 4096
 
 
 @dc.dataclass(slots=True)
@@ -116,7 +119,7 @@ def _close_reader(
     try:
         stdout = process.stdout
         assert stdout is not None, "the probe's stdout must be a pipe"
-        ready = stdout.readline()
+        ready = _read_ready_line(stdout)
         assert ready.strip() == READY_LINE, (
             "the probe must relay the child's readiness line, got "
             f"{ready!r} (probe stderr: {_read_stderr(process)!r})"
@@ -193,6 +196,44 @@ def test_probe_environment_drops_pythonunbuffered(
     assert "PYTHONUNBUFFERED" not in environment, (
         "the probe must run with buffered standard streams"
     )
+
+
+def _read_ready_line(stdout: typ.IO[str]) -> str:
+    """Read the probe's readiness line, bounded by the probe deadline.
+
+    ``readline`` on a pipe blocks until the writer sends a newline or closes,
+    so a probe that never becomes ready would hang the scenario instead of
+    failing it and leave the cleanup in the caller's ``finally`` unreachable.
+    Reading the raw descriptor under a selector bounds the wait. The text
+    wrapper has not buffered anything yet, so reading the descriptor directly
+    loses no bytes. End of file before a newline returns what did arrive.
+
+    Returns
+    -------
+    str
+        Everything the probe wrote before its first newline, or until it
+        closed the pipe.
+
+    Raises
+    ------
+    AssertionError
+        If the readiness line does not arrive within ``PROBE_WAIT_SECONDS``.
+    """
+    descriptor = stdout.fileno()
+    deadline = time.monotonic() + PROBE_WAIT_SECONDS
+    received = b""
+    with selectors.DefaultSelector() as selector:
+        selector.register(descriptor, selectors.EVENT_READ)
+        while b"\n" not in received:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(timeout=remaining):
+                msg = "the probe did not report readiness in time"
+                raise AssertionError(msg)
+            chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            received += chunk
+    return received.decode(encoding="utf-8", errors="replace")
 
 
 def _read_stderr(process: subprocess.Popen[str]) -> str:

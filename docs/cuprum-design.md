@@ -1561,7 +1561,10 @@ descriptor or the redirection itself fails. It is deliberately separate from
 `BrokenPipePolicy`: that policy governs echo writes during a run, while the
 guard governs the interpreter's own flush after the run has ended. The hook
 never raises, is idempotent, has no import-time side effect, and leaves `None`,
-healthy, and deliberately closed streams untouched.
+healthy, and deliberately closed streams untouched. A flush that fails for any
+reason other than `BrokenPipeError` is contained at the per-stream boundary and
+reported, best effort, on `sys.stderr`, so an unexpected defect is not masked
+while the remaining stream is still guarded.
 
 Command and pipeline configuration keep their destination resolution and
 partial-setup cleanup local to their execution modules because each path owns

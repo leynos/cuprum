@@ -23,7 +23,8 @@ Notes
 -----
 The hook treats only ``BrokenPipeError`` as "the reader is gone". A stream the
 application closed deliberately raises ``ValueError``, which is a different
-defect and is left alone.
+defect: the stream is left alone and the failure is reported, best effort, on
+``sys.stderr``, so a genuine defect is not masked.
 
 Writes the application makes while running are not covered. Cuprum's own echo
 path is covered separately by
@@ -117,11 +118,27 @@ def install_exit_status_guard() -> None:
 def _guard_standard_streams() -> None:
     """Redirect every standard stream whose reader has gone away."""
     for name in _STANDARD_STREAM_NAMES:
-        # One stream's failure must not cost the other its guard, and the hook
-        # runs during finalization where an escaping exception changes the
-        # exit status this helper exists to protect.
-        with contextlib.suppress(Exception):
+        # One stream's failure must not cost the other its guard. CPython's
+        # atexit runner catches a stray exception, but only after this hook has
+        # unwound, so an escaping failure would still leave the remaining
+        # stream unguarded; report it and carry on.
+        try:
             _guard_stream(name, getattr(sys, name))
+        except BaseException as error:  # ruff: ignore[blind-except] - report and keep guarding.
+            _report_unexpected(name, error)
+
+
+def _report_unexpected(name: str, error: BaseException) -> None:
+    """Report an unexpected guard failure without raising a second one."""
+    stream = sys.stderr
+    if stream is None:
+        return
+    with contextlib.suppress(BaseException):
+        print(
+            f"cuprum exit-status guard: could not inspect {name}: "
+            f"{type(error).__name__}: {error}",
+            file=stream,
+        )
 
 
 def _guard_stream(name: str, stream: typ.TextIO | None) -> None:
