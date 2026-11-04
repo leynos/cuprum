@@ -5044,6 +5044,11 @@ case concretely, and its successor is already forecast: item 5.2.2's
 
 ### Cargo cache snapshots
 
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records the decision to prepare content-keyed read-only snapshots before timed
+work, give each run private writable state, record preparation separately from
+the workload, and retain redacted diagnostics.
+
 Build routes that use `scripts/cargo_state.py` prepare a cache snapshot, then
 copy it into a writable `CARGO_HOME` owned by that run. `make test-rust` invokes
 `scripts.prepare_cargo_state` before its test commands, uses a persistent
@@ -5137,7 +5142,12 @@ Cargo's caller-selected internal parallelism. Until the shared coordinator
 exposes a documented workload lease with bounded acquisition and
 cancellation-owned release, Cuprum cannot safely bind Make's top-level test
 workloads to that lease. A repository-local lock would create a second queue
-and is not a valid substitute.
+and is not a valid substitute. Cuprum therefore uses this external boundary
+unchanged;
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records why a local admission queue was rejected, that admission waits still
+count against the end-to-end watchdogs, and that a top-level workload lease is
+follow-up work tracked in issue #694.
 
 ## Makefile tooling changes
 

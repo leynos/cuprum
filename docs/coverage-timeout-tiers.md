@@ -126,7 +126,11 @@ does not set Cargo's job count; parallelism belongs to its caller. The
 suite-wide global `timeout = 30` remains tight, and only this test raises its
 bound. The fast contract test
 `test_real_compile_test_timeout_exceeds_compile_budget` pins the marker and
-both timeout relationships.
+both timeout relationships. These bounds are end-to-end watchdogs rather than
+workload-only budgets.
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records the shared-resource decision and notes that a top-level workload lease
+is follow-up work.
 
 ## Doctest contract tier
 
@@ -187,5 +191,8 @@ timeout contracts.
 The current compiler coordinator exposes bounded compiler scopes only, not a
 bounded outer Cargo-workload lease; its queue wait has no finite limit. Until
 that contract exists, no concurrent workload timing or admission bound is
-claimed here. See the
+claimed here. The grouped packaging execution and the configuration-keyed
+target directories are recorded in
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md).
+See the
 [external compiler admission contract](developers-guide.md#external-compiler-admission-contract).
