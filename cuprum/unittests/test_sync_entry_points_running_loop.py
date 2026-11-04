@@ -10,8 +10,10 @@ they would otherwise discard.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 import warnings
+from unittest import mock
 
 import pytest
 
@@ -43,43 +45,53 @@ def _call_pipeline_bytes_sync(_command: SafeCmd, pipeline: Pipeline) -> object:
     return pipeline.run_bytes_sync()
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _EntryPointCase:
+    """One synchronous entry point and the asynchronous twin it must not call."""
+
+    call: cabc.Callable[[SafeCmd, Pipeline], object]
+    async_owner: type[SafeCmd] | type[Pipeline]
+    async_method: str
+    entry_point: str
+    async_alternative: str
+
+
 _ENTRY_POINTS = [
     pytest.param(
-        _call_safe_cmd_sync,
-        "run_sync()",
-        "run()",
+        _EntryPointCase(_call_safe_cmd_sync, SafeCmd, "run", "run_sync()", "run()"),
         id="safe-cmd-run-sync",
     ),
     pytest.param(
-        _call_safe_cmd_bytes_sync,
-        "run_bytes_sync()",
-        "run_bytes()",
+        _EntryPointCase(
+            _call_safe_cmd_bytes_sync,
+            SafeCmd,
+            "run_bytes",
+            "run_bytes_sync()",
+            "run_bytes()",
+        ),
         id="safe-cmd-run-bytes-sync",
     ),
     pytest.param(
-        _call_pipeline_sync,
-        "run_sync()",
-        "run()",
+        _EntryPointCase(_call_pipeline_sync, Pipeline, "run", "run_sync()", "run()"),
         id="pipeline-run-sync",
     ),
     pytest.param(
-        _call_pipeline_bytes_sync,
-        "run_bytes_sync()",
-        "run_bytes()",
+        _EntryPointCase(
+            _call_pipeline_bytes_sync,
+            Pipeline,
+            "run_bytes",
+            "run_bytes_sync()",
+            "run_bytes()",
+        ),
         id="pipeline-run-bytes-sync",
     ),
 ]
 
 
-@pytest.mark.parametrize(
-    ("call_entry_point", "entry_point", "async_alternative"),
-    _ENTRY_POINTS,
-)
+@pytest.mark.parametrize("case", _ENTRY_POINTS)
 def test_sync_entry_point_refuses_a_running_event_loop(
     python_catalogue_env: PythonCatalogue,
-    call_entry_point: cabc.Callable[[SafeCmd, Pipeline], object],
-    entry_point: str,
-    async_alternative: str,
+    case: _EntryPointCase,
 ) -> None:
     """Every synchronous entry point raises a documented error inside a loop."""
     command = python_catalogue_env.builder("-c", "print('hi')")
@@ -94,24 +106,30 @@ def test_sync_entry_point_refuses_a_running_event_loop(
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             with pytest.raises(RunningEventLoopError) as excinfo:
-                call_entry_point(command, pipeline)
+                case.call(command, pipeline)
         return excinfo.value, list(caught)
 
-    error, caught = asyncio.run(call_inside_loop())
+    # Count calls rather than infer them from warning finalization: a coroutine
+    # retained by a traceback may be finalized after the warning window closes.
+    # No autospec: these methods carry ``typing.overload`` stubs, and autospec
+    # then substitutes the real function, which records no calls.
+    with mock.patch.object(case.async_owner, case.async_method) as async_twin:
+        error, caught = asyncio.run(call_inside_loop())
 
+    async_twin.assert_not_called()
     assert isinstance(error, RuntimeError), (
         "the typed error should remain catchable as RuntimeError"
     )
-    assert error.entry_point == entry_point, (
+    assert error.entry_point == case.entry_point, (
         "the refusal must name the refused entry point"
     )
-    assert error.async_alternative == async_alternative, (
+    assert error.async_alternative == case.async_alternative, (
         "the refusal must name the asynchronous alternative"
     )
-    assert entry_point in str(error), (
+    assert case.entry_point in str(error), (
         "the error message must include the refused entry point"
     )
-    assert async_alternative in str(error), (
+    assert case.async_alternative in str(error), (
         "the error message must include the asynchronous alternative"
     )
     assert not [
