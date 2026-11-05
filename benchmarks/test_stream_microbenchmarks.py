@@ -277,34 +277,22 @@ def test_benchmark_consume_invalid_utf8(
 
 
 @pytest.mark.benchmark(group="observe-dispatch")
-def test_benchmark_observe_dispatch_sync_hook(
+@pytest.mark.parametrize(
+    "hook",
+    [_sync_observe_hook, _async_observe_hook],
+    ids=["sync", "async"],
+)
+def test_benchmark_observe_dispatch(
     benchmark: _IntBenchmark,
     dispatch_loop: asyncio.AbstractEventLoop,
+    hook: ExecHook,
 ) -> None:
-    """Benchmark per-line dispatch for a hook that returns ``None``."""
+    """Benchmark per-line dispatch for a ``None`` and an ``async def`` hook."""
     event = _dispatch_event()
 
     def dispatch_batch() -> int:
-        """Dispatch one batch for a synchronous hook."""
-        return _dispatch_batch(dispatch_loop, (_sync_observe_hook,), event)
-
-    dispatched = benchmark(dispatch_batch)
-    assert dispatched == _DISPATCH_BATCH, (
-        f"expected {_DISPATCH_BATCH} dispatches, got {dispatched}"
-    )
-
-
-@pytest.mark.benchmark(group="observe-dispatch")
-def test_benchmark_observe_dispatch_async_hook(
-    benchmark: _IntBenchmark,
-    dispatch_loop: asyncio.AbstractEventLoop,
-) -> None:
-    """Benchmark per-line dispatch for an ``async def`` hook."""
-    event = _dispatch_event()
-
-    def dispatch_batch() -> int:
-        """Dispatch one batch for an ``async def`` hook."""
-        return _dispatch_batch(dispatch_loop, (_async_observe_hook,), event)
+        """Dispatch one batch for the hook under test."""
+        return _dispatch_batch(dispatch_loop, (hook,), event)
 
     dispatched = benchmark(dispatch_batch)
     assert dispatched == _DISPATCH_BATCH, (
