@@ -12,10 +12,12 @@ of what ``make`` did.
 from __future__ import annotations
 
 import os
+import re
 import typing as typ
 
 import pytest
 
+from tests.helpers.ci_workflows import steps as workflow_steps
 from tests.helpers.workflow_steps import install_tool, run_bash, step_script
 
 if typ.TYPE_CHECKING:
@@ -24,6 +26,10 @@ if typ.TYPE_CHECKING:
 WORKFLOW = "rust-boundaries.yml"
 JOB = "extended"
 STEP = "Execute extended verification"
+
+#: Matches the artefact uploader pinned to a full 40-character lowercase hex
+#: commit SHA. The SHA value is not asserted: Dependabot owns revision updates.
+UPLOADER_RE = re.compile(r"^actions/upload-artifact@[0-9a-f]{40}$")
 
 
 def _run(
@@ -96,3 +102,58 @@ def test_failing_make_fails_the_step_despite_tee(tmp_path: Path) -> None:
     )
 
     assert returncode != 0, "pipefail must carry make's failure through tee"
+
+
+def test_kani_fault_sensitivity_logs_are_archived() -> None:
+    """The Kani fault harness must retain its run-local verifier logs."""
+    summary_archive = next(
+        (
+            step
+            for step in workflow_steps(WORKFLOW, JOB)
+            if step.get("name") == "Archive proof summaries and failures"
+        ),
+        None,
+    )
+    archive = next(
+        (
+            step
+            for step in workflow_steps(WORKFLOW, JOB)
+            if step.get("name") == "Archive Kani fault-sensitivity logs"
+        ),
+        None,
+    )
+
+    assert isinstance(summary_archive, dict), (
+        "the extended verification logs need an archive step"
+    )
+    summary_inputs = summary_archive.get("with")
+    assert isinstance(summary_inputs, dict), (
+        "the extended verification archive must declare its inputs"
+    )
+    assert summary_inputs.get("name") == (
+        "extended-${{ matrix.check }}-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), "each matrix attempt must receive a unique artefact name"
+
+    assert isinstance(archive, dict), "the Kani fault logs need an archive step"
+    assert archive.get("if") == "always() && matrix.check == 'kani'", (
+        "fault logs must be archived even when the Kani step fails"
+    )
+    uses = archive.get("uses")
+    assert isinstance(uses, str), "the uploader reference must be a string"
+    assert UPLOADER_RE.match(uses), (
+        "the archive must use the artefact uploader pinned to a commit SHA"
+    )
+    inputs = archive.get("with")
+    assert isinstance(inputs, dict), "the archive must declare its inputs"
+    assert inputs.get("name") == (
+        "boundary-fault-runs-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), "each Kani rerun must receive a unique artefact name"
+    assert inputs.get("path") == ".cache/boundary-faults/runs", (
+        "the archive must include the fault harness's retained run directories"
+    )
+    assert inputs.get("include-hidden-files") is True, (
+        "the uploader must include logs beneath the hidden .cache directory"
+    )
+    assert inputs.get("if-no-files-found") == "ignore", (
+        "a failure before the harness creates a run must not hide its original error"
+    )

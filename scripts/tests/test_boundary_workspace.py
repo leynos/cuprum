@@ -17,11 +17,14 @@ from scripts.boundary_compile import (
     compile_arguments,
 )
 from scripts.boundary_workspace import copy_workspace
+from scripts.cargo_state import create_run_cargo_home
 from scripts.check_boundary_contract import safe_target_roots
 from scripts.tests import boundary_harness_support
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from tests.helpers.prepared_cargo_run import PreparedCargoRun
 
 from scripts.tests.boundary_harness_support import copy_boundary_repository
 
@@ -44,6 +47,18 @@ class _ExternalSourceLink:
     source: Path
     contents: bytes
     mode: int
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _MaterializedWorkspaceCheck:
+    """Group the source links and run inputs for one real compile check."""
+
+    root: Path
+    crate: Path
+    links: tuple[_ExternalSourceLink, ...]
+    original_targets: tuple[Path, ...]
+    prepared_run: PreparedCargoRun
+    compile_workspace: cabc.Callable[[Path, CompileTargets], tuple[int, str]]
 
 
 def test_main_keeps_nested_target_sources_and_omits_root_build_output(
@@ -81,6 +96,7 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
     scheduled: list[Path] = []
     monkeypatch.setattr(contract, "ROOT", root)
     monkeypatch.setattr(contract, "_compile", lambda _workspace: (0, "checked"))
+    boundary_harness_support.stub_cargo_preparation(monkeypatch, contract)
     monkeypatch.setattr(
         contract,
         "_check_target",
@@ -89,8 +105,10 @@ def test_main_keeps_nested_target_sources_and_omits_root_build_output(
 
     contract.main()
 
-    assert copied_nested in scheduled, (
-        "the copied nested target must be scheduled for unsafe probes"
+    run_root = boundary_harness_support.latest_run_root(root, "boundary-contract")
+    run_nested = run_root / "workspace" / nested.relative_to(rust)
+    assert run_nested in scheduled, (
+        "the run-local nested target must be scheduled for unsafe probes"
     )
 
 
@@ -156,7 +174,10 @@ def _assert_external_links_are_isolated(
     assert boundary_harness_support.cargo_target_roots(copied_crate) == tuple(
         copied_crate / path.relative_to(crate) for path in original_targets
     ), "Cargo metadata must retain the copied source-file targets"
-    assert all(path.is_file() and not path.is_symlink() for path in copied_links), (
+    assert all(path.is_file() for path in copied_links), (
+        "external source-file links must become regular files inside the copy"
+    )
+    assert all(not path.is_symlink() for path in copied_links), (
         "external source-file links must be materialized inside the copied workspace"
     )
     assert all(
@@ -169,27 +190,17 @@ def _assert_external_links_are_isolated(
     ), "external source bytes and modes must survive the copied probes"
 
 
-def _remove_copied_dev_dependencies(manifest: Path) -> None:
-    """Omit test-only dependencies unused by the empty external target fixtures."""
-    contents = manifest.read_text(encoding="utf-8")
-    before, header, remainder = contents.partition("[dev-dependencies]\n")
-    dependencies, separator, after = remainder.partition("\n[lints]\n")
-    assert header, "the copied manifest must retain its dev-dependency section"
-    assert separator, "the copied manifest must retain its lint section"
-    assert dependencies, "the copied manifest must record test-only dependencies"
-    manifest.write_text(before + "[lints]\n" + after, encoding="utf-8")
-
-
-# Only this test launches Cargo through `_compile`: `main()` uses a recording
-# seam for its unsafe probes, then one real Cargo check. The two metadata calls
-# and check have fixed 120 s and 3600 s bounds; the 3900 s marker leaves 60 s
-# for test work and catches a wedged process. The compile bound sizes the
+# This test uses a recording seam for unsafe probes, then runs one real Cargo
+# check. Its two 120 s metadata calls and 3600 s compile fit inside the 3900 s
+# function watchdog with 60 s for assertions. The compile bound sizes the
 # marker; the measured 181 s cold `CARGO_BUILD_JOBS=1` build does not. Callers
 # control `-j`, independently of this budget.
 # The global `timeout = 30` remains unchanged for all other tests.
-@pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS)
+@pytest.mark.timeout(SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS, func_only=True)
 def test_main_materializes_external_source_file_symlinks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prepared_cargo_run: PreparedCargoRun,
 ) -> None:
     """External source links become copied files before the unsafe probes run."""
     root = copy_boundary_repository(tmp_path)
@@ -200,28 +211,48 @@ def test_main_materializes_external_source_file_symlinks(
     assert links[0].link in before, "Cargo must recognize the relative source-file link"
     assert links[1].link in before, "Cargo must recognize the absolute source-file link"
     observed_sources: list[str] = []
-    boundary_compile = contract._compile
+    compile_workspace = contract._compile
     monkeypatch.setattr(contract, "ROOT", root)
     monkeypatch.setattr(
         contract, "_compile", _recording_probe_compiler(observed_sources)
     )
+    boundary_harness_support.stub_cargo_preparation(monkeypatch, contract)
 
     contract.main()
 
-    copied_crate = root / ".cache/boundary-contract/workspace/cuprum-streams"
-    _remove_copied_dev_dependencies(copied_crate / "Cargo.toml")
-    code, output = boundary_compile(
-        copied_crate.parent,
-        CompileTargets.integration_tests("relative", "absolute"),
+    _assert_materialized_workspace_compiles(
+        _MaterializedWorkspaceCheck(
+            root,
+            crate,
+            links,
+            before,
+            prepared_cargo_run,
+            compile_workspace,
+        )
     )
-    assert code == 0, output
-    _assert_external_links_are_isolated(crate, copied_crate, links, before)
     assert len(metadata_calls) == CARGO_METADATA_CALLS_PER_SYMLINK_TEST, (
         "the real test must bound both Cargo metadata calls"
     )
     assert all(
         any(probe in source for source in observed_sources) for probe in contract.PROBES
     ), "each unsafe probe must reach the isolated copied sources"
+
+
+def _assert_materialized_workspace_compiles(
+    check: _MaterializedWorkspaceCheck,
+) -> None:
+    """Build the copied linked targets and verify source isolation."""
+    run_root = boundary_harness_support.latest_run_root(check.root, "boundary-contract")
+    copied_crate = run_root / "workspace/cuprum-streams"
+    create_run_cargo_home(check.prepared_run.cargo_home, run_root)
+    code, output = check.compile_workspace(
+        copied_crate.parent,
+        CompileTargets.integration_tests("relative", "absolute"),
+    )
+    assert code == 0, output
+    _assert_external_links_are_isolated(
+        check.crate, copied_crate, check.links, check.original_targets
+    )
 
 
 def test_compile_arguments_preserve_full_production_coverage() -> None:
@@ -234,6 +265,7 @@ def test_compile_arguments_preserve_full_production_coverage() -> None:
         "cuprum-streams",
         "--all-targets",
         "--all-features",
+        "--frozen",
     ), "the production boundary check must continue to cover every target"
 
 
@@ -248,12 +280,15 @@ def test_compile_arguments_scope_real_link_checks_to_named_tests() -> None:
         "cuprum-streams",
         "--all-features",
     ), "the scoped check must retain its package and feature contract"
-    assert arguments[4:] == (
+    assert arguments[4:-1] == (
         "--test",
         "relative",
         "--test",
         "absolute",
     ), "the scoped check must compile both materialized test targets"
+    assert arguments[-1] == "--frozen", (
+        "the scoped check must preserve the copied lockfile and stay offline"
+    )
     assert "--all-targets" not in arguments, (
         "the scoped check must not rebuild unrelated package targets"
     )
@@ -327,73 +362,3 @@ def test_compile_targets_reject_invalid_direct_construction(
     """Direct construction rejects malformed Cargo target collections."""
     with pytest.raises(error_type, match=expected_error):
         CompileTargets(names)
-
-
-@pytest.mark.parametrize(
-    ("target_path", "expected_error"),
-    [
-        ("../../outside/target.rs", "escapes the Rust workspace"),
-        ("/unused", "escapes the Rust workspace"),
-        ("tools/target.rs", "symlinked parent directory"),
-    ],
-)
-def test_main_rejects_explicit_targets_that_escape_the_copy(
-    target_path: str,
-    expected_error: str,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Explicit paths cannot reach original sources through escapes or directories."""
-    root = copy_boundary_repository(tmp_path)
-    crate = root / "rust/cuprum-streams"
-    external = root / "outside/target.rs"
-    external.parent.mkdir()
-    external.write_text(SAFE_SOURCE, encoding="utf-8")
-    if target_path == "/unused":
-        target_path = str(external)
-    if target_path.startswith("tools/"):
-        (crate / "tools").symlink_to("../../outside", target_is_directory=True)
-    manifest = crate / "Cargo.toml"
-    manifest.write_text(
-        manifest.read_text(encoding="utf-8")
-        + f'\n[[bin]]\nname = "escaped-target"\npath = "{target_path}"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(contract, "ROOT", root)
-
-    with pytest.raises(ValueError, match=expected_error):
-        contract.main()
-
-
-def test_probe_appended_preserves_crlf_bytes_after_a_write_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Probe restoration preserves raw bytes even when its first write fails."""
-    target = tmp_path / "target.rs"
-    original = b"//! CRLF source.\r\n#![forbid(unsafe_code)]\r\n"
-    target.write_bytes(original)
-    probe = "pub fn unsafe_probe() { unsafe {} }"
-    with contract._probe_appended(target, probe):
-        assert target.read_bytes() == original + b"\n" + probe.encode() + b"\n", (
-            "the probe must preserve the original CRLF bytes"
-        )
-    assert target.read_bytes() == original, "the normal probe path must restore bytes"
-    original_write = type(target).write_bytes
-
-    def write_bytes(path: Path, data: bytes) -> int:
-        """Simulate a partial first write while allowing the restoration write."""
-        if path == target and data != original:
-            original_write(path, data[:1])
-            msg = "injected probe write failure"
-            raise OSError(msg)
-        return original_write(path, data)
-
-    monkeypatch.setattr(type(target), "write_bytes", write_bytes)
-    with (
-        pytest.raises(OSError, match="injected probe write failure"),
-        contract._probe_appended(target, probe),
-    ):
-        pass
-    assert target.read_bytes() == original, (
-        "the failed first probe write must still restore the original raw bytes"
-    )

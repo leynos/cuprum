@@ -73,6 +73,58 @@ def test_the_nextest_path_takes_test_threads_not_a_build_limit() -> None:
     assert "--jobs" not in nextest_line, "nextest must not be given --jobs"
 
 
+def test_test_rust_prepares_private_state_and_runs_frozen_offline() -> None:
+    """Prepare dependencies and isolate writable Cargo state before testing."""
+    recipe = _recipe("test-rust")
+
+    assert "scripts.prepare_cargo_state" in recipe, (
+        "test-rust must prepare a lockfile-keyed Cargo snapshot before execution"
+    )
+    assert 'export CARGO_HOME="$run_root/cargo-home"' in recipe, (
+        "test-rust must use a private writable Cargo home"
+    )
+    assert (
+        'export CARGO_TARGET_DIR="$target_root/test-rust-$target_route-$target_key"'
+        in recipe
+    ), "test-rust must retain a target directory keyed by toolchain and build flags"
+    assert "export CARGO_NET_OFFLINE=true" in recipe, (
+        "the timed Rust tests must use dependencies prepared before execution"
+    )
+    nextest_start = recipe.index("nextest run")
+    nextest_end = recipe.index("|| suite_status=$?", nextest_start)
+    assert "--frozen" in recipe[nextest_start:nextest_end], (
+        "the nextest route must run with Cargo's frozen lock and offline contract"
+    )
+    fallback_marker = recipe.index("falling back to cargo test.")
+    fallback_start = recipe.index("RUSTFLAGS=", fallback_marker)
+    fallback_end = recipe.index("|| suite_status=$?", fallback_start)
+    assert "--frozen" in recipe[fallback_start:fallback_end], (
+        "the cargo test fallback must use its prepared lockfile"
+    )
+    doctest_start = recipe.index("test --workspace --doc")
+    doctest_end = recipe.index("|| suite_status=$?", doctest_start)
+    assert "--frozen" in recipe[doctest_start:doctest_end], (
+        "the doctest route must use its already prepared lockfile"
+    )
+    assert "rust_test_workload" in recipe, (
+        "the test execution duration must be recorded separately from preparation"
+    )
+    telemetry_lines = [
+        line
+        for line in recipe.splitlines()
+        if "rust_test_workload" in line or "rows=[json.loads" in line
+    ]
+    assert len(telemetry_lines) == 2, (
+        "the workload timing record and report must both remain present"
+    )
+    assert all(" || " in line for line in telemetry_lines), (
+        "timing telemetry must be best-effort so it cannot replace suite_status"
+    )
+    assert recipe.index('exit "$suite_status"') > max(
+        recipe.index(line) for line in telemetry_lines
+    ), "the Rust suite result must remain authoritative after timing telemetry"
+
+
 @pytest.mark.parametrize(
     "cargo_flags",
     [

@@ -145,6 +145,11 @@ and the content boundary.
   accepted decision to add a separate launch entry point returning an immutable
   receipt, rather than a detach flag or a dropped handle, so ownership is
   legible at the call site.
+- [ADR-029: Shared build resources and prepared Cargo state][adr-029] -
+  accepted decision to prepare a content-keyed read-only Cargo cache snapshot
+  before timed work, give each run a private writable home and target
+  directory, record preparation separately from the workload, and use external
+  compiler admission unchanged.
 
 ## Requests for comments
 
@@ -212,6 +217,7 @@ and the content boundary.
 [adr-026]: adrs/adr-0026-narrowed-results-only-for-complete-text-capture.md
 [adr-027]: adrs/adr-0027-compile-contracts-in-the-build-graph.md
 [adr-028]: adrs/adr-0028-detached-command-launch.md
+[adr-029]: adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rstest-bdd-guide]: rstest-bdd-users-guide.md

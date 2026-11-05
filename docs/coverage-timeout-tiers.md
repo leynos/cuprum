@@ -120,9 +120,79 @@ s), and its two Cargo metadata calls are each bounded by
 `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` (3900 s). The outer marker leaves 60 s
 for surrounding test work and catches a wedged test process.
 
-The marker covers the cold `CARGO_BUILD_JOBS=1` build measured at 181 s. The
-test does not set Cargo's job count; parallelism belongs to its caller, so the
-allowance does not depend on the caller's `-j` value. The suite-wide global
-`timeout = 30` remains tight, and only this test raises its bound. The fast
-contract test `test_real_compile_test_timeout_exceeds_compile_budget` pins the
-marker and both timeout relationships.
+The historical 181-second observation used `CARGO_BUILD_JOBS=1` outside the
+resource contract. It is not a current execution-budget measurement. The test
+does not set Cargo's job count; parallelism belongs to its caller. The
+suite-wide global `timeout = 30` remains tight, and only this test raises its
+bound. The fast contract test
+`test_real_compile_test_timeout_exceeds_compile_budget` pins the marker and
+both timeout relationships. These bounds are end-to-end watchdogs rather than
+workload-only budgets.
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records the shared-resource decision and notes that a top-level workload lease
+is follow-up work.
+
+## Doctest contract tier
+
+The doctest-warning contract in
+`cuprum/unittests/test_doctest_warning_contract.py` makes two real Cargo calls,
+one per Rustdoc route. Each call is bounded by `DOCTEST_CALL_TIMEOUT_SECONDS`
+(3600 s) and owns its process group. The test's pytest mark is
+`DOCTEST_TEST_TIMEOUT_SECONDS` (7260 s), twice the per-call bound plus a 60 s
+margin for surrounding work, and a fast contract test pins that relationship.
+
+The per-call bound is an end-to-end watchdog, not an execution budget. Both
+calls compete for the host's compiler-admission tokens, and the coordinator
+exposes no workload lease that could exclude that queue. On 2026-11-03 a
+270-second per-call bound expired while the captured stream reported
+`[build-limits] warning_doctest: waiting for a compile slot (343 ahead, 45s)`.
+The 3600 s bound therefore matches the boundary compile tier's finite watchdog
+rather than a measured workload; an expired call still terminates its Cargo
+descendants. Replace this with a measured execution budget once a documented
+workload lease exists.
+
+## Packaging build measurement
+
+On 2026-10-26, the grouped packaging consumers built each frontend and archive
+once through `DistributionArtefactFactory`. The focused session used a prepared
+snapshot and fresh run-local Cargo homes. A second Maturin wheel build used a
+new Cargo home and the same configuration-keyed target as the first, so the
+target was cold for the first build and warm for the second.
+
+_Table 2: Local packaging route timing observations._
+
+| Phase                       | Duration    | Conditions                                      |
+| --------------------------- | ----------: | ----------------------------------------------- |
+| Dependency preparation      | 21.2 s      | Snapshot reused; run-local home copied          |
+| uv source archive           | 0.10 s      | Grouped session; prepared snapshot              |
+| uv wheel                    | 0.05 s      | Grouped session; prepared snapshot              |
+| Maturin source archive      | 7.15 s      | Grouped session; prepared snapshot              |
+| Maturin wheel, empty target | 38.6–49.1 s | Compiler objects already cached                 |
+| Maturin wheel, warm target  | 23.8 s      | Separate home; same target; `sccache` available |
+| Maturin wheel, rebuilt      | 163 s       | Fresh target and home; 2026-10-30; loaded host  |
+
+The packaging command watchdogs are 180 s for the uv frontend and 3600 s for
+Maturin. `CUPRUM_PACKAGING_BUILD_TIMEOUT` can raise both end-to-end caps for a
+runner with more queueing, but never lowers either below its default, and the
+pytest mark stays 60 s above the largest configured cap. The 49.1 s Maturin
+wheel was measured in the grouped session; the 38.6 s sample used a separate
+empty target; in both, compiled objects were already available to the compiler
+cache. The 163 s sample rebuilt the native extension from an empty target, but
+a later gate run waited behind 67 and then 123 compiler-admission requests and
+overran a 600 s Maturin bound. The native watchdog therefore remains the finite
+end-to-end bound inherited from the pre-factory contract, not the measured
+workload, because the coordinator exposes no workload lease that could exclude
+that queue. This was a developer-host observation, not a CI-runner or
+concurrent-run measurement. It does not establish the workload-only budget
+under a top-level resource lease. Repeat the measurement on the target CI
+runner and under the coordinator's documented workload lease before revising
+timeout contracts.
+
+The current compiler coordinator exposes bounded compiler scopes only, not a
+bounded outer Cargo-workload lease; its queue wait has no finite limit. Until
+that contract exists, no concurrent workload timing or admission bound is
+claimed here. The grouped packaging execution and the configuration-keyed
+target directories are recorded in
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md).
+See the
+[external compiler admission contract](developers-guide.md#external-compiler-admission-contract).

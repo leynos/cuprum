@@ -89,6 +89,21 @@ def _coverage_step(workflow_name: str, job_name: str) -> Step:
     return matches[0]
 
 
+def _serialized_targets(makefile: str) -> tuple[str, ...]:
+    """Return `.NOTPARALLEL` targets after collapsing Make continuations."""
+    joined_makefile = makefile.replace("\\\n", " ")
+    notparallel = next(
+        (
+            line
+            for line in joined_makefile.splitlines()
+            if line.startswith(".NOTPARALLEL:")
+        ),
+        None,
+    )
+    assert notparallel is not None, "the Makefile must declare .NOTPARALLEL"
+    return tuple(notparallel.partition(":")[2].split())
+
+
 @pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
 def test_coverage_executes_the_rust_suite(workflow_name: str, job_name: str) -> None:
     """Keep the Rust suite running, and running under instrumentation."""
@@ -234,13 +249,52 @@ def test_the_extension_gate_is_not_a_duplicate_run() -> None:
 
 
 def test_make_keeps_both_suites_available_locally() -> None:
-    """Keep `make test` running everything, whatever CI splits apart."""
+    """Keep local suites available while serializing their heavy builds."""
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    assert "\ntest: makeutil test-selection test-python test-rust" in makefile, (
-        "`make test` must still run both suites for contributors, even though "
-        "CI calls the halves separately"
+    test_target = makefile.split("\ntest:", 1)[1].split("\n\n", 1)[0]
+    serialized_targets = _serialized_targets(makefile)
+    assert "test" in serialized_targets, (
+        "the test aggregate must serialize its direct prerequisites under parallel Make"
+    )
+    assert re.search(
+        r"^test:\s+test-selection\s+test-python\s+test-rust\b",
+        makefile,
+        re.MULTILINE,
+    ), "the aggregate must order selection, Python, then Rust"
+    assert "test-python" in test_target, (
+        "`make test` must still run the Python suite for contributors"
+    )
+    assert "test-rust" in test_target, (
+        "`make test` must still run the Rust suite for contributors"
     )
     rust_target = makefile.split("\ntest-rust:", 1)[1].split("\n\n", 1)[0]
     assert "nextest run" in rust_target, (
         "`make test-rust` must keep running the Rust suite"
     )
+
+
+def test_test_rust_cleans_its_run_home_after_interrupt_or_termination() -> None:
+    """Remove the private Cargo home when a Rust test run is interrupted."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    rust_target = makefile.split("\ntest-rust:", 1)[1].split("\n\n", 1)[0]
+
+    signal_cleanup_contract = (
+        r"(?s)"
+        r"(?=.*trap cleanup EXIT)"
+        r"(?=.*trap 'handle_signal 130' INT)"
+        r"(?=.*trap 'handle_signal 143' TERM)"
+        r'(?=.*trap - EXIT INT TERM; cleanup; exit "\$\$1")'
+    )
+    assert re.search(signal_cleanup_contract, rust_target), (
+        "normal exit, interrupt, and termination must remove the run-local "
+        "Cargo home and preserve the signal exit status"
+    )
+
+
+def test_notparallel_target_reader_joins_continued_declarations() -> None:
+    """Keep targets on continued `.NOTPARALLEL` lines in the result."""
+    assert _serialized_targets(".NOTPARALLEL: lint \\\n  test rust-lint\n") == (
+        "lint",
+        "test",
+        "rust-lint",
+    ), "the target reader must collapse Make continuations before splitting"

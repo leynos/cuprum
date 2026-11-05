@@ -13,6 +13,10 @@ import typing as typ
 
 import pytest
 
+from tests.helpers.distribution_artefacts import (
+    distribution_artefact_factory,  # ruff: ignore[unused-import] - pytest discovers this fixture re-export
+)
+
 if typ.TYPE_CHECKING:
     from pathlib import Path
 

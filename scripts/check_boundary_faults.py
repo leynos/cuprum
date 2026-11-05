@@ -16,7 +16,26 @@ import os
 import shutil
 from pathlib import Path
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    ProcessGroupPolicy,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    scoped,
+    sh,
+)
+from scripts.boundary_cargo import (
+    boundary_cargo_run as _boundary_cargo_run,
+)
+from scripts.boundary_cargo import (
+    new_run_root as _new_boundary_run_root,
+)
+from scripts.boundary_cargo import offline_cargo_environment
+from scripts.boundary_cargo import (
+    prepare_run_cargo_home as _prepare_boundary_cargo_home,
+)
+from scripts.cargo_state_metadata import _sha256
 from scripts.render_boundary_proofs import render
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +69,15 @@ class BoundaryFaultError(RuntimeError):
         self.check_name = check_name
         self.exit_code = exit_code
         self.log_path = log_path
+
+
+class _LockfileRewriteError(RuntimeError):
+    """Report a verifier that rewrote its lockfile, retaining its output."""
+
+    def __init__(self, message: str, output: str) -> None:
+        """Carry the verifier's diagnostic stream with the rewrite failure."""
+        super().__init__(message)
+        self.output = output
 
 
 def read_tool_pins() -> ToolPins:
@@ -118,6 +146,56 @@ def mutate(source: str, old: str, new: str) -> str:
     return source.replace(old, new)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Invocation:
+    """One verifier command and the lockfile contract that must survive it."""
+
+    command_arguments: tuple[str, ...]
+    environment: dict[str, str]
+    lockfile: Path | None = None
+    lockfile_digest: str | None = None
+
+
+def _invocation(
+    program: str,
+    args: tuple[str, ...],
+    workspace: Path,
+    pins: ToolPins,
+) -> _Invocation:
+    """Build the verifier environment and its arguments, freezing native Cargo.
+
+    Cargo consumes a global ``--frozen`` before dispatching an external
+    subcommand, and cargo-kani 0.67.0 rejects that flag itself, so a Kani
+    invocation cannot receive it. The offline environment is the supported
+    mechanism there; the copied lockfile is compared afterwards instead.
+
+    Returns
+    -------
+    _Invocation
+        The arguments, environment, and lockfile contract for this program.
+    """
+    kani = Path.home() / f".kani/kani-{pins.kani}"
+    target_directory = workspace.parent / "target/boundary-faults-debug-all-features"
+    environment = os.environ.copy()
+    environment.update({
+        "CARGO_TARGET_DIR": str(target_directory),
+        "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
+        "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
+        "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
+    })
+    if program != "cargo":
+        return _Invocation(args, environment)
+    environment = offline_cargo_environment(
+        workspace,
+        target_directory,
+        caller_environment=environment,
+    )
+    if args[0] != "kani":
+        return _Invocation(("--frozen", *args), environment)
+    lockfile = workspace / "Cargo.lock"
+    return _Invocation(args, environment, lockfile, _sha256(lockfile))
+
+
 def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str]:
     """Run one allowlisted verification tool with bounded execution time."""
     pins = read_tool_pins()
@@ -129,20 +207,23 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
         noise_rules=(),
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
-    kani = Path.home() / f".kani/kani-{pins.kani}"
+    invocation = _invocation(program, args, workspace, pins)
     context = sh.ExecutionContext(
         cwd=workspace,
-        env={
-            "CARGO_TARGET_DIR": str(ROOT / "rust/target/boundary-faults"),
-            "LD_LIBRARY_PATH": f"{kani}/toolchain/lib:{kani}/lib",
-            "VERUS_Z3_PATH": str(ROOT / ".cache/boundary-z3/z3"),
-            "RUSTUP_TOOLCHAIN": "1.98.0" if program != "cargo" else "1.85.0",
-        },
+        env=invocation.environment,
         timeout=1200,
+        process_group=ProcessGroupPolicy.OWN_GROUP,
     )
     with scoped(ScopeConfig(allowlist=frozenset({executable}))):
-        result = command(*args).run_sync(context=context)
-    return result.exit_code, (result.stdout or "") + (result.stderr or "")
+        result = command(*invocation.command_arguments).run_sync(context=context)
+    output = (result.stdout or "") + (result.stderr or "")
+    if (
+        invocation.lockfile is not None
+        and _sha256(invocation.lockfile) != invocation.lockfile_digest
+    ):
+        msg = f"cargo kani changed the copied lockfile: {invocation.lockfile}"
+        raise _LockfileRewriteError(msg, output)
+    return result.exit_code, output
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -157,27 +238,42 @@ class _Check:
 
 def _check(check: _Check, workspace: Path, logs: Path) -> None:
     """Archive a control or require the specific counterexample diagnostic."""
-    code, output = _run(check.program, check.args, workspace)
-    (logs / f"{check.name}.log").write_text(output, encoding="utf-8")
+    log_path = logs / f"{check.name}.log"
+    try:
+        code, output = _run(check.program, check.args, workspace)
+    except _LockfileRewriteError as error:
+        log_path.write_text(error.output, encoding="utf-8")
+        raise
+    log_path.write_text(output, encoding="utf-8")
     passed = (
         code == 0
         if check.expected_failure is None
         else code != 0 and check.expected_failure in output
     )
     if not passed:
-        raise BoundaryFaultError(check.name, code, logs / f"{check.name}.log")
+        raise BoundaryFaultError(check.name, code, log_path)
 
 
 def main() -> None:
     """Execute controls and four deliberate faults without editing live sources."""
-    workspace = ROOT / ".cache/boundary-faults/workspace"
-    if workspace.exists():
-        shutil.rmtree(workspace)
+    run_root = _new_run_root()
+    workspace = run_root / "workspace"
     shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
-    logs = ROOT / "rust/target/boundary-verification/faults"
-    logs.mkdir(parents=True, exist_ok=True)
-    _verify_progress_faults(workspace, logs)
-    _verify_ownership_faults(workspace, logs)
+    with _boundary_cargo_run(run_root, workspace, _prepare_run_cargo_home):
+        logs = run_root / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        _verify_progress_faults(workspace, logs)
+        _verify_ownership_faults(workspace, logs)
+
+
+def _new_run_root() -> Path:
+    """Create a private workspace root for one fault-sensitivity run."""
+    return _new_boundary_run_root(ROOT / ".cache/boundary-faults/runs")
+
+
+def _prepare_run_cargo_home(run_root: Path, workspace: Path) -> float:
+    """Prepare the copied workspace with this harness's repository root."""
+    return _prepare_boundary_cargo_home(ROOT, run_root, workspace)
 
 
 def _verify_progress_faults(workspace: Path, logs: Path) -> None:

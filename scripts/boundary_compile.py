@@ -10,7 +10,16 @@ import dataclasses
 import re
 import typing as typ
 
-from cuprum import Program, ProgramCatalogue, ProjectSettings, ScopeConfig, scoped, sh
+from cuprum import (
+    ProcessGroupPolicy,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    ScopeConfig,
+    scoped,
+    sh,
+)
+from scripts.boundary_cargo import offline_cargo_environment
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -117,11 +126,19 @@ def compile_arguments(targets: CompileTargets | None = None) -> tuple[str, ...]:
             "cuprum-streams",
             "--all-targets",
             "--all-features",
+            "--frozen",
         )
     test_arguments = tuple(
         argument for name in targets.names for argument in ("--test", name)
     )
-    return ("check", "--package", "cuprum-streams", "--all-features", *test_arguments)
+    return (
+        "check",
+        "--package",
+        "cuprum-streams",
+        "--all-features",
+        *test_arguments,
+        "--frozen",
+    )
 
 
 def _compile(
@@ -152,10 +169,12 @@ def _compile(
         noise_rules=(),
     )
     cargo = sh.make(cargo_program, catalogue=ProgramCatalogue(projects=(project,)))
+    environment = offline_cargo_environment(workspace, target_directory)
     context = sh.ExecutionContext(
         cwd=workspace,
-        env={"CARGO_TARGET_DIR": str(target_directory)},
+        env=environment,
         timeout=COMPILE_TIMEOUT_SECONDS,
+        process_group=ProcessGroupPolicy.OWN_GROUP,
     )
     with scoped(ScopeConfig(allowlist=frozenset({cargo_program}))):
         result = cargo(*compile_arguments(targets)).run_sync(context=context)

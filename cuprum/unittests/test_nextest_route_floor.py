@@ -91,13 +91,17 @@ def _write_stubs(directory: Path, version: str | None) -> Path:
     """
     log = directory / "cargo.log"
     log.write_text("", encoding="utf-8")
+    cargo_home = directory / "cargo-home"
+    cargo_home.mkdir()
     if version is not None:
         nextest = directory / "cargo-nextest"
         nextest.write_text(f'#!/bin/sh\necho "{version}"\n', encoding="utf-8")
         nextest.chmod(0o755)
     cargo = directory / "cargo"
     cargo.write_text(
-        f'#!/bin/sh\necho "CARGO $*" >> "{log}"\n',
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then echo "cargo 1.85.0"; exit 0; fi\n'
+        f'echo "CARGO $*" >> "{log}"\n',
         encoding="utf-8",
     )
     cargo.chmod(0o755)
@@ -131,7 +135,7 @@ def _route_env() -> dict[str, str]:
 
 def _drive(
     target: str, stub_directory: Path, version: str | None, *, with_host_path: bool
-) -> tuple[int, str]:
+) -> tuple[int, str, str]:
     """Drive one Makefile route with stubbed tools.
 
     Parameters
@@ -155,8 +159,8 @@ def _drive(
 
     Returns
     -------
-    tuple[int, str]
-        The route's exit status and the commands its cargo received.
+    tuple[int, str, str]
+        The route's exit status, Cargo commands, and Make diagnostics.
     """
     log = _write_stubs(stub_directory, version)
     make = shutil.which("make")
@@ -164,13 +168,18 @@ def _drive(
         "the two routes this module drives are Makefile targets; without "
         "`make` neither the gate nor its absence can be shown"
     )
+    uv = shutil.which("uv")
+    assert uv is not None, (
+        "Cargo preparation runs through uv, so the route stub needs its path"
+    )
     # `LOCAL_TOOL_PATH` is the variable both routes build their `PATH`
     # from, so putting the stubs at its front is how the probe and the
     # version call resolve to them -- the same mechanism, and the same
     # variable, that finds a real tool in `~/.local/bin`. `CARGO` is
-    # pointed at the stub as well because the doctest line at the foot of
-    # `test-rust` runs outside `LOCAL_TOOL_ENV` and would otherwise reach
-    # the host's real compiler. `DEV_FAST_CHECK_COMMAND` is neutralized
+    # pointed at the stub because preparation and the workload commands use
+    # Cargo outside the lookup performed for nextest. `UV` is an absolute
+    # executable so the fallback case can keep its restricted path free of
+    # the host's cargo-nextest. `DEV_FAST_CHECK_COMMAND` is neutralized
     # because the accelerated route otherwise insists on a Cranelift
     # toolchain and a checksum-verified `mold`; those are dev-fast
     # prerequisites rather than anything this module is about, and the stub
@@ -181,17 +190,22 @@ def _drive(
     selections = (
         f"LOCAL_TOOL_PATH={path}",
         f"CARGO={stub_directory / 'cargo'}",
+        f"UV={uv}",
         "DEV_FAST_CHECK_COMMAND=true",
     )
+    environment = _route_env()
+    environment["CARGO_HOME"] = str(stub_directory / "cargo-home")
+    environment["XDG_CACHE_HOME"] = str(stub_directory / "cache")
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell needed.
         [make, *selections, target],
         capture_output=True,
         check=False,
         cwd=repo_root(),
-        env=_route_env(),
+        env=environment,
         text=True,
     )
-    return completed.returncode, log.read_text(encoding="utf-8")
+    output = f"{completed.stdout}{completed.stderr}"
+    return completed.returncode, log.read_text(encoding="utf-8"), output
 
 
 @pytest.mark.parametrize("target", _DRIVEN_ROUTES)
@@ -204,21 +218,47 @@ def test_a_release_below_the_floor_stops_the_route(target: str, tmp_path: Path) 
     status would still look like a refusal, so a check that had lost its
     `exit 1` would pass a status-only test while enforcing nothing.
     """
-    status, commands = _drive(
+    status, commands, output = _drive(
         target, tmp_path, _BELOW_FLOOR_VERSION, with_host_path=True
     )
     assert status != 0, (
         f"`{target}` ran a cargo-nextest below the "
         f"{EXPECTED_NEXTEST_MIN_VERSION} floor to a successful exit; the "
         f"release that drops the whole-run budget silently is the one the "
-        f"floor exists to refuse"
+        f"floor exists to refuse. Make output: {output}"
     )
+    assert (
+        f"cargo-nextest {EXPECTED_NEXTEST_MIN_VERSION} or newer is required" in output
+    ), f"`{target}` must name the supported nextest floor. Make output: {output}"
     assert "nextest run" not in commands, (
         f"`{target}` reported the floor and then ran nextest anyway. The "
         f"refusal has to stop the route, not print: nextest warns about the "
         f"`global-timeout` key it does not know and runs on without a "
         f"whole-run budget, which is the failure the floor prevents. Its "
         f"cargo received: {commands.strip()!r}"
+    )
+
+
+@pytest.mark.parametrize("target", _DRIVEN_ROUTES)
+def test_an_empty_version_probe_is_reported_as_a_floor_failure(
+    target: str,
+    tmp_path: Path,
+) -> None:
+    """Refuse a present nextest executable that reports no version."""
+    status, commands, output = _drive(target, tmp_path, "", with_host_path=True)
+    assert status != 0, (
+        f"`{target}` accepted a cargo-nextest executable with an empty version "
+        f"probe. Make output: {output}"
+    )
+    assert (
+        f"cargo-nextest {EXPECTED_NEXTEST_MIN_VERSION} or newer is required" in output
+    ), f"`{target}` must explain its version floor. Make output: {output}"
+    assert "version probe was empty" in output, (
+        f"`{target}` must describe the empty probe accurately. Make output: {output}"
+    )
+    assert "nextest run" not in commands, (
+        f"`{target}` reported an empty probe and still ran nextest. Its cargo "
+        f"received: {commands.strip()!r}"
     )
 
 
@@ -231,11 +271,14 @@ def test_a_release_at_the_floor_reaches_the_suite(target: str, tmp_path: Path) -
     excluded value. A refusal here blocks every supported run, which is the
     other way a version check fails its purpose.
     """
-    status, commands = _drive(target, tmp_path, _SUPPORTED_VERSION, with_host_path=True)
+    status, commands, output = _drive(
+        target, tmp_path, _SUPPORTED_VERSION, with_host_path=True
+    )
     assert status == 0, (
         f"`{target}` refused a cargo-nextest reporting "
         f"{EXPECTED_NEXTEST_MIN_VERSION}, which is the floor itself; a "
-        f"minimum that excludes its own value blocks every supported run"
+        f"minimum that excludes its own value blocks every supported run. "
+        f"Make output: {output}"
     )
     assert "nextest run" in commands, (
         f"`{target}` accepted the release and never ran the suite. Its "
@@ -251,10 +294,11 @@ def test_a_host_without_the_tool_falls_back_to_cargo_test(tmp_path: Path) -> Non
     relies on, so a version check that refused an absent tool would turn an
     optional accelerator into a dependency of the default route.
     """
-    status, commands = _drive("test-rust", tmp_path, None, with_host_path=False)
+    status, commands, output = _drive("test-rust", tmp_path, None, with_host_path=False)
     assert status == 0, (
         "`test-rust` failed on a host with no cargo-nextest on the augmented "
-        "PATH; the floor is a gate on the tool, not a requirement to have it"
+        "PATH; the floor is a gate on the tool, not a requirement to have it. "
+        f"Make output: {output}"
     )
     assert "nextest" not in commands, (
         f"`test-rust` fell through to a nextest call with no cargo-nextest "

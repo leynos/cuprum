@@ -92,6 +92,50 @@ def test_boundary_cache_ownership_is_limited(name: str) -> None:
         )
 
 
+def test_verus_archives_the_negative_compiler_evidence() -> None:
+    """The boundary contract keeps its compiler logs under `.cache`, so archive them.
+
+    `make boundary-contract` writes each attempt beneath
+    `.cache/boundary-contract/runs`, not under the Cargo target directory the
+    proof log uses. Without that path the job archives only the Verus output and
+    the negative compiler evidence — the artefact a failure investigation needs
+    most — is discarded with the runner.
+    """
+    archive = next(
+        (
+            step
+            for step in steps(WORKFLOW, "verus")
+            if step.get("name") == "Archive proof and negative compiler evidence"
+        ),
+        None,
+    )
+
+    assert isinstance(archive, dict), "the verus job must archive its evidence"
+    inputs = step_inputs(archive, "the verus archive must declare its inputs")
+    assert inputs.get("name") == (
+        "verus-and-compiler-contracts-${{ github.run_id }}-${{ github.run_attempt }}"
+    ), (
+        "each attempt must upload under its own name; the uploader rejects a "
+        "duplicate name within one run, which would replace the original failure"
+    )
+    paths = {
+        line.strip()
+        for line in str(inputs.get("path", "")).splitlines()
+        if line.strip()
+    }
+
+    assert paths == {
+        "rust/target/boundary-verification",
+        ".cache/boundary-contract/runs",
+    }, "the archive must carry the proof log and the boundary contract's run logs"
+    assert inputs.get("include-hidden-files") is True, (
+        "the uploader must include logs beneath the hidden .cache directory"
+    )
+    assert inputs.get("if-no-files-found") == "ignore", (
+        "a failure before the harness creates a run must not mask its original error"
+    )
+
+
 def test_prover_tools_selects_its_required_python() -> None:
     """The installer must override CI's Python 3.13 with its required Python 3.14."""
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(

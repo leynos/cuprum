@@ -26,8 +26,14 @@ import typing as typ
 from tests.helpers.ci_documents import require
 from tests.helpers.ci_run_scripts import run_scripts
 from tests.helpers.docs import repo_root
-from tests.helpers.makefile import recipe_of, variable_expansion
-from tests.helpers.recipe_flow import require_selector_is_consumed
+from tests.helpers.makefile import (
+    recipe_of,
+    variable_expansion,
+)
+from tests.helpers.recipe_flow import (
+    require_selector_is_consumed,
+)
+from tests.helpers.suite_selector_coverage import require_test_python_selector_coverage
 from tests.helpers.workflow_shell import script_runs_command
 
 if typ.TYPE_CHECKING:
@@ -237,18 +243,19 @@ def _require_selector_resolves_to_module(module: str, entry: Exemption) -> None:
 
 
 def _require_target_consumes_selector(module: str, entry: Exemption) -> None:
-    """Require the named target's recipe to hand the selector to a command.
+    """Require the named target's recipe to execute all selected modules.
 
-    The consumption check raises its own diagnosis, which names the recipe
-    shape but knows nothing about exemptions. It is re-raised with the entry
-    that provoked it, so a failure sends the reader to the table row rather
-    than to a Makefile target they did not choose.
+    `test-python` splits its selector across individual and grouped commands,
+    so that route needs both branches checked together. Other targets consume
+    their selector directly. The resulting diagnostic includes the exemption
+    entry that relied on the target.
     """
     try:
-        require_selector_is_consumed(
-            recipe_of(entry.target),
-            selector=entry.selector,
-        )
+        recipe = recipe_of(entry.target)
+        if entry.selector == SELECTOR and entry.target == "test-python":
+            require_test_python_selector_coverage(recipe, entry.selector)
+        else:
+            require_selector_is_consumed(recipe, selector=entry.selector)
     except AssertionError as error:
         require(
             condition=False,

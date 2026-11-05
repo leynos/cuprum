@@ -28,6 +28,9 @@ from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
+from tests.helpers.prepared_cargo_run import (
+    prepared_cargo_run,  # ruff: ignore[unused-import] - pytest discovers this session fixture globally
+)
 
 # Property tests assert behaviour, while pytest-timeout retains the suite-wide
 # bound for tests that hang. Hypothesis's per-example runtime is host-sensitive.

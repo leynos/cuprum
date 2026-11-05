@@ -37,6 +37,68 @@ def copy_boundary_repository(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def latest_run_root(root: Path, harness: str) -> Path:
+    """Return the single run directory a boundary harness retained.
+
+    Parameters
+    ----------
+    root : Path
+        Repository-like root the harness ran against.
+    harness : str
+        Harness name, which also names its ``.cache/<harness>/runs`` directory.
+
+    Returns
+    -------
+    Path
+        The one private run root the harness created.
+
+    Raises
+    ------
+    RuntimeError
+        If the harness retained no run root or more than one.
+    """
+    runs = sorted((root / f".cache/{harness}/runs").glob("run-*"))
+    if len(runs) != 1:
+        msg = f"the {harness} invocation must use one private run root"
+        raise RuntimeError(msg)
+    return runs[0]
+
+
+def _no_preparation_time(_run_root: Path, _workspace: Path) -> float:
+    """Report dependency preparation that consumed no measurable time."""
+    return 0.0
+
+
+def stub_cargo_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
+    """Make one harness skip Cargo-home preparation in its orchestration test.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch manager for the current test.
+    module : object
+        Production module exposing ``_prepare_run_cargo_home``.
+    """
+    monkeypatch.setattr(module, "_prepare_run_cargo_home", _no_preparation_time)
+
+
+def recorded_phases(run_root: Path) -> list[str]:
+    """Return the timing phases one harness recorded, in order.
+
+    Parameters
+    ----------
+    run_root : Path
+        Private run directory holding the harness's ``timings.jsonl``.
+
+    Returns
+    -------
+    list of str
+        Phase names in the order they were recorded.
+    """
+    lines = (run_root / "timings.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line)["phase"] for line in lines]
+
+
 def cargo_target_roots(crate: Path) -> tuple[Path, ...]:
     """Return Cargo metadata source roots for the synthetic safe package."""
     cargo = shutil.which("cargo")

@@ -607,11 +607,18 @@ land in Ubicloud's store rather than GitHub's.
 
 `PYTEST_TARGETS` in the `Makefile` is what `make test` and CI's
 `typecheck-test` job collect. It is a list of glob patterns, not a directory
-sweep, so a test module that matches no pattern is simply never named — the
-target loops over the patterns, and `[ -e "$1" ] || continue` skips any whose
-first expansion does not exist. Nothing reports the omission: the loop exits
-zero having run only the modules its patterns named, and the contracts inside
-the module can regress unnoticed.
+sweep, so a test module that matches no pattern is simply never named. The
+`test-python` recipe loops over the patterns in `PYTEST_INDIVIDUAL_TARGETS`, and
+`[ -e "$1" ] || continue` skips any whose first expansion does not exist.
+`PYTEST_GROUPED_DESELECT` excludes grouped modules from those individual runs.
+Nothing reports a missing expansion: the loop exits zero having run only the
+modules its patterns named, and the contracts inside the module can regress
+unnoticed.
+
+After the per-pattern runs, one grouped pytest invocation runs the existing
+paths from `PYTEST_GROUPED_TARGETS`, selected through
+`PYTEST_SELECTED_TARGETS`. This lets grouped modules share session-scoped
+builds without also running in each per-pattern invocation.
 
 Absent from this suite is not the same as absent from CI. The `coverage` job
 runs a bare `pytest` from the repository root through an out-of-repo composite
@@ -808,7 +815,9 @@ skips. Three details are load-bearing:
 `make test` still runs both suites, which is what a contributor wants locally.
 CI calls the halves separately: `make test-python` in the matrix, and the Rust
 suite only through the coverage action. `make test-rust` exists for running the
-Rust half alone.
+Rust half alone. That half prepares Cargo state before it starts; see
+[Cargo cache snapshots](#cargo-cache-snapshots) and
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md).
 
 Two jobs survive that look like duplicates and are not:
 
@@ -3146,12 +3155,17 @@ telemetry architecture and its design rationale are recorded in the
 ### Build and test worker controls
 
 `make test` runs pytest serially by default. Set `PYTEST_WORKERS` to a positive
-worker count to enable xdist explicitly. Set `CARGO_BUILD_JOBS=N` to bound
-Cargo's build parallelism; `make` passes it through unchanged, and Cargo uses
-every core when it is unset. Set `TEST_JOBS=N` for the test-thread count, which
-nextest takes as `--test-threads` and the `cargo test` fallback takes after
-`--`. `BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no
-longer sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
+worker count to enable xdist explicitly. The grouped branch, which runs the
+modules in `PYTEST_GROUPED_TARGETS`, always passes `--dist loadgroup`: those
+modules share session-scoped distribution builds and carry an `xdist_group`
+marker, so a positive worker count keeps every consumer of one shared build on
+a single worker instead of repeating the build once per worker. Set
+`CARGO_BUILD_JOBS=N` to bound Cargo's build parallelism; `make` passes it
+through unchanged, and Cargo uses every core when it is unset. Set
+`TEST_JOBS=N` for the test-thread count, which nextest takes as
+`--test-threads` and the `cargo test` fallback takes after `--`.
+`BUILD_JOBS=-jN` is appended verbatim to the Rust test commands and no longer
+sets `CARGO_BUILD_JOBS` or `RAYON_NUM_THREADS`.
 
 ## Tracing adapter span lifecycle
 
@@ -4092,13 +4106,17 @@ marker is picked up from its position in the tree. Do **not** add it to
 workspace files that would otherwise be omitted, and their entries are scoped
 to the sdist.
 
-`tests/test_py_typed_marker.py` holds the contract. It builds all four
-artefacts — a wheel and a source archive from each frontend — and asserts the
-marker is inside each one, because a wheel that loses it still imports and
-still passes every behavioural test. The native wheel is covered a second way:
-`test_maturin_wheel_build_snapshot` compares the packaged file list against a
-syrupy snapshot, so adding `cuprum/py.typed` required regenerating
-`cuprum/unittests/__snapshots__/test_maturin_build.ambr`:
+`tests/test_native_sdist.py` and `tests/test_py_typed_marker.py` hold the
+archive contracts. They share a lazy session fixture keyed by frontend and
+format, so each wheel and source archive is built once per pytest process while
+both modules retain their workspace, marker, and archive assertions. The
+Makefile groups those modules with the doctest-warning contract, so the
+prepared Cargo home serves both the native wheel and doctest routes. A fixture
+session is local to one pytest invocation and one xdist worker; separate
+invocations or workers prepare their own home and artefacts. The native wheel
+is covered a second way: `test_maturin_wheel_build_snapshot` compares the
+packaged file list against a syrupy snapshot, so adding `cuprum/py.typed`
+required regenerating `cuprum/unittests/__snapshots__/test_maturin_build.ambr`:
 
 ```bash
 uv run pytest \
@@ -5026,12 +5044,112 @@ case concretely, and its successor is already forecast: item 5.2.2's
 *above* the bar by succeeding. See
 [the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
 
-**Shared Cargo cache.** This repository never creates an isolated Cargo cache.
-Measurement helpers and builds use the shared default cache and let Cargo's
-package-cache lock serialize access, so concurrent worktrees do not each refill
-a private registry. Do not redirect `CARGO_HOME` to a scratch directory, and do
-not work around the lock: if another Cargo job holds it, wait for the lock to
-clear.
+## Cargo cache snapshots
+
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records the decision to prepare content-keyed read-only snapshots before timed
+work, give each run private writable state, record preparation separately from
+the workload, and retain redacted diagnostics.
+
+Build routes that use `scripts/cargo_state.py` prepare a cache snapshot, then
+copy it into a writable `CARGO_HOME` owned by that run. `make test-rust` invokes
+`scripts.prepare_cargo_state` before its test commands, uses a persistent
+target directory keyed by toolchain and Rust flags, and passes `--frozen` with
+`CARGO_NET_OFFLINE=true`; it records dependency preparation and workload time
+separately. `make test` runs `test-python` before `test-rust`, so their sibling
+build workloads cannot overlap under parallel Make. The pytest session fixture
+shares one copied home within an invocation and xdist worker; the boundary
+harness prepares one for each run. The snapshot seeds registry indexes, Cargo
+git databases, and only those registry `.crate` archives whose package names
+and versions appear in the workspace lockfile. Filtering the archives during
+seeding means staging never needs room for the caller's whole download history;
+a prune after locked fetch retains the same selection as a defensive final
+pass. Registry indexes and Git databases remain copied as cache metadata. Cargo
+configuration and credentials are copied into staging for the locked fetch
+only; neither is retained by a published snapshot. Each run home receives the
+caller's configuration as it stands when that home is created, and never its
+credentials. Applying current settings per run keeps a reused snapshot from
+pinning stale options such as `build.rustc-wrapper`, source replacement, or
+linkage choices, and it is why the snapshot key does not hash configuration the
+snapshot no longer captures. Locked fetch materializes the sources and
+checkouts selected by the current lockfile, without copying stale extracted
+versions from the caller's cache. Copies contain ordinary files, not links to
+the snapshot or caller cache. Snapshot preparation and copying are recorded as
+dependency-preparation time; current packaging and doctest timeout marks remain
+finite end-to-end bounds and include any compiler-admission wait inside Cargo.
+The packaging frontend watchdog defaults to 180 seconds for uv and 3600 seconds
+for Maturin, whose cold target compiles the native extension; either can be
+raised with `CUPRUM_PACKAGING_BUILD_TIMEOUT` when a runner needs more queue
+headroom, and the override never lowers a backend below its default. A cold
+Maturin wheel build measured 163 seconds on a loaded developer host on
+2026-10-30, but a gate run then waited behind 67 and then 123
+compiler-admission requests and overran a 600-second bound. Because the
+coordinator exposes no workload lease, the native watchdog stays at the finite
+end-to-end bound inherited from the pre-factory contract rather than at the
+measured workload. The packaging consumer mark is derived from the largest
+frontend bound with a 60-second margin. This timeout remains an end-to-end
+watchdog, not an execution-only budget. The snapshot key follows the Cargo
+lockfile, toolchain, Cargo version, and runner scope. Do not hand the snapshot
+itself to Cargo: Cargo coordinates cache access only within one home, and
+offline mode does not remove those locks. `CARGO_BUILD_JOBS` remains
+caller-owned. CPU, memory, and the host-wide compiler-admission limit remain
+separate resource constraints.
+
+Target directories are keyed by build configuration: the route, toolchain
+fragment, Rust flags, and doctest Rustdoc flags all enter the key, so two
+incompatible configurations never share one. Configurations that do share a
+directory run in sequence within a single recipe, and Cargo's own
+target-directory lock arbitrates that intentional sharing. No repository-local
+target-directory ownership lock is added in front of it. Such a lock would only
+put a second queue ahead of the one Cargo already takes inside the same
+invocation, so it could not shorten the wait, and its expiry could not be
+reported as an allocation failure while Cargo's own lock was still held by
+another run. Only the external coordinator could bound that wait, and its
+contract exposes no workload lease.
+
+Snapshots remain in the per-user cache under their content keys. Remove an
+unneeded snapshot only when no preparation or run-home copy is active, first
+restoring its write permissions with `make_tree_writable` from
+`scripts/cargo_cache_tree.py`. An automatic age-based pruner would need to
+coordinate with active copies so it cannot delete a snapshot being read.
+
+The measured packaging and doctest command durations currently include any wait
+inside Cargo for compiler admission. The external coordinator has no parent
+workload lease, so those invocation times are not execution-only budgets. Keep
+finite end-to-end watchdogs, but do not treat their durations as the workload
+budget after resource waits are removed.
+
+## External compiler admission contract
+
+The installed mechanism is the compiler-wrapper contract documented by
+[`leynos/dev-env-rocky` revision `dc870c5`](https://github.com/leynos/dev-env-rocky/tree/dc870c553505778d263bfbaea0535223a4e3dfc3/python/build_limits/README.md),
+in particular its adapter guide and
+[ADR 011](https://github.com/leynos/dev-env-rocky/blob/dc870c553505778d263bfbaea0535223a4e3dfc3/docs/adr-011-sccache-under-compile-admission.md).
+`RUSTC_WRAPPER` submits one rustc invocation to the owner's supervisor. A
+guildmaster token accounts for that invocation's transient compiler scope;
+`build-limits-status` reports capacity, held tokens, queued requests, and
+running groups. The supervisor owns scope creation, cancellation, and token
+release, retaining a token until the scope is empty and any sccache work is
+accounted for. Nested compiler wrappers detect an admitted scope through
+`/proc/self/cgroup` and execute directly within it.
+
+This contract does not expose a lease for an outer Cargo or test workload. Its
+300-second unavailable setting bounds connecting to the supervisor, but the
+adapter drops that deadline after the supervisor reports `Queued`; queue wait
+has no finite limit. The installed commands are the rustc and rustdoc wrappers,
+status, recovery, and metrics tools. They do not provide a bounded top-level
+Cargo acquisition with a distinct expiry result. The token count bounds
+concurrent compiler scopes, not host CPU or memory, and it does not bound
+Cargo's caller-selected internal parallelism. Until the shared coordinator
+exposes a documented workload lease with bounded acquisition and
+cancellation-owned release, Cuprum cannot safely bind Make's top-level test
+workloads to that lease. A repository-local lock would create a second queue
+and is not a valid substitute. Cuprum therefore uses this external boundary
+unchanged;
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
+records why a local admission queue was rejected, that admission waits still
+count against the end-to-end watchdogs, and that a top-level workload lease is
+follow-up work tracked in issue #694.
 
 ## Makefile tooling changes
 
@@ -5323,14 +5441,15 @@ make boundary-faults
 `make boundary-faults` requires the verification harnesses to detect deliberate
 faults.
 
-The external-source symlink test uses `COMPILE_TIMEOUT_SECONDS` (3600 s) for
-its one real Cargo check and `CARGO_METADATA_TIMEOUT_SECONDS` (120 s) for each
-of its two metadata calls. Its `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` marker is
-3900 s, above their combined 3840 s subprocess budget. It covers a cold
-`CARGO_BUILD_JOBS=1` build measured at 181 s; the test leaves parallelism to
-its caller. The suite-wide `timeout = 30` remains tight, and only this test
-raises its bound. `test_real_compile_test_timeout_exceeds_compile_budget`
-enforces the ordering. See
+The external-source symlink test uses `COMPILE_TIMEOUT_SECONDS` for its real
+Cargo check and `CARGO_METADATA_TIMEOUT_SECONDS` for each of its two metadata
+calls. Its `SYMLINK_COMPILE_TEST_TIMEOUT_SECONDS` marker must exceed their
+combined subprocess budget. The previously recorded 181-second cold build was
+measured with `CARGO_BUILD_JOBS=1` outside the new resource contract; treat it
+as historical, not as a current execution-budget measurement. The test leaves
+parallelism to its caller.
+`test_real_compile_test_timeout_exceeds_compile_budget` enforces the timeout
+ordering. See
 [Boundary harness compile tier](coverage-timeout-tiers.md#boundary-harness-compile-tier).
 
 Install the checksum-verified prebuilt tools first with `make install-verus` and
@@ -5410,7 +5529,12 @@ builds. `scripts/check_boundary_faults.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
 abstraction. Its progress and ownership checks have separate private runners;
 their scope is the existing four mutations, with the same controls and failure
-diagnostics. The download helpers separate bounded redirect traversal, one
+diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
+cannot: Cargo consumes a global `--frozen` before dispatching an external
+subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
+therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
+the copied workspace's lockfile digest after every run so a build that rewrites
+it fails closed. The download helpers separate bounded redirect traversal, one
 connection's lifetime, and response classification. They remain private to the
 pinned binary installer. The compiler-contract checker uses a named predicate
 requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
@@ -5422,8 +5546,14 @@ the borrowed handle and converts the byte count once for both read and write;
 Unix adapters retain their direct syscall and buffer contracts.
 
 `make boundary-faults` archives controls and deliberate fault failures for the
-scheduled `extended` job. The final run passed its controls and detected all
-four mutations; see `/tmp/issue379-round27-faults.log`.
+scheduled `extended` job. Each run writes per-command output under
+`.cache/boundary-faults/runs/run-<id>/logs/`, and the workflow archives the
+whole run directory. Run roots are retained deliberately: the harnesses do not
+prune during a run, because a concurrent invocation may be active and the
+workflow archives the directory after the step completes. `make clean` removes
+`.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The final
+run passed its controls and detected all four mutations; see
+`/tmp/issue379-round27-faults.log`.
 
 ### Python-side native pump descriptor lifetime
 
@@ -6134,12 +6264,18 @@ MSRV, coverage, release, verification, and Whitaker retain their prescribed
 routes.
 
 The Python doctest-warning contract invokes Cargo twice to prove that the
-former route accepts a warning and the corrected route rejects it. Its
-600-second test budget includes waiting for shared compiler admission; the
-suite's default 30-second unit-test budget is too short for that workload.
-Build artefacts stay in `rust/target/doctest-warning-contract`, outside the
-temporary fixture source directory, and Cargo serializes concurrent access.
-Both warning assertions remain mandatory.
+former route accepts a warning and the corrected route rejects it. Each call
+has its own finite 3600-second end-to-end watchdog and the pytest mark is 7260
+seconds, twice that bound plus a 60-second margin for surrounding work. These
+bounds include shared compiler-admission waits because the coordinator has no
+parent workload lease, so they are not execution-only budgets; on 2026-11-03 a
+270-second bound expired while the captured stream reported 343 requests ahead.
+The suite's default 30-second unit-test budget is too short for the two Cargo
+calls. Build artefacts stay under the invocation's
+`rust/target/pytest-<run-key>/doctest-warning-contract` directory, outside the
+temporary fixture source directory. Independent pytest invocations get separate
+targets, while both Cargo calls in this test share one target. Both warning
+assertions remain mandatory.
 
 ### Rustfmt fixture compatibility
 
@@ -7388,11 +7524,14 @@ manual chore.
 Contract tests may still verify the *shape* of a reusable-workflow caller. Each
 call into `leynos/shared-actions` must use an immutable, lowercase 40-character
 commit SHA. Tests must not prescribe a particular SHA value: Dependabot owns
-revision updates. Calls do not have to share one revision; a workflow may pin
-an action to the commit that provides the behaviour and compatibility that
-workflow needs. For example, the coverage workflow can retain a newer
-`generate-coverage` pin for baseline compatibility while its other shared
-actions use a different validated commit.
+revision updates. The same shape rule covers third-party actions pinned in
+workflow steps, such as `actions/upload-artifact`: a contract test asserts the
+`actions/<name>@<40 lowercase hex>` form rather than a literal revision, so a
+Dependabot bump does not fail the suite. Calls do not have to share one
+revision; a workflow may pin an action to the commit that provides the
+behaviour and compatibility that workflow needs. For example, the coverage
+workflow can retain a newer `generate-coverage` pin for baseline compatibility
+while its other shared actions use a different validated commit.
 
 - Do assert the workflow references the correct reusable workflow path.
 - Do assert that every shared-action call uses a full, lowercase 40-character

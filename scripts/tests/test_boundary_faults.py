@@ -13,7 +13,12 @@ import pytest
 
 from scripts import check_boundary_faults as faults
 from scripts.check_boundary_faults import mutate
-from scripts.tests.boundary_harness_support import copy_boundary_repository
+from scripts.tests.boundary_harness_support import (
+    copy_boundary_repository,
+    latest_run_root,
+    recorded_phases,
+    stub_cargo_preparation,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -114,6 +119,7 @@ def _drive(
     runner = _RecordedRun(root / "rust")
     monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
+    stub_cargo_preparation(monkeypatch, faults)
     faults.main()
     return root, runner
 
@@ -179,7 +185,8 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
 ) -> None:
     """main() copies the workspace and drives the proof and ownership faults."""
     root, runner = _drive(tmp_path, monkeypatch)
-    workspace = root / ".cache/boundary-faults/workspace"
+    run_root = latest_run_root(root, "boundary-faults")
+    workspace = run_root / "workspace"
     assert workspace.is_dir(), "the harness must copy the workspace before mutating"
     assert not (workspace / "target").exists(), (
         "the workspace copy must exclude Cargo build output"
@@ -192,6 +199,10 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
     assert runner.names().count("cargo") == 4, (
         "each ownership fault must be preceded by a control"
     )
+    assert recorded_phases(run_root) == [
+        "dependency_preparation",
+        "workload",
+    ], "preparation and fault execution must have separate timing records"
 
 
 def test_every_proof_fault_reaches_the_verus_input(
@@ -269,6 +280,34 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     )
     assert "no verdict" in caught.value.log_path.read_text(encoding="utf-8"), (
         "the verifier output must be archived for inspection"
+    )
+
+
+def test_a_lockfile_rewrite_archives_output_before_failing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A guarded run that rewrites its lockfile must still leave diagnostics."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+
+    def rewrite(
+        _program: str, _args: tuple[str, ...], _workspace: Path
+    ) -> tuple[int, str]:
+        """Fail the guarded run as though it had rewritten the lockfile."""
+        error = faults._LockfileRewriteError(
+            "changed the copied lockfile", "kani output"
+        )
+        raise error
+
+    monkeypatch.setattr(faults, "_run", rewrite)
+    with pytest.raises(faults._LockfileRewriteError):
+        faults._check(
+            faults._Check("kani-control", "cargo", ("kani", "--package", "x")),
+            tmp_path,
+            logs,
+        )
+    assert (logs / "kani-control.log").read_text(encoding="utf-8") == "kani output", (
+        "the verifier output must be archived before the rewrite failure propagates"
     )
 
 
