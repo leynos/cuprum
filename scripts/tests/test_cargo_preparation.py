@@ -149,9 +149,7 @@ def test_recorded_cargo_retains_a_record_when_the_invocation_raises(
     assert record["exit_code"] == -1, (
         "a raised invocation must be distinguishable from a Cargo exit status"
     )
-    assert record["stdout"] == "", (
-        "an invocation that raised produced no standard output"
-    )
+    assert not record["stdout"], "an invocation that raised produced no standard output"
     assert record["stderr"] == ("cargo fetch --locked exceeded 900s for <redacted>"), (
         "the failure detail must be retained with the caller's credential removed"
     )
