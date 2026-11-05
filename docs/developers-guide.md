@@ -1175,9 +1175,9 @@ MSRV-aware Clippy lints use it while the Linux debug lint route runs on the
 dev-fast nightly. `make msrv-check` separately compiles every workspace target
 on Rust `1.87.0` without the fragment, so the accelerated lint compiler cannot
 replace compatibility verification. `cargo metadata --locked` reports a single
-dependency whose declared `rust_version` is `1.87.0`, `wasip2`, and it is
-reachable only under the unsupported `wasm32-wasip2` target, so no host target
-raises the floor above the workspace pin.
+dependency, `wasip2`, that declares `rust_version` `1.87.0`. It is reachable
+only under the unsupported `wasm32-wasip2` target, so no host target raises the
+floor above the workspace pin.
 
 Maturin accepts a Cargo executable but cannot pass Cargo's configuration-file
 flag itself. The Linux-only `tools/dev-fast/cargo` adapter receives the injected
@@ -6263,7 +6263,7 @@ keeps its explicit crate-level prohibition, which the boundary contract checks.
 The
 [ADR-011 addendum](adrs/adr-0011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records why that source-level contract complements the shared lint tables. The
-The Rust 1.87.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
+Rust 1.87.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
 `RUSTFMT_TOOLCHAIN=nightly-2026-05-28` provides `rustfmt`. Linux debug Rustdoc,
 Clippy, and doctests use the separately pinned dev-fast configuration, while
 MSRV, coverage, release, verification, and Whitaker retain their prescribed

@@ -4,6 +4,12 @@
 //! compiled out under Miri. Every blocking read runs on a spawned thread and
 //! returns through a channel with a deadline, so a lost EOF fails the test
 //! instead of hanging the suite.
+//!
+//! Each test takes `descriptor_guard` before its `endpoints` fixture, and
+//! `rstest` expands fixture arguments in parameter order. Tests in this
+//! module, `ownership_tests`, and `windows_tests` share one test binary and
+//! therefore one descriptor table: an unguarded pipe elsewhere in the binary
+//! can be handed the number a guarded test is about to observe as closed.
 
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -11,14 +17,27 @@ use std::os::fd::AsRawFd;
 use std::os::windows::io::{AsHandle, AsRawHandle};
 use std::{
     io,
-    sync::mpsc::{self, RecvTimeoutError},
+    sync::{
+        LockResult,
+        MutexGuard,
+        mpsc::{self, RecvTimeoutError},
+    },
     thread,
     time::Duration,
 };
 
 use rstest::{fixture, rstest};
 
-use super::{BorrowedStream, OwnedStream, borrow, fd_is_open, pipe, read_once, write_once};
+use super::{
+    BorrowedStream,
+    OwnedStream,
+    borrow,
+    fd_is_open,
+    ownership_tests::descriptor_guard,
+    pipe,
+    read_once,
+    write_once,
+};
 
 /// How long a spawned reader may take before the test fails.
 ///
@@ -121,8 +140,10 @@ fn write_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<usize
 /// A transferred payload arrives intact and the reader reaches EOF.
 #[rstest]
 fn payload_transfers_and_reader_reaches_eof(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
     endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
 ) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     let payload = b"cuprum pipes bytes";
     let receiver = read_to_eof_on_worker(reader);
@@ -133,11 +154,16 @@ fn payload_transfers_and_reader_reaches_eof(
     drop(writer);
 
     assert_eq!(await_payload(&receiver), payload);
+    drop(guard);
 }
 
 /// EOF waits for the last writer owner, not the first one dropped.
 #[rstest]
-fn last_writer_owner_governs_eof(endpoints: Result<(OwnedStream, OwnedStream), io::Error>) {
+fn last_writer_owner_governs_eof(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     let duplicate = writer
         .try_clone()
@@ -163,13 +189,16 @@ fn last_writer_owner_governs_eof(endpoints: Result<(OwnedStream, OwnedStream), i
         payload,
         "the full payload, then EOF, follows the last writer being dropped",
     );
+    drop(guard);
 }
 
 /// An early reader close makes the writer fail without failing the process.
 #[rstest]
 fn early_reader_close_reports_broken_pipe(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
     endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
 ) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     let reader_raw = raw_of(&reader);
     drop(reader);
@@ -189,12 +218,17 @@ fn early_reader_close_reports_broken_pipe(
         io::ErrorKind::BrokenPipe,
         "the native error reaches the caller unchanged",
     );
+    drop(guard);
 }
 
 /// Both endpoints are created close-on-exec.
 #[rstest]
 #[cfg(unix)]
-fn unix_endpoints_are_close_on_exec(endpoints: Result<(OwnedStream, OwnedStream), io::Error>) {
+fn unix_endpoints_are_close_on_exec(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     assert!(
         !exec_inheritable(raw_of(&reader))
@@ -206,12 +240,16 @@ fn unix_endpoints_are_close_on_exec(endpoints: Result<(OwnedStream, OwnedStream)
             .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}")),
         "the writer must not survive an exec",
     );
+    drop(guard);
 }
 
 /// Both endpoints are created non-inheritable and work synchronously.
 #[rstest]
 #[cfg(windows)]
-fn windows_endpoints_are_non_inheritable_and_synchronous() {
+fn windows_endpoints_are_non_inheritable_and_synchronous(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = pipe().unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     assert!(
         !inheritable(raw_of(&reader))
@@ -246,6 +284,7 @@ fn windows_endpoints_are_non_inheritable_and_synchronous() {
         payload.len()
     );
     assert_eq!(buffer.get(..payload.len()), Some(payload.as_slice()));
+    drop(guard);
 }
 
 /// Observe a descriptor, failing loudly when observation itself fails.

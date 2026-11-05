@@ -409,4 +409,3 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
 
 if __name__ == "__main__":
     main()
-# weave: run 'weave explain scripts/check_boundary_faults.py' for per-hunk detail, 'weave check' to verify your resolution

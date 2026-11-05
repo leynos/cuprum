@@ -201,12 +201,15 @@ whether the wrapper was configured.
 At the revision those measurements cover, the compatibility check reported
 `rustc 1.85.0 (4d91de4e4 2025-02-17)` and
 `cargo 1.85.0 (d73d2caf9 2024-12-31)`. That was the MSRV then; issue #507 moved
-the floor to 1.87.0, so the 1.85.0 figures describe the historical run rather
-than the current pin. The modern route ran with the versions printed above. Its
-Rust test run reported 165 passed and no skipped tests; the separate doctest
-run reported 8 passed and 3 ignored. The extension suite reported 142 passed
-and 4 skipped; those skips are Windows-only tests and are not Linux runtime
-evidence. The lockfile SHA-256 was
+the floor to 1.87.0, so those 1.85.0 figures describe the historical run rather
+than the current pin. The floor was re-measured on Rust `1.87.0` after the
+move, reporting `rustc 1.87.0 (17067e9ac 2025-05-09)` and
+`cargo 1.87.0 (99624be96 2025-05-06)`, and that run is the one the MSRV row
+above records. The modern route ran with the versions printed above. Its Rust
+test run reported 165 passed and no skipped tests; the separate doctest run
+reported 8 passed and 3 ignored. The extension suite reported 142 passed and 4
+skipped; those skips are Windows-only tests and are not Linux runtime evidence.
+The lockfile SHA-256 was
 `f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591` at that
 commit. This branch does not modify `rust/Cargo.lock`: after the base advanced
 to take the `pyo3` bump (#682), the file is byte-identical to the base and

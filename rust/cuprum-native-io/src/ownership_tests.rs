@@ -24,9 +24,15 @@ static DESCRIPTOR_TESTS: Mutex<()> = Mutex::new(());
 // `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
 // form that triggers `unused_braces` under Rust 1.87. Remove this skip when
 // that formatter/rstest combination compiles the configured profile cleanly.
+//
+// Shared with `pipe_tests`, which creates endpoints from the same runtime
+// binary. Both modules observe descriptors after dropping an endpoint, so a
+// pipe made in an unguarded test can be handed the descriptor number a guarded
+// test is about to inspect as closed. The static stays private; taking the
+// fixture is what serializes.
 #[rustfmt::skip]
 #[fixture]
-fn descriptor_guard() -> LockResult<MutexGuard<'static, ()>> {
+pub(super) fn descriptor_guard() -> LockResult<MutexGuard<'static, ()>> {
     DESCRIPTOR_TESTS.lock()
 }
 
