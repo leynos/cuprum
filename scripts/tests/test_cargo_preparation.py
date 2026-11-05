@@ -8,6 +8,8 @@ import json
 import typing as typ
 from pathlib import Path
 
+import pytest
+
 from cuprum import ExecutionContext, ProcessGroupPolicy, Program, ScopeConfig
 from cuprum.sh import CommandResult
 from scripts import cargo_state_command
@@ -20,8 +22,6 @@ from scripts.cargo_preparation import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-    import pytest
 
     from cuprum import ProgramCatalogue
 
@@ -114,6 +114,48 @@ def test_recorded_cargo_writes_nothing_without_a_sink(tmp_path: Path) -> None:
 
     assert returned.exit_code == 0, "the caller must receive Cargo's own result"
     assert not diagnostics.exists(), "no sink means no retained file"
+
+
+def test_recorded_cargo_retains_a_record_when_the_invocation_raises(
+    tmp_path: Path,
+) -> None:
+    """A bounded timeout is recorded before the original failure propagates."""
+    diagnostics = tmp_path / "cargo-diagnostics.jsonl"
+    environment = {
+        "CARGO_HOME": str(tmp_path / "run-home"),
+        "GH_TOKEN": "ghs-super-secret",
+    }
+
+    def run(
+        _arguments: tuple[str, ...],
+        _working_directory: Path,
+        _child_environment: cabc.Mapping[str, str],
+    ) -> CommandResult:
+        """Fail the way a bounded preparation timeout would."""
+        message = "cargo fetch --locked exceeded 900s for ghs-super-secret"
+        raise TimeoutError(message)
+
+    with pytest.raises(TimeoutError, match="exceeded 900s"):
+        run_recorded_cargo(
+            _invocation(tmp_path, environment=environment),
+            diagnostics,
+            run,
+        )
+
+    [record] = _records(diagnostics)
+    assert record["operation"] == "cargo fetch --locked", (
+        "the record must name the invocation that never returned"
+    )
+    assert record["exit_code"] == -1, (
+        "a raised invocation must be distinguishable from a Cargo exit status"
+    )
+    assert record["stdout"] == "", (
+        "an invocation that raised produced no standard output"
+    )
+    assert record["stderr"] == ("cargo fetch --locked exceeded 900s for <redacted>"), (
+        "the failure detail must be retained with the caller's credential removed"
+    )
+    assert float(record["elapsed_seconds"]) >= 0, "the record must carry a duration"
 
 
 def test_record_phase_appends_one_line_per_measured_phase(tmp_path: Path) -> None:

@@ -9,6 +9,7 @@ they inherit and the run-local file that receives diagnostics. Carrying both in
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import json
 import time
@@ -32,6 +33,12 @@ __all__ = (
     "record_phase",
     "run_recorded_cargo",
 )
+
+#: Exit status recorded when the invocation raised instead of returning one,
+#: such as when the bounded preparation timeout interrupts it. Cargo never
+#: reports a negative status, so this value marks a process that did not
+#: finish on its own terms.
+_FAILED_INVOCATION_EXIT_CODE = -1
 
 
 def record_phase(timings_path: Path, phase: str, seconds: float) -> None:
@@ -103,7 +110,10 @@ def run_recorded_cargo(
     """Run one invocation and append a redacted record when a sink is configured.
 
     The record is written for successful invocations too, so a later failure
-    can be read alongside the preparation steps that preceded it.
+    can be read alongside the preparation steps that preceded it. If ``run``
+    raises, a record of the failure is appended before that exception
+    propagates, so a bounded timeout or a spawn failure leaves the same
+    evidence as a Cargo exit status.
 
     Parameters
     ----------
@@ -121,11 +131,15 @@ def run_recorded_cargo(
         Whatever ``run`` returned, unchanged.
     """
     started = time.monotonic()
-    result = run(
-        invocation.arguments,
-        invocation.working_directory,
-        invocation.environment,
-    )
+    try:
+        result = run(
+            invocation.arguments,
+            invocation.working_directory,
+            invocation.environment,
+        )
+    except Exception as error:
+        _record_failed_invocation(invocation, diagnostics_path, started, error)
+        raise
     if diagnostics_path is not None:
         record_cargo_diagnostic(
             diagnostics_path,
@@ -144,3 +158,29 @@ def run_recorded_cargo(
             ),
         )
     return result
+
+
+def _record_failed_invocation(
+    invocation: CargoInvocation,
+    diagnostics_path: Path | None,
+    started: float,
+    error: BaseException,
+) -> None:
+    """Retain a record for an invocation that raised instead of returning."""
+    if diagnostics_path is None:
+        return
+    with contextlib.suppress(OSError):
+        # A sink that cannot be written must not replace the invocation's own
+        # failure, which is the condition the caller has to act on.
+        record_cargo_diagnostic(
+            diagnostics_path,
+            CargoDiagnostic(
+                operation=invocation.operation,
+                working_directory=str(invocation.working_directory),
+                cargo_home=invocation.environment.get("CARGO_HOME"),
+                exit_code=_FAILED_INVOCATION_EXIT_CODE,
+                elapsed_seconds=time.monotonic() - started,
+                stdout="",
+                stderr=redact_environment_values(str(error), invocation.environment),
+            ),
+        )

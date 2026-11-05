@@ -152,6 +152,51 @@ def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
     _assert_reported_metadata(json.loads(capsys.readouterr().out), record, run_root)
 
 
+def test_main_creates_a_missing_run_root_before_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A run root that does not exist yet exists before diagnostics are written."""
+    run_root = tmp_path / "run"
+    recorder = _PreparationRecorder(
+        run_root=run_root,
+        repository=tmp_path / "repository",
+        snapshot_root=tmp_path / "snapshots",
+        caller_home=tmp_path / "caller-cargo-home",
+    )
+
+    def prepare_snapshot(
+        repository_root: Path,
+        requested_root: Path,
+        *,
+        context: object,
+    ) -> SimpleNamespace:
+        """Prove the run root exists before preparation writes into it."""
+        assert run_root.is_dir(), (
+            "the run root must exist before preparation writes diagnostics into it"
+        )
+        return recorder.prepare_snapshot(
+            repository_root, requested_root, context=context
+        )
+
+    monkeypatch.setattr(prepare_cargo_state, "prepare_cargo_snapshot", prepare_snapshot)
+    monkeypatch.setattr(
+        prepare_cargo_state, "create_run_cargo_home", recorder.create_home
+    )
+
+    prepare_cargo_state.main(run_root, recorder.repository, recorder.snapshot_root)
+
+    assert recorder.calls == ["snapshot", "run-home"], (
+        "a new run root must still publish a snapshot before copying the run home"
+    )
+    [record] = _run_records(run_root)
+    assert record["phase"] == "dependency_preparation", (
+        "the new run root must receive the preparation timing record"
+    )
+    capsys.readouterr()
+
+
 def _write_stub_cargo(bin_directory: Path) -> Path:
     """Create a Cargo stand-in that reports a version and fetches nothing."""
     stub = bin_directory / "cargo"

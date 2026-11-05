@@ -56,6 +56,23 @@ def test_redaction_replaces_every_occurrence_of_a_secret_value() -> None:
     )
 
 
+def test_redaction_replaces_the_longest_secret_value_first() -> None:
+    """A secret containing another secret must not leave a fragment behind."""
+    environment = {
+        "GH_TOKEN": "ghs-super-secret",
+        "AWS_SECRET_ACCESS_KEY": "ghs-super-secret-extended",
+    }
+
+    redacted = redact_environment_values(
+        "value=ghs-super-secret-extended",
+        environment,
+    )
+
+    assert redacted == "value=<redacted>", (
+        "replacing the shorter value first would leave '-extended' in the record"
+    )
+
+
 def test_redaction_leaves_short_and_non_secret_values_alone() -> None:
     """Short values and ordinary variables survive so the diagnostic stays legible."""
     environment = {"GH_TOKEN": "abc", "PATH": "/opt/tools"}

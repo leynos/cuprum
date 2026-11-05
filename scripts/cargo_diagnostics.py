@@ -91,16 +91,21 @@ def redact_environment_values(
     collide with ordinary words, and redacting them would hide the diagnostic
     without protecting a usable credential.
 
+    Longer values are replaced first. When one secret value contains another,
+    replacing the shorter value first would leave the longer value's remaining
+    characters in the text, so the record would still disclose part of it.
+
     Returns
     -------
     str
         The text with each secret value replaced by ``<redacted>``.
     """
-    for name, value in environment.items():
-        if not is_secret_environment_name(name):
-            continue
-        if len(value) < _MINIMUM_SECRET_LENGTH:
-            continue
+    secret_values = {
+        value
+        for name, value in environment.items()
+        if is_secret_environment_name(name) and len(value) >= _MINIMUM_SECRET_LENGTH
+    }
+    for value in sorted(secret_values, key=len, reverse=True):
         text = text.replace(value, _REDACTED)
     return text
 

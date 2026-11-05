@@ -29,6 +29,9 @@ def main(
 ) -> None:
     """Prepare one snapshot and private run home, emitting non-secret metadata."""
     preparation_started = time.monotonic()
+    # Diagnostics and timings are written into the run root, so it must exist
+    # before preparation starts; an existing directory is reused unchanged.
+    run_root.mkdir(parents=True, exist_ok=True)
     cache_root = snapshot_root or default_snapshot_root()
     prepared = prepare_cargo_snapshot(
         repository_root,
