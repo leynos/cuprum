@@ -111,3 +111,20 @@ def test_named_large_payload_lengths_match_python(
     metadata = check_payload(payload, buffer_size)
 
     assert metadata.native_module_path, "the child should report its extension"
+
+
+def test_incomplete_mebibyte_capture_drains_a_concurrent_producer() -> None:
+    """Direct native consume drains a real producer pipe through EOF."""
+    payload = _patterned_large_payload(1_048_577, b"\xe2\x98")
+    metadata = check_payload(payload, buffer_size=65_535)
+    expected = payload.decode("utf-8", errors="replace")
+
+    assert len(metadata.native_captures) == 6, (
+        "the wrapper and direct-native capture paths must all be exercised"
+    )
+    assert all(capture == expected for capture in metadata.native_captures), (
+        "all native paths must match the Python replacement oracle"
+    )
+    assert metadata.reader_open_checks == len(metadata.native_captures), (
+        "native consume must borrow every reader through its complete lifetime"
+    )

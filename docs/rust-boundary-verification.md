@@ -58,11 +58,11 @@ confines raw-resource construction to the two approved boundaries.
 
 Table 2. Current crate responsibilities and safe/unsafe surfaces.
 
-| Crate                   | Current responsibility                                                                                                                                                                    | Unsafe policy and boundary                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rust/cuprum-streams`   | Safe stream orchestration, read/write and Linux `splice` policy, pump state machine, errors, and checked UTF-8 replacement.                                                               | `#![forbid(unsafe_code)]` at the crate root and in compile-contract tests. Unix receives `AsStream`/`OwnedStream`; Windows receives only synchronous-stream capabilities from the native boundary.                                                                                                                                                                         |
-| `rust/cuprum-native-io` | Lifetime-bound OS borrows, unique writer adoption, single read/write/splice calls, checked native progress, Unix and Windows pipe fixtures, and close observation for native regressions. | Approved unsafe-bearing crate. Windows `SynchronousBorrowedStream` distinguishes a live borrow from a handle established as non-overlapped and synchronous. `adopt_writer` and `borrow_reader` are unsafe integration constructors with caller obligations. Every unsafe block has a local safety comment, and the crate denies unsafe operations inside unsafe functions. |
-| `rust/cuprum-rust`      | Original `cdylib`/PyO3 module, argument validation, GIL release, error conversion, and the raw Python hand-off.                                                                           | Approved integration boundary. Its Unix path calls `adopt_writer` and `borrow_reader`; its Windows PyO3 entry points reject raw handles because they cannot establish the capability.                                                                                                                                                                                      |
+| Crate                   | Current responsibility                                                                                                                                                                                            | Unsafe policy and boundary                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rust/cuprum-streams`   | Safe stream orchestration, read/write and Linux `splice` policy, pump state machine, errors, and checked UTF-8 replacement.                                                                                       | `#![forbid(unsafe_code)]` at the crate root and in compile-contract tests. Unix receives `AsStream`/`OwnedStream`; Windows pump receives synchronous-stream capabilities and consume receives a borrowed CRT descriptor from the native boundary.                                                                                                                                                |
+| `rust/cuprum-native-io` | Lifetime-bound OS borrows, unique writer adoption, single read/write/splice and Windows CRT `_read` calls, checked native progress, Unix and Windows pipe fixtures, and close observation for native regressions. | Approved unsafe-bearing crate. Windows `SynchronousBorrowedStream` distinguishes a live borrow from a handle established as non-overlapped and synchronous. `adopt_writer`, `borrow_reader`, and `borrow_crt_reader` are unsafe integration constructors with caller obligations. Every unsafe block has a local safety comment, and the crate denies unsafe operations inside unsafe functions. |
+| `rust/cuprum-rust`      | Original `cdylib`/PyO3 module, argument validation, GIL release, error conversion, and the raw Python hand-off.                                                                                                   | Approved integration boundary. Unix calls `adopt_writer` and `borrow_reader`; Windows pump rejects raw handles, while consume validates and borrows a synchronous CRT descriptor through its detached operation.                                                                                                                                                                                 |
 
 The safe writer path is `cuprum_native_io::with_owned_writer`: generic drop
 elaboration owns the transferred writer on normal return, error, and real
@@ -143,11 +143,12 @@ external platform assumption rather than a proven lemma.
 
 The Python dispatch continues to decline native pumping on Windows because
 `ProactorEventLoop` subprocess pipes are overlapped. The cross-reference at
-`cuprum/_pipeline_streams.py:65-78` keeps that policy tied to the Rust
-capability rather than treating the fallback as a lifetime-only decision.
-PyO3's raw-handle entry points also reject Windows calls at
-`rust/cuprum-rust/src/stream_pyfunctions_windows.rs:36-52,66-76`, before they
-can construct a synchronous capability.
+`cuprum/_pipeline_streams.py:65-78` keeps the production pump fallback tied to
+the Rust capability rather than treating it as a lifetime-only decision.
+Windows PyO3 pump still rejects raw handles; Windows consume accepts a borrowed
+CRT descriptor and uses `_read`, while the Python wrapper duplicates it and
+sets the duplicate to binary mode. Neither path turns an overlapped asyncio
+handle into a synchronous resource.
 
 ## Current-operation inventory
 
@@ -162,6 +163,8 @@ Table 2a. Remaining unsafe operations and their current callers.
 | Unix fixtures and observation (`src/lib.rs:209,225,255`)        | `pipe` (`:209-212`) delegates to `std::io::pipe` and converts each endpoint with the safe `From<PipeReader> for OwnedFd`; it contains no raw constructor. `fcntl(F_GETFD)` (`:225-242`) observes close state, and `F_GETFD` (`:255-270`) observes `FD_CLOEXEC`; both retry `EINTR` without granting ownership.                             | Native fixtures only. The fallible `descriptor_guard` `LockResult<MutexGuard>` serializes close observations in `ownership_tests.rs:22-32`.                                                                                                                           |
 | Windows fixtures (`src/windows.rs:100,120,152`)                 | `pipe` is the cross-platform constructor above: `std`, not a Windows binding. `synchronous_pipe` (`:100-107`) records the non-overlapped creation contract `std` supplies. `fd_is_open` (`:120-137`) and `handle_is_inheritable` (`:152-160`) call `GetHandleInformation` to observe liveness and `HANDLE_FLAG_INHERIT` without ownership. | Windows tests use `synchronous_pipe` for the accepted path; the Windows CI lane executes `pipe_tests` and `cuprum-streams`' Windows regressions.                                                                                                                      |
 | Windows borrowed I/O (`src/windows.rs:19-262`)                  | `SynchronousBorrowedStream` (`:19-45`) records blocking, non-overlapped suitability; `cap_std::fs::File::from_raw_handle` (`:259-262`) temporarily reconstructs a file, while `with_retained_owner` prevents closing the borrowed handle on return or unwind.                                                                              | Private adapter used only by `read_once`/`write_once` (`:207-248`). Generic `BorrowedHandle` cannot reach this safe API; `new_unchecked` is the documented audited boundary. Locked dependency is `cap-std 4.0.3`; `rust/dylint.toml` has no filesystem exclusion.    |
+| `cuprum-native-io::borrow_crt_reader` (`src/windows_crt.rs`)    | The raw CRT descriptor must remain open, synchronous, and bound to the same resource until the returned borrow expires; it must not be closed or reused while GIL-free consume runs.                                                                                                                                                                         | Windows PyO3 consume calls it only after Python duplicates the CRT descriptor and sets that duplicate to binary mode. The wrapper closes the duplicate after `Python::detach` returns.                                                                                |
+| Windows CRT consume (`src/windows_crt.rs`)                      | `libc::read` links to CRT `_read`; the descriptor must remain open and synchronous, the output slice must be writable, and binary mode must be established by the caller. `_set_errno`, `_set_doserrno`, `SetLastError`, `_get_doserrno`, `_get_errno`, and `GetLastError` access thread-local error slots; capture occurs immediately after failed `_read`. | `read_crt_once` is called only through the safe `cuprum-streams` adapter and the unsafe `borrow_crt_reader` PyO3 hand-off. Tests use CRT pipes and an invalid descriptor; the caller-owned synchronous/binary contract remains trusted.                               |
 | Windows rejected writer (`stream_pyfunctions_windows.rs:16-19`) | `OwnedStream::from_raw_handle` (`:48`) requires a valid, exclusively transferred handle. `drop(writer)` (`:17`) closes it, including if constructing the `OSError` unwinds, without asserting synchronous-I/O suitability.                                                                                                                 | Windows `rust_pump_stream` adopts the transferred writer before validating the remaining arguments, then returns the raw-handle rejection. `test_rust_errno_windows::test_pump_rejects_raw_windows_handles` covers this safe Python boundary.                         |
 | PyO3 generated ABI                                              | `#[pyfunction]`, `#[pyo3(signature = ...)]`, `#[pymodule]`, and `wrap_pyfunction!` generate/register wrappers. Unix `Python::detach` (`stream_pyfunctions.rs:43`) requires `Send`, no Python-state access, and valid resource lifetimes through completion.                                                                                | Unix raw calls (`adopt_writer`, `borrow_reader`) and ABI: `stream_pyfunctions.rs:59-60,72,77,98-99,109`; Windows ABI and rejection: `stream_pyfunctions_windows.rs:36-52,66-76`; module: `src/lib.rs:169-177`. PyO3/CPython/asyncio/GIL behaviour remains trusted.    |
 
@@ -174,7 +177,9 @@ explicit trust assumptions.
 
 The following operations contain no explicit `unsafe` token in the baseline,
 but are part of the trusted boundary and must be audited with the explicit
-operations above:
+operations above. The Windows CRT consume adapter added for M3 is covered by
+the current-operation inventory, while the baseline inventory above remains a
+historical record.
 
 - `#[pyfunction]` and `#[pyo3(signature = ...)]` on
   `rust/cuprum-rust/src/stream_pyfunctions.rs:59-60,98-99` generate Unix Python
@@ -203,13 +208,13 @@ operations above:
   fails setup or submission must be closed exactly once. Once submitted, Rust
   owns the duplicate and the completion callback must wait for Rust's drop
   rather than close a possibly released or reused descriptor.
-- `cuprum/_streams_rs.py` validates buffer sizes before transfer
-  (`:114-167`), converts platform values, and on Windows duplicates a native
-  handle before closing the CRT descriptor (`:192-250`). A Python integer's
-  range is not proof of validity, lifetime, or exclusivity. The caller must
-  establish that the extracted reader stays open and caller-owned, that the
-  writer duplicate is unique, and that no concurrent transport close or FD
-  reuse occurs during the detached operation.
+- `cuprum/_streams_rs.py` validates buffer sizes before native entry and
+  prepares platform values. The Windows pump duplicates a native handle before
+  closing its transferred CRT writer; Windows consume duplicates the borrowed
+  CRT reader, sets only that duplicate to binary mode, and closes it after the
+  detached call. A Python integer's range is not proof of validity, lifetime,
+  or exclusivity. The caller must keep the reader open and prevent descriptor
+  reuse for the duration of native consume.
 
   `_prepare_native_reader` now checks the platform ABI representation before
   writer ownership is transferred. Round 7 first recorded a red focused
@@ -226,7 +231,8 @@ operations above:
 These Python functions are not Rust unsafe sites, but their tests are part of
 the Rust boundary contract. In particular, preserve pause/block/duplicate/
 submit/await-cleanup cancellation regressions, native-load and setup-failure
-rollback tests, and Windows duplicate-handle cleanup tests.
+rollback tests, Windows duplicate-handle cleanup tests, and the consume
+duplicate's binary-mode and close-on-setup-failure checks.
 
 ### Pinned PyO3 trust inventory
 

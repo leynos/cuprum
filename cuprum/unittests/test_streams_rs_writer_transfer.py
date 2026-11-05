@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from cuprum import _streams_rs
+from cuprum import _streams_rs, _streams_windows
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -69,6 +69,10 @@ def _patch_windows_pump(
         "_load_native",
         lambda: _native_pump_module(native_pump),
     )
+    # The Windows adapters live in their own module, so patch each name in the
+    # namespace that actually resolves it. Patching the re-export in
+    # ``_streams_rs`` would leave the real implementation running.
+    monkeypatch.setattr(_streams_windows, "_convert_fd_for_platform", convert_fd)
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert_fd)
     monkeypatch.setattr(
         ctypes, "WinDLL", mock.Mock(return_value=kernel32), raising=False
@@ -80,6 +84,8 @@ def _patch_windows_pump(
         lambda error: OSError(error, "simulated Windows error"),
         raising=False,
     )
+    # Both modules hold the same ``os`` object, so this one patch covers the
+    # adapter's close and the caller's pre-native cleanup alike.
     monkeypatch.setattr(_streams_rs.os, "close", closed_fds.append)
 
 
@@ -91,7 +97,7 @@ def test_kernel32_handle_api_declares_pointer_sized_handle_abi(
     windll = mock.Mock(return_value=kernel32)
     monkeypatch.setattr(ctypes, "WinDLL", windll, raising=False)
 
-    assert _streams_rs._kernel32_handle_api() is kernel32
+    assert _streams_windows._kernel32_handle_api() is kernel32
 
     windll.assert_called_once_with("kernel32", use_last_error=True)
     assert kernel32.GetCurrentProcess.argtypes == ()
@@ -128,7 +134,7 @@ def test_windows_writer_transfer_releases_the_crt_duplicate(
         closed_fds=closed_fds,
     )
     monkeypatch.setattr(
-        _streams_rs,
+        _streams_windows,
         "_duplicate_windows_handle",
         lambda _handle: rust_owned_handle,
     )
@@ -165,7 +171,7 @@ def test_windows_writer_transfer_passes_the_normalized_buffer_size(
         closed_fds=closed_fds,
     )
     monkeypatch.setattr(
-        _streams_rs,
+        _streams_windows,
         "_duplicate_windows_handle",
         lambda _handle: rust_owned_handle,
     )

@@ -19,9 +19,18 @@ import cyclopts
 from cuprum._stream_config import _StreamConfig
 from cuprum._streams import _consume_stream
 from cuprum.capture_policy import FullCapture
+from tests.helpers.consume_boundary_subprocess import capture_from_producer
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+# The concurrent-producer witness is defined by one exact payload shape: a
+# one-mebibyte pattern ending in an incomplete three-byte UTF-8 sequence. The
+# streamed check runs only for that shape, so a generated payload cannot pay
+# for an extra child process on every case.
+_STREAMED_PAYLOAD_LENGTH = 1_048_577
+_STREAMED_PAYLOAD_TAIL = b"\xe2\x98"
 
 
 class _BoundaryFailure(enum.StrEnum):
@@ -81,6 +90,10 @@ class _StreamsRust(typ.Protocol):
         """Convert a Python descriptor for the native extension."""
         ...
 
+    def _duplicate_binary_reader(self, reader_fd: int) -> cabc.ContextManager[int]:
+        """Duplicate a Windows CRT reader in binary mode."""
+        ...
+
     def rust_consume_stream(
         self,
         reader_fd: int,
@@ -124,10 +137,12 @@ class _PayloadCase:
 
 @dc.dataclass(frozen=True, slots=True)
 class _OracleMetadata:
-    """Report interpreter and extension provenance to the Rust parent."""
+    """Report parity outcomes and extension provenance to test callers."""
 
     python_executable: str
     native_module_path: str
+    native_captures: tuple[str, ...]
+    reader_open_checks: int
 
 
 def _capture_python(payload: bytes) -> str:
@@ -239,8 +254,21 @@ def _consume_direct(
     *,
     buffer_size: int | None = None,
 ) -> str:
-    """Call the extension directly after platform-specific descriptor conversion."""
+    """Call the extension directly with an independently owned reader copy."""
+    if os.name == "nt":
+        with modules.streams_rs._duplicate_binary_reader(reader_fd) as native_fd:
+            return _call_native_consumer(modules, native_fd, buffer_size)
+
     native_fd = modules.streams_rs._convert_fd_for_platform(reader_fd)
+    return _call_native_consumer(modules, native_fd, buffer_size)
+
+
+def _call_native_consumer(
+    modules: _NativeModules,
+    native_fd: int,
+    buffer_size: int | None,
+) -> str:
+    """Call the direct extension method with omitted or explicit buffer size."""
     if buffer_size is None:
         return modules.native.rust_consume_stream(native_fd)
     return modules.native.rust_consume_stream(native_fd, buffer_size=buffer_size)
@@ -298,9 +326,35 @@ def check_payload(payload: bytes, buffer_size: int) -> _OracleMetadata:
     )
     _assert_equal("Python consumer", _capture_python(payload), case)
     modules = _load_native_modules()
+    native_captures: list[str] = []
     for label, consume in _native_consumers(modules, buffer_size):
-        _assert_equal(label, _consume_file(payload, consume), case)
-    return _OracleMetadata(sys.executable, str(modules.native_path))
+        captured = _consume_file(payload, consume)
+        _assert_equal(label, captured, case)
+        native_captures.append(captured)
+
+    reader_open_checks = len(native_captures)
+    if len(payload) == _STREAMED_PAYLOAD_LENGTH and payload.endswith(
+        _STREAMED_PAYLOAD_TAIL
+    ):
+        captured = capture_from_producer(
+            payload,
+            _STREAMED_PAYLOAD_TAIL,
+            functools.partial(
+                _consume_direct,
+                modules,
+                buffer_size=buffer_size,
+            ),
+        )
+        _assert_equal("direct native subprocess pipe", captured, case)
+        native_captures.append(captured)
+        reader_open_checks += 1
+
+    return _OracleMetadata(
+        sys.executable,
+        str(modules.native_path),
+        tuple(native_captures),
+        reader_open_checks,
+    )
 
 
 app = cyclopts.App()

@@ -28,6 +28,11 @@ import os
 import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
+from cuprum._streams_windows import (
+    _convert_fd_for_platform,
+    _duplicate_binary_reader,
+    _transfer_writer_fd_for_platform,
+)
 from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import (
     _emit_native_pump_io_failure,
@@ -37,10 +42,8 @@ from cuprum.pump_span_events import NATIVE_PUMP_BUFFER_SIZE
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from types import ModuleType
 
 
-_DUPLICATE_SAME_ACCESS = 2
 _I64_MIN = -(1 << 63)
 _I64_MAX = (1 << 63) - 1
 _MAX_BUFFER_SIZE = 1 << 30
@@ -89,24 +92,6 @@ def _load_native() -> _NativeBackend:
         "_NativeBackend",
         importlib.import_module("cuprum._rust_backend_native"),
     )
-
-
-def _convert_fd_for_platform(fd: int) -> int:
-    """Convert a file descriptor for platform-specific Rust handling."""
-    if os.name != "nt":
-        return fd
-    import ctypes
-    import msvcrt
-
-    # Use getattr to avoid cross-platform stub mismatches in type checking.
-    get_osfhandle = typ.cast(
-        "cabc.Callable[[int], int]",
-        getattr(msvcrt, "get_osfhandle"),  # ruff: ignore[get-attr-with-constant]  # https://github.com/leynos/cuprum/pull/29#discussion_r2743182508
-    )
-    handle = get_osfhandle(fd)
-    bit_size = ctypes.sizeof(ctypes.c_void_p) * 8
-    mask = (1 << bit_size) - 1
-    return handle & mask
 
 
 def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
@@ -189,89 +174,6 @@ def _prepare_rust_pump_call(
         reader=reader,
         buffer_size=validated_buffer_size,
     )
-
-
-def _kernel32_handle_api() -> ModuleType:
-    """Load Kernel32 with the handle signatures required by this module."""
-    import ctypes
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
-    kernel32.GetCurrentProcess.argtypes = ()
-    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-    kernel32.DuplicateHandle.argtypes = (
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_uint32,
-        ctypes.c_int,
-        ctypes.c_uint32,
-    )
-    kernel32.DuplicateHandle.restype = ctypes.c_int
-    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
-    kernel32.CloseHandle.restype = ctypes.c_int
-    return kernel32
-
-
-def _duplicate_windows_handle(handle: int) -> int:
-    """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
-    import ctypes
-
-    kernel32 = _kernel32_handle_api()
-    current_process = kernel32.GetCurrentProcess()
-    duplicated_handle = ctypes.c_void_p()
-    should_inherit_handle = False
-    duplicate_succeeded = kernel32.DuplicateHandle(
-        current_process,
-        ctypes.c_void_p(handle),
-        current_process,
-        ctypes.byref(duplicated_handle),
-        0,
-        should_inherit_handle,
-        _DUPLICATE_SAME_ACCESS,
-    )
-    if not duplicate_succeeded:
-        raise _windows_error(ctypes)
-    if duplicated_handle.value is None:
-        msg = "DuplicateHandle returned a null handle"
-        raise OSError(msg)
-    return int(duplicated_handle.value)
-
-
-def _close_windows_handle(handle: int) -> None:
-    """Close a duplicated Win32 handle that was not handed to Rust."""
-    import ctypes
-
-    kernel32 = _kernel32_handle_api()
-    if not kernel32.CloseHandle(ctypes.c_void_p(handle)):
-        raise _windows_error(ctypes)
-
-
-def _windows_error(ctypes_module: ModuleType) -> OSError:
-    """Build an OSError from a Windows-only ctypes last-error function."""
-    get_last_error = typ.cast(
-        "cabc.Callable[[], int]",
-        getattr(ctypes_module, "get_last_error"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API
-    )
-    win_error = typ.cast(
-        "cabc.Callable[[int], OSError]",
-        getattr(ctypes_module, "WinError"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API
-    )
-    return win_error(get_last_error())
-
-
-def _transfer_writer_fd_for_platform(writer_fd: int) -> int:
-    """Return a writer resource that Rust can consume without a CRT FD leak."""
-    if os.name != "nt":
-        return writer_fd
-
-    owned_handle = _duplicate_windows_handle(_convert_fd_for_platform(writer_fd))
-    try:
-        os.close(writer_fd)
-    except BaseException:
-        _close_windows_handle(owned_handle)
-        raise
-    return owned_handle
 
 
 def rust_pump_stream(
@@ -380,16 +282,38 @@ def rust_consume_stream(
     exercised directly by tests and remains available for downstream
     experimentation.
 
+    On Windows, it duplicates the CRT reader descriptor, sets that duplicate
+    to binary mode, and closes it after the native call; the caller keeps
+    ownership and its original translation mode. The wrapper rejects a
+    negative or out-of-range Windows descriptor itself, because ``os.dup``
+    would otherwise raise ``OSError`` where the native boundary documents
+    ``ValueError``.
+
     Failures propagate unchanged from the Rust extension rather than being
     raised here: ``ImportError`` if the native module cannot be imported,
     ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
-    1 GiB maximum, and ``OSError`` if an I/O error occurs while reading.
-    """
+    1 GiB maximum, and ``OSError`` if descriptor setup or reading fails.
+    ``OverflowError`` reports an integer outside PyO3's ``i64`` range.
+    """  # ruff: ignore[docstring-missing-exception] - ValueError and OverflowError are raised above; the rule reads only the docstring body.
     native = _load_native()
-    return native.rust_consume_stream(
-        _convert_fd_for_platform(reader_fd),
-        buffer_size=buffer_size,
-    )
+    if os.name == "nt":
+        reader = operator.index(reader_fd)
+        if not _I64_MIN <= reader <= _I64_MAX:
+            msg = "Python int too large to convert to C long"
+            raise OverflowError(msg)
+        if reader < 0:
+            msg = "file descriptor must be non-negative"
+            raise ValueError(msg)
+        if reader > (1 << 31) - 1:
+            msg = "file descriptor out of range"
+            raise ValueError(msg)
+        with _duplicate_binary_reader(reader) as duplicate_fd:
+            return native.rust_consume_stream(
+                duplicate_fd,
+                buffer_size=buffer_size,
+            )
+
+    return native.rust_consume_stream(reader_fd, buffer_size=buffer_size)
 
 
 __all__ = ["rust_consume_stream", "rust_pump_stream"]

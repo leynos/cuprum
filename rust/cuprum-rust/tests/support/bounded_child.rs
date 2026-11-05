@@ -208,10 +208,12 @@ fn wait_until_deadline(
 }
 
 fn kill_and_reap(child: &mut Child) -> Result<ExitStatus, ChildFailure> {
-    if let Err(kill_error) = child.kill()
-        && child.try_wait().map_err(ChildFailure::Wait)?.is_none()
-    {
-        return Err(ChildFailure::Kill(kill_error));
+    // Let-chains need a newer compiler than the workspace's 1.85 MSRV, so the
+    // kill failure is nested rather than combined with the reap probe.
+    if let Err(kill_error) = child.kill() {
+        if child.try_wait().map_err(ChildFailure::Wait)?.is_none() {
+            return Err(ChildFailure::Kill(kill_error));
+        }
     }
     child.wait().map_err(ChildFailure::Wait)
 }

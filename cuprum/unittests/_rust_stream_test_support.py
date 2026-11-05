@@ -30,3 +30,11 @@ def _safe_close(fd: int) -> None:
     """Close a file descriptor, ignoring errors."""
     with contextlib.suppress(OSError):
         os.close(fd)
+
+
+def _set_binary_mode(fd: int) -> None:
+    """Keep pipe payload bytes unchanged when writing on Windows."""
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.setmode(fd, os.O_BINARY)

@@ -7,13 +7,17 @@
 use std::io;
 #[cfg(kani)]
 mod kani_proofs;
+
 mod memory;
+
 pub mod progress;
 pub use memory::with_owned_writer;
 #[cfg(kani)]
 mod fd_ownership_kani_proofs;
+
 #[cfg(any(test, kani, loom))]
 mod fd_ownership_model;
+
 #[cfg(loom)]
 #[doc(hidden)]
 pub mod loom_support;
@@ -36,6 +40,7 @@ use std::os::windows::io::{FromRawHandle, RawHandle};
 /// Integer representation at the Python ABI boundary, not an ownership token.
 #[cfg(unix)]
 pub type PlatformFd = i32;
+
 /// Pointer-width integer representation at the Python ABI boundary.
 #[cfg(windows)]
 pub type PlatformFd = usize;
@@ -285,8 +290,12 @@ mod pipe_tests;
 // descriptors and the same exclusion from Miri's isolation.
 #[cfg(all(test, not(miri)))]
 mod pipe_property_tests;
+
 #[cfg(windows)]
 mod windows;
+
+#[cfg(windows)]
+mod windows_crt;
 // `pipe` is not re-exported from here: the cross-platform constructor above
 // already owns that name, and a second Windows-only binding would shadow it.
 #[cfg(windows)]
@@ -299,3 +308,5 @@ pub use windows::{
 };
 #[cfg(all(test, windows))]
 pub(crate) use windows::{fd_is_open, handle_is_inheritable};
+#[cfg(windows)]
+pub use windows_crt::{BorrowedCrtFileDescriptor, borrow_crt_reader, read_crt_once};
