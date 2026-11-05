@@ -150,7 +150,8 @@ ownership and error contracts, stop and report the exact incompatibility.
 - [x] M1: establish the real-boundary test bridge and prove its failure paths.
 - [x] M2: implementation and focused acceptance complete; the corrected
   post-rebase candidate passed `make check-fmt`, `make test`, `make typecheck`,
-  and `make lint` on 2026-11-03. The final correction commit is pending.
+  and `make lint` on 2026-11-03. The final correction is committed as
+  `fdf7f51bb`.
 - [x] (2026-11-03) Rebase onto fetched `origin/main` at
   `7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; resolve both conflicts while
   preserving the target's deadline/ancestor handling and the branch's parity
@@ -167,8 +168,30 @@ ownership and error contracts, stop and report the exact incompatibility.
   `/tmp/typecheck-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`,
   and
   `/tmp/lint-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`.
-- [ ] M3: authorized on 2026-11-03 to add Windows native consume support and
-  preserve Linux/Windows parity; begin after the M2 correction is committed.
+- [ ] M3: in progress; Windows consume now uses a borrowed CRT descriptor and
+  `_read` through the shared decoder. The Python shim duplicates the validated
+  descriptor, sets only the duplicate to binary mode, and closes it after the
+  detached call. The wrapper keeps its established Windows reader-first setup;
+  the direct native entry point still validates the buffer before descriptor
+  conversion. Consume properties, Windows error/setup-cleanup cases, the large
+  subprocess-pipe BDD witness, and boundary documentation are in place. A
+  pre-rebase Windows-target `cargo check` for `cuprum-rust` passed after fixing
+  a root-module visibility error and adding the Windows-only stream re-export.
+  The refreshed target rebase onto `origin/main` at
+  `45c06213bd16cf1da1f4bc08a91e97ae58514629` then replayed all nine commits
+  with no conflicts. The range-diff maps each commit; target echo code and
+  tests remain byte-identical, and both target documentation additions remain
+  present. Production dispatch and public signatures remain unchanged. A later
+  repair pass fixed defects that the staged candidate could not have survived:
+  dead imports and stale helper references left behind by the
+  `_streams_windows` split, an undefined message constant, a `rust_streams`
+  attribute assertion on a module that never exposed it, and a
+  `DuplicateHandle` call rewritten to keyword arguments that ctypes cannot bind.
+  `make lint-windows` then found four further cross-target defects invisible
+  to the Linux gates — a wrapping `u32` cast, an `if let`/`else` clippy shape,
+  an indexing slice in a test, and a missing-backtick module doc — plus a
+  `let`-chain that the 1.85 MSRV rejects. All are repaired; `make lint-windows`,
+  `make check-fmt`, and the focused Python and behavioural suites now pass.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -338,6 +361,21 @@ deadline's timestamp and preserves its monotonic clock. The four cases now pass
 in a focused run; the full gate sequence must be repeated on the corrected
 candidate.
 
+The first Windows-target check found that `pub(super)` is not valid in the
+crate-root stream module; the shared decoder remains private and its child
+module can call it. The next check found the Windows-only PyO3 module needed an
+explicit `consume_crt_stream` import. Both were corrected, after which the
+target check passed. Microsoft Learn documents `_get_doserrno` and
+`_set_doserrno` with `int` parameters, matching the FFI declarations:
+[`_get_doserrno`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/get-doserrno?view=msvc-170)
+and
+[`_set_doserrno`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/set-doserrno?view=msvc-170).
+
+The refreshed rebase's first `--exec` formatter command started at the
+repository root, where Cargo has no manifest. The equivalent formatter check
+passed with `--manifest-path rust/Cargo.toml`; the remaining eight todo entries
+were corrected to use that manifest and all passed during replay.
+
 ## Decision log
 
 - (2026-10-25) The user explicitly approved implementation and selected the
@@ -353,6 +391,11 @@ candidate.
   signature and dispatch unchanged. Use a duplicated binary-mode CRT descriptor
   for Windows consume rather than treating an arbitrary raw handle as
   synchronously readable; retain the existing pump safety boundary.
+- (2026-11-03) Preserve the two existing validation layers: Windows wrapper
+  consume prepares the CRT descriptor before native entry, while the direct
+  native function validates `buffer_size` before its descriptor conversion. The
+  competing-invalid-input wrapper property skips only Windows consume;
+  direct-native order tests continue to cover that platform's native contract.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle
@@ -850,7 +893,8 @@ Revision note (2026-11-03): rebased onto `origin/main` at
 `7d56d0be8637dce2e38f99919c57bd4c7af0fd27`, repaired the lifecycle helper for
 the target's deadline value, and passed the corrected candidate's requested
 format, test, typecheck, and lint gates. The current change is ready for its M2
-correction commit; M3 implementation is still outstanding.
+correction commit `fdf7f51bb`. M3 Windows consume implementation is now
+underway under the user's explicit scope authorization.
 
 The first full test run on the repaired candidate exhausted the existing
 1,800-second compile-time UI timeout while waiting for shared Cargo and

@@ -43,10 +43,8 @@ from cuprum.unittests._rust_stream_test_support import _safe_close
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
-# The native module takes the Unix i32 descriptor contract. On Windows the shim
-# converts a CRT descriptor to an OS handle and duplicates it before the native
-# call, so a raw descriptor cannot be handed over there; these orderings are
-# asserted on the platform whose contract they describe.
+# The pump retains the Unix i32 descriptor contract. Windows consume now uses
+# a CRT descriptor, so its native validation-order cases run on both platforms.
 _unix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="asserts the Unix descriptor contract the shim converts on Windows",
@@ -155,7 +153,6 @@ def test_pump_adopts_and_closes_the_writer_on_success(
         )
 
 
-@_unix_only
 def test_consume_reports_a_rejected_buffer_before_reading_the_reader(
     native_streams: ModuleType,
 ) -> None:
@@ -174,7 +171,6 @@ def test_consume_reports_a_rejected_buffer_before_reading_the_reader(
     )
 
 
-@_unix_only
 def test_consume_buffer_error_leaves_borrowed_reader_usable(
     native_streams: ModuleType,
 ) -> None:
@@ -319,7 +315,6 @@ def test_out_of_i64_descriptors_keep_pyo3_overflow_error(
 _VALID_BUFFER_SIZE = 65536
 
 
-@_unix_only
 def test_consume_maps_an_invalid_descriptor_to_value_error(
     native_streams: ModuleType,
 ) -> None:

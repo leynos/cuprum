@@ -12,6 +12,13 @@ Feature: Optional Rust stream operations
     When I consume a payload with invalid UTF-8
     Then the decoded output matches replacement semantics
 
+  Scenario: A large malformed stream preserves Python replacement decoding
+    Given a payload of 1048577 bytes ending with an incomplete UTF-8 sequence
+    When the native and Python consumers capture the complete payload
+    Then both captures equal Python UTF-8 replacement decoding
+    And omitted and explicit default buffers produce the same capture
+    And the caller's reader descriptor remains open
+
   Scenario: Rust pump stream handles large pipe transfers
     Given the Rust pump stream is available
     When I pump a large payload through the Rust stream

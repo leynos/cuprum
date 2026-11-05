@@ -31,7 +31,7 @@ enum ChildFixture {
 }
 
 impl ChildFixture {
-    fn mode(self) -> &'static str {
+    const fn mode(self) -> &'static str {
         match self {
             Self::Copy => "copy",
             Self::Mismatch => "mismatch",

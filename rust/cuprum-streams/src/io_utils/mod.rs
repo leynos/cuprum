@@ -51,10 +51,10 @@ fn record_write_retry() {
     WRITE_RETRIES.with(|counter| counter.set(counter.get().saturating_add(1)));
 }
 
-#[cfg(windows)]
-use cuprum_native_io::SynchronousBorrowedStream;
 #[cfg(unix)]
 use cuprum_native_io::{AsStream, BorrowedStream, borrow};
+#[cfg(windows)]
+use cuprum_native_io::{BorrowedCrtFileDescriptor, SynchronousBorrowedStream};
 
 /// Result of a single write attempt on the stream.
 #[derive(Debug, PartialEq, Eq)]
@@ -102,6 +102,16 @@ pub(crate) fn read_stream(
     buffer: &mut [u8],
 ) -> Result<usize, PumpError> {
     cuprum_native_io::read_once(reader, buffer)
+        .and_then(|count| usize::try_from(count).map_err(io::Error::other))
+        .map_err(PumpError::from)
+}
+
+#[cfg(windows)]
+pub(crate) fn read_crt_stream(
+    reader: BorrowedCrtFileDescriptor<'_>,
+    buffer: &mut [u8],
+) -> Result<usize, PumpError> {
+    cuprum_native_io::read_crt_once(reader, buffer)
         .and_then(|count| usize::try_from(count).map_err(io::Error::other))
         .map_err(PumpError::from)
 }
