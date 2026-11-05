@@ -103,38 +103,34 @@ fn count_of(count: isize) -> io::Result<usize> {
     usize::try_from(count).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+/// Present a borrowed endpoint as the platform's single-call stream type.
+///
+/// A Unix descriptor needs no narrowing: `read` and `write` block, so the
+/// borrowed descriptor is already what the primitive takes. The Windows
+/// primitives demand the synchronous-I/O capability, which the platform cannot
+/// verify from a bare handle and so must be asserted.
+#[cfg(unix)]
+fn primitive_stream(stream: BorrowedStream<'_>) -> BorrowedStream<'_> { stream }
+
+/// Present a borrowed endpoint as the platform's single-call stream type.
+///
+/// The endpoint came from `pipe`, whose Windows half `synchronous_pipe`
+/// documents as `CreatePipe`-backed and therefore synchronous.
+#[cfg(windows)]
+fn primitive_stream(stream: BorrowedStream<'_>) -> super::SynchronousBorrowedStream<'_> {
+    // SAFETY: the process's own `pipe` constructor made this endpoint, so it is
+    // not an overlapped handle.
+    unsafe { super::SynchronousBorrowedStream::new_unchecked(stream) }
+}
+
 /// Read once through the platform's borrowed-reader primitive.
 fn read_payload(stream: BorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<usize> {
-    #[cfg(unix)]
-    {
-        count_of(read_once(stream, buffer)?)
-    }
-    #[cfg(windows)]
-    {
-        // The endpoint came from `pipe`, whose Windows half `synchronous_pipe`
-        // documents as `CreatePipe`-backed and therefore synchronous.
-        // SAFETY: the process's own `pipe` constructor made this endpoint, so
-        // it is not an overlapped handle.
-        let synchronous = unsafe { super::SynchronousBorrowedStream::new_unchecked(stream) };
-        count_of(read_once(synchronous, buffer)?)
-    }
+    count_of(read_once(primitive_stream(stream), buffer)?)
 }
 
 /// Write a payload through the platform's borrowed-writer primitive.
 fn write_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<usize> {
-    #[cfg(unix)]
-    {
-        count_of(write_once(stream, payload)?)
-    }
-    #[cfg(windows)]
-    {
-        // The endpoint came from `pipe`, whose Windows half `synchronous_pipe`
-        // documents as `CreatePipe`-backed and therefore synchronous.
-        // SAFETY: the process's own `pipe` constructor made this endpoint, so
-        // it is not an overlapped handle.
-        let synchronous = unsafe { super::SynchronousBorrowedStream::new_unchecked(stream) };
-        count_of(write_once(synchronous, payload)?)
-    }
+    count_of(write_once(primitive_stream(stream), payload)?)
 }
 
 /// A transferred payload arrives intact and the reader reaches EOF.
