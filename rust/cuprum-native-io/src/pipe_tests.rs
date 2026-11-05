@@ -197,11 +197,13 @@ fn early_reader_close_reports_broken_pipe(
 fn unix_endpoints_are_close_on_exec(endpoints: Result<(OwnedStream, OwnedStream), io::Error>) {
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     assert!(
-        !exec_inheritable(raw_of(&reader)),
+        !exec_inheritable(raw_of(&reader))
+            .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}")),
         "the reader must not survive an exec",
     );
     assert!(
-        !exec_inheritable(raw_of(&writer)),
+        !exec_inheritable(raw_of(&writer))
+            .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}")),
         "the writer must not survive an exec",
     );
 }
@@ -212,11 +214,13 @@ fn unix_endpoints_are_close_on_exec(endpoints: Result<(OwnedStream, OwnedStream)
 fn windows_endpoints_are_non_inheritable_and_synchronous() {
     let (reader, writer) = pipe().unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     assert!(
-        !inheritable(raw_of(&reader)),
+        !inheritable(raw_of(&reader))
+            .unwrap_or_else(|error| panic!("observe HANDLE_FLAG_INHERIT: {error:?}")),
         "the reader handle must not be inheritable",
     );
     assert!(
-        !inheritable(raw_of(&writer)),
+        !inheritable(raw_of(&writer))
+            .unwrap_or_else(|error| panic!("observe HANDLE_FLAG_INHERIT: {error:?}")),
         "the writer handle must not be inheritable",
     );
 
@@ -265,15 +269,16 @@ fn raw_of(resource: &OwnedStream) -> super::PlatformFd {
 }
 
 /// Report whether a Unix descriptor inherits across `exec`.
+///
+/// The observation is fallible, so this helper stays a query: the caller turns
+/// a refusal into the panic that names which assertion could not be made.
 #[cfg(unix)]
-fn exec_inheritable(fd: super::PlatformFd) -> bool {
+fn exec_inheritable(fd: super::PlatformFd) -> io::Result<bool> {
     super::fd_is_exec_inheritable(fd)
-        .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}"))
 }
 
 /// Report whether a Windows handle inherits into a child process.
 #[cfg(windows)]
-fn inheritable(raw: super::PlatformFd) -> bool {
+fn inheritable(raw: super::PlatformFd) -> io::Result<bool> {
     super::handle_is_inheritable(raw)
-        .unwrap_or_else(|error| panic!("observe HANDLE_FLAG_INHERIT: {error:?}"))
 }
