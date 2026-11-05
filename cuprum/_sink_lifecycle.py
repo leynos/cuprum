@@ -87,6 +87,7 @@ class _SinkBracket:
         default_factory=threading.Lock,
         repr=False,
     )
+    _opened: bool = dc.field(default=False, init=False, repr=False)
 
     @classmethod
     def open(
@@ -108,11 +109,63 @@ class _SinkBracket:
         _SinkBracket
             The bracket owning this run's session, which may be empty.
         """
-        return cls(
-            _open_sink_session(sink, start),
-            bounded_delivery=bounded_delivery,
+        bracket = cls(None)
+        bracket.open_session(
+            sink,
+            start,
             delivery_grace_s=delivery_grace_s,
+            bounded_delivery=bounded_delivery,
         )
+        return bracket
+
+    def open_session(
+        self,
+        sink: sinks.OutputSink | None,
+        start: sinks.SessionStart,
+        *,
+        delivery_grace_s: float | None = None,
+        bounded_delivery: bool = False,
+    ) -> None:
+        """Open this bracket's session in place, at most once.
+
+        A lazily started run builds its bracket while its options are being
+        validated but must not frame anything until iteration actually begins:
+        a stream that is built and never pulled would otherwise leave a group
+        and its stop-commands lease open, silencing the runner's own workflow
+        commands. Opening in place lets one bracket span both moments, so the
+        execution bundle built at the first pull sees the session's log, and
+        the close that already guards every terminal path releases it.
+
+        Parameters
+        ----------
+        sink : sinks.OutputSink | None
+            The configured adapter, or ``None`` when the run has none.
+        start : sinks.SessionStart
+            The session start describing this run.
+        delivery_grace_s : float | None, default=None
+            The drain grace for a run that mirrors output through a bounded
+            delivery worker.
+        bounded_delivery : bool, default=False
+            Whether the run uses bounded delivery, which makes closing the
+            session an off-loop, serialized operation.
+
+        Raises
+        ------
+        RuntimeError
+            If this bracket has already opened its session. Opening twice
+            would duplicate the adapter's framing, and the take-once close
+            guards only the far end of the lifecycle.
+        """
+        with self._state_lock:
+            if self._opened:
+                msg = "a sink bracket opens its session at most once"
+                raise RuntimeError(msg)
+            self._opened = True
+            self.bounded_delivery = bounded_delivery
+            self.delivery_grace_s = delivery_grace_s
+        session = _open_sink_session(sink, start)
+        with self._state_lock:
+            self.session = session
 
     def resolve_destination(self, fallback: typ.IO[str]) -> typ.IO[str]:
         """Return the active session's log destination, or *fallback*.

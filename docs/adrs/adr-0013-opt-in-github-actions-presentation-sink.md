@@ -292,3 +292,35 @@ project names and program names also enter workflow logs. Workflow-command
 escaping protects the command syntax; it does not redact values. Callers that
 put sensitive values in any of these fields must configure a redaction policy
 or choose safe labels.
+
+### Amendment (2026-11-04): line-stream session lifecycle
+
+Issue #547 showed that a lazy line stream could let child output reach the job
+log as live workflow commands. The stream's finalizer closed the framing, but
+the session itself was opened only on the eager path, so `SafeCmd.lines()`
+never held a `::stop-commands::` lease while it mirrored a child's output.
+
+This amendment extends the accepted decision to lazy iteration. A line stream
+now opens its session at the first pull, immediately after the allowlist check
+in its opener, and not when the stream is constructed: a stream that is built
+and never iterated writes no workflow commands at all, and a refused program
+writes none either. `run()` and pipelines keep their eager opening, because a
+command run and a multi-stage pipeline have no equivalent cancellation boundary
+between preparation and start.
+
+One bracket spans preparation and iteration. It opens its session at most once,
+and its take-once close is idempotent, so repeated teardown cannot duplicate
+the release or the group close. Settlement closes the run's delivery worker
+first, so mirrored lines land inside the framing, and closes the session last
+and shielded, after the child is reconciled and the observe hooks are drained.
+
+The close outcome keeps the accepted closed set. A genuine iteration failure
+supplies the category. Otherwise the run's own result supplies it, including a
+non-zero exit code, unless a teardown failure accompanied a clean exit, in
+which case the teardown failure supplies `error` so a run the caller saw fail
+is not annotated as successful. A close with neither a result nor a teardown
+failure reports `cancelled`. Closing the generator after the terminal yield
+arrives as `GeneratorExit` and is not treated as a failure.
+
+The group, lease, annotation, escaping, and redaction decisions in the accepted
+record are unchanged.
