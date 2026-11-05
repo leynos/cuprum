@@ -7868,12 +7868,12 @@ bundle resolves its destinations from the session; a later refusal from
 finalizer closes it without any child line in between.
 
 One `_SinkBracket` spans preparation and iteration. `SafeCmd.lines()` builds it;
-`open_sink` opens its session exactly once; `_LineIterationState` carries it
-to the finalizer. The bracket enforces both ends of the take-once contract:
-`open_session` raises on a second open, and `_take_session` transfers the
-session out exactly once, so a repeated close cannot frame the run again.
-`open_session` records `bounded_delivery` and `delivery_grace_s`, because only
-the opener knows which delivery worker the run will actually start.
+`open_sink` opens its session exactly once; `_ExecutionTracking` carries it to
+the finalizer as `tracking.sink_bracket`. The bracket enforces both ends of the
+take-once contract: `open_session` raises on a second open, and `_take_session`
+transfers the session out exactly once, so a repeated close cannot frame the
+run again. `open_session` records `bounded_delivery` and `delivery_grace_s`,
+because only the opener knows which delivery worker the run will actually start.
 
 `cuprum/_line_stream_finalization.py` owns settlement. `_settle_line_iteration`
 runs on every exit — exhaustion, `aclose()` after a `break`, timeout,
