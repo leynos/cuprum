@@ -5044,7 +5044,7 @@ case concretely, and its successor is already forecast: item 5.2.2's
 *above* the bar by succeeding. See
 [the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
 
-### Cargo cache snapshots
+## Cargo cache snapshots
 
 [ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md)
 records the decision to prepare content-keyed read-only snapshots before timed
@@ -5119,7 +5119,7 @@ workload lease, so those invocation times are not execution-only budgets. Keep
 finite end-to-end watchdogs, but do not treat their durations as the workload
 budget after resource waits are removed.
 
-### External compiler admission contract
+## External compiler admission contract
 
 The installed mechanism is the compiler-wrapper contract documented by
 [`leynos/dev-env-rocky` revision `dc870c5`](https://github.com/leynos/dev-env-rocky/tree/dc870c553505778d263bfbaea0535223a4e3dfc3/python/build_limits/README.md),

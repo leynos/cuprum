@@ -64,7 +64,7 @@ def _complete(machine: _RustPumpWriterHandoffModel) -> None:
 def _complete_after_cancellation(machine: _RustPumpWriterHandoffModel) -> None:
     """Reach completion after one cancellation request."""
     _prepare_submission(machine)
-    machine._cancel_before_native_settlement()
+    _apply(machine, "cancel")
     _finish_lifecycle(machine)
 
 
@@ -183,8 +183,8 @@ def test_cancellation_retries_are_bounded_and_then_progress_resumes() -> None:
     """Two cancellation requests remain available before worker progress."""
     machine = _RustPumpWriterHandoffModel()
     _prepare_submission(machine)
-    machine._cancel_before_native_settlement()
-    machine._cancel_before_native_settlement()
+    _apply(machine, "cancel")
+    _apply(machine, "cancel")
 
     assert machine._cancellation_count == machine._MAX_CANCELLATIONS, (
         "the deterministic cancellation path must exercise the configured bound"
