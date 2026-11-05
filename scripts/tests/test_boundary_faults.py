@@ -299,7 +299,10 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     logs.mkdir()
 
     def rewrite(
-        _program: str, _args: tuple[str, ...], _workspace: Path
+        _program: str,
+        _args: tuple[str, ...],
+        _workspace: Path,
+        _target_dir: Path | None = None,
     ) -> tuple[int, str]:
         """Fail the guarded run as though it had rewritten the lockfile."""
         error = faults._LockfileRewriteError(
@@ -380,7 +383,6 @@ def test_an_ownership_control_builds_apart_from_its_fault(
     """
     root, runner = _drive(tmp_path, monkeypatch)
     run_root = latest_run_root(root, "boundary-faults")
-    uploaded = root / "rust/target/boundary-verification"
     harness = [
         target
         for (program, args), target in zip(
@@ -397,9 +399,8 @@ def test_an_ownership_control_builds_apart_from_its_fault(
         assert target.parent == run_root / "build", (
             "the per-check build directories must stay under the run's build root"
         )
-        # CI archives `rust/target/boundary-verification` whole with
-        # `if: always()`, so a build tree beneath it uploads a full Cargo
-        # target directory as an artefact on every run.
-        assert not target.is_relative_to(uploaded), (
-            "the build directories must stay out of the uploaded evidence tree"
+        # CI archives the whole run root, `logs` included, so a Cargo target
+        # tree under `logs` would ship build output as evidence on every run.
+        assert not target.is_relative_to(run_root / "logs"), (
+            "the build directories must stay out of the archived evidence tree"
         )

@@ -160,7 +160,6 @@ def _invocation(
     program: str,
     args: tuple[str, ...],
     workspace: Path,
-    pins: ToolPins,
     target_dir: Path | None = None,
 ) -> _Invocation:
     """Build the verifier environment and its arguments, freezing native Cargo.
@@ -180,10 +179,9 @@ def _invocation(
     _Invocation
         The arguments, environment, and lockfile contract for this program.
     """
-    kani = Path.home() / f".kani/kani-{pins.kani}"
+    kani = Path.home() / f".kani/kani-{read_tool_pins().kani}"
     target_directory = (
-        target_dir
-        or workspace.parent / "target/boundary-faults-debug-all-features"
+        target_dir or workspace.parent / "target/boundary-faults-debug-all-features"
     )
     environment = os.environ.copy()
     environment.update({
@@ -222,8 +220,12 @@ def _run(
     -------
     tuple[int, str]
         The verifier's exit code and its combined standard output and error.
+
+    Raises
+    ------
+    _LockfileRewriteError
+        If a guarded Kani run rewrote the copied lockfile, carrying its output.
     """
-    pins = read_tool_pins()
     executable = Program(program)
     project = ProjectSettings(
         name="boundary-faults",
@@ -232,7 +234,7 @@ def _run(
         noise_rules=(),
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
-    invocation = _invocation(program, args, workspace, pins, target_dir)
+    invocation = _invocation(program, args, workspace, target_dir)
     context = sh.ExecutionContext(
         cwd=workspace,
         env=invocation.environment,
@@ -360,11 +362,10 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
     # the mutation's prebuilt harness, so a working control is archived as a
     # failed verification.
     #
-    # They live beside the run's own workspace, under the archived
-    # `.cache/boundary-faults/runs` tree, rather than under `logs`. CI uploads
-    # `rust/target/boundary-verification` whole with `if: always()`, so a build
-    # tree in the log directory would ship a full Cargo target directory as an
-    # artefact on every run.
+    # They live beside the run's own workspace, in the run's `build` directory,
+    # rather than under `logs`. CI archives the run root wholesale with
+    # `include-hidden-files`, so keeping a Cargo target tree out of `logs` keeps
+    # the archived evidence readable rather than shipping build output with it.
     build_root = logs.parent / "build"
     for name, args, old, new, diagnostic in (
         (
