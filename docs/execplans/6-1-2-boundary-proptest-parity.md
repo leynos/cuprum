@@ -264,6 +264,19 @@ ownership and error contracts, stop and report the exact incompatibility.
   evidence for these criteria is the `make test-extension` target in the final
   bundle below; the checkbox asserts that the work exists and is exercised by
   that target, not that the bundle has already run.
+- [x] (2026-11-05) M3 names two acceptance scenarios. The 1,048,577-byte
+  scenario is present verbatim in `tests/features/rust_streams.feature`. The
+  second, "Invalid buffers retain the native exception contract", is not a
+  separate scenario, and deliberately so: the existing
+  `Preserve native stream exception categories` outline already carries
+  `a zero buffer size` rows for both `pump` and `consume` and asserts
+  `ValueError` through a bound step in
+  `tests/behaviour/test_rust_streams_errors_behaviour.py`. That is the same
+  contract over both entry points, exercised rather than duplicated. The plan
+  itself directs that existing passing scenarios count as evidence and that
+  duplication be avoided, so a second scenario covering the same rows would add
+  maintenance cost without adding evidence. Recorded here so the absence reads
+  as a decision rather than an oversight.
 - [ ] Final gate bundle and PR review.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
