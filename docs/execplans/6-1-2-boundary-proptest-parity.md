@@ -610,8 +610,8 @@ external documentation gaps, `logisphere-experts` for design review, and
 The original implementation-planning baseline was fetched `origin/main` at
 commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
 repeatedly as `main` advanced. The implementation branch's current base, and
-the one this document's conformance claims are made against, is `origin/main`
-at `e170f908f2a7b4187cc321296a9029e621169b07`. The branch sits directly on it
+the one this document's conformance claims are made against, is `origin/main` at
+`e170f908f2a7b4187cc321296a9029e621169b07`. The branch sits directly on it
 with no open rebase. Earlier bases — `7d56d0be8` on 2026-11-03 and `40d56d69f`
 before it — are superseded and kept only as history. Local recovery refs retain
 the pre-rebase head, base, target, and remote head. The original plan was
