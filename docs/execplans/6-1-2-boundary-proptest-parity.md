@@ -192,6 +192,18 @@ ownership and error contracts, stop and report the exact incompatibility.
   an indexing slice in a test, and a missing-backtick module doc — plus a
   `let`-chain that the 1.85 MSRV rejects. All are repaired; `make lint-windows`,
   `make check-fmt`, and the focused Python and behavioural suites now pass.
+  The branch then rebased onto the advanced `origin/main` at
+  `e170f908f2a7b4187cc321296a9029e621169b07` (ten upstream commits, including
+  `59c168753`, which made native UTF-8 consumption linear in malformed input).
+  Two conflicts arose, both in files where the two sides edited disjoint
+  regions. `test_rust_consume_stream.py` kept upstream's new malformed-vector
+  matrix and the branch's Windows CRT text-mode case; the module-wide Windows
+  skip was dropped, which is now correct because consume no longer rejects raw
+  handles on that platform, leaving one targeted Windows-only case.
+  `docs/developers-guide.md` kept both reworded table rows. After rebuilding
+  the extension, 186 focused Python and behavioural tests passed with 2
+  skipped, and `make test-boundary-parity` passed all 30 cases in 98.38 seconds;
+  `make lint-windows` also stayed green.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
