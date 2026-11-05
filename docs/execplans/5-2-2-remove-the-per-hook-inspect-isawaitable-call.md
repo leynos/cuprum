@@ -223,9 +223,18 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   the `None`-returning hook costs 115.8 µs and the `async def` hook 4.65 ms per
   1,000-dispatch batch, i.e. about 116 ns and 4.7 µs per event; the async
   figure is task creation, matching the D8 estimate.
-- [ ] EP-M5: profiler and timing evidence collected; evidence document
-  written.
-- [ ] EP-M6: documentation, changelog, and roadmap updated; item marked done.
+- [x] (2026-11-05) EP-M5: profiler and timing evidence collected and the
+  evidence document written. Six profiled captures (three pairs), their census
+  results, and the classifier re-run are conformant: control target weights
+  1,887–1,964, candidate weights 0, every anchor above the 14,000 floor. The
+  unprofiled timing was re-collected under the load gate and admits six pairs
+  with a geometric-mean ratio of 0.9529 and a 95% interval of [0.9199, 1.0001].
+  Recorded in `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` with the raw
+  data under `docs/profiling/5-2-2-observe-hook-dispatch/`.
+- [x] (2026-11-05) EP-M6: documentation, changelog, and roadmap updated; the
+  roadmap item is marked done. Touched `docs/users-guide.md`,
+  `docs/developers-guide.md`, `docs/cuprum-design.md`, `docs/roadmap.md`,
+  `docs/contents.md`, and `CHANGELOG.md`.
 
 ## Surprises & discoveries
 
@@ -342,6 +351,39 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   are fixed in the EP-M3 commit; the brute-force recount test is what made the
   first one visible, and it stays as the guard.
 
+- Observation: on this shared host a load spike lasts longer than one
+  unprofiled run, so ABBA ordering alone cannot balance it. Evidence: the first
+  collection's one-minute load average reached 33.0 and its bootstrap 95%
+  interval for the `cb` ratio was `[0.8228, 1.0693]`; the second reached 38.2
+  and gave `[0.8531, 1.0948]`. In the second, round 5's control took 238.6 s
+  against a usual 185-188 s and round 6's candidate took 239.3 s, so the two
+  ratios moved in opposite directions and widened the interval from both ends.
+  The four pairs that ran below load 15 were consistent: 0.9144, 0.9332,
+  0.9901, 0.9742. A third collection that waited for a load average below 8
+  before each pair still met spikes inside rounds 3-6 (35.2, 33.35/33.66,
+  23.88/38.7, and 53.15) and produced ratios of 0.7749, 0.8820, 1.1741, and
+  0.5717 there: round 5's candidate arm took 225.0 s against a usual 160-170 s,
+  and round 6's control arm took 301.0 s against a usual 172-186 s. Its
+  interval, `[0.7152, 1.0101]`, clears the 1.05 bound, but it is computed from
+  runs that measured other agents' linker bursts, so it is not the evidence
+  this plan accepts. Impact: Decision D9 replaces the pre-run wait with a
+  sampled per-run load ceiling and a bounded re-run, so the accepted pairs are
+  the ones that measured the workload. The profiled census does not depend on
+  wall time and is unaffected.
+- Observation: the first load-gated re-run driver silently rejected clean
+  pairs. `run_arm` wrote its diagnostic line to standard output, so the
+  `$(...)` that captured the arm's maximum captured that line too, and `awk`
+  read the timestamp's year (`2026`) as the load. Every attempt therefore
+  compared 2026 against the ceiling of 20 and was reported contaminated.
+  Evidence: round 4's attempt 2 sampled 8.55 (candidate) and 6.04 (control),
+  with wall times of 162.11 s and 176.54 s, yet was logged "contaminated;
+  retrying". Impact: the driver now writes diagnostics to standard error and
+  keeps every attempt's artefacts under `unprofiled/attempts/`, so a rejected
+  attempt is evidence rather than something the next attempt overwrites. Round
+  4's attempt 2 was re-collected because its candidate load series had already
+  been destroyed by the next attempt's cleanup; `timing-attempts.tsv` records
+  it as not admitted for that reason, not because it failed the load rule.
+
 ## Decision log
 
 - Decision D1 (RESOLVED 2026-11-02: **Option A** chosen by the approver): a
@@ -415,12 +457,92 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   saves about 25 ns of a roughly 4,000 ns async path, so a profile would show
   "unchanged", which V1 and the microbenchmark already establish. Date/Author:
   2026-10-01, planning agent.
+- Decision D9 (2026-11-05, implementation): admit a wall-clock run to the
+  paired analysis only when its sampled one-minute load average never exceeds
+  20, and re-run a contaminated pair in full, up to three attempts. Rationale:
+  the acceptance statistic is a wall-time ratio, and this host runs other
+  agents' Rust builds whose linker bursts reach load 35-53; a run that competes
+  with one measures contention, not the workload. The rule reads only
+  `/proc/loadavg`, never a run's wall time or ratio, so it cannot select on the
+  result. Every attempt, including discarded ones, is logged with its load
+  samples. Date/Author: 2026-11-05, implementation agent.
+- Decision D10 (2026-11-05, implementation): when a round exhausts D9's three
+  attempts, it may be retried up to six attempts in total. Rationale: the
+  ceiling is a property of the host's other tenants, not of the change, and a
+  fixed three-attempt budget would drop a round whenever the host happened to
+  stay busy, leaving the admitted set decided by luck rather than by the
+  measurement. The retry decision still reads only the sampled load averages,
+  never a run's wall time or ratio, so raising the budget cannot select on the
+  result. The budget was raised after round 3's first two attempts were
+  rejected on load and before any accepted round's ratio was known.
+  Date/Author: 2026-11-05, implementation agent.
 
 ## Outcomes & retrospective
 
-Not yet started. Record the measured census weights, the timing ratio and its
-interval, the microbenchmark figures, and the re-measured construction share
-here at each milestone.
+Every acceptance criterion is met, and the mechanism is measurable in three
+independent ways: the profiler no longer sees the detector, the wall clock is
+not slower, and a direct microbenchmark of the dispatch loop shows the removed
+cost.
+
+*Census.* Three matched capture pairs at repeat count 2, control `ccc970116`
+against candidate `2dd643995`, CPython 3.14.4, py-spy 0.4.2 at 100 Hz:
+
+| pair | control `target` / `any` | control anchor | candidate `target` / `any` | candidate anchor |
+| ---- | ------------------------ | -------------- | -------------------------- | ---------------- |
+| 1    | 1,899 / 1,899            | 21,572         | 0 / 0                      | 19,346           |
+| 2    | 1,887 / 1,887            | 21,425         | 0 / 0                      | 18,217           |
+| 3    | 1,964 / 1,964            | 22,591         | 0 / 0                      | 19,675           |
+
+In every control the location-specific and name-only weights agree and no
+target sample falls outside the anchor, so the detector is reachable only
+through `emit_line`. Every candidate reports zero on both weights while its
+anchor clears the 14,000 floor by at least 4,217 samples, so the zero is an
+observed absence. The census exits 1 for each control and 0 for each candidate.
+
+*Wall time.* Six load-admitted ABBA pairs of the unprofiled `cb` scenario give
+ratios 0.9203, 0.9529, 1.0661, 0.9064, 0.9243, and 0.9560, a geometric mean of
+0.9529, and a 10,000-resample bootstrap 95% interval of [0.9199, 1.0001] (seed
+20261105). The upper bound is 1.0001 against the 1.05 tolerance. The profiled
+`cb` scenario, three paired captures, moved from 413.4 s to 390.3 s at the
+median (−5.59%). Both readings are consistent with removing work from the
+per-line path; neither supports a slowdown.
+
+*Microbenchmark.* The `observe-dispatch` group dispatches 1,000 events per
+call. Across four runs with alternating order, a hook that returns `None` fell
+from a median-of-medians 385.91 µs to 113.92 µs per 1,000 dispatches, a 3.39x
+reduction or about 272 ns per event, while an `async def` hook was unchanged at
+0.978. The async path is `asyncio.Task` creation, which this change does not
+touch.
+
+*Construction share.* The 5.2.1 classifier re-run on the same stacks moved from
+a 30.7670% control median to 33.0662% candidate median, a rise of 2.2992
+points. This is the metric's documented inversion when work outside the counted
+constructor is removed, and the rise is larger than 5.2.1's 0.9686-point
+forecast because the forecast counted the detector's leaf frames only while the
+denominator loses every stack that reached it, including the
+`abc.__instancecheck__` work beneath. 5.2.1's gate is not 5.2.2's to pass, and
+this plan does not claim it.
+
+*Retrospective.* Two things dominated the effort. The first was measurement,
+not code: this host's shared load made an unprofiled pair admissible only
+inside short calm windows, and the first two collections — plus a third that
+waited for calm before each pair — had to be discarded because a linker burst
+inside a run measures contention rather than the workload. A driver defect that
+sent its diagnostic line to standard output masked this for one pass by making
+`awk` compare a timestamp's year against the load ceiling; writing diagnostics
+to standard error and keeping each attempt's artefacts fixed it. The lesson is
+that a load gate needs its own evidence trail, which is why
+`timing-attempts.tsv` and `load-samples.json` are committed beside the accepted
+numbers. The second was scope: the CodeScene follow-ups in EP-M2 changed the
+dispatcher's shape but not its behaviour, and folding the two failure handlers
+into one removed a complexity warning without adding hot-path work.
+
+The change itself stayed small because the decision that made it safe was
+established before any code: `type(result) is types.CoroutineType` is the first
+test `inspect.isawaitable` makes, so the fast path cannot disagree with the
+slow one for that shape, and the remaining shapes still reach the original
+call. No supported hook shape changed behaviour, which the red tests in EP-M1
+and the behaviour rows pin.
 
 ## Context and orientation
 
