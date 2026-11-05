@@ -1,11 +1,15 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
-Status: APPROVED — proceed as written within the stated tolerances.
+Status: IMPLEMENTED — milestones M1–M3 complete; final gate bundle and PR
+review pending.
 
-Rebased on `origin/main` at `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` on
-2026-10-24. Issues #90, #124, and #127 are closed; their merged work is
-recorded under [Conformance basis](#conformance-basis). Roadmap 6.1.2 remains
-open.
+Implemented on branch `6-1-2-boundary-proptest-parity`, which sits directly on
+`origin/main` at `e170f908f2a7b4187cc321296a9029e621169b07` with no rebase
+required. Issues #90, #124, and #127 are closed; their merged work is recorded
+under [Conformance basis](#conformance-basis). The implementation adds the
+extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
+the supporting documentation. Roadmap 6.1.2 is checked once the implementation
+is accepted; final validation and review are pending.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -30,11 +34,11 @@ generated domain; it is not an exhaustive proof over all possible inputs.
 
 ## Constraints
 
-Implementation requires explicit approval of this plan. The planning pull
-request leaves roadmap 6.1.2 unchecked. Its post-rebase validation repairs
-isolate existing checker tests from ancestor project configuration and
-synchronize native lifecycle fixtures before their short timeout begins. They
-do not implement stream-boundary parity or change production code.
+Implementation of this plan is approved. Roadmap 6.1.2 is checked once that
+implementation is accepted. The plan's earlier validation repairs isolate
+existing checker tests from ancestor project configuration and synchronize
+native lifecycle fixtures before their short timeout begins; they do not
+implement stream-boundary parity or change production code.
 
 Keep production dispatch, public signatures, Python fallback, observation
 channels, and error policy unchanged. Preserve the completed 6.1.1 conversion
@@ -508,19 +512,30 @@ were corrected to use that manifest and all passed during replay.
 ## Outcomes & retrospective
 
 The plan, six-perspective expert review, and original documentation validation
-are complete. Draft [PR #619](https://github.com/leynos/cuprum/pull/619)
-publishes the approved plan on `6-1-2-boundary-proptest-parity`. The merged
-implementation PRs for issues #90, #124, and #127 closed those issues. M1 and
-the original M2 candidate passed their recorded acceptance. On 2026-11-03, this
-branch was rebased onto `origin/main` at
-`7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; the replayed range-diff maps all
-eight commits after two documented conflict resolutions. The first
-rebase-candidate `make test` exposed the stale lifecycle-helper keyword, which
-was corrected; all four affected cases pass in a focused run. The full gate
-sequence on the corrected rebase candidate is pending. Windows consume support
-and cross-platform parity are now explicitly authorized, but M3 implementation
-and acceptance remain incomplete. The roadmap task remains open, and no speedup
-or production-dispatch change is claimed.
+are complete. [PR #619](https://github.com/leynos/cuprum/pull/619) carries both
+the approved plan and the implementation on `6-1-2-boundary-proptest-parity`.
+The merged implementation PRs for issues #90, #124, and #127 closed those
+issues.
+
+M1, M2, and M3 are implemented. The branch adds a bridge that runs the compiled
+PyO3 consume entry point against an independent Python consumer, a `proptest`
+suite covering malformed UTF-8, buffer-boundary straddles, and payloads around
+one mebibyte with shrinking and committed regression persistence, curated
+replay seeds, and the Windows CRT descriptor boundary in which Python
+duplicates the caller's descriptor and sets only the duplicate to binary mode.
+Production dispatch is unchanged: `rust_consume_stream` is not activated, no
+speedup is claimed, and phase 6's separate 20% wall-time gate is untouched. The
+parity evidence establishes the stated generated domain, not exhaustive proof
+over all inputs.
+
+Three full-bundle iterations found defects that no focused run could see: nine
+`ty` diagnostics from Windows-only members reaching POSIX stubs, a
+wheel-manifest snapshot missing the newly shipped `cuprum/_streams_windows.py`,
+and an `interrogate` failure caused by two undocumented helper `__init__`
+methods. All are repaired. The `interrogate` failure is worth remembering: the
+six pre-existing misses on `main` round to a passing `100.0%`, and only this
+branch's added denominator pressure exposed them. Roadmap 6.1.2 is checked
+after the implementation is accepted, not before.
 
 ## Context and orientation
 
