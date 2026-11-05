@@ -55,6 +55,21 @@ def test_run_homes_receive_current_caller_settings_but_never_credentials(
     )
 
 
+def test_a_snapshot_credential_is_removed_from_the_run_home(tmp_path: Path) -> None:
+    """An older snapshot carrying credentials must not authenticate a run."""
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / "credentials.toml").write_text(
+        "token = 'stale-token'\n", encoding="utf-8"
+    )
+
+    run_home = cargo_state.create_run_cargo_home(snapshot, tmp_path / "run")
+
+    assert not (run_home / "credentials.toml").exists(), (
+        "a run home must never retain credentials carried by an older snapshot"
+    )
+
+
 def test_copied_workspace_dependencies_are_fetched_locked_before_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

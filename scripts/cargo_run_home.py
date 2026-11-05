@@ -12,6 +12,7 @@ from scripts.cargo_cache_tree import (
     copy_cargo_settings,
     make_tree_writable,
     reject_tree_symlinks,
+    remove_cargo_credentials,
     remove_cargo_settings,
 )
 from scripts.cargo_state_errors import CargoStatePreparationError
@@ -62,9 +63,10 @@ def create_run_cargo_home(
     run_home = _prepare_run_home(run_root, CargoStatePreparationError)
     try:
         shutil.copytree(snapshot, run_home)
-        # Snapshots are read-only, and an older one may still carry settings from
-        # before published snapshots excluded them. Restore write access before
-        # dropping any copied settings, then apply the caller's current ones.
+        # Snapshots are read-only, and an older one may still carry settings or
+        # credentials from before published snapshots excluded them. Restore
+        # write access before dropping them, then apply the caller's current
+        # settings.
         make_tree_writable(run_home)
     except BaseException:
         # copytree mirrors the snapshot's read-only modes even when it fails
@@ -76,6 +78,7 @@ def create_run_cargo_home(
         shutil.rmtree(run_home, ignore_errors=True)
         raise
     remove_cargo_settings(run_home)
+    remove_cargo_credentials(run_home)
     if source_cargo_home is not None:
         copy_cargo_settings(
             source_cargo_home,
