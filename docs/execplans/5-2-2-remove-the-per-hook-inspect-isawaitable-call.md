@@ -215,7 +215,14 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   files, and the CLI was smoke-tested end to end. Documented under "Profiling
   harness overview" in `docs/developers-guide.md`. Two defects in the draft
   were found by the tests and fixed (see `Surprises & discoveries`).
-- [ ] EP-M4: dispatch microbenchmark added.
+- [x] (2026-11-05) EP-M4: the `observe-dispatch` group in
+  `benchmarks/test_stream_microbenchmarks.py` dispatches 1,000 events per
+  benchmark call, so the reported mean amortizes pytest-benchmark's loop entry
+  rather than measuring it, and covers a hook that returns `None` and an
+  `async def` hook. `make benchmark-micro` exits 0 with 4 passed. On this host
+  the `None`-returning hook costs 115.8 µs and the `async def` hook 4.65 ms per
+  1,000-dispatch batch, i.e. about 116 ns and 4.7 µs per event; the async
+  figure is task creation, matching the D8 estimate.
 - [ ] EP-M5: profiler and timing evidence collected; evidence document
   written.
 - [ ] EP-M6: documentation, changelog, and roadmap updated; item marked done.
