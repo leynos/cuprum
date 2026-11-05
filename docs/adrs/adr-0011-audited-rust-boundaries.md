@@ -253,3 +253,30 @@ guarantee the synchronous, non-overlapped property. Python's
 Python fallback remains in place until a separately designed overlapped-I/O
 adapter exists. The `cap-std` file and handle adapters remain trusted
 dependencies, not verifier-proved implementations.
+
+## Addendum (2026-11-03): Windows CRT consume boundary
+
+The approved stream-boundary parity work adds a separate Windows consume
+capability for CRT file descriptors. The PyO3 integration validates the
+descriptor as a signed CRT `int`, borrows it for the synchronous operation, and
+uses `_read` rather than treating its numeric value as a Win32 `HANDLE`. The
+`cuprum-streams` crate continues to own decoding and error policy; the unsafe
+borrow and audited CRT call remain in `cuprum-native-io`.
+
+The Python helper duplicates a caller-owned CRT descriptor, puts that duplicate
+in binary mode, and closes it in `finally`. `_dup` shares the open file
+position, which is appropriate for a consume operation, while the mode change
+applies only to the temporary descriptor. Direct extension callers must supply
+a valid synchronous CRT descriptor already in binary mode and keep it open
+until the call returns. This does not establish that an arbitrary descriptor
+wraps a synchronous handle, and it does not make the overlapped handles from
+asyncio's Windows proactor suitable for `_read`. Production consume dispatch
+therefore remains on the Python path pending ADR-002 Phase 2. The
+platform-specific helpers are kept in `cuprum/_streams_windows.py` and are used
+by the extension shim's Windows setup and cleanup path, not as a general
+descriptor-conversion utility.
+
+The CRT adapter clears stale CRT and Win32 error slots before `_read`, then
+prefers the current `_doserrno` value when constructing a Windows `OSError`.
+This keeps error provenance inside the audited native boundary and prevents an
+unrelated earlier CRT failure from supplying the reported `winerror`.

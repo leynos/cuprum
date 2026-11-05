@@ -16,6 +16,8 @@ import typing as typ
 import pytest
 from pytest_bdd import given, scenario, then, when
 
+from cuprum.unittests._rust_stream_test_support import _set_binary_mode
+from tests.helpers.consume_boundary_oracle import _OracleMetadata, check_payload
 from tests.helpers.stream_pipes import (
     _pipe_pair,
     _read_all,
@@ -28,9 +30,9 @@ if typ.TYPE_CHECKING:
     from types import ModuleType
 
 
-pytestmark = pytest.mark.skipif(
+_pump_windows_only = pytest.mark.skipif(
     os.name == "nt",
-    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
+    reason="pump still requires a synchronous handle capability",
 )
 
 
@@ -58,6 +60,7 @@ def _expose_rust_stream_function(
     )
 
 
+@_pump_windows_only
 @scenario(
     "../features/rust_streams.feature",
     "Rust pump stream transfers data between pipes",
@@ -92,6 +95,7 @@ def test_rust_consume_stream_behaviour() -> None:
     """
 
 
+@_pump_windows_only
 @scenario(
     "../features/rust_streams.feature",
     "Rust pump stream handles large pipe transfers",
@@ -110,6 +114,14 @@ def test_rust_pump_stream_large_transfer_behaviour() -> None:
     -------
     None
     """
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "A large malformed stream preserves Python replacement decoding",
+)
+def test_rust_consume_stream_large_boundary_behaviour() -> None:
+    """Compare Python, wrapper, direct, and subprocess pipe captures."""
 
 
 @given("the Rust pump stream is available", target_fixture="rust_pump")
@@ -146,6 +158,74 @@ def given_rust_consume(
         Function that consumes a stream from a file descriptor.
     """
     return _expose_rust_stream_function(rust_streams, "rust_consume_stream")
+
+
+@given(
+    "a payload of 1048577 bytes ending with an incomplete UTF-8 sequence",
+    target_fixture="large_malformed_payload",
+)
+def given_large_malformed_payload() -> bytes:
+    """Build the exact-size repeated-prefix payload with an incomplete tail."""
+    length = 1_048_577
+    tail = b"\xe2\x98"
+    pattern = b"cuprum-boundary/"
+    prefix_length = length - len(tail)
+    prefix = (pattern * ((prefix_length + len(pattern) - 1) // len(pattern)))[
+        :prefix_length
+    ]
+    return prefix + tail
+
+
+@when(
+    "the native and Python consumers capture the complete payload",
+    target_fixture="large_capture_evidence",
+)
+def when_compare_large_consumers(
+    rust_streams: ModuleType,
+    large_malformed_payload: bytes,
+) -> _OracleMetadata:
+    """Run all boundary consumers, including a live subprocess pipe producer."""
+    # The ``rust_streams`` fixture already skips when the extension is absent,
+    # so reaching here proves the compiled backend is loaded.
+    del rust_streams
+    return check_payload(large_malformed_payload, buffer_size=65_535)
+
+
+@then("both captures equal Python UTF-8 replacement decoding")
+def then_large_captures_match_python(
+    large_malformed_payload: bytes,
+    large_capture_evidence: _OracleMetadata,
+) -> None:
+    """Assert each native capture matches Python's independent replacement."""
+    expected = large_malformed_payload.decode("utf-8", errors="replace")
+    assert len(large_capture_evidence.native_captures) == 6, (
+        "wrapper, direct-native, and subprocess consumers must all run"
+    )
+    assert all(
+        capture == expected for capture in large_capture_evidence.native_captures
+    ), "every native capture must match Python's UTF-8 replacement output"
+
+
+@then("omitted and explicit default buffers produce the same capture")
+def then_large_buffer_defaults_match(
+    large_capture_evidence: _OracleMetadata,
+) -> None:
+    """Assert wrapper and direct-native omitted defaults match explicit ones."""
+    captures = large_capture_evidence.native_captures
+    assert captures[0] == captures[1], "wrapper defaults must produce the same capture"
+    assert captures[3] == captures[4], (
+        "direct-native defaults must produce the same capture"
+    )
+
+
+@then("the caller's reader descriptor remains open")
+def then_large_readers_remain_open(
+    large_capture_evidence: _OracleMetadata,
+) -> None:
+    """Assert all borrowed reader descriptors survived their native calls."""
+    assert large_capture_evidence.reader_open_checks == len(
+        large_capture_evidence.native_captures
+    ), "every native consumer must leave its caller-owned reader open"
 
 
 @when(
@@ -203,6 +283,7 @@ def when_consume_invalid_utf8(
     read_fd, write_fd = os.pipe()
     open_write_fd: int | None = write_fd
     try:
+        _set_binary_mode(write_fd)
         os.write(write_fd, payload)
         _safe_close(write_fd)
         open_write_fd = None

@@ -17,5 +17,6 @@ rstest = "0.27.0"
 workspace = true
 
 [target.'cfg(windows)'.dependencies]
+libc = "0.2.186"
 cap-std = "4.0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Pipes"] }
