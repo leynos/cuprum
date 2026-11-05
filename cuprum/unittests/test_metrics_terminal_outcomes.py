@@ -90,6 +90,48 @@ def test_settled_records_category_failure_and_duration(
     )
 
 
+@pytest.mark.parametrize("operation", ["drain", "terminate", "capture_cleanup"])
+def test_teardown_error_counter_carries_the_failed_operation(
+    operation: str,
+) -> None:
+    """A teardown failure records which cleanup step failed.
+
+    The category is what makes the counter actionable: a drain that failed, a
+    child that could not be terminated, and a spill file that could not be
+    removed need different responses. Every emitter passes a literal category,
+    so the label stays bounded.
+    """
+    operations = _metric_operations(
+        _make_exec_event(
+            phase="teardown_error",
+            overrides={"operation": operation, "error_type": "OSError"},
+        )
+    )
+
+    assert operations == (
+        _CounterOp(
+            "cuprum_teardown_errors_total",
+            1.0,
+            {"operation": operation},
+        ),
+    ), f"teardown_error must name the failed operation, got {operations!r}"
+
+
+def test_teardown_error_without_an_operation_stays_unlabelled() -> None:
+    """A teardown error that names no step must not invent one."""
+    operations = _metric_operations(
+        _make_exec_event(
+            phase="teardown_error",
+            overrides={"operation": None, "error_type": "OSError"},
+        )
+    )
+
+    assert operations == (_CounterOp("cuprum_teardown_errors_total", 1.0, {}),), (
+        f"an operation-less teardown error must keep the shared label set, "
+        f"got {operations!r}"
+    )
+
+
 def test_legacy_exit_operations_keep_failure_duration_and_resource_projection() -> None:
     """Direct users of the old helper retain its former operation tuple."""
     event = _make_exec_event(

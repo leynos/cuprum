@@ -2962,8 +2962,11 @@ The hook collects:
 - `cuprum_stdio_errors_total`: Counter of standard-stream boundary failures,
   labelled by `error_category`
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
-- `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
-  during cleanup
+- `cuprum_teardown_errors_total`: Counter of teardown failures, labelled by
+  the bounded `operation` naming the cleanup step that failed — `drain` for a
+  stream-consumer drain, or one of `terminate`, `task_settle`, `stdin_close`,
+  `output_discard`, `transport_close`, and `capture_cleanup` for a reclaim of a
+  child whose startup failed after its spawn
 - `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn

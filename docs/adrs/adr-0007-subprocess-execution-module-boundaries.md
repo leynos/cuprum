@@ -1512,12 +1512,21 @@ started; release the pipes by closing stdin, discarding stdout and stderr to
 end-of-file, and closing the output transports; and finally release the capture
 accumulators the setup had resolved, which it receives as a separate `captures`
 argument so a route that never reached its stream wiring can omit them. Each
-step is wrapped in its own `contextlib.suppress(Exception)`, so an ordinary
+step catches its own ordinary failures, reports them, and then carries on, so a
 cleanup failure neither aborts a later step nor replaces the error the caller
-is already unwinding. A cancellation is not suppressed; it propagates only once
-the whole sequence has completed, which is exactly what the one shield buys —
-three sequential shields would let a cancellation cut the reclaim short between
-steps.
+is already unwinding. Reporting uses the two diagnostic channels this package
+already has: a structured `cuprum.reclaim` warning naming the execution, the
+child, and the failed step, and a `teardown_error` observe event carrying the
+same category. A reclaim that leaves a child, a descriptor, or a spill file
+behind is therefore visible to an operator instead of being silently discarded.
+The categories are literals — `terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, and `capture_cleanup` — which is what lets
+`cuprum_teardown_errors_total` label them as `operation` without unbounded
+cardinality. Reporting is itself best-effort, because a misconfigured log
+handler must not replace the error being described. A cancellation is not
+suppressed; it propagates only once the whole sequence has completed, which is
+exactly what the one shield buys — three sequential shields would let a
+cancellation cut the reclaim short between steps.
 
 The order is not incidental. The child is stopped first because both drain
 policies wait for their consumers to reach end-of-file, and a live child can
@@ -1555,7 +1564,10 @@ that module owns generic teardown primitives — `_shielded_cleanup`,
 `_terminate_all_shielded` — while this one composes them into one
 route-specific sequence. The import direction follows: this module imports the
 lifecycle primitives, the stream drain's EOF grace, and `_TeardownPolicy`, and
-the lifecycle module knows nothing about it.
+the lifecycle module knows nothing about it. The reporting helpers are the one
+piece that did not stay: adding them pushed the reclaim module past the
+400-line ceiling, so they live in `cuprum/_reclaim_reporting.py`, which the
+reclaim imports and which knows nothing about the sequence it reports on.
 
 Three guard sites call it. `_start_owned_process` wraps the `start` emission,
 and `_subprocess_stream_run` and `_subprocess_direct_run` wrap their post-spawn

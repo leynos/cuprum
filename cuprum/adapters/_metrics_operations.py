@@ -322,6 +322,20 @@ def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
         # above claims the metric name has one definition, and hardcoding it
         # here would give it two that could drift apart.
         return (_CounterOp(_PHASE_COUNTERS["stdio_error"], 1.0, labels),)
+    if phase == "teardown_error" and event.operation is not None:
+        # The operation names which cleanup step failed, which is what makes
+        # the counter actionable: a failed drain, a child that could not be
+        # terminated, and a descriptor that could not be released are
+        # different faults with different responses. Every emitter passes a
+        # literal, so the label stays bounded — see ``_ReclaimOperation`` and
+        # the single ``drain`` category the timeout reporter uses.
+        return (
+            _CounterOp(
+                _PHASE_COUNTERS[phase],
+                1.0,
+                {"operation": str(event.operation)},
+            ),
+        )
     counter_name = _PHASE_COUNTERS.get(phase)
     if counter_name is None:
         raise _UnhandledMetricsPhaseError(phase)
