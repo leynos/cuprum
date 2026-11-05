@@ -153,6 +153,7 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
         """Capture the arguments the boundary hands to the command client."""
 
         def __init__(self, *arguments: str) -> None:
+            """Store the arguments for the later assertion."""
             observed["arguments"] = arguments
 
         def run_sync(self, *, context: ExecutionContext) -> CommandResult:

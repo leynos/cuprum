@@ -235,8 +235,8 @@ def test_artefact_path_is_a_read_only_query(tmp_path: Path) -> None:
     with pytest.raises(ArtefactNotBuiltError, match="uv wheel"):
         factory.artefact_path("uv", "wheel")
 
-    assert filesystem.calls == [], "a lookup must not touch the filesystem"
-    assert frontend.requests == [], "a lookup must not run the frontend"
+    assert not filesystem.calls, "a lookup must not touch the filesystem"
+    assert not frontend.requests, "a lookup must not run the frontend"
     assert clock.reads == 0, "a lookup must not read the clock"
     assert not (tmp_path / "artefacts").exists(), "a lookup must not create directories"
 
