@@ -2807,7 +2807,12 @@ the drain settles. `cleanup` belongs to the run's teardown instead:
 assembly and by `_reconcile_run_tasks` after a teardown drain, and it closes
 the handles the drain results carry before calling `_cleanup_capture_sinks` on
 the accumulators. That second call is the only path reaching a drain that was
-cancelled mid-await and so never finalized. The two heap-backed accumulators
+cancelled mid-await and so never finalized. `_cleanup_capture_sinks` in
+`cuprum/_capture_cleanup.py` gives every non-`None` sink its own turn: it
+gathers every `sink.cleanup()` with `return_exceptions=True`, then re-raises
+the first collected failure once all attempts have finished. A sink that cannot
+remove its own file therefore cannot strand another stream's file, and the
+caller still learns that a file may remain. The two heap-backed accumulators
 answer without suspending, so awaiting costs one coroutine step per chunk; the
 file-backed one spills through `cuprum._capture_spill_io`, whose `_SpillIo`
 serializes that accumulator's blocking calls onto a worker thread so the loop
@@ -8120,10 +8125,10 @@ consume, and leaves result construction to `_build_command_result` in
 `_subprocess_outcome.py`, which it re-exports. It also re-exports
 `_build_stream_config` and `_spawn_stream_consumers`, so a change in *which*
 streams a run consumes is an orchestration change and belongs here, while a
-change to how one `_StreamConfig` is assembled or how its consumer task is
-created belongs in `_subprocess_streams`. The split is what keeps the execution
-module under the Pylint module ceiling now that the idle-heartbeat wiring
-reaches into the stream configs; see the
+change to how one `_StreamConfig` is assembled belongs in `_stream_config`, and
+a change to how its consumer task is created belongs in `_subprocess_streams`.
+The split is what keeps the execution module under the Pylint module ceiling
+now that the idle-heartbeat wiring reaches into the stream configs; see the
 [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
@@ -8262,17 +8267,21 @@ unchanged. See the
 2026-10-11.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
+`_create_stream_callback` builds the per-line observability hook,
+`_prepare_stream_spawn` resolves the stdout and stderr configs before any
+consumer starts, and `_spawn_stream_consumers` creates both reader tasks. The
+config construction those consumers use lives in `cuprum/_stream_config.py`:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
 presentation-sink session's log first, so mirrored output lands inside the
 adapter's framing (the GitHub Actions group, say) in the order the adapter
 received it, then the execution context's configured sink, then the process's
-own stream — `_create_stream_callback` builds the per-line observability hook,
-`_build_stream_config` assembles the stdout `_StreamConfig`, and
-`_spawn_stream_consumers` derives the stderr config from it and starts both
-reader tasks. It was split out of `_subprocess_execution` to keep both modules
-within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
-so callers and the tests that monkeypatch them by module path resolve the same
-names as before.
+own stream — `_build_stream_config` assembles the stdout `_StreamConfig`, and
+`_resolve_stream_configs` derives the stderr config from it.
+`cuprum/_subprocess_streams.py` re-exports all three config helpers, and
+`cuprum/_subprocess_execution.py` re-exports `_build_stream_config`, so callers
+and the tests that monkeypatch them by module path resolve the same names as
+before. `cuprum/_subprocess_streams.py` was split out of
+`_subprocess_execution` to keep both modules within the 400-line ceiling.
 
 `cuprum/_subprocess_outcome.py` owns what a settled run reports:
 `_DirectCompletion` is the record the waiting helpers produce, and
@@ -8306,7 +8315,8 @@ supplied and otherwise delegates to the bounded `_await_eof_grace`;
 `_settle_consumers` is the single optional settlement boundary that sets the
 discard event before cancelling pending readers.
 `_build_stream_config(execution, discard_on_cancel)` (in
-`cuprum/_subprocess_streams.py`) passes that shared event into each stream's
+`cuprum/_stream_config.py`, re-exported by `cuprum/_subprocess_streams.py` and
+`cuprum/_subprocess_execution.py`) passes that shared event into each stream's
 `_StreamConfig`, so timeout capture can hand back the bytes buffered so far —
 decoded for a text run, raw for a byte-exact one — while cancellation and
 failure cleanup can discard it. It was split out of `_subprocess_execution` so
@@ -8950,8 +8960,14 @@ is aggregated with the active error into a `BaseExceptionGroup` rather than
 replacing it, so the primary error is preserved within the aggregate. The
 metrics adapter counts timeout and teardown phases as `cuprum_timeouts_total`
 and `cuprum_teardown_errors_total`, and counts `capture_eof_grace_expired` as
-`cuprum_capture_eof_grace_expired_total`; these counters use only the `program`
-and `project` labels. The tracing adapter records them as ancillary span events
+`cuprum_capture_eof_grace_expired_total`. Those counters use the `program` and
+`project` labels; `cuprum_teardown_errors_total` additionally carries an
+`operation` label naming the failed cleanup step. Every emitter passes a
+literal, so the extra series stay bounded: `drain` from the timeout reporter,
+and the `_ReclaimOperation` values (`terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, `capture_cleanup`) from the startup
+reclaim. A teardown error that names no step keeps the shared label set rather
+than inventing one. The tracing adapter records them as ancillary span events
 and leaves the span open until `settled` closes it.
 
 The parallel `cuprum.timeout` log records use the same field names under the
