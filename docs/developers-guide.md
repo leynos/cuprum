@@ -815,7 +815,9 @@ skips. Three details are load-bearing:
 `make test` still runs both suites, which is what a contributor wants locally.
 CI calls the halves separately: `make test-python` in the matrix, and the Rust
 suite only through the coverage action. `make test-rust` exists for running the
-Rust half alone.
+Rust half alone. That half prepares Cargo state before it starts; see
+[Cargo cache snapshots](#cargo-cache-snapshots) and
+[ADR-0029](adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md).
 
 Two jobs survive that look like duplicates and are not:
 

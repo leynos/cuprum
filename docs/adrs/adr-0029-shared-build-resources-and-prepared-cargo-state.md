@@ -129,10 +129,10 @@ directory, Cargo home, exit code, elapsed time, and captured standard output
 and error. Values from environment names containing `TOKEN`, `SECRET`,
 `PASSWORD`, `CREDENTIAL`, or `AUTH` are replaced with `<redacted>`; values
 shorter than eight characters are left alone because they cannot be
-distinguished from ordinary words. The file sits beside `timings.jsonl` in the
-run root. The boundary harnesses' run roots are archived by CI in
-`rust-boundaries.yml`, so a failed preparation can be read alongside the steps
-that preceded it.
+distinguished from ordinary words. Where a preparation has a diagnostics sink,
+the file sits beside `timings.jsonl` in the run root. The boundary harnesses'
+run roots are archived by CI in `rust-boundaries.yml`, so a failed preparation
+can be read alongside the steps that preceded it.
 
 ### Finite end-to-end watchdogs
 
