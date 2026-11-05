@@ -608,11 +608,14 @@ external documentation gaps, `logisphere-experts` for design review, and
 ## Conformance basis
 
 The original implementation-planning baseline was fetched `origin/main` at
-commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24). The branch was
-rebased again on 2026-11-03 onto `origin/main` at
-`7d56d0be8637dce2e38f99919c57bd4c7af0fd27`; local recovery refs retain the
-pre-rebase head, base, target, and remote head. The original plan was drafted
-from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate
+commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
+repeatedly as `main` advanced. The implementation branch's current base, and
+the one this document's conformance claims are made against, is `origin/main`
+at `e170f908f2a7b4187cc321296a9029e621169b07`. The branch sits directly on it
+with no open rebase. Earlier bases — `7d56d0be8` on 2026-11-03 and `40d56d69f`
+before it — are superseded and kept only as history. Local recovery refs retain
+the pre-rebase head, base, target, and remote head. The original plan was
+drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate
 task-specific terms-of-reference document. The governing documents at the
 latest baseline are `docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust
 extension strategy), `docs/adr-002-additional-rust-components.md` (decoding and
@@ -630,11 +633,11 @@ fixed `drain_reader` EINTR handling. Issue #127 was implemented by merged PR
 `1716f08f89312babd0df14c3396c53105c65531a`), which documents and tests
 `rust_consume_stream` as implemented but not integrated. All three issues are
 closed, their implementation PRs are merged, and the listed commits are
-reachable from this baseline. The work in 6.1.2 remains: Rust proptest through
-the compiled PyO3 boundary, broader generated inputs around 1 MiB, committed
-replay evidence, and confirmation of the current extension-suite error
-boundary. This plan PR does not close those issues a second time or mark the
-roadmap task complete.
+reachable from this baseline. The remaining 6.1.2 work — Rust `proptest`
+through the compiled PyO3 boundary, broader generated inputs around 1 MiB,
+committed replay evidence, and confirmation of the extension-suite error
+boundary — is implemented on this branch. This work does not close those issues
+a second time.
 
 Trace the important requirements as follows:
 
