@@ -224,21 +224,25 @@ ownership and error contracts, stop and report the exact incompatibility.
   the source file back under the 400-line cap. Typecheck, Ruff, Pylint, the
   maturin snapshot test, and 143 focused tests (6 skipped as Windows-only)
   pass. The full gate bundle must be re-run against the repaired commit.
-- [x] (2026-11-05) The re-run against `58c87c49d` passed `make check-fmt`,
-  `make test` (1,147 s), and `make typecheck` (the nine diagnostics are gone).
-  `make lint` then failed its `interrogate` leaf at 99.9% against a 100%
-  threshold. The two misses were this branch's own
-  `tests/helpers/consume_boundary_subprocess.py` `__init__` methods, now
-  documented. The remaining six misses are **inherited**: the same six appear,
-  with identical counts and node names, when `interrogate` runs on a pristine
-  `e170f908f` worktree, which is exactly the current `origin/main` and this
-  branch's merge base. They are a nested `collect()` in
-  `test_safe_cmd_lines_hook_binding.py`, a nested `call_inside_loop`, a nested
-  `synthetic_job_environment`, and inner `__init__`s in two other test modules.
-  So the `interrogate` leaf of `make lint` is already red on `main` and this
-  branch neither caused nor widened that red. Recorded rather than silently
-  fixed: repairing unrelated upstream test modules belongs in its own change,
-  and doing it here would obscure which defects this branch introduced.
+- [x] (2026-11-05) The re-run against `58c87c49d` passed `make test` (1,147 s)
+  and `make typecheck` (the nine diagnostics are gone). `make check-fmt` failed
+  on `mdtablefix` prose wrapping in this plan, and `make lint` failed its
+  `interrogate` leaf at `actual: 99.9%` against a 100% threshold. Both are
+  branch-caused, not inherited. `interrogate` counted 13,154 items with 8
+  missed: the two this branch's `tests/helpers/consume_boundary_subprocess.py`
+  `__init__` methods lacked docstrings, and the other six are pre-existing. The
+  distinction is the rounding boundary, and it is worth stating precisely
+  because an earlier reading of this plan got it backwards. The six inherited
+  misses sit among `origin/main`'s 13,081 items, where they score 99.954% and
+  round to a **passing** 100.0%. This branch raised the miss count to 8 while
+  adding only 73 items, so the ratio fell to 99.939% and the display fell to
+  99.9%. The inherited misses are therefore harmless on their own; it is this
+  branch's added denominator pressure that exposed them. Both branch-owned
+  misses are now documented, and `interrogate` passes at `actual: 100.0%`. The
+  six inherited misses are untouched: repairing unrelated upstream test modules
+  belongs in its own change, and doing it here would obscure which defects this
+  branch introduced. It is also not required, since `interrogate` only fails
+  below the rounded 100.0% display and `main` clears it.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -274,6 +278,19 @@ split's new *test* modules passed while the new *production* module broke the
 manifest. A branch whose only remaining risk is cross-platform or packaging
 behaviour should be gated in full before any review request, because both
 defects are cheap to fix and expensive to discover during PR review.
+
+A percentage gate near its limit is decided by the denominator, not by the
+defect that first draws the eye. `interrogate` is configured for a 100%
+threshold and prints its rating rounded to one decimal, so it fails only below
+99.95%. `origin/main` misses six callables out of 13,081, which is 99.954% and
+rounds to a passing 100.0%. This branch added two more misses but only 73
+items, landing on 99.939% and a failing 99.9%. The correct reading is that the
+inherited misses were never a red gate, and that adding a small number of items
+to a repository already near the rounding boundary can convert a long-standing
+latent defect into a blocker. An earlier draft of this plan asserted the
+opposite — that `main` was already red — by reasoning from the miss count alone
+instead of dividing by the right denominator. Both numbers came from the same
+`interrogate` run, so the check that settles it is arithmetic, not another gate.
 
 Roadmap 6.1.1 is already complete. `RustStreamError` lives in
 `rust/cuprum-rust/src/lib.rs`; `run_stream_operation` in
