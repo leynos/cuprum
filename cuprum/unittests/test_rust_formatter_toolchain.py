@@ -25,8 +25,12 @@ _FORMATTER_FIXTURE_SKIPS = {
 }
 _RUSTFMT_SKIP = "#[rustfmt::skip]"
 _RUSTFMT_SKIP_FINDER = re.compile(re.escape(_RUSTFMT_SKIP))
+# The visibility qualifier is optional: a fixture shared with a sibling test
+# module needs one, and the qualifier says nothing about whether the skip is
+# legitimate. The audited set below, not the signature, is what stays small.
 _RUSTFMT_FIXTURE_SKIP = re.compile(
-    rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\nfn (?P<name>\w+)\b"
+    rf"{re.escape(_RUSTFMT_SKIP)}\n#\[fixture\]\n"
+    r"(?:pub(?:\([^)]*\))?\s+)?fn (?P<name>\w+)\b"
 )
 # A raw string opener such as `r"`, `r#"`, or `r##"`. The captured hash count
 # must be repeated exactly to close the literal, so a quote carrying a
