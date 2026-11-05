@@ -428,7 +428,7 @@ FD-ownership risks).
   - Success: invalid `buffer_size` raises `ValueError` and I/O failures raise
     `OSError`, with the conversion centralized rather than scattered across call
     sites.
-- [ ] 6.1.2. Add proptest parity and error-mapping coverage at the boundary.
+- [x] 6.1.2. Add proptest parity and error-mapping coverage at the boundary.
   - Requires 6.1.1.
   - Cover empty, ASCII, and 2-, 3-, and 4-byte UTF-8 payloads, invalid bytes
     replaced with U+FFFD, and payloads around 1 MiB, plus default-versus-explicit
