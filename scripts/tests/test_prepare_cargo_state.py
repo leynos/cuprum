@@ -29,78 +29,76 @@ def _run_records(run_root: Path) -> list[dict[str, str | float]]:
     ]
 
 
-def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Snapshot preparation precedes run-home creation and both are reported."""
-    run_root = tmp_path / "run"
-    run_root.mkdir()
-    repository = tmp_path / "repository"
-    snapshot_root = tmp_path / "snapshots"
-    snapshot = tmp_path / "snapshot-cache"
-    caller_home = tmp_path / "caller-cargo-home"
-    prepared = SimpleNamespace(
-        path=snapshot,
-        key="key-0001",
-        cargo_version=STUB_CARGO_VERSION,
-        source_cargo_home=caller_home,
-        reused=True,
-    )
-    calls: list[str] = []
+class _PreparationRecorder:
+    """Check that one preparation receives and reports the controlled run."""
+
+    def __init__(
+        self,
+        *,
+        run_root: Path,
+        repository: Path,
+        snapshot_root: Path,
+        caller_home: Path,
+    ) -> None:
+        """Store the controlled roots and the caller's Cargo configuration."""
+        self.run_root = run_root
+        self.repository = repository
+        self.snapshot_root = snapshot_root
+        self.caller_home = caller_home
+        self.calls: list[str] = []
+        self.prepared = SimpleNamespace(
+            path=snapshot_root / "snapshot-cache",
+            key="key-0001",
+            cargo_version=STUB_CARGO_VERSION,
+            source_cargo_home=caller_home,
+            reused=True,
+        )
 
     def prepare_snapshot(
+        self,
         repository_root: Path,
         requested_root: Path,
         *,
         context: object,
     ) -> SimpleNamespace:
-        """Record snapshot preparation for the requested repository."""
-        assert (repository_root, requested_root) == (repository, snapshot_root), (
-            "snapshot preparation must receive the requested repository and root"
-        )
+        """Check the requested roots and report the prepared snapshot."""
+        assert (repository_root, requested_root) == (
+            self.repository,
+            self.snapshot_root,
+        ), "snapshot preparation must receive the requested repository and root"
         assert context == prepare_cargo_state.PreparationContext(
-            diagnostics_path=run_root / "cargo-diagnostics.jsonl"
+            diagnostics_path=self.run_root / "cargo-diagnostics.jsonl"
         ), "preparation must retain its diagnostics in the run root"
-        calls.append("snapshot")
-        return prepared
+        self.calls.append("snapshot")
+        return self.prepared
 
     def create_home(
+        self,
         snapshot_path: Path,
         requested_run_root: Path,
         *,
         source_cargo_home: Path,
     ) -> Path:
-        """Record run-home creation and report the home path."""
-        assert snapshot_path == snapshot, (
+        """Check the copied snapshot and report the run home path."""
+        assert snapshot_path == self.prepared.path, (
             "the run home must copy the snapshot preparation published"
         )
-        assert requested_run_root == run_root, (
+        assert requested_run_root == self.run_root, (
             "the run home must live in the run root the caller named"
         )
-        assert source_cargo_home == caller_home, (
+        assert source_cargo_home == self.caller_home, (
             "the run home must copy the caller's Cargo configuration"
         )
-        calls.append("run-home")
+        self.calls.append("run-home")
         return requested_run_root / "cargo-home"
 
-    monkeypatch.setattr(prepare_cargo_state, "prepare_cargo_snapshot", prepare_snapshot)
-    monkeypatch.setattr(prepare_cargo_state, "create_run_cargo_home", create_home)
 
-    prepare_cargo_state.main(run_root, repository, snapshot_root)
-
-    assert calls == ["snapshot", "run-home"], (
-        "the run home must be copied after the snapshot is published"
-    )
-    [record] = _run_records(run_root)
-    assert record["phase"] == "dependency_preparation", (
-        "preparation must be attributable apart from the workload"
-    )
-    assert float(record["seconds"]) >= 0, (
-        "the CLI must record the preparation cost it reports"
-    )
-    metadata = json.loads(capsys.readouterr().out)
+def _assert_reported_metadata(
+    metadata: dict[str, object],
+    record: dict[str, str | float],
+    run_root: Path,
+) -> None:
+    """Check the report names the run-local home and the recorded cost."""
     assert metadata["cargo_home"] == str(run_root / "cargo-home"), (
         "the reported home must be the run-local one"
     )
@@ -116,6 +114,42 @@ def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
     assert metadata["snapshot_reused"] is True, (
         "the report must disclose that the snapshot was reused"
     )
+
+
+def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Snapshot preparation precedes run-home creation and both are reported."""
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    recorder = _PreparationRecorder(
+        run_root=run_root,
+        repository=tmp_path / "repository",
+        snapshot_root=tmp_path / "snapshots",
+        caller_home=tmp_path / "caller-cargo-home",
+    )
+    monkeypatch.setattr(
+        prepare_cargo_state, "prepare_cargo_snapshot", recorder.prepare_snapshot
+    )
+    monkeypatch.setattr(
+        prepare_cargo_state, "create_run_cargo_home", recorder.create_home
+    )
+
+    prepare_cargo_state.main(run_root, recorder.repository, recorder.snapshot_root)
+
+    assert recorder.calls == ["snapshot", "run-home"], (
+        "the run home must be copied after the snapshot is published"
+    )
+    [record] = _run_records(run_root)
+    assert record["phase"] == "dependency_preparation", (
+        "preparation must be attributable apart from the workload"
+    )
+    assert float(record["seconds"]) >= 0, (
+        "the CLI must record the preparation cost it reports"
+    )
+    _assert_reported_metadata(json.loads(capsys.readouterr().out), record, run_root)
 
 
 def _write_stub_cargo(bin_directory: Path) -> Path:
