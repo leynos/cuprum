@@ -208,21 +208,37 @@ ownership and error contracts, stop and report the exact incompatibility.
   deterministic defects that the focused runs could not see. `make typecheck`
   reported nine diagnostics across three files: the Windows-only
   `msvcrt.setmode`, `os.O_TEXT`, and `os.O_BINARY` members, the Windows-only
-  `OSError.winerror` attribute, and `collections.abc.ContextManager`, which does
-  not exist (`contextlib.AbstractContextManager` is the real name). `make test`
-  failed `test_maturin_wheel_build_snapshot` because `cuprum/_streams_windows.py`
-  is a newly shipped module and the wheel-manifest snapshot still listed the
-  split's pre-split file set. The `- cuprum/sh/bytes_entry_points.py` row in
-  that diff is the documented display shift from the inserted line, not a real
-  removal. All are repaired: the Windows-only members now use the repository's
-  established `ty: ignore[unresolved-attribute]` idiom with a reason, the oracle
-  names `contextlib.AbstractContextManager`, and the snapshot lists the new
-  module in sorted position. The Windows text-mode case moved from
+  `OSError.winerror` attribute, and `collections.abc.ContextManager`, which
+  does not exist (`contextlib.AbstractContextManager` is the real name).
+  `make test` failed `test_maturin_wheel_build_snapshot` because
+  `cuprum/_streams_windows.py` is a newly shipped module and the wheel-manifest
+  snapshot still listed the split's pre-split file set. The
+  `- cuprum/sh/bytes_entry_points.py` row in that diff is the documented
+  display shift from the inserted line, not a real removal. All are repaired:
+  the Windows-only members now use the repository's established
+  `ty: ignore[unresolved-attribute]` idiom with a reason, the oracle names
+  `contextlib.AbstractContextManager`, and the snapshot lists the new module in
+  sorted position. The Windows text-mode case moved from
   `test_rust_consume_stream.py` to `test_rust_errno_windows.py`, which already
   owns that boundary; this both colocates the Windows-only contracts and brings
   the source file back under the 400-line cap. Typecheck, Ruff, Pylint, the
-  maturin snapshot test, and 143 focused tests (6 skipped as Windows-only) pass.
-  The full gate bundle must be re-run against the repaired commit.
+  maturin snapshot test, and 143 focused tests (6 skipped as Windows-only)
+  pass. The full gate bundle must be re-run against the repaired commit.
+- [x] (2026-11-05) The re-run against `58c87c49d` passed `make check-fmt`,
+  `make test` (1,147 s), and `make typecheck` (the nine diagnostics are gone).
+  `make lint` then failed its `interrogate` leaf at 99.9% against a 100%
+  threshold. The two misses were this branch's own
+  `tests/helpers/consume_boundary_subprocess.py` `__init__` methods, now
+  documented. The remaining six misses are **inherited**: the same six appear,
+  with identical counts and node names, when `interrogate` runs on a pristine
+  `e170f908f` worktree, which is exactly the current `origin/main` and this
+  branch's merge base. They are a nested `collect()` in
+  `test_safe_cmd_lines_hook_binding.py`, a nested `call_inside_loop`, a nested
+  `synthetic_job_environment`, and inner `__init__`s in two other test modules.
+  So the `interrogate` leaf of `make lint` is already red on `main` and this
+  branch neither caused nor widened that red. Recorded rather than silently
+  fixed: repairing unrelated upstream test modules belongs in its own change,
+  and doing it here would obscure which defects this branch introduced.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -248,8 +264,8 @@ deferred-cleanup paths. See the
 
 Focused suites are not a substitute for the gate bundle. The Windows CRT work
 passed every focused Python run, `make lint-windows`, and `make check-fmt`, yet
-the first full sequential run still failed twice. The typecheck diagnostics were
-platform-gated code: POSIX type stubs simply have no `msvcrt.setmode`,
+the first full sequential run still failed twice. The typecheck diagnostics
+were platform-gated code: POSIX type stubs simply have no `msvcrt.setmode`,
 `os.O_TEXT`, or `OSError.winerror`, and no focused run had ever exercised the
 whole tree under `ty`. The wheel-snapshot failure is the same class inverted: a
 module split that adds a shipped file is invisible to every test that does not
@@ -458,8 +474,8 @@ were corrected to use that manifest and all passed during replay.
   Keep the extension lane selective as currently configured, and verify the
   remaining #124 race claim before changing test-environment requirements.
 - (2026-11-05) Place a platform contract in the module that already owns that
-  platform's boundary, not merely beside the operation it exercises. The Windows
-  CRT text-mode case moved from `test_rust_consume_stream.py` to
+  platform's boundary, not merely beside the operation it exercises. The
+  Windows CRT text-mode case moved from `test_rust_consume_stream.py` to
   `test_rust_errno_windows.py`. Both modules describe the same consume
   operation, but only the latter is Windows-scoped, so the move colocated the
   Windows-only assertions and kept the cross-platform module under the
