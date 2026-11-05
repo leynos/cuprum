@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import typing as typ
-from types import SimpleNamespace
 
 import pytest
 
-from cuprum import ProcessGroupPolicy
+from cuprum import ProcessGroupPolicy, Program
+from cuprum.sh import CommandResult
 from tests.helpers.distribution_build import (
     BUILD_TIMEOUT_ENVIRONMENT_VARIABLE,
     BuildFailure,
@@ -44,13 +44,11 @@ class _RecordingRunner:
     ) -> None:
         """Store the result the frontend will observe."""
         self.calls: list[tuple[tuple[str, ...], ExecutionContext]] = []
-        self._result = SimpleNamespace(
-            exit_code=exit_code, stdout=stdout, stderr=stderr
-        )
+        self._result = CommandResult(Program("uv"), (), exit_code, -1, stdout, stderr)
 
     def __call__(
         self, arguments: tuple[str, ...], context: ExecutionContext
-    ) -> SimpleNamespace:
+    ) -> CommandResult:
         """Record the invocation and return the configured result."""
         self.calls.append((arguments, context))
         return self._result

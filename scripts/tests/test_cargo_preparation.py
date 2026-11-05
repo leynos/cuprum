@@ -8,9 +8,8 @@ import json
 import typing as typ
 from pathlib import Path
 
-import pytest
-
 from cuprum import ExecutionContext, ProcessGroupPolicy, Program, ScopeConfig
+from cuprum.sh import CommandResult
 from scripts import cargo_state_command
 from scripts.cargo_preparation import (
     CargoInvocation,
@@ -22,16 +21,14 @@ from scripts.cargo_preparation import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    import pytest
+
     from cuprum import ProgramCatalogue
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _StubResult:
-    """Stand in for a Cargo result without running a process."""
-
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
+def _result(*, exit_code: int, stdout: str = "", stderr: str = "") -> CommandResult:
+    """Build the Cargo result a stubbed boundary would return."""
+    return CommandResult(Program("cargo"), (), exit_code, -1, stdout, stderr)
 
 
 def _invocation(
@@ -48,7 +45,7 @@ def _invocation(
     )
 
 
-def _records(diagnostics: Path) -> list[dict[str, object]]:
+def _records(diagnostics: Path) -> list[dict[str, str | float | int]]:
     """Parse the retained JSON-lines file."""
     return [
         json.loads(line)
@@ -60,7 +57,7 @@ def test_recorded_cargo_returns_the_result_and_retains_redacted_context(
     tmp_path: Path,
 ) -> None:
     """The record names the invocation and hides secret environment values."""
-    result = _StubResult(exit_code=3, stdout="token=ghs-super-secret", stderr="error")
+    result = _result(exit_code=3, stdout="token=ghs-super-secret", stderr="error")
     calls: list[tuple[tuple[str, ...], Path, dict[str, str]]] = []
     environment = {
         "CARGO_HOME": str(tmp_path / "run-home"),
@@ -71,7 +68,7 @@ def test_recorded_cargo_returns_the_result_and_retains_redacted_context(
         arguments: tuple[str, ...],
         working_directory: Path,
         child_environment: cabc.Mapping[str, str],
-    ) -> _StubResult:
+    ) -> CommandResult:
         """Record the command the boundary would have executed."""
         calls.append((arguments, working_directory, dict(child_environment)))
         return result
@@ -106,7 +103,7 @@ def test_recorded_cargo_writes_nothing_without_a_sink(tmp_path: Path) -> None:
     returned = run_recorded_cargo(
         _invocation(tmp_path, environment={}),
         None,
-        lambda _arguments, _cwd, _environment: _StubResult(exit_code=0),
+        lambda _arguments, _cwd, _environment: _result(exit_code=0),
     )
 
     assert returned.exit_code == 0
@@ -149,7 +146,7 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cargo runs in an owned group under a finite timeout and a closed scope."""
-    result = _StubResult(exit_code=0)
+    result = _result(exit_code=0)
     observed: dict[str, object] = {}
 
     class _BoundCommand:
@@ -158,7 +155,7 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
         def __init__(self, *arguments: str) -> None:
             observed["arguments"] = arguments
 
-        def run_sync(self, *, context: ExecutionContext) -> _StubResult:
+        def run_sync(self, *, context: ExecutionContext) -> CommandResult:
             """Record the context and return the stubbed result."""
             observed["context"] = context
             return result
@@ -185,13 +182,13 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
 
     returned = cargo_state_command.run_cargo(("--version",), tmp_path, environment)
 
-    program = observed["program"]
+    program = typ.cast("Program", observed["program"])
     assert returned is result, "the boundary must return Cargo's result unchanged"
     assert program == Program("/opt/probe/cargo")
-    catalogue = observed["catalogue"]
+    catalogue = typ.cast("ProgramCatalogue", observed["catalogue"])
     assert catalogue.is_allowed(program), "the catalogue must admit the chosen program"
     assert observed["arguments"] == ("--version",)
-    context = observed["context"]
+    context = typ.cast("ExecutionContext", observed["context"])
     assert context.cwd == tmp_path
     assert context.env == environment, (
         "the caller's environment must reach Cargo intact"
@@ -209,8 +206,15 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
 
 
 def test_cargo_invocation_is_a_frozen_record() -> None:
-    """Invocation records cannot drift while a diagnostic is being written."""
+    """A changed operation yields a new record rather than mutating the old one."""
     invocation = _invocation(Path("/workspace"), environment={})
 
-    with pytest.raises(AttributeError):
-        invocation.operation = "cargo version"  # type: ignore[misc]
+    replacement = dc.replace(invocation, operation="cargo version")
+
+    assert replacement is not invocation, (
+        "a changed operation must produce a distinct invocation record"
+    )
+    assert replacement.operation == "cargo version"
+    assert invocation.operation == "cargo fetch --locked", (
+        "the original invocation must not drift while a diagnostic is written"
+    )

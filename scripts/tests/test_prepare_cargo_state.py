@@ -19,7 +19,7 @@ CLI_TIMEOUT_SECONDS = 20
 STUB_CARGO_VERSION = "cargo 1.85.0"
 
 
-def _run_records(run_root: Path) -> list[dict[str, object]]:
+def _run_records(run_root: Path) -> list[dict[str, str | float]]:
     """Parse the run's JSON-lines timing records."""
     return [
         json.loads(line)

@@ -258,7 +258,7 @@ def test_artefact_path_is_a_read_only_query(tmp_path: Path) -> None:
 def test_artefact_path_reports_a_retained_failure(tmp_path: Path) -> None:
     """A query for a failed build carries the diagnostic the build retained."""
 
-    def fail(_request: BuildRequest) -> Path:
+    def fail(_request: BuildRequest) -> Path | BuildFailure:
         """Return a retained failure instead of an archive."""
         return BuildFailure("uv wheel build failed with 3")
 
