@@ -23,6 +23,7 @@ from tests.helpers.consume_boundary_subprocess import capture_from_producer
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import contextlib
 
 
 # The concurrent-producer witness is defined by one exact payload shape: a
@@ -90,7 +91,9 @@ class _StreamsRust(typ.Protocol):
         """Convert a Python descriptor for the native extension."""
         ...
 
-    def _duplicate_binary_reader(self, reader_fd: int) -> cabc.ContextManager[int]:
+    def _duplicate_binary_reader(
+        self, reader_fd: int
+    ) -> contextlib.AbstractContextManager[int]:
         """Duplicate a Windows CRT reader in binary mode."""
         ...
 

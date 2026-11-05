@@ -26,6 +26,7 @@ import pytest
 from cuprum import _streams_windows
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
 
@@ -72,7 +73,7 @@ def test_consume_maps_an_invalid_crt_descriptor(
     with pytest.raises(OSError, match="WinError 6") as excinfo:
         native.rust_consume_stream(1_000_000)
 
-    assert excinfo.value.winerror == _ERROR_INVALID_HANDLE
+    assert excinfo.value.winerror == _ERROR_INVALID_HANDLE  # ty: ignore[unresolved-attribute]  # Windows-only attribute.
     assert excinfo.value.errno == errno.EBADF
 
 
@@ -111,6 +112,41 @@ def test_binary_mode_setup_failure_closes_the_duplicate(
             os.fstat(duplicate_fds[0])
     finally:
         for fd in (reader_fd, writer_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@_windows_only
+def test_binary_consume_preserves_crlf_and_ctrl_z(
+    rust_streams: ModuleType,
+) -> None:
+    """Windows consume keeps raw bytes and leaves the caller in text mode."""
+    import msvcrt
+
+    setmode = typ.cast(
+        "cabc.Callable[[int, int], int]",
+        getattr(msvcrt, "setmode"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+    )
+    text_mode: int = os.O_TEXT  # ty: ignore[unresolved-attribute]  # Windows-only constant.
+    binary_mode: int = os.O_BINARY  # ty: ignore[unresolved-attribute]  # Windows-only constant.
+    read_fd, write_fd = os.pipe()
+    try:
+        setmode(read_fd, text_mode)
+        setmode(write_fd, binary_mode)
+        payload = b"before\r\n\x1aafter"
+        assert os.write(write_fd, payload) == len(payload)
+        os.close(write_fd)
+
+        output = rust_streams.rust_consume_stream(read_fd)
+
+        assert output == payload.decode("utf-8", errors="replace"), (
+            "binary native consume must preserve CRLF and Ctrl-Z bytes"
+        )
+        assert setmode(read_fd, text_mode) == text_mode, (
+            "consume must not change the caller descriptor's text mode"
+        )
+    finally:
+        for fd in (read_fd, write_fd):
             with contextlib.suppress(OSError):
                 os.close(fd)
 

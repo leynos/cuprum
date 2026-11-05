@@ -88,8 +88,9 @@ _MALFORMED_VECTORS: tuple[tuple[str, bytes], ...] = (
 _MALFORMED_BUFFER_SIZES: tuple[int, ...] = (1, 2, 3, 4, 5, 7, 4096, 65536)
 
 # Windows consume reads a borrowed CRT descriptor rather than a raw handle, so
-# the module is no longer skipped there; the Windows-only case below asserts
-# that boundary directly.
+# the module is no longer skipped there. `test_rust_errno_windows.py` asserts
+# that boundary, including the text-mode contract, beside the other Windows-only
+# cases.
 
 
 def _consume_payload(
@@ -289,35 +290,6 @@ class TestRustConsumeStream:
                         "rust_consume_stream must not close the file descriptor"
                     )
                 raise
-
-    @staticmethod
-    @pytest.mark.skipif(os.name != "nt", reason="Windows CRT text-mode contract")
-    def test_binary_consume_preserves_crlf_and_ctrl_z(
-        rust_streams: ModuleType,
-    ) -> None:
-        """Windows consume keeps raw bytes and leaves the caller in text mode."""
-        import msvcrt
-
-        read_fd, write_fd = os.pipe()
-        try:
-            msvcrt.setmode(read_fd, os.O_TEXT)
-            msvcrt.setmode(write_fd, os.O_BINARY)
-            payload = b"before\r\n\x1aafter"
-            assert os.write(write_fd, payload) == len(payload)
-            _safe_close(write_fd)
-
-            output = rust_streams.rust_consume_stream(read_fd)
-
-            assert output == payload.decode("utf-8", errors="replace"), (
-                "binary native consume must preserve CRLF and Ctrl-Z bytes"
-            )
-            previous_mode = msvcrt.setmode(read_fd, os.O_TEXT)
-            assert previous_mode == os.O_TEXT, (
-                "consume must not change the caller descriptor's text mode"
-            )
-        finally:
-            _safe_close(read_fd)
-            _safe_close(write_fd)
 
     @staticmethod
     def test_rejects_invalid_buffer(

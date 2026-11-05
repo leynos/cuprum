@@ -204,6 +204,25 @@ ownership and error contracts, stop and report the exact incompatibility.
   the extension, 186 focused Python and behavioural tests passed with 2
   skipped, and `make test-boundary-parity` passed all 30 cases in 98.38 seconds;
   `make lint-windows` also stayed green.
+- [x] (2026-11-05) A full sequential gate run against `10fab6130` found two
+  deterministic defects that the focused runs could not see. `make typecheck`
+  reported nine diagnostics across three files: the Windows-only
+  `msvcrt.setmode`, `os.O_TEXT`, and `os.O_BINARY` members, the Windows-only
+  `OSError.winerror` attribute, and `collections.abc.ContextManager`, which does
+  not exist (`contextlib.AbstractContextManager` is the real name). `make test`
+  failed `test_maturin_wheel_build_snapshot` because `cuprum/_streams_windows.py`
+  is a newly shipped module and the wheel-manifest snapshot still listed the
+  split's pre-split file set. The `- cuprum/sh/bytes_entry_points.py` row in
+  that diff is the documented display shift from the inserted line, not a real
+  removal. All are repaired: the Windows-only members now use the repository's
+  established `ty: ignore[unresolved-attribute]` idiom with a reason, the oracle
+  names `contextlib.AbstractContextManager`, and the snapshot lists the new
+  module in sorted position. The Windows text-mode case moved from
+  `test_rust_consume_stream.py` to `test_rust_errno_windows.py`, which already
+  owns that boundary; this both colocates the Windows-only contracts and brings
+  the source file back under the 400-line cap. Typecheck, Ruff, Pylint, the
+  maturin snapshot test, and 143 focused tests (6 skipped as Windows-only) pass.
+  The full gate bundle must be re-run against the repaired commit.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -226,6 +245,19 @@ dispatch delay reproduced the failure. The fixture now waits for worker
 readiness before arming the same short deadline, retaining the real timeout and
 deferred-cleanup paths. See the
 [startup diagnosis](../debugging/debugging-plan-2026-10-25-native-pump-startup.md).
+
+Focused suites are not a substitute for the gate bundle. The Windows CRT work
+passed every focused Python run, `make lint-windows`, and `make check-fmt`, yet
+the first full sequential run still failed twice. The typecheck diagnostics were
+platform-gated code: POSIX type stubs simply have no `msvcrt.setmode`,
+`os.O_TEXT`, or `OSError.winerror`, and no focused run had ever exercised the
+whole tree under `ty`. The wheel-snapshot failure is the same class inverted: a
+module split that adds a shipped file is invisible to every test that does not
+build a wheel, and `cuprum/unittests/**` is excluded from the wheel, so the
+split's new *test* modules passed while the new *production* module broke the
+manifest. A branch whose only remaining risk is cross-platform or packaging
+behaviour should be gated in full before any review request, because both
+defects are cheap to fix and expensive to discover during PR review.
 
 Roadmap 6.1.1 is already complete. `RustStreamError` lives in
 `rust/cuprum-rust/src/lib.rs`; `run_stream_operation` in
@@ -425,6 +457,20 @@ were corrected to use that manifest and all passed during replay.
   PRs. Closure supplies context, not completion evidence for roadmap 6.1.2.
   Keep the extension lane selective as currently configured, and verify the
   remaining #124 race claim before changing test-environment requirements.
+- (2026-11-05) Place a platform contract in the module that already owns that
+  platform's boundary, not merely beside the operation it exercises. The Windows
+  CRT text-mode case moved from `test_rust_consume_stream.py` to
+  `test_rust_errno_windows.py`. Both modules describe the same consume
+  operation, but only the latter is Windows-scoped, so the move colocated the
+  Windows-only assertions and kept the cross-platform module under the
+  repository's 400-line cap without deleting a case. The general rule: when a
+  file approaches the cap, prefer relocating a case to the module that owns its
+  contract over compressing the surrounding code.
+- (2026-11-05) Keep the wheel-manifest snapshot change minimal. Adding the one
+  new shipped module in sorted position is preferred to regenerating the
+  snapshot, because regeneration rewrites unrelated rows and hides which entry
+  actually changed. The snapshot test's own redaction of generator and version
+  is what makes the hand edit safe.
 
 ## Outcomes & retrospective
 
