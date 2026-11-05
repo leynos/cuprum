@@ -85,14 +85,20 @@ def test_recorded_cargo_returns_the_result_and_retains_redacted_context(
         "the invocation must reach the runner unchanged"
     )
     [record] = _records(diagnostics)
-    assert record["operation"] == "cargo fetch --locked"
-    assert record["working_directory"] == str(tmp_path)
-    assert record["cargo_home"] == str(tmp_path / "run-home")
-    assert record["exit_code"] == 3
+    assert record["operation"] == "cargo fetch --locked", (
+        "the record must name the operation it recorded"
+    )
+    assert record["working_directory"] == str(tmp_path), (
+        "the record must name the directory Cargo ran in"
+    )
+    assert record["cargo_home"] == str(tmp_path / "run-home"), (
+        "the record must name the prepared Cargo home"
+    )
+    assert record["exit_code"] == 3, "the record must retain Cargo's exit status"
     assert record["stdout"] == "token=<redacted>", (
         "the retained stream must not carry the caller's credential"
     )
-    assert record["stderr"] == "error"
+    assert record["stderr"] == "error", "the record must retain standard error"
     assert float(record["elapsed_seconds"]) >= 0, "the record must carry a duration"
 
 
@@ -106,7 +112,7 @@ def test_recorded_cargo_writes_nothing_without_a_sink(tmp_path: Path) -> None:
         lambda _arguments, _cwd, _environment: _result(exit_code=0),
     )
 
-    assert returned.exit_code == 0
+    assert returned.exit_code == 0, "the caller must receive Cargo's own result"
     assert not diagnostics.exists(), "no sink means no retained file"
 
 
@@ -117,28 +123,38 @@ def test_record_phase_appends_one_line_per_measured_phase(tmp_path: Path) -> Non
     record_phase(timings, "dependency_preparation", 1.25)
     record_phase(timings, "workload", 2.5)
 
-    assert [
+    records = [
         json.loads(line) for line in timings.read_text(encoding="utf-8").splitlines()
-    ] == [
-        {"phase": "dependency_preparation", "seconds": 1.25},
-        {"phase": "workload", "seconds": 2.5},
     ]
+    assert [record["phase"] for record in records] == [
+        "dependency_preparation",
+        "workload",
+    ], "each measured phase must be appended once, in order"
+    assert [record["seconds"] for record in records] == [1.25, 2.5], (
+        "each record must carry the duration it measured"
+    )
 
 
 def test_preparation_context_defaults_to_the_process_environment() -> None:
     """An unspecified context asks preparation to inherit the process environment."""
     context = PreparationContext()
 
-    assert context.caller_environment is None
-    assert context.diagnostics_path is None
+    assert context.caller_environment is None, (
+        "an unspecified context must not claim a caller environment"
+    )
+    assert context.diagnostics_path is None, (
+        "an unspecified context must not claim a diagnostics sink"
+    )
 
 
 def test_cargo_program_reads_the_supplied_environment() -> None:
     """The Cargo executable comes from the caller's mapping, not module state."""
     assert cargo_state_command.cargo_program({"CARGO": "/opt/probe/cargo"}) == Program(
         "/opt/probe/cargo"
+    ), "the supplied executable must be the program Cargo runs as"
+    assert cargo_state_command.cargo_program({}) == Program("cargo"), (
+        "an empty mapping must fall back to Cargo on the PATH"
     )
-    assert cargo_state_command.cargo_program({}) == Program("cargo")
 
 
 def test_run_cargo_bounds_the_process_and_admits_only_cargo(
@@ -185,16 +201,22 @@ def test_run_cargo_bounds_the_process_and_admits_only_cargo(
 
     program = typ.cast("Program", observed["program"])
     assert returned is result, "the boundary must return Cargo's result unchanged"
-    assert program == Program("/opt/probe/cargo")
+    assert program == Program("/opt/probe/cargo"), (
+        "the boundary must admit the program the caller supplied"
+    )
     catalogue = typ.cast("ProgramCatalogue", observed["catalogue"])
     assert catalogue.is_allowed(program), "the catalogue must admit the chosen program"
-    assert observed["arguments"] == ("--version",)
+    assert observed["arguments"] == ("--version",), (
+        "the caller's arguments must reach the command client unchanged"
+    )
     context = typ.cast("ExecutionContext", observed["context"])
-    assert context.cwd == tmp_path
+    assert context.cwd == tmp_path, "Cargo must run in the caller's directory"
     assert context.env == environment, (
         "the caller's environment must reach Cargo intact"
     )
-    assert context.timeout == cargo_state_command.CARGO_TIMEOUT_SECONDS
+    assert context.timeout == cargo_state_command.CARGO_TIMEOUT_SECONDS, (
+        "the boundary must use the module's fixed preparation limit"
+    )
     assert context.timeout == 900, (
         "preparation is bounded independently of test budgets"
     )
@@ -215,7 +237,9 @@ def test_cargo_invocation_is_a_frozen_record() -> None:
     assert replacement is not invocation, (
         "a changed operation must produce a distinct invocation record"
     )
-    assert replacement.operation == "cargo version"
+    assert replacement.operation == "cargo version", (
+        "the replacement must carry the changed operation"
+    )
     assert invocation.operation == "cargo fetch --locked", (
         "the original invocation must not drift while a diagnostic is written"
     )

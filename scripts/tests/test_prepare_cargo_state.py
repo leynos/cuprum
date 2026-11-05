@@ -57,7 +57,9 @@ def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
         context: object,
     ) -> SimpleNamespace:
         """Record snapshot preparation for the requested repository."""
-        assert (repository_root, requested_root) == (repository, snapshot_root)
+        assert (repository_root, requested_root) == (repository, snapshot_root), (
+            "snapshot preparation must receive the requested repository and root"
+        )
         assert context == prepare_cargo_state.PreparationContext(
             diagnostics_path=run_root / "cargo-diagnostics.jsonl"
         ), "preparation must retain its diagnostics in the run root"
@@ -71,9 +73,15 @@ def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
         source_cargo_home: Path,
     ) -> Path:
         """Record run-home creation and report the home path."""
-        assert snapshot_path == snapshot
-        assert requested_run_root == run_root
-        assert source_cargo_home == caller_home
+        assert snapshot_path == snapshot, (
+            "the run home must copy the snapshot preparation published"
+        )
+        assert requested_run_root == run_root, (
+            "the run home must live in the run root the caller named"
+        )
+        assert source_cargo_home == caller_home, (
+            "the run home must copy the caller's Cargo configuration"
+        )
         calls.append("run-home")
         return requested_run_root / "cargo-home"
 
@@ -86,18 +94,28 @@ def test_main_prepares_before_creating_the_run_home_and_reports_metadata(
         "the run home must be copied after the snapshot is published"
     )
     [record] = _run_records(run_root)
-    assert record["phase"] == "dependency_preparation"
+    assert record["phase"] == "dependency_preparation", (
+        "preparation must be attributable apart from the workload"
+    )
     assert float(record["seconds"]) >= 0, (
         "the CLI must record the preparation cost it reports"
     )
     metadata = json.loads(capsys.readouterr().out)
-    assert metadata == {
-        "cargo_home": str(run_root / "cargo-home"),
-        "snapshot_key": "key-0001",
-        "cargo_version": STUB_CARGO_VERSION,
-        "preparation_seconds": record["seconds"],
-        "snapshot_reused": True,
-    }
+    assert metadata["cargo_home"] == str(run_root / "cargo-home"), (
+        "the reported home must be the run-local one"
+    )
+    assert metadata["snapshot_key"] == "key-0001", (
+        "the report must name the snapshot the run copied"
+    )
+    assert metadata["cargo_version"] == STUB_CARGO_VERSION, (
+        "the report must name the Cargo version that prepared the snapshot"
+    )
+    assert metadata["preparation_seconds"] == record["seconds"], (
+        "the reported cost must match the recorded preparation phase"
+    )
+    assert metadata["snapshot_reused"] is True, (
+        "the report must disclose that the snapshot was reused"
+    )
 
 
 def _write_stub_cargo(bin_directory: Path) -> Path:
@@ -156,15 +174,23 @@ def test_cli_prepares_a_run_home_and_records_the_preparation(tmp_path: Path) -> 
     assert completed.returncode == 0, completed.stderr
     metadata = json.loads(completed.stdout)
     run_home = run_root / "cargo-home"
-    assert metadata["cargo_home"] == str(run_home)
+    assert metadata["cargo_home"] == str(run_home), (
+        "the reported home must be the run-local one"
+    )
     assert run_home.is_dir(), "the workload needs the run-local Cargo home to exist"
-    assert metadata["cargo_version"] == STUB_CARGO_VERSION
-    assert metadata["snapshot_reused"] is False
+    assert metadata["cargo_version"] == STUB_CARGO_VERSION, (
+        "the report must name the Cargo version that prepared the snapshot"
+    )
+    assert metadata["snapshot_reused"] is False, (
+        "a first run must report that it published a new snapshot"
+    )
     [record] = _run_records(run_root)
     assert record["phase"] == "dependency_preparation", (
         "the CLI must separate preparation cost from the later workload"
     )
-    assert float(record["seconds"]) == pytest.approx(metadata["preparation_seconds"])
+    assert float(record["seconds"]) == pytest.approx(metadata["preparation_seconds"]), (
+        "the JSON report must repeat the value the timings file records"
+    )
     recorded_operations = [
         json.loads(line)["operation"]
         for line in (run_root / "cargo-diagnostics.jsonl")

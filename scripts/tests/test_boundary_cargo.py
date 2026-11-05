@@ -72,7 +72,9 @@ def test_successful_run_records_both_phases_and_removes_owned_state(
     with boundary_cargo_run(
         run_root, workspace, _creating_preparation(workspace, seen)
     ):
-        assert seen == [run_root]
+        assert seen == [run_root], (
+            "the workload must run after preparation touched this run root"
+        )
         assert (run_root / "cargo-home").is_dir(), (
             "the workload must run against the prepared Cargo home"
         )
@@ -112,8 +114,12 @@ def test_workload_failure_records_both_phases_and_still_cleans_up(
     assert _phases(run_root) == ["dependency_preparation", "workload"], (
         "a failed workload must still leave a measurable workload phase"
     )
-    assert not (run_root / "cargo-home").exists()
-    assert not (run_root / "target").exists()
+    assert not (run_root / "cargo-home").exists(), (
+        "a failed workload must still remove the owned Cargo home"
+    )
+    assert not (run_root / "target").exists(), (
+        "a failed workload must still remove the owned target directory"
+    )
 
 
 def test_preparation_failure_records_preparation_and_still_cleans_up(
@@ -138,8 +144,12 @@ def test_preparation_failure_records_preparation_and_still_cleans_up(
     assert _phases(run_root) == ["dependency_preparation"], (
         "a preparation failure must still record the time it consumed"
     )
-    assert not (run_root / "cargo-home").exists()
-    assert not (run_root / "target").exists()
+    assert not (run_root / "cargo-home").exists(), (
+        "a failed preparation must still remove the owned Cargo home"
+    )
+    assert not (run_root / "target").exists(), (
+        "a failed preparation must still remove the owned target directory"
+    )
 
 
 def test_run_home_preparation_retains_diagnostics_beside_the_run(

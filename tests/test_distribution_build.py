@@ -265,14 +265,19 @@ def test_frontend_reports_non_zero_diagnostics(tmp_path: Path) -> None:
     outcome = _frontend(runner, [])(request)
 
     assert isinstance(outcome, BuildFailure), "a non-zero exit is a retained failure"
-    assert "uv wheel build failed with 3" in outcome.diagnostic, (
-        "the diagnostic must name the route and the exit code"
+    expected_fragments = (
+        "uv wheel build failed with 3",
+        "stdout: build output",
+        "stderr: link failed",
     )
-    assert "stdout: build output" in outcome.diagnostic, (
-        "the diagnostic must retain captured standard output"
-    )
-    assert "stderr: link failed" in outcome.diagnostic, (
-        "the diagnostic must retain captured error output"
+    missing = [
+        fragment
+        for fragment in expected_fragments
+        if fragment not in outcome.diagnostic
+    ]
+    assert not missing, (
+        "the diagnostic must name the route and exit code and retain both streams; "
+        f"missing {missing!r} from {outcome.diagnostic!r}"
     )
 
 

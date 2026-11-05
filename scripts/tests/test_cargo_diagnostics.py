@@ -37,7 +37,9 @@ def test_only_secret_shaped_names_are_treated_as_secret(
     name: str, expected: bool
 ) -> None:
     """Only names carrying a secret marker classify their value as secret."""
-    assert is_secret_environment_name(name) is expected
+    assert is_secret_environment_name(name) is expected, (
+        f"{name} must be classified as {'secret' if expected else 'non-secret'}"
+    )
 
 
 def test_redaction_replaces_every_occurrence_of_a_secret_value() -> None:
@@ -49,7 +51,9 @@ def test_redaction_replaces_every_occurrence_of_a_secret_value() -> None:
         environment,
     )
 
-    assert redacted == "token=<redacted>; retry <redacted>"
+    assert redacted == "token=<redacted>; retry <redacted>", (
+        "a value echoed twice must be redacted at every occurrence"
+    )
 
 
 def test_redaction_leaves_short_and_non_secret_values_alone() -> None:
@@ -67,7 +71,7 @@ def test_redaction_leaves_unrelated_text_unchanged() -> None:
     """Text that contains no secret value is returned untouched."""
     assert redact_environment_values("registry index unavailable", {}) == (
         "registry index unavailable"
-    )
+    ), "text with no secret value must be returned untouched"
 
 
 def test_a_record_keeps_the_invocation_context_and_streams(tmp_path: Path) -> None:
@@ -91,15 +95,23 @@ def test_a_record_keeps_the_invocation_context_and_streams(tmp_path: Path) -> No
         json.loads(line)
         for line in diagnostics.read_text(encoding="utf-8").splitlines()
     ]
-    assert record == {
-        "operation": "cargo fetch --locked",
-        "working_directory": "/repo/rust",
-        "cargo_home": "/run/cargo-home",
-        "exit_code": 101,
-        "elapsed_seconds": 1.5,
-        "stdout": "standard output",
-        "stderr": "standard error",
-    }
+    assert record["operation"] == "cargo fetch --locked", (
+        "the record must name the operation it observed"
+    )
+    assert record["working_directory"] == "/repo/rust", (
+        "the record must name the directory Cargo ran in"
+    )
+    assert record["cargo_home"] == "/run/cargo-home", (
+        "the record must name the Cargo home it used"
+    )
+    assert record["exit_code"] == 101, "the record must retain the exit status"
+    assert record["elapsed_seconds"] == pytest.approx(1.5), (
+        "the record must retain the measured duration"
+    )
+    assert record["stdout"] == "standard output", (
+        "the record must retain standard output"
+    )
+    assert record["stderr"] == "standard error", "the record must retain standard error"
 
 
 def test_records_append_so_a_failure_keeps_its_preparation_context(
