@@ -85,6 +85,20 @@ class _Teardown:
     published: BaseException | None = None
 
 
+_NO_TEARDOWN = _Teardown()
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _Settlement:
+    """One generated ending handed to the settlement finalizer."""
+
+    bracket: _SinkBracket
+    execution: _StubExecution | None
+    result: CommandResult | None
+    failure: BaseException | None
+    errors: _Teardown = _NO_TEARDOWN
+
+
 @dc.dataclass(slots=True)
 class _Case:
     """The generated shape of one settlement case, plus what it produced."""

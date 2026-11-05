@@ -43,6 +43,7 @@ from cuprum.unittests._line_stream_settlement_support import (
     _Case,
     _OrderedSession,
     _RecordingWorker,
+    _Settlement,
     _StubExecution,
     _StubObservation,
     _Teardown,
@@ -126,16 +127,6 @@ def _classify(error: BaseException) -> TerminalOutcome:
             return TerminalOutcome.ERROR
 
 
-def _model_result_outranks(
-    result: CommandResult,
-    teardown: BaseException | None,
-) -> bool:
-    """State whether the run's own result outranks the teardown failure."""
-    if result.exit_code != 0:
-        return True
-    return teardown is None
-
-
 def _model_outcome(
     result: CommandResult | None,
     failure: BaseException | None,
@@ -155,7 +146,8 @@ def _model_outcome(
     """
     if failure is not None and not isinstance(failure, GeneratorExit):
         return _classify(failure)
-    if result is not None and _model_result_outranks(result, teardown):
+    result_outranks = result is not None and (result.exit_code != 0 or teardown is None)
+    if result_outranks:
         return (
             TerminalOutcome.EXIT_ZERO
             if result.exit_code == 0
@@ -194,18 +186,12 @@ async def _idle_coordinator() -> None:
     """
 
 
-_NO_ERRORS = _Teardown()
-
-
-async def _settle_once(
-    bracket: _SinkBracket,
-    execution: _StubExecution | None,
-    result: CommandResult | None,
-    failure: BaseException | None,
-    *,
-    errors: _Teardown = _NO_ERRORS,
-) -> BaseException | None:
+async def _settle_once(settlement: _Settlement) -> BaseException | None:
     """Settle one generated ending, returning any raised teardown failure."""
+    execution = settlement.execution
+    errors = settlement.errors
+    result = settlement.result
+    failure = settlement.failure
     result_future = (
         None if execution is None else asyncio.get_running_loop().create_future()
     )
@@ -220,7 +206,7 @@ async def _settle_once(
     tracking = _ExecutionTracking(
         execution_hooks=_ExecutionHooks((), (), ()),
         pending_tasks=pending,
-        sink_bracket=bracket,
+        sink_bracket=settlement.bracket,
     )
     state = _LineIterationState(
         execution=typ.cast("_SubprocessExecution | None", execution),
@@ -316,11 +302,13 @@ class _SettlementMachine(RuleBasedStateMachine):
         teardown = _model_teardown(future_error, hook_error)
         case.raised = asyncio.run(
             _settle_once(
-                case.bracket,
-                case.execution,
-                child_result,
-                occurrence,
-                errors=_Teardown(hook=hook_error, published=future_error),
+                _Settlement(
+                    bracket=case.bracket,
+                    execution=case.execution,
+                    result=child_result,
+                    failure=occurrence,
+                    errors=_Teardown(hook=hook_error, published=future_error),
+                )
             )
         )
         case.settled = True
@@ -338,7 +326,16 @@ class _SettlementMachine(RuleBasedStateMachine):
         """Settle a spent bracket again without reconciling anything twice."""
         case = self._case
         assert case.bracket is not None, "initialize must have opened a bracket"
-        raised = asyncio.run(_settle_once(case.bracket, None, None, None))
+        raised = asyncio.run(
+            _settle_once(
+                _Settlement(
+                    bracket=case.bracket,
+                    execution=None,
+                    result=None,
+                    failure=None,
+                )
+            )
+        )
         assert raised is None, (
             f"re-settling a spent bracket must not fail; it raised {raised!r}"
         )
