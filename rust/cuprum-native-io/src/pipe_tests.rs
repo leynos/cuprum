@@ -106,18 +106,18 @@ fn count_of(count: isize) -> io::Result<usize> {
 /// Present a borrowed endpoint as the platform's single-call stream type.
 ///
 /// A Unix descriptor needs no narrowing: `read` and `write` block, so the
-/// borrowed descriptor is already what the primitive takes. The Windows
-/// primitives demand the synchronous-I/O capability, which the platform cannot
-/// verify from a bare handle and so must be asserted.
+/// borrowed descriptor is already what the primitive takes.
 #[cfg(unix)]
 const fn primitive_stream(stream: BorrowedStream<'_>) -> BorrowedStream<'_> { stream }
 
 /// Present a borrowed endpoint as the platform's single-call stream type.
 ///
-/// The endpoint came from `pipe`, whose Windows half `synchronous_pipe`
-/// documents as `CreatePipe`-backed and therefore synchronous.
+/// Windows is the asymmetric arm: its primitives demand the synchronous-I/O
+/// capability, which the platform cannot verify from a bare handle. The
+/// endpoint nonetheless qualifies, because `pipe`'s Windows half
+/// `synchronous_pipe` documents it as `CreatePipe`-backed and synchronous.
 #[cfg(windows)]
-fn primitive_stream(stream: BorrowedStream<'_>) -> super::SynchronousBorrowedStream<'_> {
+const fn primitive_stream(stream: BorrowedStream<'_>) -> super::SynchronousBorrowedStream<'_> {
     // SAFETY: the process's own `pipe` constructor made this endpoint, so it is
     // not an overlapped handle.
     unsafe { super::SynchronousBorrowedStream::new_unchecked(stream) }
