@@ -1,7 +1,7 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
-Status: IMPLEMENTED — milestones M1–M3 complete; final gate bundle and PR
-review pending.
+Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
+eight commit gates green on candidate `4913a0753`; hosted review pending.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits directly on
 `origin/main` at `e170f908f2a7b4187cc321296a9029e621169b07` with no rebase
@@ -277,8 +277,22 @@ ownership and error contracts, stop and report the exact incompatibility.
   duplication be avoided, so a second scenario covering the same rows would add
   maintenance cost without adding evidence. Recorded here so the absence reads
   as a decision rather than an oversight.
-- [ ] Final gate bundle and PR review.
-- [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
+- [x] Final gate bundle. All eight targets passed on candidate
+  `4913a07532b8a08784f9eb374ff1f18591f2fa93` with a clean tree, sequentially,
+  between 16:05:49Z and 18:31:22Z. Every log header names that candidate and
+  every footer records the same head at end. Results: `check-fmt` 2s; `test`
+  5355s with zero `FAILED`; `typecheck` 1s; `lint` 2537s with `interrogate` at
+  `actual: 100.0%`; `markdownlint` 24s; `nixie` 3s; `develop` 102s;
+  `test-extension` 708s. The extension lane printed `running 30 tests` and
+  `30 passed; 0 failed; 8 filtered out`, so the anti-vacuity guard held and the
+  parity lane was not narrowed. An earlier attempt on the same candidate was
+  reaped by an infrastructure timeout mid-`make test`; its log carries no
+  footer and contributes no result.
+- [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
+  outstanding; local gates do not establish hosted success.
+- [x] Roadmap 6.1.2 marked done, after the implementation existed and its
+  acceptance criteria were inspectable. The hosted review below may still
+  reopen it if it exposes an in-scope gap.
 
 ## Surprises & discoveries
 
