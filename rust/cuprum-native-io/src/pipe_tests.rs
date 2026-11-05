@@ -273,12 +273,8 @@ fn raw_of(resource: &OwnedStream) -> super::PlatformFd {
 /// The observation is fallible, so this helper stays a query: the caller turns
 /// a refusal into the panic that names which assertion could not be made.
 #[cfg(unix)]
-fn exec_inheritable(fd: super::PlatformFd) -> io::Result<bool> {
-    super::fd_is_exec_inheritable(fd)
-}
+fn exec_inheritable(fd: super::PlatformFd) -> io::Result<bool> { super::fd_is_exec_inheritable(fd) }
 
 /// Report whether a Windows handle inherits into a child process.
 #[cfg(windows)]
-fn inheritable(raw: super::PlatformFd) -> io::Result<bool> {
-    super::handle_is_inheritable(raw)
-}
+fn inheritable(raw: super::PlatformFd) -> io::Result<bool> { super::handle_is_inheritable(raw) }
