@@ -42,6 +42,7 @@ if typ.TYPE_CHECKING:
     from cuprum.capture_policy import FileBackedCapture
 
 __all__ = [
+    "_DESCENDANT_SCRIPT",
     "_execution",
     "_is_fd_open",
     "_is_running",
