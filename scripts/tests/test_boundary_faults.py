@@ -71,9 +71,14 @@ class _RecordedRun:
         """Record the workspace under test and start with no calls."""
         self.workspace = workspace
         self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.target_dirs: list[Path | None] = []
 
     def __call__(
-        self, program: str, args: tuple[str, ...], workspace: Path
+        self,
+        program: str,
+        args: tuple[str, ...],
+        workspace: Path,
+        target_dir: Path | None = None,
     ) -> tuple[int, str]:
         """Record one invocation and return the result its workspace implies.
 
@@ -87,6 +92,7 @@ class _RecordedRun:
             The exit code and output the harness will classify.
         """
         self.calls.append((program, args))
+        self.target_dirs.append(target_dir)
         proof = Path(args[0])
         is_proof = proof.name == PROOF_TARGET
         if is_proof:
@@ -265,7 +271,9 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (3, "no verdict")
+        faults,
+        "_run",
+        lambda _program, _args, _workspace, _target_dir=None: (3, "no verdict"),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
         faults._check(
@@ -318,7 +326,9 @@ def test_a_control_that_fails_closed_is_not_accepted(
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (1, "unexpected failure")
+        faults,
+        "_run",
+        lambda _program, _args, _workspace, _target_dir=None: (1, "unexpected failure"),
     )
     with pytest.raises(faults.BoundaryFaultError):
         faults._check(
@@ -336,7 +346,12 @@ def test_a_fault_is_only_accepted_for_its_own_diagnostic(
         "invalid-bound", "verus", ("proof.rs",), "verification results::"
     )
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (1, "error: build failed")
+        faults,
+        "_run",
+        lambda _program, _args, _workspace, _target_dir=None: (
+            1,
+            "error: build failed",
+        ),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
         faults._check(check, tmp_path, logs)
@@ -345,6 +360,46 @@ def test_a_fault_is_only_accepted_for_its_own_diagnostic(
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace: (1, "verification results::"),
+        lambda _program, _args, _workspace, _target_dir=None: (
+            1,
+            "verification results::",
+        ),
     )
     faults._check(check, tmp_path, logs)
+
+
+def test_an_ownership_control_builds_apart_from_its_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control must not reuse Kani's prebuilt harness for the mutation.
+
+    Kani decides whether to rebuild from the build directory alone. A control
+    sharing one with its fault can therefore verify the mutation's prebuilt
+    harness and archive a failed verification for production source, which is
+    the defect that made this check flaky rather than sensitive.
+    """
+    root, runner = _drive(tmp_path, monkeypatch)
+    run_root = latest_run_root(root, "boundary-faults")
+    uploaded = root / "rust/target/boundary-verification"
+    harness = [
+        target
+        for (program, args), target in zip(
+            runner.calls, runner.target_dirs, strict=True
+        )
+        if program == "cargo" and args[0] == "kani"
+    ]
+    assert len(harness) == 2, "the ownership fault must run one control and one fault"
+    assert len(set(harness)) == 2, "the control must not share its fault's build dir"
+    for target in harness:
+        assert target is not None, (
+            "both the control and its fault need their own build directory"
+        )
+        assert target.parent == run_root / "build", (
+            "the per-check build directories must stay under the run's build root"
+        )
+        # CI archives `rust/target/boundary-verification` whole with
+        # `if: always()`, so a build tree beneath it uploads a full Cargo
+        # target directory as an artefact on every run.
+        assert not target.is_relative_to(uploaded), (
+            "the build directories must stay out of the uploaded evidence tree"
+        )

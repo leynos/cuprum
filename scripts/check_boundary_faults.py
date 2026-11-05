@@ -161,6 +161,7 @@ def _invocation(
     args: tuple[str, ...],
     workspace: Path,
     pins: ToolPins,
+    target_dir: Path | None = None,
 ) -> _Invocation:
     """Build the verifier environment and its arguments, freezing native Cargo.
 
@@ -169,13 +170,21 @@ def _invocation(
     invocation cannot receive it. The offline environment is the supported
     mechanism there; the copied lockfile is compared afterwards instead.
 
+    ``target_dir`` overrides the shared build directory. Kani decides whether
+    to rebuild from that directory alone, so a directory reused across a
+    mutation and its control can serve the mutation's prebuilt harness to the
+    control, which then reports the fault it was meant to precede.
+
     Returns
     -------
     _Invocation
         The arguments, environment, and lockfile contract for this program.
     """
     kani = Path.home() / f".kani/kani-{pins.kani}"
-    target_directory = workspace.parent / "target/boundary-faults-debug-all-features"
+    target_directory = (
+        target_dir
+        or workspace.parent / "target/boundary-faults-debug-all-features"
+    )
     environment = os.environ.copy()
     environment.update({
         "CARGO_TARGET_DIR": str(target_directory),
@@ -196,8 +205,24 @@ def _invocation(
     return _Invocation(args, environment, lockfile, _sha256(lockfile))
 
 
-def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str]:
-    """Run one allowlisted verification tool with bounded execution time."""
+def _run(
+    program: str,
+    args: tuple[str, ...],
+    workspace: Path,
+    target_dir: Path | None = None,
+) -> tuple[int, str]:
+    """Run one allowlisted verification tool with bounded execution time.
+
+    ``target_dir`` gives a check its own build directory. Kani decides whether
+    to rebuild from that directory alone, so a directory reused across a
+    mutation and its control can serve the mutation's prebuilt harness to the
+    control. The control then reports the fault it was meant to precede.
+
+    Returns
+    -------
+    tuple[int, str]
+        The verifier's exit code and its combined standard output and error.
+    """
     pins = read_tool_pins()
     executable = Program(program)
     project = ProjectSettings(
@@ -207,7 +232,7 @@ def _run(program: str, args: tuple[str, ...], workspace: Path) -> tuple[int, str
         noise_rules=(),
     )
     command = sh.make(executable, catalogue=ProgramCatalogue(projects=(project,)))
-    invocation = _invocation(program, args, workspace, pins)
+    invocation = _invocation(program, args, workspace, pins, target_dir)
     context = sh.ExecutionContext(
         cwd=workspace,
         env=invocation.environment,
@@ -236,11 +261,16 @@ class _Check:
     expected_failure: str | None = None
 
 
-def _check(check: _Check, workspace: Path, logs: Path) -> None:
+def _check(
+    check: _Check,
+    workspace: Path,
+    logs: Path,
+    target_dir: Path | None = None,
+) -> None:
     """Archive a control or require the specific counterexample diagnostic."""
     log_path = logs / f"{check.name}.log"
     try:
-        code, output = _run(check.program, check.args, workspace)
+        code, output = _run(check.program, check.args, workspace, target_dir)
     except _LockfileRewriteError as error:
         log_path.write_text(error.output, encoding="utf-8")
         raise
@@ -325,6 +355,17 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
         "--",
         "--exact",
     )
+    # The control and its fault get separate build directories. Sharing one
+    # lets Kani decide the unchanged control needs no rebuild and then report
+    # the mutation's prebuilt harness, so a working control is archived as a
+    # failed verification.
+    #
+    # They live beside the run's own workspace, under the archived
+    # `.cache/boundary-faults/runs` tree, rather than under `logs`. CI uploads
+    # `rust/target/boundary-verification` whole with `if: always()`, so a build
+    # tree in the log directory would ship a full Cargo target directory as an
+    # artefact on every run.
+    build_root = logs.parent / "build"
     for name, args, old, new, diagnostic in (
         (
             "leaked-writer",
@@ -349,12 +390,23 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
         ),
     ):
         try:
-            _check(_Check(f"{name}-control", "cargo", args), workspace, logs)
+            _check(
+                _Check(f"{name}-control", "cargo", args),
+                workspace,
+                logs,
+                build_root / f"{name}-control",
+            )
             memory.write_text(mutate(original, old, new), encoding="utf-8")
-            _check(_Check(name, "cargo", args, diagnostic), workspace, logs)
+            _check(
+                _Check(name, "cargo", args, diagnostic),
+                workspace,
+                logs,
+                build_root / name,
+            )
         finally:
             memory.write_text(original, encoding="utf-8")
 
 
 if __name__ == "__main__":
     main()
+# weave: run 'weave explain scripts/check_boundary_faults.py' for per-hunk detail, 'weave check' to verify your resolution
