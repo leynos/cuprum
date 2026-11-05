@@ -1,0 +1,133 @@
+{
+  "note": "Four runs of the observe-dispatch group; each benchmark dispatches 1000 events per call, so divide by 1000 for the per-event cost. The primary run is the pair committed beside this file; r1-r3 are alternating-order repeats.",
+  "runs": [
+    {
+      "run": "primary-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 420.136,
+      "median_us": 392.957,
+      "rounds": 2261
+    },
+    {
+      "run": "primary-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 5570.966,
+      "median_us": 4441.463,
+      "rounds": 170
+    },
+    {
+      "run": "primary-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 129.263,
+      "median_us": 117.542,
+      "rounds": 7314
+    },
+    {
+      "run": "primary-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 6349.479,
+      "median_us": 4502.553,
+      "rounds": 145
+    },
+    {
+      "run": "r1-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 118.409,
+      "median_us": 113.822,
+      "rounds": 7752
+    },
+    {
+      "run": "r1-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 5037.816,
+      "median_us": 4164.443,
+      "rounds": 123
+    },
+    {
+      "run": "r1-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 394.795,
+      "median_us": 384.797,
+      "rounds": 2235
+    },
+    {
+      "run": "r1-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 5044.964,
+      "median_us": 4275.105,
+      "rounds": 126
+    },
+    {
+      "run": "r2-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 120.326,
+      "median_us": 112.242,
+      "rounds": 6558
+    },
+    {
+      "run": "r2-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 4977.707,
+      "median_us": 4098.177,
+      "rounds": 159
+    },
+    {
+      "run": "r2-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 400.461,
+      "median_us": 387.012,
+      "rounds": 2268
+    },
+    {
+      "run": "r2-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 5429.799,
+      "median_us": 4138.738,
+      "rounds": 43
+    },
+    {
+      "run": "r3-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 122.002,
+      "median_us": 114.022,
+      "rounds": 7815
+    },
+    {
+      "run": "r3-candidate",
+      "variant": "candidate",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 4664.094,
+      "median_us": 4089.287,
+      "rounds": 109
+    },
+    {
+      "run": "r3-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_sync_hook",
+      "mean_us": 384.934,
+      "median_us": 382.202,
+      "rounds": 2284
+    },
+    {
+      "run": "r3-control",
+      "variant": "control",
+      "benchmark": "test_benchmark_observe_dispatch_async_hook",
+      "mean_us": 5090.002,
+      "median_us": 4177.508,
+      "rounds": 112
+    }
+  ]
+}

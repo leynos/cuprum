@@ -1,0 +1,4 @@
+variant: candidate
+interpreter: 3.14.4 (main, Apr 14 2026, 14:26:14) [Clang 22.1.3 ]
+package: <repo:candidate>/cuprum
+revision: 2dd64399560f0248fe5c4462d33f7b9644e5a18b

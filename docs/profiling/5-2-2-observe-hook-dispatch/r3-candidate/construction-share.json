@@ -1,0 +1,16 @@
+{
+  "caller_samples": {
+    "ExecEvent.__init__ reachable from the event-emission path": 19675
+  },
+  "construction_samples": 12562,
+  "construction_share_of_all_parent_percent": 31.9011,
+  "construction_share_percent": 33.0309,
+  "consume_samples": 38031,
+  "limit_percent": 30.0,
+  "matched_frames": {
+    "ExecEvent.__init__ reachable from the event-emission path": 12562
+  },
+  "parent_samples": 39378,
+  "status": "fail_above_limit",
+  "unresolved_frames": {}
+}
