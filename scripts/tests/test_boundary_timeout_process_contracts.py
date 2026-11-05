@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import boundary_compile, check_boundary_faults
+from scripts import boundary_compile, boundary_fault_invocations
 from scripts.boundary_cargo import offline_cargo_environment
 from scripts.tests import boundary_harness_support
 
@@ -186,9 +186,9 @@ def _run_with_recorded_cargo(
     """Drive one Cargo fault route through an argument-recording seam."""
     cargo_home = workspace.parent / "cargo-home"
     cargo_home.mkdir(exist_ok=True)
-    monkeypatch.setattr(check_boundary_faults, "ROOT", workspace.parent)
+    monkeypatch.setattr(boundary_fault_invocations, "ROOT", workspace.parent)
     monkeypatch.setattr(
-        check_boundary_faults,
+        boundary_fault_invocations,
         "read_tool_pins",
         lambda: SimpleNamespace(kani="0.1", verus="0.2"),
     )
@@ -217,16 +217,16 @@ def _run_with_recorded_cargo(
             return command
 
     monkeypatch.setattr(
-        check_boundary_faults.sh,
+        boundary_fault_invocations.sh,
         "make",
         lambda _program, *, catalogue: RecordingCargo(),
     )
     monkeypatch.setattr(
-        check_boundary_faults,
+        boundary_fault_invocations,
         "scoped",
         lambda _config: nullcontext(),
     )
-    result = check_boundary_faults._run("cargo", args, workspace)
+    result = boundary_fault_invocations._run("cargo", args, workspace)
     return calls, contexts, result
 
 
@@ -252,7 +252,7 @@ def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     )
     context = contexts[0]
     assert (
-        context.process_group is check_boundary_faults.ProcessGroupPolicy.OWN_GROUP
+        context.process_group is boundary_fault_invocations.ProcessGroupPolicy.OWN_GROUP
     ), "fault checks must own descendants for bounded termination"
     assert context.timeout == 1200, "the fault workload must keep its finite timeout"
     assert context.env is not None, (

@@ -11,13 +11,18 @@ from pathlib import Path
 
 import pytest
 
+from scripts import boundary_fault_invocations
 from scripts import check_boundary_faults as faults
 from scripts.check_boundary_faults import mutate
+from scripts.tests.boundary_fault_recorder import (
+    PROOF_FAULTS,
+    _RecordedRun,
+    drive,
+)
 from scripts.tests.boundary_harness_support import (
     copy_boundary_repository,
     latest_run_root,
     recorded_phases,
-    stub_cargo_preparation,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,109 +30,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # Repository-relative, for reading the fixture root the harness is pointed at.
 PROGRESS = "rust/cuprum-native-io/src/progress.rs"
 MEMORY = "rust/cuprum-native-io/src/memory.rs"
-# Workspace-relative, because the harness copies the crate tree to its root.
-MEMORY_IN_WORKSPACE = "cuprum-native-io/src/memory.rs"
-
-# What the harness archives each proof fault under, and the fragments that must
-# only ever appear in a rendered fault.
-PROOF_FAULTS = {
-    "invalid-bound": "count >= capacity",
-    "incorrect-accounting": "total - written",
-}
-
-# Fragments proving an ownership fault is currently planted in the workspace.
-OWNERSHIP_FAULTS = ("core::mem::forget(writer)", "core::mem::forget(retained)")
-
-# Exit codes chosen to be distinct, so a control that returned a fault's code
-# would not have run and a fault that returned a control's code was not caught.
-CONTROL_EXIT = 0
-FAULT_EXIT = 7
-
-# The diagnostic each verifier emits for a rejected check. Only the demanded
-# one is reported, so a harness that accepted any failure would fail.
-#
-# A rendered proof is checked by Verus (its `program` is the absolute verus
-# path). An ownership fault is a Cargo run, and which diagnostic it must
-# produce depends on the subcommand: `cargo kani` reports a failed
-# verification, while `cargo test` reports a failed test result.
-VERUS_DIAGNOSTIC = "verification results::"
-KANI_DIAGNOSTIC = "VERIFICATION:- FAILED"
-TEST_DIAGNOSTIC = "test result: FAILED"
-CARGO_DIAGNOSTICS = {"kani": KANI_DIAGNOSTIC, "test": TEST_DIAGNOSTIC}
-PROOF_TARGET = "progress-fault.rs"
-
-
-class _RecordedRun:
-    """Record every invocation while returning a result derived from the workspace.
-
-    A control is identified by the workspace still holding production source; a
-    fault is identified by the planted mutation. Deriving the result from the
-    workspace rather than from call order keeps the seam honest: if the harness
-    ran a control while a fault was planted, or ran without planting anything,
-    the expected diagnostic would not match and the test would fail.
-    """
-
-    def __init__(self, workspace: Path) -> None:
-        """Record the workspace under test and start with no calls."""
-        self.workspace = workspace
-        self.calls: list[tuple[str, tuple[str, ...]]] = []
-        self.target_dirs: list[Path | None] = []
-
-    def __call__(
-        self,
-        program: str,
-        args: tuple[str, ...],
-        workspace: Path,
-        target_dir: Path | None = None,
-    ) -> tuple[int, str]:
-        """Record one invocation and return the result its workspace implies.
-
-        Only the diagnostic that this specific check demands is returned, so a
-        harness that accepted any failure — rather than the designated one —
-        would still be caught.
-
-        Returns
-        -------
-        tuple[int, str]
-            The exit code and output the harness will classify.
-        """
-        self.calls.append((program, args))
-        self.target_dirs.append(target_dir)
-        proof = Path(args[0])
-        is_proof = proof.name == PROOF_TARGET
-        if is_proof:
-            source = proof.read_text(encoding="utf-8")
-            planted = any(fragment in source for fragment in PROOF_FAULTS.values())
-            rejected = VERUS_DIAGNOSTIC
-        else:
-            memory = (workspace / MEMORY_IN_WORKSPACE).read_text(encoding="utf-8")
-            planted = any(fragment in memory for fragment in OWNERSHIP_FAULTS)
-            rejected = CARGO_DIAGNOSTICS[args[0]]
-        if not planted:
-            return CONTROL_EXIT, f"{VERUS_DIAGNOSTIC}\n"
-        return FAULT_EXIT, f"{rejected}\n"
-
-    def names(self) -> list[str]:
-        """Return the invocation programs in call order."""
-        return [program for program, _args in self.calls]
-
-    def proof_targets(self) -> list[str]:
-        """Return the rendered proof file paths in call order."""
-        return [args[0].rsplit("/", 1)[-1] for _program, args in self.calls]
-
-
-def _drive(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Path, _RecordedRun]:
-    """Run the whole harness against a temporary repository copy."""
-    root = copy_boundary_repository(tmp_path)
-    runner = _RecordedRun(root / "rust")
-    monkeypatch.setattr(faults, "ROOT", root)
-    monkeypatch.setattr(faults, "_run", runner)
-    stub_cargo_preparation(monkeypatch, faults)
-    faults.main()
-    return root, runner
 
 
 def test_the_harness_launches_the_pinned_installer_versions() -> None:
@@ -156,7 +58,9 @@ def test_an_empty_pin_is_refused_rather_than_defaulted(
     """A blank pin must fail closed instead of naming a verifier that cannot exist."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/kani/VERSION").write_text("\n", encoding="utf-8")
-    monkeypatch.setattr(faults, "ROOT", root)
+    # Patching the re-exporting module would not reach the pin reader, which
+    # resolves `ROOT` in the module that defines it.
+    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     with pytest.raises(ValueError, match="records no version"):
         faults.read_tool_pins()
 
@@ -167,7 +71,7 @@ def test_a_missing_pin_is_a_hard_failure(
     """An absent pin propagates rather than silently defaulting a version."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/verus/VERSION").unlink()
-    monkeypatch.setattr(faults, "ROOT", root)
+    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     with pytest.raises(FileNotFoundError):
         faults.read_tool_pins()
 
@@ -190,7 +94,7 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """main() copies the workspace and drives the proof and ownership faults."""
-    root, runner = _drive(tmp_path, monkeypatch)
+    root, runner = drive(tmp_path, monkeypatch)
     run_root = latest_run_root(root, "boundary-faults")
     workspace = run_root / "workspace"
     assert workspace.is_dir(), "the harness must copy the workspace before mutating"
@@ -381,7 +285,7 @@ def test_an_ownership_control_builds_apart_from_its_fault(
     harness and archive a failed verification for production source, which is
     the defect that made this check flaky rather than sensitive.
     """
-    root, runner = _drive(tmp_path, monkeypatch)
+    root, runner = drive(tmp_path, monkeypatch)
     run_root = latest_run_root(root, "boundary-faults")
     harness = [
         target

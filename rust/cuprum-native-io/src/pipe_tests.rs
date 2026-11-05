@@ -110,7 +110,7 @@ fn count_of(count: isize) -> io::Result<usize> {
 /// primitives demand the synchronous-I/O capability, which the platform cannot
 /// verify from a bare handle and so must be asserted.
 #[cfg(unix)]
-fn primitive_stream(stream: BorrowedStream<'_>) -> BorrowedStream<'_> { stream }
+const fn primitive_stream(stream: BorrowedStream<'_>) -> BorrowedStream<'_> { stream }
 
 /// Present a borrowed endpoint as the platform's single-call stream type.
 ///
