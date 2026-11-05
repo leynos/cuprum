@@ -14,9 +14,11 @@ entirely.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import typing as typ
 
+import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
@@ -100,6 +102,22 @@ def _contains(
     )
 
 
+def _recount(capture: Capture) -> tuple[int, int, int, int]:
+    """Recount anchor, exact-target, name-only, and out-of-anchor weights."""
+    anchor = exact = name_only = outside = 0
+    for stack in capture.stacks:
+        if not _contains(stack, "emit_line", "cuprum/_line_callbacks.py"):
+            if _contains(stack, "isawaitable", "inspect.py"):
+                outside += stack.samples
+            continue
+        anchor += stack.samples
+        if _contains(stack, "isawaitable", "inspect.py"):
+            exact += stack.samples
+        if _contains(stack, "isawaitable", None):
+            name_only += stack.samples
+    return anchor, exact, name_only, outside
+
+
 @example(
     capture=Capture(
         stacks=(
@@ -113,35 +131,19 @@ def _contains(
 def test_census_matches_a_brute_force_recount(capture: Capture) -> None:
     """Every reported weight equals an independent recount over the stacks."""
     result = census_module.census(capture, _ANCHOR, _TARGET)
-    anchored = [
-        stack
-        for stack in capture.stacks
-        if _contains(stack, "emit_line", "cuprum/_line_callbacks.py")
-    ]
-    exact = [
-        stack for stack in anchored if _contains(stack, "isawaitable", "inspect.py")
-    ]
-    name_only = [stack for stack in anchored if _contains(stack, "isawaitable", None)]
-    outside = [
-        stack
-        for stack in capture.stacks
-        if _contains(stack, "isawaitable", "inspect.py")
-        and not _contains(stack, "emit_line", "cuprum/_line_callbacks.py")
-    ]
+    anchor, exact, name_only, outside = _recount(capture)
 
     assert result.total_weight == capture.parent_samples, "total must be every sample"
-    assert result.anchor_weight == sum(stack.samples for stack in anchored), (
-        "anchor weight must be the anchored stacks"
-    )
-    assert result.target_weight == sum(stack.samples for stack in exact), (
+    assert result.anchor_weight == anchor, "anchor weight must be the anchored stacks"
+    assert result.target_weight == exact, (
         "target weight must be the anchored stacks reaching the target exactly"
     )
-    assert result.target_weight_any_location == sum(
-        stack.samples for stack in name_only
-    ), "name-only weight must be the anchored stacks reaching the name"
-    assert result.target_weight_outside_anchor == sum(
-        stack.samples for stack in outside
-    ), "outside weight must be the stacks reaching the target without the anchor"
+    assert result.target_weight_any_location == name_only, (
+        "name-only weight must be the anchored stacks reaching the name"
+    )
+    assert result.target_weight_outside_anchor == outside, (
+        "outside weight must be the stacks reaching the target without the anchor"
+    )
 
 
 def _write_capture(tmp_path: pth.Path, text: str) -> pth.Path:
@@ -151,30 +153,45 @@ def _write_capture(tmp_path: pth.Path, text: str) -> pth.Path:
     return path
 
 
-def _run(
-    tmp_path: pth.Path,
-    text: str,
-    *,
-    anchor: str = "emit_line@cuprum/_line_callbacks.py",
-    target: str = "isawaitable@inspect.py",
-    floor: int = 1,
-) -> tuple[int, dict[str, object]]:
-    """Run the census over ``text`` and return its exit status and document."""
+@dataclasses.dataclass(frozen=True)
+class _Spec:
+    """Census options for one test run: the frame patterns and the anchor floor."""
+
+    anchor: str = "emit_line@cuprum/_line_callbacks.py"
+    target: str = "isawaitable@inspect.py"
+    floor: int = 1
+
+
+_DEFAULT_SPEC = _Spec()
+
+
+def _invoke(tmp_path: pth.Path, text: str, spec: _Spec) -> tuple[int, pth.Path]:
+    """Run the census over ``text`` and report its status and output path."""
     folded = _write_capture(tmp_path, text)
     output = tmp_path / "census.json"
     status = census_module.main(
         [
             str(folded),
             "--anchor",
-            anchor,
+            spec.anchor,
             "--target",
-            target,
+            spec.target,
             "--min-anchor-weight",
-            str(floor),
+            str(spec.floor),
             "--output",
             str(output),
         ],
     )
+    return status, output
+
+
+def _run(
+    tmp_path: pth.Path,
+    text: str,
+    spec: _Spec = _DEFAULT_SPEC,
+) -> tuple[int, dict[str, object]]:
+    """Run the census over ``text`` and return its exit status and document."""
+    status, output = _invoke(tmp_path, text, spec)
     document = output.read_text() if output.exists() else "{}"
     return status, typ.cast("dict[str, object]", json.loads(document))
 
@@ -187,7 +204,7 @@ def _line(*frames: str, samples: int) -> str:
 def test_absence_under_the_anchor_passes(tmp_path: pth.Path) -> None:
     """A capture with no target under the anchor proves absence and exits 0."""
     capture = _line(_OTHER_TEXT, samples=100) + _line(_ANCHOR_TEXT, samples=200)
-    status, result = _run(tmp_path, capture, floor=200)
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
 
     assert result["status"] == "pass", "zero target weight must pass"
     assert result["anchor_weight"] == 200, "both anchored samples count"
@@ -201,7 +218,7 @@ def test_absence_under_the_anchor_passes(tmp_path: pth.Path) -> None:
 def test_presence_under_the_anchor_fails(tmp_path: pth.Path) -> None:
     """A target that survives under the anchor exits 1."""
     capture = _line(_ANCHOR_TEXT, _TARGET_TEXT, samples=200)
-    status, result = _run(tmp_path, capture, floor=200)
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
 
     assert result["status"] == "fail_target_present", "a surviving target must fail"
     assert result["target_weight"] == 200, "the one stack carries all the weight"
@@ -214,7 +231,7 @@ def test_presence_under_the_anchor_fails(tmp_path: pth.Path) -> None:
 def test_target_outside_the_anchor_never_counts(tmp_path: pth.Path) -> None:
     """A target reached without the anchor is reported but not scored."""
     capture = _line(_ANCHOR_TEXT, samples=200) + _line(_TARGET_TEXT, samples=50)
-    status, result = _run(tmp_path, capture, floor=200)
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
 
     assert result["target_weight"] == 0, "out-of-anchor target samples do not score"
     assert result["target_weight_any_location"] == 0, (
@@ -229,7 +246,7 @@ def test_target_outside_the_anchor_never_counts(tmp_path: pth.Path) -> None:
 def test_target_repeated_in_one_stack_counts_once(tmp_path: pth.Path) -> None:
     """A stack matching the target twice contributes its weight once."""
     capture = _line(_ANCHOR_TEXT, _TARGET_TEXT, _TARGET_TEXT, samples=200)
-    status, result = _run(tmp_path, capture, floor=200)
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
 
     assert result["target_weight"] == 200, "one stack must be counted once"
     assert status == 1, "a repeated target still proves presence"
@@ -242,7 +259,7 @@ def test_target_at_another_location_is_only_name_visible(
     capture = _line(_ANCHOR_TEXT, _TARGET_ELSEWHERE_TEXT, samples=200) + _line(
         _ANCHOR_TEXT, _TARGET_TEXT, samples=100
     )
-    status, result = _run(tmp_path, capture, floor=200)
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
 
     assert result["target_weight"] == 100, "only the exact location scores"
     assert result["target_weight_any_location"] == 300, (
@@ -257,7 +274,7 @@ def test_target_at_another_location_is_only_name_visible(
 def test_anchor_below_the_floor_is_inconclusive(tmp_path: pth.Path) -> None:
     """Zero target weight is not evidence when the anchor was rarely sampled."""
     capture = _line(_ANCHOR_TEXT, samples=10)
-    status, result = _run(tmp_path, capture, floor=14_000)
+    status, result = _run(tmp_path, capture, _Spec(floor=14_000))
 
     assert result["status"] == "anchor_below_floor", "a thin anchor proves nothing"
     assert status == 2, "an unsupported claim exits 2"
@@ -270,55 +287,36 @@ def test_empty_capture_is_inconclusive(tmp_path: pth.Path) -> None:
     assert status == 2, "an empty capture cannot prove absence"
 
 
-def test_spec_without_a_location_is_rejected(tmp_path: pth.Path) -> None:
-    """An anchor without a location cannot identify a frame."""
-    capture = _line(_ANCHOR_TEXT, samples=1)
-    folded = _write_capture(tmp_path, capture)
-    output = tmp_path / "census.json"
-    status = census_module.main(
-        [
-            str(folded),
-            "--anchor",
-            "emit_line",
-            "--target",
-            "isawaitable@inspect.py",
-            "--min-anchor-weight",
-            "1",
-            "--output",
-            str(output),
-        ],
-    )
-
-    assert status == 2, "a location-less anchor must be rejected"
-    assert not output.exists(), "a rejected run must write no result"
-
-
-def test_spec_with_two_separators_is_rejected(tmp_path: pth.Path) -> None:
-    """An over-specified anchor is rejected rather than silently truncated."""
-    capture = _line(_ANCHOR_TEXT, samples=1)
-    folded = _write_capture(tmp_path, capture)
-    output = tmp_path / "census.json"
-    status = census_module.main(
-        [
-            str(folded),
-            "--anchor",
+@pytest.mark.parametrize(
+    ("anchor", "reason"),
+    [
+        ("emit_line", "a location-less anchor must be rejected"),
+        (
             "emit_line@cuprum/_line_callbacks.py@extra",
-            "--target",
-            "isawaitable@inspect.py",
-            "--min-anchor-weight",
-            "1",
-            "--output",
-            str(output),
-        ],
+            "an over-specified anchor must be rejected",
+        ),
+    ],
+    ids=["missing-location", "two-separators"],
+)
+def test_malformed_anchor_spec_is_rejected(
+    tmp_path: pth.Path,
+    anchor: str,
+    reason: str,
+) -> None:
+    """An anchor that is not exactly ``function@location`` is rejected."""
+    status, output = _invoke(
+        tmp_path,
+        _line(_ANCHOR_TEXT, samples=1),
+        _Spec(anchor=anchor),
     )
 
-    assert status == 2, "an over-specified anchor must be rejected"
+    assert status == 2, reason
     assert not output.exists(), "a rejected run must write no result"
 
 
 def test_negative_floor_is_rejected(tmp_path: pth.Path) -> None:
     """A negative floor would make every capture vacuously pass."""
     capture = _line(_ANCHOR_TEXT, samples=1)
-    status, _ = _run(tmp_path, capture, floor=-1)
+    status, _ = _run(tmp_path, capture, _Spec(floor=-1))
 
     assert status == 2, "a negative floor must be rejected"
