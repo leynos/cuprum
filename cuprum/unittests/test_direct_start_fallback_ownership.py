@@ -161,6 +161,79 @@ def _select_the_asyncio_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+class _Effects(typ.NamedTuple):
+    """What a failed run and its reclaim left observable."""
+
+    pid: int
+    descriptors: tuple[int | None, ...]
+    descendant_alive: bool
+    bounded: bool
+    reaped: bool
+
+
+async def _run_until_the_hook_fails(
+    command: sh.SafeCmd,
+    spawned: list[tuple[asyncio.subprocess.Process, tuple[int | None, ...]]],
+    pid_file: pathlib.Path,
+) -> _Effects:
+    """Run the command, and read the reclaim's effects inside the loop.
+
+    The descriptor and liveness readings are taken before this coroutine
+    returns, because the event loop is torn down immediately afterwards: a
+    transport that had merely been asked to close would never get its
+    callback, so reading here is what makes "closed" mean closed.
+
+    Returns
+    -------
+    _Effects
+        The child's pid and output-pipe descriptors, whether the descendant is
+        still alive, whether the reclaim stayed inside its bound, and whether
+        the child was reaped.
+    """
+    started_at = time.monotonic()
+    with pytest.raises(_StartHookError):
+        await command.run(output=RunOutputOptions())
+    elapsed = time.monotonic() - started_at
+    assert len(spawned) == 1, f"expected one spawn, got {len(spawned)}"
+    process, descriptors = spawned[0]
+    descendant_pid = _recorded_pid(pid_file)
+    assert descendant_pid is not None, "the hook must have seen the pid file"
+    return _Effects(
+        pid=process.pid,
+        descriptors=descriptors,
+        descendant_alive=_is_running(descendant_pid),
+        bounded=elapsed < _RECLAIM_BOUND_S,
+        reaped=process.returncode is not None,
+    )
+
+
+def _assert_the_reclaim_released_everything(effects: _Effects) -> None:
+    """Assert the child was reaped and the pipes released, inside the bound."""
+    assert effects.reaped, (
+        "the direct child must be reaped by the time the hook's error "
+        "reaches the caller"
+    )
+    wait_for_process_death(effects.pid, context="a failed start hook on the fallback")
+    assert effects.bounded, (
+        f"the reclaim took longer than {_RECLAIM_BOUND_S}s; it must be "
+        "bounded by the end-of-file grace rather than wait for the "
+        "descendant to exit"
+    )
+    assert effects.descendant_alive, (
+        "the descendant must still hold the pipes when the descriptors are "
+        "read, or this case proves nothing about releasing them"
+    )
+    for fd in effects.descriptors:
+        assert fd is not None, (
+            "each captured stream must have a parent-side pipe whose "
+            "descriptor this case can watch"
+        )
+        assert not _is_fd_open(fd), (
+            f"descriptor {fd} must be closed before the event loop is torn "
+            "down, even though no end-of-file arrived"
+        )
+
+
 @_posix_only
 def test_public_run_releases_the_fallback_pipes_a_descendant_holds(
     monkeypatch: pytest.MonkeyPatch,
@@ -188,66 +261,13 @@ def test_public_run_releases_the_fallback_pipes_a_descendant_holds(
     _select_the_asyncio_fallback(monkeypatch)
     spawned = _record_spawns(monkeypatch)
 
-    async def run_case() -> tuple[int, tuple[int | None, ...], bool, bool, bool]:
-        """Run the command, and read the reclaim's effects inside the loop.
-
-        The descriptor and liveness readings are taken before this coroutine
-        returns, because the event loop is torn down immediately afterwards: a
-        transport that had merely been asked to close would never get its
-        callback, so reading here is what makes "closed" mean closed.
-
-        Returns
-        -------
-        tuple[int, tuple[int | None, ...], bool, bool, bool]
-            The child's pid, its output-pipe descriptors, whether the
-            descendant is still alive, whether the reclaim stayed inside its
-            bound, and whether the child was reaped.
-        """
-        started_at = time.monotonic()
-        with pytest.raises(_StartHookError):
-            await command.run(output=RunOutputOptions())
-        elapsed = time.monotonic() - started_at
-        assert len(spawned) == 1, f"expected one spawn, got {len(spawned)}"
-        process, descriptors = spawned[0]
-        descendant_pid = _recorded_pid(pid_file)
-        assert descendant_pid is not None, "the hook must have seen the pid file"
-        return (
-            process.pid,
-            descriptors,
-            _is_running(descendant_pid),
-            elapsed < _RECLAIM_BOUND_S,
-            process.returncode is not None,
-        )
-
     with (
         scoped(ScopeConfig(allowlist=catalogue.allowlist)),
         sh.observe(_fail_start_once_the_descendant_is_recorded(events, pid_file)),
     ):
-        pid, descriptors, descendant_alive, bounded, reaped = asyncio.run(run_case())
+        effects = asyncio.run(_run_until_the_hook_fails(command, spawned, pid_file))
 
     try:
-        assert reaped, (
-            "the direct child must be reaped by the time the hook's error "
-            "reaches the caller"
-        )
-        wait_for_process_death(pid, context="a failed start hook on the fallback")
-        assert bounded, (
-            f"the reclaim took longer than {_RECLAIM_BOUND_S}s; it must be "
-            "bounded by the end-of-file grace rather than wait for the "
-            "descendant to exit"
-        )
-        assert descendant_alive, (
-            "the descendant must still hold the pipes when the descriptors are "
-            "read, or this case proves nothing about releasing them"
-        )
-        for fd in descriptors:
-            assert fd is not None, (
-                "each captured stream must have a parent-side pipe whose "
-                "descriptor this case can watch"
-            )
-            assert not _is_fd_open(fd), (
-                f"descriptor {fd} must be closed before the event loop is torn "
-                "down, even though no end-of-file arrived"
-            )
+        _assert_the_reclaim_released_everything(effects)
     finally:
         _kill_descendant(_recorded_pid(pid_file))

@@ -59,6 +59,21 @@ class _Run(typ.NamedTuple):
     capturers: list[tuple[object, ...]]
 
 
+class _Case(typ.NamedTuple):
+    """What one reclaim attempt was told to do, shared by every step stand-in.
+
+    The stand-ins are substituted for what the real steps call, so each one is
+    handed the whole case as a single argument. Keeping the fields together
+    also lets a case pause the first step without every other signature having
+    to carry a gate it never reads.
+    """
+
+    run: _Run
+    failing: frozenset[str]
+    errors: dict[str, BaseException]
+    gate: asyncio.Event | None = None
+
+
 class _FakeTask:
     """A cancellable stand-in for a task the failed setup had started.
 
@@ -113,70 +128,50 @@ def _process(run: _Run) -> asyncio.subprocess.Process:
 
 
 async def _terminate(
-    run: _Run,
-    failing: frozenset[str],
-    errors: dict[str, BaseException],
-    gate: asyncio.Event | None,
+    case: _Case,
     *_args: object,
     **_kwargs: object,
 ) -> None:
-    """Stand in for the termination step, pausing at *gate* when supplied.
+    """Stand in for the termination step, pausing at the case's gate.
 
     The pause is what lets a case cancel the caller while the sequence is
     provably mid-flight.
     """
-    run.order.append("terminate")
-    if gate is not None:
-        gate.set()
+    case.run.order.append("terminate")
+    if case.gate is not None:
+        case.gate.set()
         await asyncio.sleep(0.05)
-    if "terminate" in failing:
-        raise errors["terminate"]
+    if "terminate" in case.failing:
+        raise case.errors["terminate"]
 
 
-async def _discard(
-    run: _Run,
-    failing: frozenset[str],
-    errors: dict[str, BaseException],
-    *_args: object,
-) -> None:
+async def _discard(case: _Case, *_args: object) -> None:
     """Stand in for the output-discard step, yielding as the real drain does."""
-    run.order.append("discard")
+    case.run.order.append("discard")
     await asyncio.sleep(0)
-    if "discard" in failing:
-        raise errors["discard"]
+    if "discard" in case.failing:
+        raise case.errors["discard"]
 
 
-async def _cleanup_captures(
-    run: _Run,
-    failing: frozenset[str],
-    errors: dict[str, BaseException],
-    *args: object,
-) -> None:
+async def _cleanup_captures(case: _Case, *args: object) -> None:
     """Stand in for the capture-cleanup step, recording what it was given."""
-    run.order.append("capture_cleanup")
-    run.capturers.append(typ.cast("tuple[object, ...]", args[0]))
+    case.run.order.append("capture_cleanup")
+    case.run.capturers.append(typ.cast("tuple[object, ...]", args[0]))
     await asyncio.sleep(0)
-    if "capture_cleanup" in failing:
-        raise errors["capture_cleanup"]
+    if "capture_cleanup" in case.failing:
+        raise case.errors["capture_cleanup"]
 
 
-def _install_steps(
-    stack: contextlib.ExitStack,
-    run: _Run,
-    *,
-    failing: frozenset[str],
-    errors: dict[str, BaseException],
-    gate: asyncio.Event | None = None,
-) -> None:
+def _install_steps(stack: contextlib.ExitStack, case: _Case) -> None:
     """Replace what each step calls, leaving the steps themselves intact.
 
     The substitution is one level *below* the sequence, so the per-step
     suppression these properties are about still runs.
     """
     for name, replacement in (
-        ("_terminate_all_shielded", partial(_terminate, run, failing, errors, gate)),
-        ("_discard_outputs", partial(_discard, run, failing, errors)),
-        ("_cleanup_capture_sinks", partial(_cleanup_captures, run, failing, errors)),
+        ("_terminate_all_shielded", partial(_terminate, case)),
+        ("_discard_outputs", partial(_discard, case)),
+        ("_cleanup_capture_sinks", partial(_cleanup_captures, case)),
     ):
         stack.enter_context(mock.patch.object(reclaim, name, replacement))
 
@@ -245,7 +240,7 @@ def test_every_step_gets_its_turn_and_reports_its_own_failure(
 
     with contextlib.ExitStack() as stack:
         _install_reporter(stack, run)
-        _install_steps(stack, run, failing=frozen, errors=errors)
+        _install_steps(stack, _Case(run, frozen, errors))
 
         async def run_case() -> None:
             """Abandon once, letting any escaped error reach this frame."""
@@ -287,7 +282,7 @@ def test_a_cancelled_caller_still_completes_the_sequence(
         gate = asyncio.Event()
         with contextlib.ExitStack() as stack:
             _install_reporter(stack, run)
-            _install_steps(stack, run, failing=frozen, errors=errors, gate=gate)
+            _install_steps(stack, _Case(run, frozen, errors, gate))
             task = asyncio.ensure_future(_abandon(run, frozen, errors))
             await gate.wait()
             task.cancel()
@@ -321,7 +316,7 @@ def test_a_reclaim_where_every_step_fails_raises_nothing() -> None:
 
     with contextlib.ExitStack() as stack:
         _install_reporter(stack, run)
-        _install_steps(stack, run, failing=frozen, errors=errors)
+        _install_steps(stack, _Case(run, frozen, errors))
         asyncio.run(_abandon(run, frozen, errors))
 
     assert run.order == list(_STEP_NAMES), (
