@@ -227,7 +227,8 @@ ownership and error contracts, stop and report the exact incompatibility.
   owns that boundary; this both colocates the Windows-only contracts and brings
   the source file back under the 400-line cap. Typecheck, Ruff, Pylint, the
   maturin snapshot test, and 143 focused tests (6 skipped as Windows-only)
-  pass. The full gate bundle must be re-run against the repaired commit.
+  pass. The full gate bundle is then re-run against the repaired commit; see
+  the next entry.
 - [x] (2026-11-05) The re-run against `58c87c49d` passed `make test` (1,147 s)
   and `make typecheck` (the nine diagnostics are gone). `make check-fmt` failed
   on `mdtablefix` prose wrapping in this plan, and `make lint` failed its
@@ -247,6 +248,23 @@ ownership and error contracts, stop and report the exact incompatibility.
   belongs in its own change, and doing it here would obscure which defects this
   branch introduced. It is also not required, since `interrogate` only fails
   below the rounded 100.0% display and `main` clears it.
+- [x] (2026-11-05) M1, M2, and M3 are implemented and committed. The branch
+  sits directly on `origin/main` at `e170f908f` and needs no rebase. Roadmap
+  6.1.2 is checked on the strength of the implementation's static criteria,
+  each confirmed by inspection: `proptest` is configured with
+  `max_shrink_iters` and `max_shrink_time` and
+  `FileFailurePersistence::WithSource("proptest-regressions")`; four curated
+  seeds are committed in
+  `rust/cuprum-rust/tests/fixtures/consume_boundary_seeds.txt`; the small
+  domain covers empty, ASCII, and 2-, 3-, and 4-byte UTF-8 with invalid bytes,
+  across buffer bands including the default and one above it; the large domain
+  covers the nine lengths around 1 MiB; and the M3 acceptance scenarios are
+  present in `tests/features/rust_streams.feature`, including the explicit
+  1,048,577-byte scenario and the descriptor-stays-open assertion. The runtime
+  evidence for these criteria is the `make test-extension` target in the final
+  bundle below; the checkbox asserts that the work exists and is exercised by
+  that target, not that the bundle has already run.
+- [ ] Final gate bundle and PR review.
 - [ ] Mark roadmap 6.1.2 done only after implementation acceptance.
 
 ## Surprises & discoveries
@@ -382,7 +400,7 @@ The mutation was restored, its helper SHA-256 matched the saved digest, no
 failure seed was retained, and `git write-tree` remained the validated tree.
 M1's bridge and routing acceptance are satisfied. M2 implementation and focused
 acceptance are recorded below. Its full sequential gates passed on the
-candidate tree; the milestone commit remains pending.
+candidate tree, and the milestone work is committed.
 
 On 2026-10-26, M2 added shrinkable generated domains, named UTF-8 and buffer
 split witnesses, all nine 1 MiB boundary lengths, curated fixed-seed replay,
