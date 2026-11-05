@@ -43,6 +43,7 @@ class _ProducerExitError(RuntimeError):
     """Report a producer that failed before the consumer saw end of input."""
 
     def __init__(self, status: int, diagnostics: bytes) -> None:
+        """Keep the exit status and the captured diagnostics for the report."""
         super().__init__(f"producer exited {status}: {diagnostics!r}")
         self.status = status
         self.diagnostics = diagnostics
@@ -56,6 +57,7 @@ class _ConsumerOutcomeError(RuntimeError):
     """Re-raise a consumer failure outside its reporting thread."""
 
     def __init__(self, cause: BaseException) -> None:
+        """Retain the originating failure so the caller can re-raise it."""
         super().__init__("native consumer failed")
         self.cause = cause
 
