@@ -743,7 +743,16 @@ test-rust: $(RUST_DEBUG_PREREQUISITE) ## Run the Rust suite
 	target_root="$(abspath $(RUST_DIR))/target"; \
 	mkdir -p "$$target_root"; \
 	run_root=$$(mktemp -d "$$target_root/.cuprum-test-run.XXXXXX"); \
-	cleanup() { rm -rf "$$run_root"; }; \
+	suite_status=1; \
+	preserve_diagnostics() { \
+	  diagnostics="$$run_root/cargo-diagnostics.jsonl"; \
+	  if [ -f "$$diagnostics" ]; then \
+	    retained="$$target_root/$$(basename "$$run_root")-cargo-diagnostics.jsonl"; \
+	    cp "$$diagnostics" "$$retained"; \
+	    printf 'Cargo diagnostics retained at %s\n' "$$retained" >&2; \
+	  fi; \
+	}; \
+	cleanup() { if [ "$$suite_status" -ne 0 ]; then preserve_diagnostics; fi; rm -rf "$$run_root"; }; \
 	handle_signal() { trap - EXIT INT TERM; cleanup; exit "$$1"; }; \
 	trap cleanup EXIT; \
 	trap 'handle_signal 130' INT; \

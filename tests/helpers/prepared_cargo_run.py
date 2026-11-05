@@ -9,6 +9,8 @@ import typing as typ
 
 import pytest
 
+from scripts.cargo_diagnostics import DIAGNOSTICS_FILE_NAME
+from scripts.cargo_preparation import PreparationContext
 from scripts.cargo_state import (
     cargo_environment,
     create_run_cargo_home,
@@ -81,7 +83,14 @@ def prepared_cargo_run(
     repository_root = repo_root()
     run_root = tmp_path_factory.mktemp("cargo-run")
     preparation_started = time.monotonic()
-    snapshot = prepare_cargo_snapshot(repository_root, default_snapshot_root())
+    context = PreparationContext(
+        diagnostics_path=run_root / DIAGNOSTICS_FILE_NAME,
+    )
+    snapshot = prepare_cargo_snapshot(
+        repository_root,
+        default_snapshot_root(),
+        context=context,
+    )
     cargo_home = create_run_cargo_home(
         snapshot.path,
         run_root,
