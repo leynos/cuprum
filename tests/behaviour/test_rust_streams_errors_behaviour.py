@@ -146,14 +146,9 @@ def when_native_helper_receives(
 
     match failure:
         case "a zero buffer size":
-            # The reader is never dereferenced — buffer validation runs first —
-            # but it must still be one the wrapper can prepare. ``-1`` is not:
-            # on Windows the wrapper resolves the reader through
-            # ``msvcrt.get_osfhandle``, which raises ``OSError(EBADF)`` for it
-            # before the native buffer check can run, so the row would observe
-            # the wrapper's descriptor failure rather than the native category
-            # it pins. An open read end survives that preparation on every
-            # platform.
+            # The reader is never dereferenced because native buffer
+            # validation runs first. Keep it open so this row stays focused on
+            # the documented argument error on every platform.
             with contextlib.ExitStack() as stack:
                 reader = os.open(os.devnull, os.O_RDONLY)
                 stack.callback(_safe_close, reader)
@@ -169,15 +164,9 @@ def when_native_helper_receives(
                 kwargs = {"buffer_size": 0}
                 return _capture(entry_point, args, kwargs)
         case "a fatal reader error":
-            # The reader must be *open but unreadable*, not closed. A closed
-            # descriptor never reaches Rust on Windows: the wrapper resolves it
-            # through ``msvcrt.get_osfhandle`` during preparation, which raises
-            # ``OSError(EBADF)`` there, so the row would pass on the wrapper's
-            # descriptor failure rather than on the native read path it pins —
-            # the same vacuous pass the row above avoids. A file opened
-            # ``O_WRONLY`` is open on every platform yet fails the first read,
-            # which is also the device ``test_rust_errno_windows.py`` uses to
-            # put a native code on the error the conversion must retain.
+            # The reader must be open but unreadable so the failure reaches the
+            # native read. A file opened ``O_WRONLY`` is a valid descriptor on
+            # each platform and fails at the read operation itself.
             with contextlib.ExitStack() as stack:
                 unreadable = os.open(
                     tmp_path / "write-only.bin", os.O_WRONLY | os.O_CREAT

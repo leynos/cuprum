@@ -3879,7 +3879,13 @@ The Rust extension exposes three functions via PyO3. As of 4.2.2,
 Only `rust_pump_stream` is currently routed by production dispatch.
 `rust_consume_stream` is implemented, tested, and exported for direct internal
 experimentation, but stdout and stderr consumption still uses the Python
-implementation until ADR-002 Phase 2 lands.
+implementation until ADR-002 Phase 2 lands. The Python helper supports native
+consume on Windows by duplicating the caller's CRT descriptor, setting only
+that duplicate to binary mode, and closing it after the synchronous native
+call. The Windows consume boundary uses CRT `_read`; it does not reinterpret a
+descriptor as a Win32 handle or relax the pump's synchronous-handle checks. The
+platform-specific helpers live in `cuprum/_streams_windows.py`; production use
+is limited to the extension shim's Windows setup and cleanup boundary.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
@@ -3942,6 +3948,12 @@ def rust_consume_stream(
     str
         Decoded stream content.
 
+    Notes
+    -----
+    The Python wrapper makes Windows reads binary and preserves the caller's
+    CRT descriptor. Direct extension calls on Windows require an open binary-
+    mode CRT descriptor for the duration of the call.
+
     """
     ...
 
@@ -3966,8 +3978,8 @@ echo sink and no line callbacks, and should keep Python fallback as the
 behavioural reference.
 
 For screen readers: The following sequence diagram shows the Python-to-Rust
-call flow for `rust_consume_stream`, including buffer validation, file
-handling, and incremental decoding.
+call flow for `rust_consume_stream`, including platform-specific reader
+preparation and the shared incremental decoder.
 
 ```mermaid
 sequenceDiagram
@@ -3979,16 +3991,27 @@ sequenceDiagram
     participant ImplFiles as consume_stream_files
 
     PyCaller->>PyShim: rust_consume_stream(reader_fd, buffer_size)
-    PyShim->>PyRust: rust_consume_stream(converted_fd, buffer_size)
+    PyShim->>PyShim: validate buffer_size
+    alt Windows CRT descriptor
+        PyShim->>PyShim: duplicate reader and set O_BINARY
+        PyShim->>PyRust: rust_consume_stream(duplicate_crt_fd, buffer_size)
+    else Unix descriptor
+        PyShim->>PyRust: rust_consume_stream(reader_fd, buffer_size)
+    end
 
     PyRust->>RustFn: call via PyO3
     RustFn->>RustFn: validate_buffer_size(buffer_size)
-    RustFn->>RustFn: convert_fd(reader_fd)
-    RustFn->>Impl: detach and call consume_stream(reader_fd, buffer_size)
-    Note over RustFn,Impl: GIL released during I/O
-
-    Impl->>Impl: file_from_raw(reader_fd)
-    Impl->>ImplFiles: consume_stream_files(&mut file, buffer_size)
+    alt Windows CRT descriptor
+        RustFn->>RustFn: validate CRT descriptor
+        RustFn->>Impl: detach and call consume_crt_stream(reader_fd, buffer_size)
+        Note over RustFn,Impl: GIL released during I/O
+        Impl->>ImplFiles: read_crt_stream with _read
+    else Unix descriptor
+        RustFn->>RustFn: borrow descriptor
+        RustFn->>Impl: detach and call consume_stream(reader_fd, buffer_size)
+        Note over RustFn,Impl: GIL released during I/O
+        Impl->>ImplFiles: consume_stream_files(reader_fd, buffer_size)
+    end
 
     loop read loop
         ImplFiles->>ImplFiles: read(buffer)
@@ -3998,7 +4021,6 @@ sequenceDiagram
 
     ImplFiles->>ImplFiles: decode_utf8_replace(pending, output, final_chunk=true)
     ImplFiles-->>Impl: Ok(output_string)
-
     Impl-->>RustFn: Ok(output_string)
     RustFn-->>PyShim: Python str result
     PyShim-->>PyCaller: decoded text

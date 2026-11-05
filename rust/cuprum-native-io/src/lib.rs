@@ -230,6 +230,8 @@ pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
 mod ownership_tests;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_crt;
 #[cfg(all(test, windows))]
 pub(crate) use windows::fd_is_open;
 #[cfg(windows)]
@@ -241,3 +243,5 @@ pub use windows::{
     synchronous_pipe,
     write_once,
 };
+#[cfg(windows)]
+pub use windows_crt::{BorrowedCrtFileDescriptor, borrow_crt_reader, read_crt_once};
