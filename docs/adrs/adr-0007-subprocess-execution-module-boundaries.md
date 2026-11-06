@@ -1522,11 +1522,12 @@ behind is therefore visible to an operator instead of being silently discarded.
 The categories are literals — `terminate`, `task_settle`, `stdin_close`,
 `output_discard`, `transport_close`, and `capture_cleanup` — which is what lets
 `cuprum_teardown_errors_total` label them as `operation` without unbounded
-cardinality. Reporting is itself best-effort, because a misconfigured log
-handler must not replace the error being described. A cancellation is not
-suppressed; it propagates only once the whole sequence has completed, which is
-exactly what the one shield buys — three sequential shields would let a
-cancellation cut the reclaim short between steps.
+cardinality; an event naming any other operation is counted under the single
+fallback value `unknown` rather than repeated verbatim. Reporting is itself
+best-effort, because a misconfigured log handler must not replace the error
+being described. A cancellation is not suppressed; it propagates only once the
+whole sequence has completed, which is exactly what the one shield buys — three
+sequential shields would let a cancellation cut the reclaim short between steps.
 
 The order is not incidental. The child is stopped first because both drain
 policies wait for their consumers to reach end-of-file, and a live child can

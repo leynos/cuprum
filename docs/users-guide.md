@@ -2703,6 +2703,29 @@ The drain failure is absorbed so it cannot displace `TimeoutExpired` or
 `CancelledError`. Logging is best-effort; the same values are emitted as
 `timeout` and `teardown_error` events, so the two channels cannot disagree.
 
+#### Startup reclaim diagnostics
+
+A startup that fails after the child was spawned is reclaimed before the
+failure reaches the caller. Each step of that reclaim is suppressed
+independently, so one cleanup failure cannot abort the rest or replace the
+error being unwound. A suppressed failure is still reported, on two channels
+that carry the same bounded category:
+
+- a `WARNING` record on the `cuprum.reclaim` logger with the message
+  `subprocess_reclaim_failed exec_id=… pid=… operation=… error=…`, carrying the
+  matching `cuprum_exec_id`, `cuprum_pid`, `cuprum_operation`, and
+  `cuprum_error_type` attributes;
+- a `teardown_error` observe event carrying `pid`, `operation`, and
+  `error_type`.
+
+`operation` is one of `terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, or `capture_cleanup`, so an operator can
+tell a child that could not be stopped from a descriptor or spill file that
+could not be released. Only the error's class name is recorded, never its
+message, so a path or command payload does not reach a log. Reporting is
+best-effort: a handler that raises cannot replace the error the caller is
+already unwinding, and the steps after the failed one still run.
+
 ### Structured execution events
 
 For richer observability, register an observe hook with `sh.observe()`. Observe
@@ -2745,8 +2768,11 @@ hooks receive `ExecEvent` values describing:
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
 
-- `teardown_error` — a stream consumer drained with an unexpected error during
-  cleanup (ancillary; the error is absorbed to preserve the primary exception).
+- `teardown_error` — a cleanup step failed and its error was absorbed to
+  preserve the primary exception (ancillary). The bounded `operation` names the
+  step: `drain` for a stream consumer drained with an unexpected error, or one
+  of the startup reclaim's categories listed under
+  [Startup reclaim diagnostics](#startup-reclaim-diagnostics).
 
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).
@@ -2784,9 +2810,12 @@ The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
 `error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for a
 positive elapsed deadline or `"non_positive_immediate"` for a non-positive
 deadline that expires without awaiting the process. The `teardown_error` event
-carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
-classes raised while cancelling and draining stream consumers. It fires at most
-once per execution and excludes expected `CancelledError` failures.
+carries `pid`, `operation`, and `error_type`. A `drain` event reports the
+comma-joined classes raised while cancelling and draining stream consumers and
+fires at most once per execution. A startup reclaim reports one event per
+failed step, so an execution can emit several; each names its step and the
+class of the error that step absorbed. Both forms exclude expected
+`CancelledError` failures.
 
 The `capture_eof_grace_expired` event carries the execution's `exec_id` and
 `pid`, `operation` (`"drain"`), `eof_grace_s`, and `pending_readers` (one or
@@ -2966,7 +2995,9 @@ The hook collects:
   the bounded `operation` naming the cleanup step that failed — `drain` for a
   stream-consumer drain, or one of `terminate`, `task_settle`, `stdin_close`,
   `output_discard`, `transport_close`, and `capture_cleanup` for a reclaim of a
-  child whose startup failed after its spawn
+  child whose startup failed after its spawn. A `teardown_error` event naming
+  any other operation is counted as `unknown`, so a hand-built event cannot
+  shatter the series
 - `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn

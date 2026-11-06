@@ -8,6 +8,17 @@ A failure in any of them escapes the helper that spawned the child, so every
 route that would normally wait for, drain, and reap it is never entered. This
 module owns the reclaim those routes share.
 
+The scope is deliberately the pre-hand-back window of ``run()``: the ``start``
+event both run shapes share, the streamed run's consumer setup, and the direct
+run's stdin writer. The other routes that spawn a child reach the same
+guarantee from their own spawn helpers — ``start()`` from ``_start_handle_run``,
+the line stream from ``_abandon_unstarted_run``, and the pipeline from
+``_cleanup_spawned_processes`` — so their failures never arrive here. Once a
+run has handed its child back as a :class:`~cuprum.RunningCommand`, cleanup
+belongs to that handle (``cuprum._process_handle``) and not here. The sequences
+are separate on purpose: the handle's caller decides when the child stops,
+whereas an abandoned startup has no caller left to decide anything.
+
 The sequence is fixed, and each step is given its own turn rather than
 aborting the rest:
 
@@ -15,7 +26,9 @@ aborting the rest:
    owns one. Reaping is not incidental: a stop that only kills still leaves a
    child for this parent to collect.
 2. cancel every task the failed setup had already started and gather them, so
-   no writer or reader outlives the attempt that failed.
+   no writer or reader outlives the attempt that failed. A task that had
+   already failed is reported under ``task_settle``; the cancellation this step
+   itself requests is expected and is not.
 3. release the pipes: close stdin, read stdout and stderr to end-of-file under
    the capture drain's own EOF grace, then close the output transports.
    Reading a stream is what lets its parent-side transport disconnect, and the
@@ -155,7 +168,7 @@ async def _settle_recorded_tasks(
     try:
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as error:  # ruff: ignore[blind-except] - a task that cannot be settled is reported; the caller's error is already propagating.
         _report_reclaim_failure(
             process,
@@ -163,6 +176,21 @@ async def _settle_recorded_tasks(
             operation="task_settle",
             error=error,
         )
+        return
+    # A task that failed rather than merely cancelling is a startup failure the
+    # caller never saw: the setup raised before it could await the task, so this
+    # is the only place its error can surface. The cancellation this step itself
+    # requested is expected and stays silent, which is why only an ordinary
+    # ``Exception`` is reported — ``CancelledError`` is not one.
+    for result in results:
+        if isinstance(result, Exception):
+            _report_reclaim_failure(
+                process,
+                execution,
+                operation="task_settle",
+                error=result,
+            )
+            return
 
 
 async def _release_pipes(
@@ -213,6 +241,14 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     ``return_exceptions=True`` keeps a failure on one stream from cancelling
     the other, and a grace that expires reaches the caller as a ``TimeoutError``
     to suppress.
+
+    A read that fails is re-raised once both have settled, because the module's
+    contract is that an operator can see a failed discard: collected and
+    dropped, the result would leave only the transport close behind it and the
+    failure itself nowhere. The caller reports it and then releases the
+    transports, so the descriptor still goes. Only an ordinary ``Exception`` is
+    re-raised; a cancellation is the caller's own and keeps its own path
+    outward, and a non-``Exception`` result is not a read failure to report.
     """
     streams = tuple(
         stream for stream in (process.stdout, process.stderr) if stream is not None
@@ -220,10 +256,13 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     if not streams:
         return
     async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(_discard_to_eof(stream) for stream in streams),
             return_exceptions=True,
         )
+    for result in results:
+        if isinstance(result, Exception):
+            raise result
 
 
 async def _release_output_transports(

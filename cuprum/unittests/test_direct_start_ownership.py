@@ -22,7 +22,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_direct_run, _subprocess_streams, scoped, sh
+from cuprum import ScopeConfig, _subprocess_direct_run, scoped, sh
 from cuprum.sh import (
     ExecutionContext,
     ProcessGroupPolicy,
@@ -32,9 +32,11 @@ from cuprum.sh import (
 from cuprum.unittests._start_ownership_support import (
     _BLOCKING_CHILD,
     _assert_strictly_reaped,
+    _fail_second_consumer,
     _failing_start_hook,
     _python_catalogue,
     _recording_hook,
+    _SetupError,
     _StartHookError,
 )
 from cuprum.unittests._wait4_process_support import (
@@ -51,14 +53,8 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-    from cuprum._subprocess_streams import _ConsumerWiring
-    from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.catalogue import ProgramCatalogue
     from cuprum.events import ExecEvent
-
-
-class _SetupError(RuntimeError):
-    """Raised by an injected post-spawn setup failure."""
 
 
 def _command(*argv: str) -> tuple[sh.SafeCmd, ProgramCatalogue]:
@@ -72,32 +68,6 @@ def _output(*, streamed: bool) -> RunOutputOptions:
     if streamed:
         return RunOutputOptions()
     return RunOutputOptions(capture=False, echo=False)
-
-
-def _fail_second_consumer(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Make the second stream consumer fail to start, recording each attempt.
-
-    The first call is passed through, so a real stdout consumer is draining
-    the child before the failure; the second raises. The returned log lets a
-    caller prove that ordering rather than infer it from a passing assertion.
-
-    Returns
-    -------
-    list[int]
-        The one-based number of each consumer spawn attempt, in order.
-    """
-    original = _subprocess_streams._spawn_consumer
-    calls: list[int] = []
-
-    def failing(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
-        """Start the first consumer, then refuse the second."""
-        calls.append(len(calls) + 1)
-        if len(calls) == 2:
-            raise _SetupError
-        return original(wiring)
-
-    monkeypatch.setattr(_subprocess_streams, "_spawn_consumer", failing)
-    return calls
 
 
 @pytest.mark.parametrize("streamed", [False, True], ids=["direct", "streamed"])

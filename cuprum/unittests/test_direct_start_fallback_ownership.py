@@ -165,7 +165,7 @@ class _Effects(typ.NamedTuple):
     """What a failed run and its reclaim left observable."""
 
     pid: int
-    descriptors: tuple[int | None, ...]
+    still_open: tuple[int, ...]
     descendant_alive: bool
     bounded: bool
     reaped: bool
@@ -178,17 +178,20 @@ async def _run_until_the_hook_fails(
 ) -> _Effects:
     """Run the command, and read the reclaim's effects inside the loop.
 
-    The descriptor and liveness readings are taken before this coroutine
-    returns, because the event loop is torn down immediately afterwards: a
-    transport that had merely been asked to close would never get its
-    callback, so reading here is what makes "closed" mean closed.
+    Both descriptors are read here, after ``SafeCmd.run()`` has raised and
+    before this coroutine returns, because the event loop is torn down
+    immediately afterwards: a transport that had merely been asked to close
+    would never get its callback, so a reading taken outside would let a lazy
+    close pass. The descendant is checked first, while it is still holding the
+    pipes, so an open descriptor at this point is the reclaim's fault rather
+    than an end-of-file that arrived on its own.
 
     Returns
     -------
     _Effects
-        The child's pid and output-pipe descriptors, whether the descendant is
-        still alive, whether the reclaim stayed inside its bound, and whether
-        the child was reaped.
+        The child's pid, which of its output-pipe descriptors are still open,
+        whether the descendant is still alive, whether the reclaim stayed
+        inside its bound, and whether the child was reaped.
     """
     started_at = time.monotonic()
     with pytest.raises(_StartHookError):
@@ -198,10 +201,22 @@ async def _run_until_the_hook_fails(
     process, descriptors = spawned[0]
     descendant_pid = _recorded_pid(pid_file)
     assert descendant_pid is not None, "the hook must have seen the pid file"
+    descendant_alive = _is_running(descendant_pid)
+    # Written as a loop rather than a comprehension: the assertion is what
+    # narrows each descriptor to an ``int``, and a comprehension's own scope
+    # would not carry that narrowing into the call below.
+    still_open: list[int] = []
+    for fd in descriptors:
+        assert fd is not None, (
+            "each captured stream must have a parent-side pipe whose "
+            "descriptor this case can watch"
+        )
+        if _is_fd_open(fd):
+            still_open.append(fd)
     return _Effects(
         pid=process.pid,
-        descriptors=descriptors,
-        descendant_alive=_is_running(descendant_pid),
+        still_open=tuple(still_open),
+        descendant_alive=descendant_alive,
         bounded=elapsed < _RECLAIM_BOUND_S,
         reaped=process.returncode is not None,
     )
@@ -223,15 +238,10 @@ def _assert_the_reclaim_released_everything(effects: _Effects) -> None:
         "the descendant must still hold the pipes when the descriptors are "
         "read, or this case proves nothing about releasing them"
     )
-    for fd in effects.descriptors:
-        assert fd is not None, (
-            "each captured stream must have a parent-side pipe whose "
-            "descriptor this case can watch"
-        )
-        assert not _is_fd_open(fd), (
-            f"descriptor {fd} must be closed before the event loop is torn "
-            "down, even though no end-of-file arrived"
-        )
+    assert not effects.still_open, (
+        f"descriptors {effects.still_open!r} must be closed while the loop is "
+        "still running, even though no end-of-file arrived"
+    )
 
 
 @_posix_only

@@ -3128,6 +3128,31 @@ Three rules matter when adding or moving a post-spawn step:
   never builds the result that would carry its spill handle, so the reclaim is
   the only thing left that can remove the file.
 
+The assembly those rules depend on is split in two, and the split is the
+contract. `_build_run_task_ownership` starts the run's stdin writer and stream
+consumers and hands each task to the `recorded` list as it exists;
+`_build_task_ownership` then assembles the record they are retained in — the
+latch, the relay diagnostics, the idle monitor, and the capture accumulators —
+without starting anything. The direct run, the line iterator, and the owned
+handle all come through the pair, so capture, echo, and sink selection cannot
+drift between the three routes. A step that starts a task belongs in
+`_build_run_task_ownership`; a field the run must keep belongs in
+`_build_task_ownership`, where it cannot introduce a failure the reclaim would
+have to cover.
+
+`_report_reclaim_failure` lives in `cuprum/_reclaim_reporting.py` rather than
+beside the reclaim sequence for two reasons: the sequence is already at the
+400-line ceiling, and reporting is a distinct responsibility from deciding what
+to reclaim. The reporter only writes the `cuprum.reclaim` log record and the
+`teardown_error` event, and never suppresses, retries, or reorders a step. Its
+operation categories are literals in the reclaim module, collected into
+`_TEARDOWN_OPERATIONS` beside the `_ReclaimOperation` type so the metrics
+adapter can bound the `operation` label by that set rather than by an open
+string; a test asserts the type and the set agree. A category the adapter does
+not recognize folds to `unknown` rather than being dropped, so a new step that
+forgets to extend the set still appears in telemetry, just without its own
+label.
+
 The `SafeCmd.lines()` coordinator and the owned-handle start keep their own
 unwind helpers because each abandons a larger record — the line stream settles
 its queue telemetry and settlement latch, and the handle settles the task set
@@ -3136,11 +3161,24 @@ by `test_direct_start_ownership.py` with real children: the failing `start`
 hook in both streamed and direct shapes with and without stdin, an injected
 consumer failure after the first consumer started, an injected stdin-writer
 failure, the POSIX `OWN_GROUP` case, and a successful start that must be
-delivered unchanged. `test_startup_abandon.py` pins the reclaim's own
+delivered unchanged. `test_owned_group_start_failure.py` adds the case a
+single-pid teardown would also pass: a descendant left in the owned group must
+die too, which only a group signal reaches.
+`test_streamed_setup_capture_ownership.py` watches the hand-off at the seam,
+because a run that dropped the accumulators would still reap the child and
+leave no task pending. `test_startup_abandon.py` pins the reclaim's own
 obligations against a real child — the reaped process, the removal of a spill
 file the capture had already opened, and the release of an output pipe that a
-surviving descendant still holds. `test_pipeline_process_lifecycle.py` pins the
-same guarantee for a pipeline stage.
+surviving descendant still holds. `test_startup_abandon_read_failure.py` covers
+a read that fails during the discard, which must be reported as
+`output_discard` rather than dropped in the gather's results.
+`test_startup_abandon_task_failure.py` separates a task that had already
+failed, which must be reported, from the cancellation the step itself
+requested, which must not. `test_startup_abandon_properties.py` states the
+orchestration contract over every pattern of step failure: each step gets its
+turn, each failure is reported and suppressed, and the caller's own error
+survives unchanged. `test_pipeline_process_lifecycle.py` pins the same
+guarantee for a pipeline stage.
 
 ### Canonical adapter projection, redaction, and locked-store base
 

@@ -1,10 +1,11 @@
 """What the startup-abandonment helper owes a run that failed after its spawn.
 
-A child spawned by ``run()``, ``run_sync()`` or ``start()`` belongs to the run
-only once the setup that follows the spawn has returned. When that setup
-raises, no route that would normally wait for, drain, and reap the child is
-entered, so :func:`~cuprum._subprocess_startup_abandon._abandon_started_process`
-performs the reclaim itself.
+A child spawned by ``run()`` or ``run_sync()`` belongs to the run only once the
+setup that follows the spawn has returned; ``start()`` reaches the same
+guarantee from its own spawn helper. When that setup raises, no route that
+would normally wait for, drain, and reap the child is entered, so
+:func:`~cuprum._subprocess_startup_abandon._abandon_started_process` performs
+the reclaim itself.
 
 Three obligations are exercised here against a genuinely spawned child, because
 none is observable from a stub: the child must be reaped, the capture spill
@@ -204,7 +205,10 @@ _SPAWN_ROUTES = (
 def _assert_descriptors_released(descriptors: cabc.Sequence[int | None]) -> None:
     """Assert every captured stream's parent-side descriptor is closed."""
     for fd in descriptors:
-        assert fd is not None
+        assert fd is not None, (
+            "each captured stream must have a parent-side pipe whose "
+            "descriptor this case can watch"
+        )
         assert not _is_fd_open(fd), (
             f"descriptor {fd} must be closed before the event loop is torn "
             "down, even though no end-of-file arrived"

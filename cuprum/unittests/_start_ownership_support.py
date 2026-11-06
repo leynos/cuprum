@@ -17,6 +17,7 @@ from __future__ import annotations
 import sys
 import typing as typ
 
+from cuprum import _subprocess_streams
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.program import Program
 from cuprum.unittests._wait4_process_support import _ChildOwnership, _probe_child
@@ -25,12 +26,18 @@ from tests.helpers.timeouts import python_interpreter
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    import pytest
+
+    from cuprum._subprocess_streams import _ConsumerWiring
+    from cuprum._subprocess_wait_types import _StreamConsumerTask
     from cuprum.events import ExecEvent
 
 __all__ = [
     "_BLOCKING_CHILD",
+    "_SetupError",
     "_StartHookError",
     "_assert_strictly_reaped",
+    "_fail_second_consumer",
     "_failing_start_hook",
     "_python_catalogue",
     "_recording_hook",
@@ -48,6 +55,36 @@ _STRICT_OWNERSHIP = sys.platform.startswith("linux") or sys.platform == "darwin"
 
 class _StartHookError(Exception):
     """Raised by a deliberately failing observe hook in these tests."""
+
+
+class _SetupError(RuntimeError):
+    """Raised by an injected post-spawn setup failure."""
+
+
+def _fail_second_consumer(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """Make the second stream consumer fail to start, recording each attempt.
+
+    The first call is passed through, so a real stdout consumer is draining
+    the child before the failure; the second raises. The returned log lets a
+    caller prove that ordering rather than infer it from a passing assertion.
+
+    Returns
+    -------
+    list[int]
+        The one-based number of each consumer spawn attempt, in order.
+    """
+    original = _subprocess_streams._spawn_consumer
+    calls: list[int] = []
+
+    def failing(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
+        """Start the first consumer, then refuse the second."""
+        calls.append(len(calls) + 1)
+        if len(calls) == 2:
+            raise _SetupError
+        return original(wiring)
+
+    monkeypatch.setattr(_subprocess_streams, "_spawn_consumer", failing)
+    return calls
 
 
 def _python_catalogue(name: str) -> tuple[Program, ProgramCatalogue]:

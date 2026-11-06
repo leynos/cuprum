@@ -15,6 +15,7 @@ import dataclasses as dc
 import types
 import typing as typ
 
+from cuprum._reclaim_reporting import _teardown_operation_label
 from cuprum.events import TerminalOutcome
 
 if typ.TYPE_CHECKING:
@@ -287,21 +288,20 @@ def _teardown_error_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
 
     The operation names which cleanup step failed, which is what makes the
     counter actionable: a failed drain, a child that could not be terminated,
-    and a descriptor that could not be released are different faults with
-    different responses. Every emitter passes a literal, so the label stays
-    bounded — see ``_ReclaimOperation`` and the single ``drain`` category the
-    timeout reporter uses.
+    and a descriptor that could not be released need different responses. The
+    label is bounded by ``_ReclaimOperation`` plus the timeout reporter's
+    ``drain``; anything else is folded into one fallback value.
 
     Returns
     -------
     tuple[_MetricOp, ...]
-        The teardown counter, labelled with the step that failed.
+        The teardown counter, labelled with the failed step or the fallback.
     """
     return (
         _CounterOp(
             _PHASE_COUNTERS["teardown_error"],
             1.0,
-            {"operation": str(event.operation)},
+            {"operation": _teardown_operation_label(event.operation)},
         ),
     )
 

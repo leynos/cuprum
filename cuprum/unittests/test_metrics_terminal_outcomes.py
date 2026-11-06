@@ -132,6 +132,30 @@ def test_teardown_error_without_an_operation_stays_unlabelled() -> None:
     )
 
 
+def test_teardown_error_with_an_unknown_operation_uses_the_bounded_fallback() -> None:
+    """A step this package does not emit must not become its own label value.
+
+    The operation label is bounded by the categories production code emits. An
+    event built elsewhere could name any string, and passing it through would
+    let one caller shatter the series into unbounded values, so it is folded
+    into a single fallback rather than dropped or repeated verbatim.
+    """
+    operations = _metric_operations(
+        _make_exec_event(
+            phase="teardown_error",
+            overrides={"operation": "not-a-reclaim-step", "error_type": "OSError"},
+        )
+    )
+
+    assert operations == (
+        _CounterOp(
+            "cuprum_teardown_errors_total",
+            1.0,
+            {"operation": "unknown"},
+        ),
+    ), f"an unknown teardown step must use the bounded fallback, got {operations!r}"
+
+
 def test_legacy_exit_operations_keep_failure_duration_and_resource_projection() -> None:
     """Direct users of the old helper retain its former operation tuple."""
     event = _make_exec_event(

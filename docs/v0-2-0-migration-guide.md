@@ -1034,6 +1034,31 @@ platform, and is the default there as everywhere else.
 to it. The decision and its alternatives are recorded in
 [ADR-021](adrs/adr-0021-process-group-ownership.md).
 
+### Startup reclaim diagnostics
+
+A run that fails during the setup which follows its spawn — a `start` observe
+hook raising, a stream consumer failing to start, or the stdin writer failing —
+now reclaims the child before it re-raises. The child is stopped and reaped,
+whatever tasks the setup had already started are cancelled and gathered, stdin
+is closed, the output pipes are discarded and their transports released, and
+any capture spill file the run had opened is removed. The caller still receives
+the original exception, so no code needs to change to get this; before the fix
+the child was left running with nothing owning it.
+
+The reclaim reports rather than hides a cleanup step that itself fails. Each
+failure emits a `teardown_error` observe event whose bounded `operation` is one
+of `terminate`, `task_settle`, `stdin_close`, `output_discard`,
+`transport_close`, or `capture_cleanup`, and writes a matching `cuprum.reclaim`
+log record. Applications that already consume these signals should expect two
+differences. First, `teardown_error` can now fire more than once for one
+execution — once per failed reclaim step — whereas a stream `drain` failure
+still fires at most once. Second, `cuprum_teardown_errors_total` carries the new
+`operation` values; a value the metrics adapter does not recognize folds to
+`unknown` so the label stays low-cardinality, which also means a dashboard
+grouped by `operation` gains an `unknown` series if a future step is not added
+to the bounded set. The reclaim's own events carry the same `exec_id` as the
+rest of the execution, so existing correlation keeps working.
+
 ### Aggregate Python stream-operation observation
 
 An opt-in observation channel reports completed operations in the pure-Python

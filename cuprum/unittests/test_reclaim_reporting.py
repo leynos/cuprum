@@ -21,7 +21,11 @@ import typing as typ
 import pytest
 
 from cuprum._pipeline_types import _ExecutionHooks
-from cuprum._reclaim_reporting import _report_reclaim_failure
+from cuprum._reclaim_reporting import (
+    _TEARDOWN_OPERATIONS,
+    _ReclaimOperation,
+    _report_reclaim_failure,
+)
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.unittests._adapter_test_support import capturing_logger
 from cuprum.unittests._startup_abandon_support import _execution
@@ -196,4 +200,24 @@ def test_every_reclaim_operation_is_reported_verbatim(
     )
     assert events[0].operation == operation, (
         f"the observe event must name {operation!r}, not a neighbouring category"
+    )
+
+
+def test_the_bounded_operation_set_agrees_with_the_reclaim_type() -> None:
+    """The exported set must name exactly the categories the type allows.
+
+    The metrics adapter bounds its ``operation`` label by
+    ``_TEARDOWN_OPERATIONS``. A category added to one and not the other would
+    either fold a real fault into ``unknown`` or admit a value the type forbids,
+    and neither would fail any behavioural case. ``drain`` is the timeout
+    reporter's own category and is deliberately not part of the reclaim type,
+    so it is added here rather than expected there.
+    """
+    alias = typ.cast("typ.Any", _ReclaimOperation).__value__
+    reclaim_categories = frozenset(typ.get_args(alias))
+
+    assert reclaim_categories, "the reclaim type must declare its categories"
+    assert reclaim_categories | {"drain"} == _TEARDOWN_OPERATIONS, (
+        "the exported operation set must match the reclaim type plus drain, got "
+        f"{sorted(_TEARDOWN_OPERATIONS)!r}"
     )

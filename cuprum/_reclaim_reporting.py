@@ -9,9 +9,12 @@ record and a ``teardown_error`` observe event.
 
 Both channels carry the same bounded operation category, which is what lets an
 operator tell a termination that failed from a descriptor that could not be
-released. Every category is a literal in the reclaim module rather than a
+released. Every category is a literal in the reclaim module — or, for the
+timeout reporter's ``drain``, a literal in that module — rather than a
 caller-supplied string, so the ``operation`` label of
-``cuprum_teardown_errors_total`` stays low-cardinality.
+``cuprum_teardown_errors_total`` stays low-cardinality. The complete set is
+exported as :data:`_TEARDOWN_OPERATIONS` so a consumer, such as the metrics
+adapter, can bound a label by it rather than by an open string.
 
 Every emission here is best-effort and must never displace the exception it
 describes.
@@ -48,6 +51,38 @@ type _ReclaimOperation = typ.Literal[
     "transport_close",
     "capture_cleanup",
 ]
+
+#: Every ``teardown_error`` operation this package emits: the reclaim's own
+#: categories above, plus the single ``drain`` category the timeout reporter
+#: uses for a teardown that could not finish. Kept beside the type that defines
+#: most of them so a consumer that bounds a label by this set — the metrics
+#: adapter does — has one place to read it from. A test asserts the two agree,
+#: so adding a category here without adding it to the type, or the reverse,
+#: fails rather than silently degrading a label.
+_TEARDOWN_OPERATIONS: frozenset[str] = frozenset({
+    "terminate",
+    "task_settle",
+    "stdin_close",
+    "output_discard",
+    "transport_close",
+    "capture_cleanup",
+    "drain",
+})
+
+
+#: Label used when an event names a teardown step this package does not emit.
+#: A hand-built event must not be able to shatter the series by choosing its own
+#: string, so an unrecognized operation is still counted, under one bounded
+#: value, rather than being dropped or repeated verbatim.
+_TEARDOWN_OPERATION_FALLBACK = "unknown"
+
+
+def _teardown_operation_label(operation: object) -> str:
+    """Fold *operation* into the bounded label set, or the fallback."""
+    rendered = str(operation)
+    if rendered in _TEARDOWN_OPERATIONS:
+        return rendered
+    return _TEARDOWN_OPERATION_FALLBACK
 
 
 def _emit_reclaim_log(
@@ -122,4 +157,9 @@ def _report_reclaim_failure(
     )
 
 
-__all__ = ["_ReclaimOperation", "_report_reclaim_failure"]
+__all__ = [
+    "_TEARDOWN_OPERATIONS",
+    "_ReclaimOperation",
+    "_report_reclaim_failure",
+    "_teardown_operation_label",
+]
