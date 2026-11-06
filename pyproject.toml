@@ -597,6 +597,14 @@ reason = "Called only from StdioTarget.__post_init__, which the dataclass machin
 [[tool.skylos.dead_code.entrypoints]]
 type = "function"
 full_name = [
+    "cuprum.adapters._tracing_retention._capacity_wait_event",
+    "cuprum.adapters._tracing_retention._retention_event",
+]
+reason = "Called only by _RetentionTracingMixin.report_retention, which _RetentionTelemetry._publish reaches structurally through the _RetentionMetricsSink protocol: the recorder holds each sink as that protocol type, so the reference graph never enters the implementation and the helpers it calls read as unreferenced. Both projections are exercised by test_tracing_retention."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "function"
+full_name = [
     "cuprum.capture_policy._is_positive_int",
 ]
 reason = "Called by BoundedCapture.__post_init__ and FileBackedCapture.__post_init__ and by nothing else. The reference graph does not traverse a dataclass __post_init__ body at all, so a helper whose only callers live there reads as unreferenced; a probe against skylos 4.33.2 confirmed it follows a plain __init__ and an explicit dataclass __init__, but not __post_init__, with slots and frozen ruled out as the trigger. Both policies reject a non-positive bound through this helper, covered by test_bounded_capture_rejects_a_non_positive_bound and test_file_backed_capture_rejects_a_non_positive_threshold."
