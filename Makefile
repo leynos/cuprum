@@ -905,7 +905,8 @@ MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
 KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.kani/kani-$(KANI_VERSION)/lib
 
-.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
+.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test \
+	boundary-download-integration
 install-verus: ## Install the checksum-verified prebuilt Verus release
 	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) verus install \
 	  --repo-root "$(CURDIR)" \
@@ -932,6 +933,15 @@ boundary-miri: ## Interpret native resource and Miri-compatible stream paths
 boundary-test: ## Run isolated native integration and verification-tool contracts
 	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
 	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
+
+# The bounded-download contracts drive the pinned downloader against a
+# controlled loopback HTTPS server. They are opt-in because installing the
+# pinned revision needs the network and every scenario binds a socket, so the
+# default suite collects the module and skips it.
+boundary-download-integration: ## Exercise bounded downloads over controlled HTTPS
+	CUPRUM_RUN_DOWNLOAD_INTEGRATION=1 \
+	  CUPRUM_PROVER_TOOLS_SOURCE="$(PROVER_TOOLS_SOURCE)" \
+	  $(PYTEST) -v scripts/tests/test_boundary_download_integration.py
 
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build

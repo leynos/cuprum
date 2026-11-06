@@ -381,6 +381,17 @@ The Makefile invokes the Verus binary directly for proofs rather than through
 the shared wrapper, whose version parser rejects the annotation
 `(overridden by environment variable RUSTUP_TOOLCHAIN)`.
 
+`make boundary-download-integration` exercises that shared transport against a
+controlled loopback HTTPS server instead of the public release endpoints. Each
+scenario asserts one refusal: an oversized `Content-Length` before the body is
+sent, a streamed overflow past the per-asset ceiling, and a stalled, trickling,
+or never-ending response that must fail near the configured deadline. The same
+suite checks that a short body, a digest mismatch, an insecure redirect, a
+redirect loop, and a redirect without a `Location` header never publish the
+asset. It is opt-in: installing the pinned revision needs the network and every
+scenario binds a socket, so `make test` collects the module and skips it, while
+the `verus` job runs it where the pinned revision is already installed.
+
 The pinned Z3 asset targets x86-64 Linux with glibc 2.39. Hosted execution
 assumes that GitHub's `ubuntu-latest` image currently resolves to Ubuntu 24.04
 ([runner-images README](https://github.com/actions/runner-images/blob/main/README.md)).

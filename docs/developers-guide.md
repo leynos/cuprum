@@ -5546,6 +5546,16 @@ cache. To adopt a new shared revision, update `PROVER_TOOLS_SOURCE` to the new
 full commit hash, run both install targets cold and warm, and rely on the
 `Makefile` hash in the verifier cache key to invalidate the archived tools.
 
+The bounded-download harness lives in four modules under `scripts/tests/`.
+`boundary_download_support.py` creates a throwaway certificate authority and
+serves one HTTPS connection on a loopback socket;
+`boundary_download_scenarios.py` names the responses that must be refused;
+`boundary_download_runner.py` owns the isolated `uv` process and the paths
+around it; and `boundary_download_driver.py` runs inside that process, where
+the pinned revision is importable. `test_boundary_download_integration.py`
+holds the assertions and is skipped unless `CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`,
+so the default suite never reaches the network.
+
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone;
 `scripts/install_pypy312.py` keeps a private `checked_download` for the linter
