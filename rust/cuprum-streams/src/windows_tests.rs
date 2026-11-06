@@ -1,10 +1,30 @@
 //! Exercise public Windows stream entry points with known synchronous pipes.
 
-use std::io;
+use std::{
+    io,
+    sync::mpsc::{self, RecvTimeoutError},
+    thread,
+    time::Duration,
+};
 
 use cuprum_native_io::{SynchronousOwnedStream, read_once, synchronous_pipe, write_once};
 
 use crate::{BufferSize, consume_stream, pump_stream};
+
+/// How long a pump may take to finish once its source writer has closed.
+///
+/// The transfer is local and in-process, so a correct pump completes in
+/// microseconds. The margin exists only so a lost EOF reports as a failure
+/// rather than waiting out the job's own timeout.
+const PUMP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long a pump with a live source writer is observed before its completion
+/// is accepted as correctly withheld.
+///
+/// A pump that treated the writer's arrival, rather than its closure, as the
+/// end of input would report through the channel almost immediately, so this
+/// window only has to outlast the payload's own read.
+const RETAINED_WRITER_PROBE: Duration = Duration::from_millis(500);
 
 fn buffer_size(bytes: i64) -> Result<BufferSize, io::Error> {
     BufferSize::new(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
@@ -139,5 +159,86 @@ fn public_pump_drains_the_reader_after_the_writer_breaks() {
         remaining.is_empty(),
         "the pump must drain the upstream reader to EOF after the writer breaks, found {} bytes",
         remaining.len(),
+    );
+}
+
+/// A source writer the pump's caller still owns keeps the pump waiting for EOF.
+///
+/// `pump_stream` reads until the source reports end of input, and on Windows a
+/// synchronous `ReadFile` against a pipe reports that only once every write
+/// handle has closed. `SynchronousOwnedStream` is not `Clone`, so the caller
+/// can hand the pump nothing but the reader while continuing to hold the
+/// original writer — exactly the arrangement this test builds. The pump must
+/// therefore stay blocked, not treat the writer outliving its own call as end
+/// of input, and must still finish normally when that writer finally closes.
+///
+/// Both halves matter. Until the writer closes the destination must hold no
+/// bytes, so a pump that returned early would be caught with a complete
+/// transfer rather than a truncated one. After the close it must exit on its
+/// own; the deadline turns a pump that never resumes into a failure instead of
+/// a hung suite.
+#[test]
+fn public_pump_waits_for_a_retained_source_writer_to_close() {
+    let (source_reader, source_writer) =
+        synchronous_pipe().expect("source synchronous pipe creation should succeed");
+    let (destination_reader, destination_writer) =
+        synchronous_pipe().expect("destination synchronous pipe creation should succeed");
+
+    let payload = b"payload-a-retained-writer-keeps-open";
+    let written = write_once(source_writer.as_synchronous_borrowed(), payload)
+        .expect("source write should succeed");
+    assert_eq!(
+        usize::try_from(written).expect("write count should fit usize"),
+        payload.len(),
+        "source pipe must accept the complete payload",
+    );
+
+    let (sender, receiver) = mpsc::channel();
+    let deadline = PUMP_DEADLINE;
+    // The pump runs on its own thread so a missed EOF cannot wedge the test.
+    // The source reader moves with it: the pump needs a borrow of the owner,
+    // and the owner has to outlive the pump rather than the test thread.
+    thread::spawn(move || {
+        let reader = source_reader.as_synchronous_borrowed();
+        let result = pump_stream(
+            reader,
+            destination_writer,
+            buffer_size(5).expect("buffer size should be valid"),
+        );
+        // A failed send means the test already gave up on this worker.
+        drop(sender.send(result));
+    });
+
+    assert!(
+        matches!(
+            receiver.recv_timeout(RETAINED_WRITER_PROBE),
+            Err(RecvTimeoutError::Timeout),
+        ),
+        "the pump must not finish while the caller still owns a source writer",
+    );
+
+    drop(source_writer);
+
+    let transferred = match receiver.recv_timeout(deadline) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => panic!("pump failed after the retained writer closed: {error:?}"),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("pump did not finish within {deadline:?} after the retained writer closed")
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            panic!("pump worker dropped its sender without a result")
+        }
+    };
+    let drained = read_to_eof(&destination_reader).expect("destination pipe read should succeed");
+
+    assert_eq!(
+        transferred,
+        u64::try_from(payload.len()).expect("payload length should fit u64"),
+        "the pump must report the bytes it transferred once the writer closes",
+    );
+    assert_eq!(
+        drained.as_slice(),
+        payload,
+        "the destination must receive the whole payload once the writer closes",
     );
 }
