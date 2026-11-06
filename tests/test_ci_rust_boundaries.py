@@ -13,7 +13,9 @@ from tests.helpers.ci_workflows import (
     job,
     step_inputs,
     steps,
+    workflow_document,
 )
+from tests.helpers.makefile import recipe_of, recipe_tokens
 
 WORKFLOW = "rust-boundaries.yml"
 
@@ -150,3 +152,72 @@ def test_prover_tools_selects_its_required_python() -> None:
     )
     runtime = arguments[arguments.index("--python") + 1]
     assert runtime == "3.14", "the pinned prover-tools package requires Python 3.14"
+
+
+def test_verus_cache_tracks_the_shared_installer_pin() -> None:
+    """A new shared-installer revision must invalidate the cached Verus and Z3 trees.
+
+    The retired `scripts/install_boundary_z3.py` used to name this key. The pin
+    now lives in the Makefile, so hashing that file keeps the archived solver
+    and verifier from outliving the revision that produced them.
+    """
+    restore = next(
+        step
+        for step in steps(WORKFLOW, "verus")
+        if step.get("name") == "Restore pinned verifier, solver, and compiler objects"
+    )
+    inputs = step_inputs(restore, "the verus restore must declare its inputs")
+    key = str(inputs.get("key", ""))
+    assert "'Makefile'" in key, (
+        "the verifier cache key must hash the Makefile that pins the shared installer"
+    )
+    assert "install_boundary_z3.py" not in key, (
+        "the retired local solver installer cannot key the cache any more"
+    )
+
+
+def test_boundary_workflows_do_not_reference_the_retired_installers() -> None:
+    """Kani and Z3 downloads must stay delegated to the shared dependency."""
+    workflow = Path(__file__).resolve().parents[1] / ".github/workflows" / WORKFLOW
+    source = workflow.read_text(encoding="utf-8")
+    assert "install_boundary_kani" not in source, (
+        "the workflow must not call the retired Kani installer"
+    )
+    assert "install_boundary_z3" not in source, (
+        "the workflow must not call the retired Z3 installer"
+    )
+
+
+def test_the_download_integration_target_supplies_its_opt_in() -> None:
+    """The opt-in suite needs both the switch and the pinned revision."""
+    tokens = recipe_tokens(recipe_of("boundary-download-integration"))
+
+    assert tokens == (
+        "CUPRUM_RUN_DOWNLOAD_INTEGRATION=1",
+        "CUPRUM_PROVER_TOOLS_SOURCE=$(PROVER_TOOLS_SOURCE)",
+        "$(PYTEST)",
+        "-v",
+        "scripts/tests/test_boundary_download_integration.py",
+    ), "the target must switch the suite on, pass the pin, and name the module"
+
+
+def test_the_verus_job_runs_the_bounded_download_contracts() -> None:
+    """The controlled HTTPS scenarios run where the pinned revision is installed."""
+    commands = [str(step.get("run", "")) for step in steps(WORKFLOW, "verus")]
+
+    assert any(
+        "make boundary-download-integration" in command for command in commands
+    ), "the verus job must exercise the bounded download contracts"
+
+
+def test_the_boundary_workflow_watches_the_download_harness() -> None:
+    """Editing a harness module must re-run the boundary workflow."""
+    triggers = workflow_document(WORKFLOW)[True]
+    assert isinstance(triggers, dict), "the boundary workflow must declare triggers"
+    pull_request = triggers["pull_request"]
+    assert isinstance(pull_request, dict), "pull_request must declare its filters"
+    paths = pull_request["paths"]
+
+    assert "scripts/tests/boundary_download_*.py" in paths, (
+        "the download harness modules must trigger the boundary workflow"
+    )
