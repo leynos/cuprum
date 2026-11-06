@@ -21,6 +21,7 @@ from cuprum.adapters._tracing_span_events import record_span_event
 
 if typ.TYPE_CHECKING:
     from cuprum._retention_telemetry import _RetentionSample
+    from cuprum.adapters.tracing_adapter import TracingHook
 
 #: Span event names, one per bounded retention surface.
 _RETENTION_EVENT = "cuprum.observe_task_retention"

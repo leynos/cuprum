@@ -21,6 +21,7 @@ from cuprum._retention_telemetry import (
 
 if typ.TYPE_CHECKING:
     from cuprum._retention_telemetry import _RetentionSample
+    from cuprum.adapters.metrics_adapter import MetricsHook
 
 #: Metric names, one per bounded retention surface.
 _DEPTH = "cuprum_observe_hook_depth"
