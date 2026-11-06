@@ -12,12 +12,7 @@ from __future__ import annotations
 
 import typing as typ
 
-from cuprum._retention_telemetry import (
-    _RETENTION_CAPACITY_WAIT,
-    _RETENTION_DEPTH,
-    _RETENTION_PRUNE,
-    _RETENTION_SATURATION,
-)
+import cuprum._retention_telemetry as _retention
 
 if typ.TYPE_CHECKING:
     from cuprum._retention_telemetry import _RetentionSample
@@ -41,21 +36,24 @@ class _RetentionMetricsMixin:
         """Apply one retention sample to the collector."""
         hook = typ.cast("MetricsHook", self)
         labels = {"phase": sample.phase or _UNKNOWN}
-        if sample.kind == _RETENTION_DEPTH:
-            hook._collector.observe_histogram(_DEPTH, float(sample.depth), labels)
-        elif sample.kind == _RETENTION_SATURATION:
-            hook._collector.inc_counter(_SATURATIONS, 1.0, labels)
-        elif sample.kind == _RETENTION_PRUNE:
-            hook._collector.inc_counter(_PRUNED, float(sample.pruned), labels)
-            if sample.pruned_failures:
-                hook._collector.inc_counter(
-                    _PRUNED_FAILURES,
-                    float(sample.pruned_failures),
-                    labels,
+        # The patterns are dotted so each one compares against the sample-kind
+        # constant rather than capturing it as a new name.
+        match sample.kind:
+            case _retention._RETENTION_DEPTH:
+                hook._collector.observe_histogram(_DEPTH, float(sample.depth), labels)
+            case _retention._RETENTION_SATURATION:
+                hook._collector.inc_counter(_SATURATIONS, 1.0, labels)
+            case _retention._RETENTION_PRUNE:
+                hook._collector.inc_counter(_PRUNED, float(sample.pruned), labels)
+                if sample.pruned_failures:
+                    hook._collector.inc_counter(
+                        _PRUNED_FAILURES,
+                        float(sample.pruned_failures),
+                        labels,
+                    )
+            case _retention._RETENTION_CAPACITY_WAIT:
+                hook._collector.observe_histogram(
+                    _CAPACITY_WAIT_SECONDS,
+                    sample.wait_seconds,
+                    {**labels, "outcome": sample.outcome or _UNKNOWN},
                 )
-        elif sample.kind == _RETENTION_CAPACITY_WAIT:
-            hook._collector.observe_histogram(
-                _CAPACITY_WAIT_SECONDS,
-                sample.wait_seconds,
-                {**labels, "outcome": sample.outcome or _UNKNOWN},
-            )
