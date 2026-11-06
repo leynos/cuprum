@@ -136,9 +136,11 @@ def drive(
     that one argument, so they cannot disagree about which repository they
     belong to.
 
-    Only the command seam is patched. ``_prepare_run_cargo_home`` keeps its
-    real signature, because that signature is part of what the run binds: it
-    receives the same root as everything else.
+    Only the command seam is patched. The preparation seam is patched at its
+    source — the module global ``_prepare_boundary_cargo_home`` — because the
+    run binds the root into that callable itself rather than going through a
+    delegate. Its real signature is kept, since it is part of what the run
+    binds: it receives the same root as everything else.
 
     Returns
     -------
@@ -149,6 +151,8 @@ def drive(
     root = copy_boundary_repository(tmp_path)
     runner = _RecordedRun(root / "rust")
     monkeypatch.setattr(faults, "_run", runner)
-    monkeypatch.setattr(faults, "_prepare_run_cargo_home", _no_fault_preparation_time)
+    monkeypatch.setattr(
+        faults, "_prepare_boundary_cargo_home", _no_fault_preparation_time
+    )
     faults.main(root)
     return root, runner

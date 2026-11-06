@@ -143,18 +143,21 @@ def stub_cargo_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> N
 def stub_fault_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     """Make the fault harness skip Cargo-home preparation in its orchestration test.
 
-    The fault harness binds its repository root before handing the callable to
-    the run context, so this seam takes the bound root as well as the run's own
-    paths.
+    The harness binds its repository root into the callable it hands the run
+    context, so the patched seam takes that root as well as the run's own paths.
+    The attribute patched is the one the run looks up: the module-global
+    ``_prepare_boundary_cargo_home``, not a per-run delegate.
 
     Parameters
     ----------
     monkeypatch : pytest.MonkeyPatch
         Patch manager for the current test.
     module : object
-        Production module exposing ``_prepare_run_cargo_home``.
+        Production module exposing ``_prepare_boundary_cargo_home``.
     """
-    monkeypatch.setattr(module, "_prepare_run_cargo_home", _no_fault_preparation_time)
+    monkeypatch.setattr(
+        module, "_prepare_boundary_cargo_home", _no_fault_preparation_time
+    )
 
 
 def recorded_phases(run_root: Path) -> list[str]:

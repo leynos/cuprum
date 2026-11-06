@@ -120,17 +120,15 @@ def main(root: Path = ROOT) -> None:
     workspace = run_root / "workspace"
     shutil.copytree(root / "rust", workspace, ignore=shutil.ignore_patterns("target"))
     context = VerifierContext(root, read_tool_pins(root))
-    prepare = functools.partial(_prepare_run_cargo_home, root)
+    # The seam takes the repository root as its first argument. Binding it here
+    # keeps the run's one root authoritative; a module-level delegate would add
+    # nothing but a second place to disagree about which repository this is.
+    prepare = functools.partial(_prepare_boundary_cargo_home, root)
     with _boundary_cargo_run(run_root, workspace, prepare):
         logs = run_root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         _verify_progress_faults(context, workspace, logs)
         _verify_ownership_faults(context, workspace, logs)
-
-
-def _prepare_run_cargo_home(root: Path, run_root: Path, workspace: Path) -> float:
-    """Prepare a copied workspace against the repository it was copied from."""
-    return _prepare_boundary_cargo_home(root, run_root, workspace)
 
 
 def _verify_progress_faults(
