@@ -207,6 +207,84 @@ class _EofStream:
         return b""
 
 
+class _RecordingReporter:
+    """Stand in for the reclaim's reporter, keeping what it was told.
+
+    The reclaim reports through a module-level function, so the stand-in has to
+    be a callable object rather than a closure: the case wants one record that
+    every report appends to, and a class keeps that list out of the case body.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing reported."""
+        self.reports: list[tuple[str, BaseException]] = []
+
+    def __call__(
+        self,
+        _process: object,
+        _execution: object,
+        *,
+        operation: str,
+        error: BaseException,
+    ) -> None:
+        """Record the operation a suppressed failure was attributed to."""
+        self.reports.append((operation, error))
+
+    @property
+    def operations(self) -> list[str]:
+        """The reported operations, in the order they arrived."""
+        return [operation for operation, _ in self.reports]
+
+
+def _output_descriptors(
+    process: asyncio.subprocess.Process,
+) -> tuple[int | None, ...]:
+    """Read both parent-side pipe descriptors, insisting each is watchable.
+
+    Returns
+    -------
+    tuple[int | None, ...]
+        The descriptors behind the child's two captured streams.
+    """
+    descriptors = tuple(
+        _extract_stream_fd(stream) for stream in (process.stdout, process.stderr)
+    )
+    assert all(fd is not None for fd in descriptors), (
+        "each captured stream must have a parent-side pipe whose descriptor "
+        "this case can watch"
+    )
+    return descriptors
+
+
+def _replace_readers(
+    process: asyncio.subprocess.Process,
+    error: BaseException,
+) -> None:
+    """Fail one stream's read and let the other report end-of-file.
+
+    Both stubs publish the transport the real reader held, so a fallback close
+    that follows the stream still names the pipe under test.
+    """
+    process.stdout = typ.cast(
+        "asyncio.StreamReader",
+        _FailingStream(_stream_transport(process.stdout), error),
+    )
+    process.stderr = typ.cast(
+        "asyncio.StreamReader",
+        _EofStream(_stream_transport(process.stderr)),
+    )
+
+
+def _assert_both_descriptors_closed(descriptors: tuple[int | None, ...]) -> None:
+    """Assert every recorded parent-side descriptor was released."""
+    for fd in descriptors:
+        assert fd is not None, "each captured stream's descriptor must be watchable"
+        assert not _is_fd_open(fd), (
+            f"descriptor {fd} must be closed after a failed read, or the "
+            "parent-side pipe leaks"
+        )
+
+
 @_posix_only
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_a_failed_read_still_releases_both_output_descriptors(
@@ -234,36 +312,12 @@ def test_a_failed_read_still_releases_both_output_descriptors(
         process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
         try:
             descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
-            descriptors = tuple(
-                _extract_stream_fd(stream)
-                for stream in (process.stdout, process.stderr)
-            )
-            assert all(fd is not None for fd in descriptors), (
-                "each captured stream must have a parent-side pipe whose "
-                "descriptor this case can watch"
-            )
+            descriptors = _output_descriptors(process)
             error = _ReadFailureError("the pipe was reset")
-            process.stdout = typ.cast(
-                "asyncio.StreamReader",
-                _FailingStream(_stream_transport(process.stdout), error),
-            )
-            process.stderr = typ.cast(
-                "asyncio.StreamReader",
-                _EofStream(_stream_transport(process.stderr)),
-            )
-            reported: list[tuple[str, BaseException]] = []
+            _replace_readers(process, error)
+            reporter = _RecordingReporter()
 
-            def record(
-                _process: object,
-                _execution: object,
-                *,
-                operation: str,
-                error: BaseException,
-            ) -> None:
-                """Record the operation a suppressed failure was attributed to."""
-                reported.append((operation, error))
-
-            with mock.patch.object(reclaim, "_report_reclaim_failure", record):
+            with mock.patch.object(reclaim, "_report_reclaim_failure", reporter):
                 await reclaim._abandon_started_process(
                     process,
                     _execution(
@@ -277,24 +331,17 @@ def test_a_failed_read_still_releases_both_output_descriptors(
             assert process.returncode is not None, (
                 "the child must still be reaped after a failed read"
             )
-            assert [operation for operation, _ in reported] == ["output_discard"], (
-                f"the read failure must be the reported one, got {reported!r}"
+            assert reporter.operations == ["output_discard"], (
+                f"the read failure must be the reported one, got {reporter.reports!r}"
             )
-            assert reported[0][1] is error, (
+            assert reporter.reports[0][1] is error, (
                 "the report must carry the read's own failure"
             )
             assert _is_running(descendant_pid), (
                 "the descendant must still hold the pipes when the descriptors "
                 "are read, or this case proves nothing"
             )
-            for fd in descriptors:
-                assert fd is not None, (
-                    "each captured stream's descriptor must be watchable"
-                )
-                assert not _is_fd_open(fd), (
-                    f"descriptor {fd} must be closed after a failed read, or "
-                    "the parent-side pipe leaks"
-                )
+            _assert_both_descriptors_closed(descriptors)
         finally:
             _kill_descendant(_recorded_pid(pid_file))
 

@@ -147,6 +147,34 @@ def _record_captures(
     return recorded
 
 
+def _assert_handed_over_the_resolved_accumulators(
+    sinks: tuple[CaptureSink | None, ...],
+    resolved: list[tuple[CaptureSink | None, ...]],
+) -> None:
+    """Assert the reclaim received the run's own accumulators, each cleaned once.
+
+    Identity separates a reclaim that was handed the run's own spill state from
+    one that accepted some other pair; the count separates a reclaim that
+    cleaned each accumulator from one that only received it.
+    """
+    assert len(resolved) == 1, (
+        f"the streamed setup must resolve one stream pair, got {len(resolved)}"
+    )
+    wrappers = [typ.cast("_RecordingSink", sink) for sink in sinks]
+    for wrapper, expected in zip(wrappers, resolved[0], strict=True):
+        assert expected is not None, (
+            "the setup resolved a sink for each stream before it failed"
+        )
+        assert wrapper.sink is expected, (
+            "the reclaim must receive the accumulator the run resolved, "
+            f"got {wrapper.sink!r} instead of {expected!r}"
+        )
+        assert wrapper.cleanups == 1, (
+            "the reclaim must clean each handed-over accumulator exactly "
+            f"once, got {wrapper.cleanups} for {expected!r}"
+        )
+
+
 def test_streamed_setup_failure_hands_both_capture_sinks_to_the_reclaim(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -197,22 +225,7 @@ def test_streamed_setup_failure_hands_both_capture_sinks_to_the_reclaim(
         assert sinks[0] is not sinks[1], (
             "each stream must keep its own accumulator, not a shared one"
         )
-        assert len(resolved) == 1, (
-            f"the streamed setup must resolve one stream pair, got {len(resolved)}"
-        )
-        wrappers = [typ.cast("_RecordingSink", sink) for sink in sinks]
-        for wrapper, expected in zip(wrappers, resolved[0], strict=True):
-            assert expected is not None, (
-                "the setup resolved a sink for each stream before it failed"
-            )
-            assert wrapper.sink is expected, (
-                "the reclaim must receive the accumulator the run resolved, "
-                f"got {wrapper.sink!r} instead of {expected!r}"
-            )
-            assert wrapper.cleanups == 1, (
-                "the reclaim must clean each handed-over accumulator exactly "
-                f"once, got {wrapper.cleanups} for {expected!r}"
-            )
+        _assert_handed_over_the_resolved_accumulators(sinks, resolved)
         assert len(pids) == 1, (
             f"exactly one child must have been announced, got {pids!r}"
         )
