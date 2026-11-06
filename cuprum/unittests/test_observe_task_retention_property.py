@@ -101,6 +101,12 @@ async def _selected_failure_multistep(
     a mix of settled successes, settled failures, and tasks that stay
     unfinished until the final gate. ``late-fail`` and ``late-cancel`` tasks
     are the ones that outlive every prune and only then fail or are cancelled.
+
+    Returns
+    -------
+    tuple[str, str | None] | None
+        The kind and marker of the failure finalization reports, or ``None``
+        when the drain raised nothing.
     """
     gate = asyncio.Event()
     tasks: list[asyncio.Task[None]] = []

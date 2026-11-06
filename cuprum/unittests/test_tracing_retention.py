@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import typing as typ
 
-import pytest
-
 from cuprum._retention_telemetry import (
     _RETENTION_CAPACITY_WAIT,
     _RETENTION_DEPTH,

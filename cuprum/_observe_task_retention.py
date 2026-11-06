@@ -245,6 +245,12 @@ async def _await_hook_capacity(
     phase:
         Closed event-phase label for the log records.
 
+    Raises
+    ------
+    asyncio.CancelledError
+        If the waiter is cancelled while suspended; the wait is recorded with
+        the ``cancelled`` outcome before the exception propagates.
+
     """
     if _admit_hook_capacity(
         pending_tasks,
