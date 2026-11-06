@@ -54,6 +54,16 @@ dev = [
     "cyclopts>=4.0",
 ]
 
+[tool.ty.src]
+# The download driver runs only inside the isolated environment that
+# installs the pinned `rust-prover-tools` revision, so its import is
+# unresolvable in the project virtual environment. Naming it here keeps the
+# application typecheck pass honest without weakening any file the package
+# itself ships.
+exclude = [
+    "scripts/tests/boundary_download_driver.py",
+]
+
 [tool.interrogate]
 # Overload signatures share the implementation's documentation; Ruff requires
 # the docstring to live on the implementation rather than each signature.

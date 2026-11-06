@@ -10,6 +10,7 @@ on:
       - 'pyproject.toml'
       - 'scripts/*boundary*'
       - 'scripts/tests/test_boundary*'
+      - 'scripts/tests/boundary_download_*.py'
       - 'tools/**'
       - 'Makefile'
       - '.github/workflows/rust-boundaries.yml'
@@ -153,6 +154,8 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
       - name: Test proof correspondence and binary installation contracts
         run: uv run pytest scripts/tests/test_boundary_*.py
+      - name: Exercise bounded download contracts over controlled HTTPS
+        run: make boundary-download-integration
       - name: Verify production kernels and compiler prohibition
         run: |
           set -o pipefail
