@@ -286,9 +286,7 @@ async def _cleanup(state: _State, *args: object) -> None:
 
 def _report(
     state: _State,
-    _process: object,
-    _execution: object,
-    *,
+    *_owner: object,
     operation: str,
     error: BaseException,
 ) -> None:
