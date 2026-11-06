@@ -210,6 +210,59 @@ def _admit_hook_capacity(
     return admitted
 
 
+def _begin_capacity_wait(
+    telemetry: _RetentionTelemetry | None,
+    *,
+    ceiling: int,
+    phase: str | None,
+) -> float:
+    """Log the saturation and return the instant the wait is measured from.
+
+    Returns
+    -------
+    float
+        The clock reading to subtract when the wait ends, or ``0.0`` when no
+        recorder is installed.
+    """
+    if telemetry is None:
+        return 0.0
+    started = telemetry.clock()
+    telemetry.log_capacity_wait(ceiling=ceiling, phase=phase)
+    return started
+
+
+async def _wait_for_hook_capacity(
+    pending_tasks: list[asyncio.Task[None]],
+    ceiling: int,
+    *,
+    telemetry: _RetentionTelemetry | None = None,
+    phase: str | None = None,
+) -> str:
+    """Block until a slot frees, returning the ``resumed`` outcome.
+
+    The refused admission that precedes this call guarantees at least
+    ``ceiling`` unfinished tasks, so the wait set is never empty. Each re-check
+    prunes and observes depth but records no admission: the completions that
+    free capacity belong to the one line already waiting, and counting them
+    would inflate the admission total.
+
+    Returns
+    -------
+    str
+        The ``resumed`` wait outcome, once a slot has freed.
+    """
+    while True:
+        unfinished = [task for task in pending_tasks if not task.done()]
+        _ = await asyncio.wait(unfinished, return_when=asyncio.FIRST_COMPLETED)
+        if _has_hook_capacity(
+            pending_tasks,
+            ceiling,
+            telemetry=telemetry,
+            phase=phase,
+        ):
+            return _WAIT_RESUMED
+
+
 async def _await_hook_capacity(
     pending_tasks: list[asyncio.Task[None]],
     ceiling: int,
@@ -228,11 +281,8 @@ async def _await_hook_capacity(
     settled by its final drain, so a cancelled line driver must not be able to
     cancel them out from under it.
 
-    Each re-check prunes and observes depth but records no admission: the
-    completions that free capacity belong to the one line already waiting, and
-    counting them would inflate the admission total. The wait itself is
-    recorded on every exit path, including cancellation, so a suspended-then-
-    abandoned line is not invisible to an operator.
+    The wait itself is recorded on every exit path, including cancellation, so
+    a suspended-then-abandoned line is not invisible to an operator.
 
     Parameters
     ----------
@@ -259,26 +309,15 @@ async def _await_hook_capacity(
         phase=phase,
     ):
         return
-    started = 0.0
-    if telemetry is not None:
-        started = telemetry.clock()
-        telemetry.log_capacity_wait(ceiling=ceiling, phase=phase)
+    started = _begin_capacity_wait(telemetry, ceiling=ceiling, phase=phase)
     outcome = _WAIT_INTERRUPTED
     try:
-        while True:
-            # The refused admission above guarantees at least ``ceiling`` (and
-            # therefore at least one) unfinished task, so this list is never
-            # empty.
-            unfinished = [task for task in pending_tasks if not task.done()]
-            _ = await asyncio.wait(unfinished, return_when=asyncio.FIRST_COMPLETED)
-            if _has_hook_capacity(
-                pending_tasks,
-                ceiling,
-                telemetry=telemetry,
-                phase=phase,
-            ):
-                outcome = _WAIT_RESUMED
-                break
+        outcome = await _wait_for_hook_capacity(
+            pending_tasks,
+            ceiling,
+            telemetry=telemetry,
+            phase=phase,
+        )
     except asyncio.CancelledError:
         outcome = _WAIT_CANCELLED
         raise

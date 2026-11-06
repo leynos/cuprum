@@ -13,6 +13,7 @@ single-step rules themselves are tested in
 from __future__ import annotations
 
 import asyncio
+import typing as typ
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -23,6 +24,12 @@ from cuprum.unittests.test_observe_task_retention import (
     _HookFailureError,
     _spawn,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    _Outcome = tuple[str, str | None] | None
+    _SequenceSelector = cabc.Callable[..., cabc.Coroutine[object, object, _Outcome]]
 
 
 def _describe(exc: BaseException) -> tuple[str, str | None]:
@@ -60,18 +67,29 @@ async def _selected_failure(
     return await _drain_outcome(tasks)
 
 
+def _assert_pruning_preserves_outcome(
+    select: _SequenceSelector,
+    sequence: list[str],
+    *,
+    case: str,
+) -> None:
+    """Assert pruning selects exactly the outcome the unpruned drain selects."""
+    unpruned = asyncio.run(select(sequence, prune=False))
+    pruned = asyncio.run(select(sequence, prune=True))
+
+    assert pruned == unpruned, (
+        f"{case} changed the reported outcome for {sequence!r}: "
+        f"{pruned!r} != {unpruned!r}"
+    )
+
+
 @settings(max_examples=40, deadline=None)
 @given(spec=st.lists(st.sampled_from(("ok", "fail", "cancel", "pending")), max_size=6))
 def test_pruning_preserves_the_failure_finalization_reports(
     spec: list[str],
 ) -> None:
     """Pruning must select exactly the failure the unpruned drain selects."""
-    unpruned = asyncio.run(_selected_failure(spec, prune=False))
-    pruned = asyncio.run(_selected_failure(spec, prune=True))
-
-    assert pruned == unpruned, (
-        f"pruning changed the reported outcome for {spec!r}: {pruned!r} != {unpruned!r}"
-    )
+    _assert_pruning_preserves_outcome(_selected_failure, spec, case="pruning")
 
 
 _PRUNE = "prune"
@@ -133,10 +151,8 @@ def test_repeated_pruning_preserves_the_failure_finalization_reports(
     steps: list[str],
 ) -> None:
     """Every prune step must leave the outcome an unpruned drain would report."""
-    unpruned = asyncio.run(_selected_failure_multistep(steps, prune=False))
-    pruned = asyncio.run(_selected_failure_multistep(steps, prune=True))
-
-    assert pruned == unpruned, (
-        f"repeated pruning changed the reported outcome for {steps!r}: "
-        f"{pruned!r} != {unpruned!r}"
+    _assert_pruning_preserves_outcome(
+        _selected_failure_multistep,
+        steps,
+        case="repeated pruning",
     )
