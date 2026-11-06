@@ -2960,12 +2960,15 @@ covered by the startup reclaim.
 When the run owns its process group (`OWN_GROUP`), the teardown signals that
 group rather than the child alone. The output discard is bounded: a descendant
 that escaped the group can hold a pipe end open, so Cuprum waits no longer than
-its fixed end-of-file grace before surfacing the original error, and then
-closes its own end of the pipe rather than leave the descriptor to be collected
-later; see [ADR-021](adrs/adr-0021-process-group-ownership.md). That grace
-bounds the discard step alone. The rest of the reclaim, including the child
-teardown, is bounded by the run's own cancel grace instead, so a slow teardown
-is not truncated by the end-of-file window.
+its fixed end-of-file grace for stdout and stderr to reach end-of-file, and
+then closes its own end of each pipe rather than leave the descriptor to be
+collected later; see [ADR-021](adrs/adr-0021-process-group-ownership.md). That
+grace bounds the discard step alone. A cleanup step that fails is reported and
+suppressed, so the error the caller meets is always the setup failure that
+ended the run, never a failure of the reclaim itself. The child teardown and
+the stdin close are bounded separately, by the run's cancel grace and the close
+grace respectively, so neither is truncated by the end-of-file window; settling
+the started tasks and removing capture spill files carry no separate deadline.
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
 reject unknown values. The set of phases can grow between releases, so such a

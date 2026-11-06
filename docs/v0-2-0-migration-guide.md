@@ -1052,12 +1052,20 @@ of `terminate`, `task_settle`, `stdin_close`, `output_discard`,
 log record. Applications that already consume these signals should expect two
 differences. First, `teardown_error` can now fire more than once for one
 execution — once per failed reclaim step — whereas a stream `drain` failure
-still fires at most once. Second, `cuprum_teardown_errors_total` carries the new
-`operation` values; a value the metrics adapter does not recognize folds to
-`unknown` so the label stays low-cardinality, which also means a dashboard
-grouped by `operation` gains an `unknown` series if a future step is not added
-to the bounded set. The reclaim's own events carry the same `exec_id` as the
-rest of the execution, so existing correlation keeps working.
+still fires at most once. Second, `cuprum_teardown_errors_total` was previously
+unlabelled and counted only consumer drain failures; it now carries an
+`operation` label naming the step that failed. A drain failure is labelled
+`drain`, and the reclaim steps use the values listed above. A value the metrics
+adapter does not recognize folds to `unknown`, so the label stays
+low-cardinality, which also means a dashboard grouped by `operation` gains an
+`unknown` series if a future step is not added to the bounded set.
+
+Update any collector, dashboard, or alert that reads this counter. A query that
+assumed one unlabelled series now sees one series per `operation`; aggregate
+with `sum` (or group by `operation`) to keep the previous total, and filter on
+`operation` where a specific step matters. The reclaim's own events carry the
+same `exec_id` as the rest of the execution, so existing correlation keeps
+working.
 
 ### Aggregate Python stream-operation observation
 

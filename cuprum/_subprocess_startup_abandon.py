@@ -35,12 +35,10 @@ aborting the rest:
    already failed is reported under ``task_settle``; the cancellation this step
    itself requests is expected and is not.
 3. release the pipes: close stdin, read stdout and stderr to end-of-file under
-   the capture drain's own EOF grace, then close the output transports.
-   Reading a stream is what lets its parent-side transport disconnect, and the
-   wait is bounded because a descendant that inherited a pipe can outlive the
-   group teardown — the limit ADR 021 records. When that limit expires, or a
-   read fails, no end-of-file ever arrives, so the transport cannot close
-   itself; closing it here is what releases the parent-side descriptor.
+   the capture drain's own EOF grace, then close the output transports. Reading
+   is what lets a parent-side transport disconnect; the wait is bounded because
+   a descendant that inherited a pipe can outlive the group teardown — the limit
+   ADR 021 records. With no end-of-file, the close releases the descriptor.
 4. release the capture accumulators, now that no consumer can still be writing
    into them. A drain cancelled rather than settled never builds the result
    that would have carried its spill handle, so the accumulator is the last
@@ -110,14 +108,14 @@ async def _abandon_started_process(
         delivery is reported against, and the stdin plan its pipe is closed
         from.
     tasks : collections.abc.Sequence[asyncio.Task[typing.Any]]
-        Tasks the failed setup had already started, in creation order. Empty
-        when the failure happened before any task existed.
+        Tasks the failed setup had already started, in creation order; empty
+        when the failure preceded any task.
     captures : collections.abc.Iterable[CaptureSink | None]
-        The capture accumulators the failed setup had resolved, if it got far
-        enough to resolve them. Their spill files are removed after the tasks
-        are settled, because a cancelled drain never builds the result that
-        would otherwise have carried the handle. Empty when the run captures
-        nothing or never reached the point of resolving its streams.
+        The capture accumulators the failed setup had resolved. Their spill
+        files are removed after the tasks are settled, because a cancelled
+        drain never builds the result that would otherwise have carried the
+        handle. Empty when the run captures nothing or never resolved its
+        streams.
 
     Notes
     -----
@@ -184,9 +182,8 @@ async def _settle_recorded_tasks(
         return
     # A task that failed rather than merely cancelling is a startup failure the
     # caller never saw: the setup raised before it could await the task, so this
-    # is the only place its error can surface. The cancellation this step itself
-    # requested is expected and stays silent, which is why only an ordinary
-    # ``Exception`` is reported — ``CancelledError`` is not one.
+    # is its only route out. The cancellation this step requested is expected
+    # and stays silent, which is why only an ordinary ``Exception`` counts.
     for result in results:
         if isinstance(result, Exception):
             _report_reclaim_failure(
@@ -239,21 +236,9 @@ async def _release_pipes(
 async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     """Discard both output streams within the capture drain's single grace.
 
-    One window covers both readers, as it does in the drain itself
-    (:func:`cuprum._stream_drain._await_eof_grace`), so two pipes kept open by
-    a descendant cost one grace rather than one each — what the documented
-    bound promises. Each read is still settled on its own:
-    ``return_exceptions=True`` keeps a failure on one stream from cancelling
-    the other.
-
-    A read that fails is re-raised once both have settled, because the module's
-    contract is that an operator can see a failed discard: collected and
-    dropped, the result would leave only the transport close behind it and the
-    failure itself nowhere. The caller reports it and then releases the
-    transports, so the descriptor still goes. Only an ordinary ``Exception`` is
-    re-raised; a cancellation keeps its own path outward, and a non-``Exception``
-    result is not a read failure. A failure already held is raised even with a
-    neighbour still running; the expiry is raised only when no read failed.
+    One window covers both readers, as in the drain itself
+    (:func:`cuprum._stream_drain._await_eof_grace`): two pipes kept open by a
+    descendant cost one grace, not one each — the documented bound.
 
     Raises
     ------
@@ -269,19 +254,40 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     try:
         _, pending = await asyncio.wait(reads, timeout=_CAPTURE_EOF_GRACE_S)
     finally:
-        # Settle every read, not only those the grace outlived: one still
-        # running would hold its transport past this step.
-        for task in reads:
-            task.cancel()
-        await asyncio.gather(*reads, return_exceptions=True)
+        await _settle_reads(reads)
+    failure = _first_read_failure(reads)
+    if failure is not None:
+        raise failure
+    if pending:
+        raise TimeoutError
+
+
+async def _settle_reads(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
+    """Cancel and gather every read, so none outlives the discard."""
+    for task in reads:
+        task.cancel()
+    await asyncio.gather(*reads, return_exceptions=True)
+
+
+def _first_read_failure(reads: cabc.Sequence[asyncio.Task[None]]) -> Exception | None:
+    """Return the first ordinary read failure, in stream order.
+
+    Only an ordinary ``Exception`` counts: a cancellation keeps its own path
+    outward. A failure is preferred to the grace's expiry, so the operator
+    still sees why the discard ended.
+
+    Returns
+    -------
+    Exception | None
+        The first ordinary failure in stream order, or ``None`` if none.
+    """
     for task in reads:
         if task.cancelled():
             continue
         error = task.exception()
         if isinstance(error, Exception):
-            raise error
-    if pending:
-        raise TimeoutError
+            return error
+    return None
 
 
 async def _release_output_transports(
@@ -297,19 +303,17 @@ async def _release_output_transports(
     is never read again, so releasing the parent's descriptor discards nothing
     a caller could still have wanted.
 
-    Which close to ask is decided through ``getattr`` rather than a type
-    test, because the two backends release a descriptor differently. The
-    ``wait4`` owner reaps with ``wait4`` alone and closes nothing of its own
-    accord, so it is asked directly. The fallback hands back asyncio's own
-    subprocess, whose read pipes are held by the transports belonging to its
-    streams; those transports close a pipe only once it reports end-of-file,
-    which is exactly what a descendant holding the write end prevents, so each
-    is asked to close as well rather than left to collect the descriptor at an
-    arbitrary later point.
+    Which close to ask is decided through ``getattr`` rather than a type test,
+    because the two backends release a descriptor differently. The ``wait4``
+    owner reaps with ``wait4`` alone and closes nothing of its own accord, so
+    it is asked directly. The fallback hands back asyncio's own subprocess,
+    whose read pipes belong to transports that close only at end-of-file —
+    exactly what a descendant holding the write end prevents — so each is
+    asked to close rather than left to collect the descriptor later.
 
     A transport releases its descriptor from the loop callback its close
-    schedules, so the yield is what makes "close requested" mean "descriptor
-    released" before this reclaim hands control back.
+    schedules, so the yield makes "close requested" mean "descriptor released"
+    before this hands control back.
     """
     close_owned = getattr(process, "close_output_transports", None)
     if callable(close_owned):
@@ -334,13 +338,12 @@ def _close_asyncio_output_transports(
     """Ask each of the fallback's output pipes to close its parent-side end.
 
     asyncio publishes no accessor for the transport carrying a read pipe, so
-    each stream is asked instead:
+    each stream is asked instead: the project's
     :func:`cuprum._pipeline_stream_fds._stream_transport` already tolerates
-    both spellings of that attribute and is the project's existing route to
-    it. A stream answers with its own pipe transport rather than the
-    subprocess transport, so closing it releases exactly that descriptor and
-    leaves the child's termination and process-group ownership untouched;
-    asyncio finishes the subprocess transport by itself once every pipe it
+    both spellings of that attribute. A stream answers with its own pipe
+    transport rather than the subprocess transport, so closing it releases
+    exactly that descriptor and leaves termination and group ownership
+    untouched; asyncio finishes the subprocess transport once every pipe it
     owns has disconnected.
     """
     # Imported here rather than at module scope for the reason ``_release_pipes``
@@ -372,10 +375,9 @@ async def _release_captures(
     """Remove any spill file the started consumers had opened.
 
     Runs after the tasks are settled: a consumer still draining into its
-    accumulator could otherwise recreate the file this is removing. The
-    shared cleanup gives every accumulator its own turn, so one that cannot
-    remove its file does not leave the other stream's file behind; the first
-    failure it reports is recorded here rather than dropped.
+    accumulator could otherwise recreate the file this is removing. Every
+    accumulator gets its own turn, so one failure does not strand the other
+    stream's file, and the first failure is recorded here rather than dropped.
     """
     try:
         await _cleanup_capture_sinks(captures)
