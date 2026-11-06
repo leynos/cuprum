@@ -1,9 +1,9 @@
 # Cuprum 0.2.0 migration guide
 
 This guide helps an application that already uses Cuprum 0.1 move to Cuprum
-0.2.0. It also has a short section for anyone who tested the 0.2.0-beta1
-prerelease. Readers who are new to Cuprum need none of this: start with the
-[users' guide](users-guide.md) instead.
+0.2.0. It also has short sections for anyone who tested the 0.2.0-beta1 or
+0.2.0-beta2 prerelease. Readers who are new to Cuprum need none of this: start
+with the [users' guide](users-guide.md) instead.
 
 Most of 0.2.0 is new, opt-in capability, but some changes need an edit before
 an existing application works again. The guide puts those first, then
@@ -99,6 +99,44 @@ and the pre-built wheels are unaffected: they contain no Rust compilation step,
 so they keep working on the same Python versions as before. See
 [build prerequisites for native extensions](users-guide.md#build-prerequisites-for-native-extensions)
 for the full toolchain requirements.
+
+## Upgrading from 0.2.0-beta2
+
+Beta2 testers have everything above. One change since beta2 can need an edit:
+awaitable observe hooks are now bounded.
+
+### Awaitable observe hooks are bounded
+
+An observe hook may return an awaitable, which Cuprum schedules as a task and
+drains when the run settles. That list is now capped at 256 unfinished tasks
+per run, shared by every stage of a pipeline. When a line event would exceed
+the cap, line observation waits for a slot before dispatching, which holds the
+read loop and, through it, the child's pipe. A slow observer therefore slows
+the child instead of growing parent memory without limit.
+
+The precise bound is `256 + hooks_per_event - 1` unfinished tasks, plus at most
+one retained settled failure in the raw list. Capacity is admitted once per
+line event rather than once per task, so one event with several awaitable hooks
+may overshoot by the hooks it carries. Non-line events — `plan`, `start`,
+`exit`, `settled`, and the other lifecycle phases — are not admitted, so they
+may still add their own tasks.
+
+Two consequences need attention:
+
+- A hook that never completes now stalls the run. The final drain is shielded
+  and runs outside the configured `timeout=`, so a hook that never settles
+  holds completion indefinitely even when the run has a deadline. Make
+  awaitable hooks finish promptly, or bound them inside the hook with
+  `asyncio.timeout`.
+- A hook that is merely slow now applies backpressure to the child. That is the
+  intended trade, but a run that previously completed quickly with a slow
+  observer may now take longer, because the child waits for the observer.
+
+Retention is observable without new public API. Entering backpressure logs
+`observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
+exit log at `DEBUG`. Every record carries the same `cuprum_*` fields — the
+execution's correlation token, the phase, the ceiling, and the counters — and
+no command text or decoded line.
 
 ## Breaking changes
 

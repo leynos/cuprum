@@ -26,6 +26,17 @@
 
 ### Fixed
 
+- **Awaitable observe hooks are bounded per run:** an observed run now retains
+  at most 256 unfinished observe-hook tasks, shared by every stage of a
+  pipeline. Line observation waits for a slot at the ceiling, which holds the
+  read loop and, through it, the child's pipe, so a slow observer applies
+  backpressure instead of growing parent memory without limit. The bound is
+  `256 + hooks_per_event - 1` unfinished tasks plus at most one retained
+  settled failure; non-line events are not admitted. Retention logs
+  `observe_task_capacity_wait` at `INFO` and its decisions at `DEBUG`, each
+  with a fixed `cuprum_*` field set. A hook that never settles now holds
+  completion indefinitely, because the final drain runs outside the configured
+  `timeout=` ([#544](https://github.com/leynos/cuprum/issues/544)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine

@@ -355,8 +355,8 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
   per-line path in `_StageObservation.emit` (`cuprum/_pipeline_types.py:62`),
   precomputing programme, argv (`SafeCmd.argv_with_program`,
   `cuprum/sh.py:363`), cwd, env, and pid once per stream rather than per line.
-  Done as `_LineEventEmitter` in `cuprum/_line_callbacks.py`, one per observed
-  stream, built after spawn; evidence in
+  Done as `_LineEventEmitter` in `cuprum/_line_event_emitter.py`, one per
+  observed stream, built after spawn; evidence in
   `docs/tee-hotpath-line-event-emission-5-2-1.md` with the raw captures under
   `docs/profiling/5-2-1-line-event-emission/`.
   - Success: per-line emission no longer reconstructs invariant fields, the
