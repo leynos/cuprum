@@ -12,6 +12,7 @@ import typing as typ
 import pytest
 
 from tests.helpers.docs import repo_root
+from tests.helpers.makefile_pins import DEV_FAST_TOOLCHAIN
 
 if typ.TYPE_CHECKING:
     from collections import abc as cabc
@@ -137,7 +138,7 @@ def test_whitaker_target_is_direct_and_fragment_free() -> None:
     assert "||" not in command, "the binding must not ignore a wrapper failure"
     assert "|" not in command, "the binding must not mask a wrapper failure"
     assert "--config" not in command, "Whitaker must not select a Cargo fragment"
-    assert "nightly-2026-08-23" not in command, (
+    assert DEV_FAST_TOOLCHAIN not in command, (
         "Whitaker must retain its independently pinned verifier toolchain"
     )
 

@@ -9,13 +9,14 @@ import sys
 import tomllib
 
 from tests.helpers.docs import repo_root
+from tests.helpers.makefile_pins import DEV_FAST_TOOLCHAIN, RUSTFMT_TOOLCHAIN
 from tests.helpers.workflow import Workflow, step_named, steps
 
 _SHARED_ACTION_REVISION = "6cec89bac47a21cf756d68d638a9a510998e57f8"
 _SETUP_RUST = (
     f"leynos/shared-actions/.github/actions/setup-rust@{_SHARED_ACTION_REVISION}"
 )
-_FORMATTER_TOOLCHAIN = "nightly-2026-05-28"
+_FORMATTER_TOOLCHAIN = RUSTFMT_TOOLCHAIN
 _PROJECT_TOOLCHAIN = "1.85.0"
 _FORMATTER_FIXTURE_SKIPS = {
     ("rust/cuprum-native-io/src/ownership_tests.rs", "descriptor_guard"),
@@ -50,11 +51,11 @@ _LEXEME_STARTS = frozenset("/r\"'")
 # host probe in the Makefile fails the contract below instead of mirroring it.
 _HOST_IS_LINUX = sys.platform.startswith("linux")
 _EXPECTED_DEBUG_ROUTE = (
-    "RUSTUP_TOOLCHAIN=nightly-2026-08-23 probe-cargo "
+    f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN} probe-cargo "
     "--config ../tools/dev-fast/config.toml"
 )
 _DEV_FAST_FRAGMENTS = (
-    "RUSTUP_TOOLCHAIN=nightly-2026-08-23",
+    f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN}",
     "--config ../tools/dev-fast/config.toml",
 )
 
@@ -71,9 +72,9 @@ def _assert_target_avoids_the_formatter_route(
     cargo_lines
         Cargo command lines from that target's dry-run recipe.
     """
-    assert all("probe-cargo +nightly-2026-05-28" not in line for line in cargo_lines), (
-        f"{target} must not select the formatter's nightly Cargo route"
-    )
+    assert all(
+        f"probe-cargo +{RUSTFMT_TOOLCHAIN}" not in line for line in cargo_lines
+    ), f"{target} must not select the formatter's nightly Cargo route"
 
 
 def _assert_target_debug_route(target: str, cargo_lines: list[str]) -> None:
@@ -327,8 +328,8 @@ def test_make_formatter_targets_select_the_pinned_nightly() -> None:
         if line.startswith("cd rust && probe-cargo")
     ]
     expected_lines = [
-        "cd rust && probe-cargo +nightly-2026-05-28 fmt --all",
-        "cd rust && probe-cargo +nightly-2026-05-28 fmt --all -- --check",
+        f"cd rust && probe-cargo +{RUSTFMT_TOOLCHAIN} fmt --all",
+        f"cd rust && probe-cargo +{RUSTFMT_TOOLCHAIN} fmt --all -- --check",
     ]
     assert formatter_lines == expected_lines, (
         "formatter targets must use only the injected pinned nightly cargo route"

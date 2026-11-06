@@ -20,6 +20,7 @@ from cuprum import (
     sh,
 )
 from cuprum.context import EnvMode
+from tests.helpers.makefile_pins import makefile_default
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -38,7 +39,9 @@ class _PreparedRun(typ.Protocol):
         """Record a monotonic phase duration."""
 
 
-DEV_FAST_TOOLCHAIN = os.environ.get("DEV_FAST_TOOLCHAIN", "nightly-2026-08-23")
+DEV_FAST_TOOLCHAIN = os.environ.get(
+    "DEV_FAST_TOOLCHAIN", makefile_default("DEV_FAST_TOOLCHAIN")
+)
 # Each scratch Cargo call must win a compiler-admission slot before it runs, and
 # the coordinator exposes no workload lease that could exclude that host-wide
 # queue. The per-call bound is therefore an end-to-end watchdog, not an

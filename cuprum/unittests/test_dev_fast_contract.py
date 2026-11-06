@@ -16,6 +16,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from tests.helpers.docs import repo_root
+from tests.helpers.makefile_pins import DEV_FAST_TOOLCHAIN
 
 if typ.TYPE_CHECKING:
     from collections import abc as cabc
@@ -82,9 +83,7 @@ def _assert_fragment_free(route: str) -> None:
     assert "tools/dev-fast/cargo" not in route, (
         f"protected route selected bridge: {route}"
     )
-    assert "nightly-2026-08-23" not in route, (
-        f"protected route selected nightly: {route}"
-    )
+    assert DEV_FAST_TOOLCHAIN not in route, f"protected route selected nightly: {route}"
     assert "DEV_FAST_" not in route, f"protected route leaked dev-fast state: {route}"
 
 
@@ -337,7 +336,7 @@ def test_linux_debug_routes_select_the_fragment_and_injected_cargo() -> None:
     assert all(
         "--config ../tools/dev-fast/config.toml" in line for line in direct_cargo
     ), "every debug Cargo command must select the approved relative fragment"
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" in routing, (
+    assert f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN}" in routing, (
         "debug routes must select the pinned dev-fast nightly"
     )
     assert "-Clink-arg=-fuse-ld=mold" in routing, (
@@ -384,7 +383,7 @@ def test_release_maturin_routes_do_not_select_dev_fast(flags: str) -> None:
     output = _dry_run("develop", variables={"MATURIN_DEVELOP_FLAGS": flags})
     assert "tools/dev-fast/cargo" not in output, "release Maturin must skip bridge"
     assert "DEV_FAST_CARGO=" not in output, "release Maturin must skip adapter env"
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in output, (
+    assert f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN}" not in output, (
         "release Maturin must not select the dev-fast nightly"
     )
 
@@ -409,7 +408,7 @@ def test_non_linux_alternative_stays_on_the_stable_cargo_route() -> None:
     assert "--config ../tools/dev-fast/config.toml" not in output, (
         "non-Linux must not select the fragment"
     )
-    assert "nightly-2026-08-23" not in output, "non-Linux must use its stable route"
+    assert DEV_FAST_TOOLCHAIN not in output, "non-Linux must use its stable route"
 
 
 def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
@@ -422,11 +421,11 @@ def test_whitaker_and_windows_lint_remain_fragment_free() -> None:
         if "--target x86_64-pc-windows-msvc" in line
     )
     assert "--config" not in whitaker, "Whitaker must not select a Cargo fragment"
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in whitaker, (
+    assert f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN}" not in whitaker, (
         "Whitaker must keep its verifier toolchain"
     )
     assert "--config" not in windows, "Windows lint must not select Linux fragment"
-    assert "RUSTUP_TOOLCHAIN=nightly-2026-08-23" not in windows, (
+    assert f"RUSTUP_TOOLCHAIN={DEV_FAST_TOOLCHAIN}" not in windows, (
         "Windows lint must retain its platform route"
     )
 
@@ -493,7 +492,7 @@ def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:
     route = next(line for line in output.splitlines() if "probe-cargo check" in line)
     assert "RUSTUP_TOOLCHAIN=1.85.0" in route, "MSRV check must pin Rust 1.85.0"
     assert "--config" not in route, "MSRV check must not select the fragment"
-    assert "nightly-2026-08-23" not in route, "MSRV check must not use nightly"
+    assert DEV_FAST_TOOLCHAIN not in route, "MSRV check must not use nightly"
 
 
 @pytest.mark.parametrize(
@@ -542,7 +541,7 @@ def test_ci_provisions_only_the_pinned_linux_prerequisites() -> None:
         encoding="utf-8"
     )
     workflow = (repo_root() / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "nightly-2026-08-23" in action, "CI must install the pinned nightly"
+    assert DEV_FAST_TOOLCHAIN in action, "CI must install the pinned nightly"
     assert "rustc-codegen-cranelift" in action, "CI must install Cranelift"
     assert 'rustup component add "${component}" clippy' in action, (
         "CI must provision the lint component with the backend"
