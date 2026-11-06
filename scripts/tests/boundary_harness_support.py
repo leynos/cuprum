@@ -14,7 +14,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Cargo me
 import typing as typ
 from pathlib import Path
 
-from scripts import check_boundary_contract
+from scripts import boundary_fault_invocations, check_boundary_contract
 from scripts.boundary_workspace import copy_source_tree
 
 if typ.TYPE_CHECKING:
@@ -35,6 +35,49 @@ def copy_boundary_repository(tmp_path: Path) -> Path:
     copy_source_tree(check_boundary_contract.ROOT / "rust", tmp_path / "rust")
     shutil.copytree(check_boundary_contract.ROOT / "tools", tmp_path / "tools")
     return tmp_path
+
+
+# Pins for a run whose verifier results are recorded rather than launched.
+# `_check` never builds an invocation when `_run` is patched, so these only have
+# to be present and distinct.
+_STUB_PINS = boundary_fault_invocations.ToolPins(kani="stub-kani", verus="stub-verus")
+
+
+def pinned_context(root: Path) -> boundary_fault_invocations.VerifierContext:
+    """Bind a repository root and the verifier pins recorded in that same root.
+
+    Parameters
+    ----------
+    root : Path
+        Repository-like root holding the ``tools/<name>/VERSION`` manifests.
+
+    Returns
+    -------
+    boundary_fault_invocations.VerifierContext
+        The context a verifier run against ``root`` must be launched with.
+    """
+    return boundary_fault_invocations.VerifierContext(
+        root, boundary_fault_invocations.read_tool_pins(root)
+    )
+
+
+def stubbed_context(root: Path) -> boundary_fault_invocations.VerifierContext:
+    """Bind a root for a run whose verifier results are recorded, not launched.
+
+    The pins are fixed placeholders: a recorded run never reaches the point
+    where they would name a verifier to launch, so only their identity matters.
+
+    Parameters
+    ----------
+    root : Path
+        Repository-like root the recorded run is bound to.
+
+    Returns
+    -------
+    boundary_fault_invocations.VerifierContext
+        A context whose pins name no real verifier.
+    """
+    return boundary_fault_invocations.VerifierContext(root, _STUB_PINS)
 
 
 def latest_run_root(root: Path, harness: str) -> Path:
@@ -95,6 +138,23 @@ def stub_cargo_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> N
         Production module exposing ``_prepare_run_cargo_home``.
     """
     monkeypatch.setattr(module, "_prepare_run_cargo_home", _no_preparation_time)
+
+
+def stub_fault_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
+    """Make the fault harness skip Cargo-home preparation in its orchestration test.
+
+    The fault harness binds its repository root before handing the callable to
+    the run context, so this seam takes the bound root as well as the run's own
+    paths.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Patch manager for the current test.
+    module : object
+        Production module exposing ``_prepare_run_cargo_home``.
+    """
+    monkeypatch.setattr(module, "_prepare_run_cargo_home", _no_fault_preparation_time)
 
 
 def recorded_phases(run_root: Path) -> list[str]:
