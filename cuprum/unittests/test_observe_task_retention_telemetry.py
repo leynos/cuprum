@@ -68,7 +68,7 @@ def _record_starting(
     raise AssertionError(msg)
 
 
-def test_depth_counts_only_unfinished_tasks() -> None:
+def test_prune_reports_only_unfinished_depth() -> None:
     """A settled task must not inflate the depth an operator reads."""
 
     async def case() -> None:
@@ -79,20 +79,45 @@ def test_depth_counts_only_unfinished_tasks() -> None:
         await asyncio.sleep(0)
         recorder = _recorder()
 
-        assert recorder.observe_depth([settled, held]) == 1, (
-            "only the unfinished task may count towards the depth"
+        _prune_finished_hook_tasks(
+            [settled, held],
+            telemetry=recorder,
+            phase="stdout",
+            ceiling=2,
         )
-        assert recorder.depth == 1, "the latest depth must be retained"
+
+        assert recorder.depth == 1, (
+            "the depth the prune reports must count only unfinished tasks"
+        )
         assert recorder.max_depth == 1, "the high-water mark must be recorded"
 
         gate.set()
         await _wait_for_exec_hook_tasks([held])
-        assert recorder.observe_depth([settled, held]) == 0, (
-            "a completed task must leave the depth"
+        _prune_finished_hook_tasks(
+            [held],
+            telemetry=recorder,
+            phase="stdout",
+            ceiling=2,
         )
+        assert recorder.depth == 0, "a completed task must leave the depth"
         assert recorder.max_depth == 1, "the high-water mark must not fall back"
 
     asyncio.run(case())
+
+
+def test_record_depth_tracks_the_latest_and_high_water_marks() -> None:
+    """The seam keeps the newest count without losing the peak."""
+    recorder = _recorder()
+
+    assert recorder.record_depth(3, phase="stdout") == 3, (
+        "the recorder must return the count it recorded"
+    )
+    assert recorder.depth == 3, "the latest depth must be retained"
+    assert recorder.record_depth(1, phase="stdout") == 1, (
+        "a lower depth must still be recorded"
+    )
+    assert recorder.depth == 1, "the latest depth must replace the earlier one"
+    assert recorder.max_depth == 3, "the high-water mark must not fall back"
 
 
 def test_admission_records_saturation_at_debug(
@@ -126,8 +151,12 @@ def test_admission_records_saturation_at_debug(
     assert vars(record)["cuprum_admitted"] is False, (
         "the per-record decision must be prefixed like every other field"
     )
-    assert vars(record)["cuprum_phase"] == "stdout"
-    assert vars(record)["cuprum_ceiling"] == 2
+    assert vars(record)["cuprum_phase"] == "stdout", (
+        "the closed phase label must identify the stream that saturated"
+    )
+    assert vars(record)["cuprum_ceiling"] == 2, (
+        "the record must name the ceiling the decision was made against"
+    )
 
 
 def test_prune_records_dropped_and_failed_counts(
@@ -160,8 +189,12 @@ def test_prune_records_dropped_and_failed_counts(
     asyncio.run(case())
 
     record = _record_starting(caplog, "observe_task_pruned")
-    assert vars(record)["cuprum_pruned"] == 2
-    assert vars(record)["cuprum_pruned_failures"] == 1
+    assert vars(record)["cuprum_pruned"] == 2, (
+        "the record must carry the running prune total"
+    )
+    assert vars(record)["cuprum_pruned_failures"] == 1, (
+        "the record must carry the running dropped-failure total"
+    )
     assert vars(record)["cuprum_prune_delta"] == 2, (
         "the per-prune count must not overwrite the running total"
     )
@@ -211,8 +244,12 @@ def test_capacity_wait_records_one_wait_and_its_duration(
     )
     resumed = _record_starting(caplog, "observe_task_capacity_resumed")
     assert resumed.levelno == logging.DEBUG, "the exit detail belongs at debug"
-    assert vars(resumed)["cuprum_waits"] == 1
-    assert vars(resumed)["cuprum_wait_seconds"] >= 0.0
+    assert vars(resumed)["cuprum_waits"] == 1, (
+        "the record must carry the running wait total"
+    )
+    assert vars(resumed)["cuprum_wait_seconds"] >= 0.0, (
+        "the record must carry the accumulated wait duration"
+    )
 
 
 def test_stage_observation_reuses_one_lazily_created_recorder() -> None:

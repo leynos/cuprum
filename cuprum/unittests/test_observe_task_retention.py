@@ -3,7 +3,9 @@
 An observed run schedules one task per awaitable observe hook per event and
 retains them until finalization. These tests pin the rules that keep that list
 bounded: which tasks are dropped, which failure is kept, and how line
-observation is admitted against the ceiling. The composed-callback behaviour
+observation is admitted against the ceiling. The generated sequences that hold
+pruning to the outcome finalization reports live in
+``test_observe_task_retention_property.py``. The composed-callback behaviour
 lives in ``test_observe_task_retention_callbacks.py``, the telemetry in
 ``test_observe_task_retention_telemetry.py``, the end-to-end backpressure
 behaviour against a real child in ``test_line_observe_backpressure.py``, the
@@ -18,8 +20,6 @@ import gc
 import typing as typ
 
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from cuprum._line_stream import _LINE_QUEUE_CAPACITY
 from cuprum._observability import _wait_for_exec_hook_tasks
@@ -54,6 +54,12 @@ async def _hold(gate: asyncio.Event) -> None:
     await gate.wait()
 
 
+async def _hold_then_fail(gate: asyncio.Event, marker: str) -> None:
+    """Stay unfinished until ``gate`` opens, then fail."""
+    await gate.wait()
+    raise _HookFailureError(marker)
+
+
 def _spawn(
     kind: str, gate: asyncio.Event, *, marker: str = "boom"
 ) -> asyncio.Task[None]:
@@ -66,6 +72,8 @@ def _spawn(
         task = asyncio.create_task(_hold(gate))
         task.cancel()
         return task
+    if kind == "late-fail":
+        return asyncio.create_task(_hold_then_fail(gate, marker))
     return asyncio.create_task(_hold(gate))
 
 
@@ -288,45 +296,3 @@ def test_cancelling_the_waiter_leaves_observer_tasks_running() -> None:
         await _wait_for_exec_hook_tasks(pending)
 
     asyncio.run(case())
-
-
-def _describe(exc: BaseException) -> tuple[str, str | None]:
-    """Render the part of a failure that finalization is expected to report."""
-    if isinstance(exc, _HookFailureError):
-        return ("failure", exc.marker)
-    if isinstance(exc, asyncio.CancelledError):
-        return ("cancelled", None)
-    return (type(exc).__name__, str(exc))
-
-
-async def _selected_failure(
-    spec: list[str], *, prune: bool
-) -> tuple[str, str | None] | None:
-    """Return the outcome finalization reports for one outcome sequence."""
-    gate = asyncio.Event()
-    tasks = [
-        _spawn(kind, gate, marker=f"failure-{index}") for index, kind in enumerate(spec)
-    ]
-    await asyncio.sleep(0)
-    if prune:
-        _prune_finished_hook_tasks(tasks)
-    gate.set()
-    try:
-        await _wait_for_exec_hook_tasks(tasks)
-    except BaseException as exc:  # ruff: ignore[blind-except] - selecting is the test
-        return _describe(exc)
-    return None
-
-
-@settings(max_examples=40, deadline=None)
-@given(spec=st.lists(st.sampled_from(("ok", "fail", "cancel", "pending")), max_size=6))
-def test_pruning_preserves_the_failure_finalization_reports(
-    spec: list[str],
-) -> None:
-    """Pruning must select exactly the failure the unpruned drain selects."""
-    unpruned = asyncio.run(_selected_failure(spec, prune=False))
-    pruned = asyncio.run(_selected_failure(spec, prune=True))
-
-    assert pruned == unpruned, (
-        f"pruning changed the reported outcome for {spec!r}: {pruned!r} != {unpruned!r}"
-    )

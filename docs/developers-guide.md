@@ -1848,24 +1848,54 @@ per-prune delta lands as `cuprum_prune_delta` and cannot overwrite the running
 `cuprum_pruned` total. Callers that supply no recorder (the retention helpers
 default `telemetry=None`) still get the behaviour, only without the logs.
 
+The same samples feed the bundled adapters through a sink port.
+`_RetentionMetricsSink` in `cuprum/_retention_telemetry.py` is a runtime-
+checkable protocol with one method, `report_retention(sample)`;
+`_StageObservation.retention_telemetry` discovers the observe hooks that
+implement it once, when it first builds the recorder, using the same
+`isinstance`-over-hooks pattern as `_PipelineWaitReporter`. Adapters therefore
+stay plain exec hooks with no registration API. Two mixins project the samples:
+`_RetentionMetricsMixin` in `cuprum/adapters/_retention_metrics.py` emits
+`cuprum_observe_hook_depth` and `cuprum_observe_hook_capacity_wait_seconds`
+histograms plus `cuprum_observe_hook_saturations_total`,
+`cuprum_observe_hook_pruned_total`, and
+`cuprum_observe_hook_pruned_failures_total` counters, labelled only by the
+closed `phase` and `outcome` values; `_RetentionTracingMixin` in
+`cuprum/adapters/_tracing_retention.py` records `cuprum.observe_task_retention`
+span events, and a distinct `cuprum.observe_task_capacity_wait` event carrying
+`operation`, `outcome`, `wait_seconds`, and `depth`, for the async wait
+boundary. The per-run `exec_id` is deliberately never a metric label: it
+correlates the log record and the span and would otherwise multiply every
+series by the number of runs. Both mixins are bases of the existing
+`MetricsHook` and `TracingHook`, and both use the shared `record_span_event`
+helper so the active-span and closed-span rules live in one place.
+
 Tests for the bound are split by level.
 `cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity, and
-cancellation isolation. Its Hypothesis property compares the failure
-finalization reports with and without pruning over success, failure,
-cancellation, and pending sequences. Its capacity-wait case releases exactly
-one held task and asserts the waiter returns while the other two stay
-unfinished; the settled task is pruned from the shared list in place, so hold
-task references rather than list indices when asserting on it. That is what
-distinguishes `FIRST_COMPLETED` from a gather.
-`test_observe_task_retention_callbacks.py` covers the composed callback with a
-patched ceiling (patch `cuprum._line_event_emitter._OBSERVE_TASK_CEILING`,
-never the shared constant; the emitter module is where the ceiling is read, so
-patching a re-export in the composing module would leave the real call site
-unchanged): the deferred dispatch, the decode-time stamp a deferred line keeps,
-the per-event overshoot, and the ordering guarantee that a failed observation
-never reaches `on_line`. `test_observe_task_retention_telemetry.py` covers the
-recorder's counters and the field set of its records. The split keeps each
-module inside the repository's file-size ceiling.
+cancellation isolation. Its capacity-wait case releases exactly one held task
+and asserts the waiter returns while the other two stay unfinished; the settled
+task is pruned from the shared list in place, so hold task references rather
+than list indices when asserting on it. That is what distinguishes
+`FIRST_COMPLETED` from a gather. `test_observe_task_retention_property.py`
+holds pruning to the outcome finalization reports with Hypothesis: one property
+compares a single prune with an unpruned drain over success, failure,
+cancellation, and pending sequences, and a second generates several prune steps
+interleaved with new spawns, earlier tasks that only fail later, and tasks
+cancelled after every prune, comparing the reported outcome with the unpruned
+run each time. `test_observe_task_retention_callbacks.py` covers the composed
+callback with a patched ceiling (patch
+`cuprum._line_event_emitter._OBSERVE_TASK_CEILING`, never the shared constant;
+the emitter module is where the ceiling is read, so patching a re-export in the
+composing module would leave the real call site unchanged): the deferred
+dispatch, the decode-time stamp a deferred line keeps, the per-event overshoot,
+and the ordering guarantee that a failed observation never reaches `on_line`.
+`test_observe_task_retention_telemetry.py` covers the recorder's counters and
+the field set of its records; `test_retention_sink.py` covers the sink port and
+the injectable clock, which makes a capacity wait's recorded duration exact and
+is asserted even for a cancelled wait; `test_retention_metrics.py` and
+`test_tracing_retention.py` pin each adapter's names, values, and label or
+attribute set. The split keeps each module inside the repository's file-size
+ceiling.
 
 The real-child cases share their scaffolding in
 `cuprum/unittests/test_line_observe_support.py`: the chatty child and pipeline

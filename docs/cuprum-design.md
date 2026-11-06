@@ -2126,7 +2126,11 @@ implemented with the following decisions:
   Capacity is checked once per event, so one event carrying several async hooks
   can leave the unfinished count at the ceiling plus one fewer than that hook
   count; the one settled failure finalization still needs may add one more
-  entry to the raw list.
+  entry to the raw list. Retention is observable through the same hooks: one
+  that implements the one-method retention sink port receives each bounded
+  sample, so the metrics and tracing adapters project depth, saturation,
+  pruning, and capacity-wait duration without a second registration API, and a
+  run nothing observes pays nothing.
 
 ### 8.1.4 Timeouts
 
