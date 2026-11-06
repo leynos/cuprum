@@ -10,14 +10,19 @@ module owns the reclaim those routes share.
 
 The scope is deliberately the pre-hand-back window of ``run()``: the ``start``
 event both run shapes share, the streamed run's consumer setup, and the direct
-run's stdin writer. The other routes that spawn a child reach the same
-guarantee from their own spawn helpers — ``start()`` from ``_start_handle_run``,
-the line stream from ``_abandon_unstarted_run``, and the pipeline from
-``_cleanup_spawned_processes`` — so their failures never arrive here. Once a
-run has handed its child back as a :class:`~cuprum.RunningCommand`, cleanup
-belongs to that handle (``cuprum._process_handle``) and not here. The sequences
-are separate on purpose: the handle's caller decides when the child stops,
-whereas an abandoned startup has no caller left to decide anything.
+run's stdin writer. The other routes that spawn a child never arrive here,
+because each reclaims from its own spawn helper: ``start()`` from
+``_start_handle_run``, the line stream from ``_abandon_unstarted_run``, and the
+pipeline from ``_cleanup_spawned_processes``. Their guarantees are not
+identical to this one and this module does not claim them. ``_start_handle_run``
+stops and reaps the child through ``_terminate_shielded`` but releases no
+output transport, so a handle run whose descendant keeps a pipe open still has
+the descriptor question to answer; that belongs to the running-command
+ownership work, not to an abandoned startup. Once a run has handed its child
+back as a :class:`~cuprum.RunningCommand`, cleanup belongs to that handle
+(``cuprum._process_handle``) and not here. The sequences are separate on
+purpose: the handle's caller decides when the child stops, whereas an
+abandoned startup has no caller left to decide anything.
 
 The sequence is fixed, and each step is given its own turn rather than
 aborting the rest:

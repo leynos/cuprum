@@ -1,9 +1,11 @@
 """What the startup-abandonment helper owes a run that failed after its spawn.
 
 A child spawned by ``run()`` or ``run_sync()`` belongs to the run only once the
-setup that follows the spawn has returned; ``start()`` reaches the same
-guarantee from its own spawn helper. When that setup raises, no route that
-would normally wait for, drain, and reap the child is entered, so
+setup that follows the spawn has returned. ``start()`` reclaims its own failed
+spawn from ``_start_handle_run``; that helper stops and reaps the child but
+releases no output transport, so the obligations below are this module's and
+``run()``'s alone. When the run's setup raises, no route that would normally
+wait for, drain, and reap the child is entered, so
 :func:`~cuprum._subprocess_startup_abandon._abandon_started_process` performs
 the reclaim itself.
 

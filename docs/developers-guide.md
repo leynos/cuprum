@@ -3129,14 +3129,17 @@ Three rules matter when adding or moving a post-spawn step:
   the only thing left that can remove the file.
 
 The assembly those rules depend on is split in two, and the split is the
-contract. `_build_run_task_ownership` starts the run's stdin writer and stream
-consumers and hands each task to the `recorded` list as it exists;
-`_build_task_ownership` then assembles the record they are retained in — the
-latch, the relay diagnostics, the idle monitor, and the capture accumulators —
-without starting anything. The direct run, the line iterator, and the owned
-handle all come through the pair, so capture, echo, and sink selection cannot
-drift between the three routes. A step that starts a task belongs in
-`_build_run_task_ownership`; a field the run must keep belongs in
+contract. `_build_run_task_ownership` starts the streamed run's stdin writer
+and stream consumers and hands each task to the `recorded` list as it is
+created; `_build_task_ownership` then assembles the record they are retained in
+— the latch, the relay diagnostics, the idle monitor, and the capture
+accumulators — without starting anything. The streamed run, the line iterator,
+and the owned handle all come through the pair, so capture, echo, and sink
+selection cannot drift between the three routes. The direct run
+(`_run_subprocess_without_streams`) is the exception: it wires no stream
+consumers and starts its own stdin writer through `_spawn_stdin_writer` and
+`_record_started`, so it calls neither builder. A step that starts a task
+belongs in `_build_run_task_ownership`; a field the run must keep belongs in
 `_build_task_ownership`, where it cannot introduce a failure the reclaim would
 have to cover.
 

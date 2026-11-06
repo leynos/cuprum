@@ -65,11 +65,19 @@ _CAPTURE = object()
 
 
 class _Run(typ.NamedTuple):
-    """What one reclaim attempt did, for the property to inspect."""
+    """What one reclaim attempt did, for the property to inspect.
+
+    ``order`` records that a step was entered; ``settled`` and ``cleaned``
+    record that the two steps whose work is asynchronous *completed*. The
+    distinction matters under cancellation: a step can be entered and then
+    abandoned, and only the completion lists can tell the two apart.
+    """
 
     order: list[str]
     reported: list[str]
     capturers: list[tuple[object, ...]]
+    settled: list[str]
+    cleaned: list[tuple[object, ...]]
 
 
 class _Case(typ.NamedTuple):
@@ -136,6 +144,7 @@ class _FakeTask:
         if self._case.gate is not None and self._case.gate_step == "task_settle":
             yield from asyncio.sleep(0.05).__await__()
         yield from ()
+        self._case.run.settled.append("task_settle")
 
 
 def _execution() -> _SubprocessExecution:
@@ -183,6 +192,7 @@ async def _cleanup_captures(case: _Case, *args: object) -> None:
     await asyncio.sleep(0)
     if "capture_cleanup" in case.failing:
         raise case.errors["capture_cleanup"]
+    case.run.cleaned.append(typ.cast("tuple[object, ...]", args[0]))
 
 
 def _install_steps(stack: contextlib.ExitStack, case: _Case) -> None:
