@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import tarfile
 from pathlib import Path
@@ -169,3 +170,125 @@ def test_install_rejects_a_platform_without_the_pinned_binary(
     assert not installation.archive.exists(), (
         "a rejected platform must not leave a downloaded archive behind"
     )
+
+
+class TestCheckedDownload:
+    """The shared HTTPS fetch must fail closed on every checksum mismatch."""
+
+    def test_cached_binary_must_match_digest(self, tmp_path: Path) -> None:
+        """A verified cache is reusable without performing a download."""
+        archive = tmp_path / "binary.tar.gz"
+        archive.write_bytes(b"verified archive")
+        digest = hashlib.sha256(b"verified archive").hexdigest()
+        installer.checked_download("https://example.invalid/asset", archive, digest)
+        assert archive.read_bytes() == b"verified archive", (
+            "verified cache was modified"
+        )
+
+    def test_mismatch_preserves_existing_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Corrupt downloads cannot replace a cached artefact or leave a partial."""
+        archive = tmp_path / "binary.tar.gz"
+        archive.write_bytes(b"old cache")
+
+        def fetch(_url: str, destination: Path) -> None:
+            """Supply a corrupt release body without network access."""
+            destination.write_bytes(b"corrupt body")
+
+        monkeypatch.setattr(installer, "_download", fetch)
+        with pytest.raises(ValueError, match="checksum mismatch"):
+            installer.checked_download(
+                "https://example.invalid/asset", archive, "0" * 64
+            )
+        assert archive.read_bytes() == b"old cache", (
+            "corrupt download replaced the cache"
+        )
+        assert not archive.with_suffix(".download").exists(), "partial download leaked"
+
+    def test_an_unreadable_cache_is_refused_rather_than_replaced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A cache entry that cannot be read must not be answered with a download."""
+        archive = tmp_path / "binary.tar.gz"
+        archive.write_bytes(b"cached archive")
+        downloads: list[str] = []
+
+        def fetch(url: str, _destination: Path) -> None:
+            """Record any attempted download so the test can reject it."""
+            downloads.append(url)
+
+        def unreadable(_path: Path) -> str:
+            """Stand in for a cache entry the process cannot read."""
+            raise PermissionError("unreadable")
+
+        monkeypatch.setattr(installer, "_download", fetch)
+        monkeypatch.setattr(installer, "_digest", unreadable)
+
+        with pytest.raises(PermissionError):
+            installer.checked_download(
+                "https://example.invalid/asset", archive, "0" * 64
+            )
+
+        assert not downloads, "an unreadable cache must not start a download"
+        assert archive.read_bytes() == b"cached archive", (
+            "an unreadable cache must be left in place"
+        )
+
+    def test_a_missing_cache_entry_is_a_miss_not_a_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An absent cache entry downloads normally instead of raising."""
+        archive = tmp_path / "binary.tar.gz"
+        content = b"fresh archive"
+        digest = hashlib.sha256(content).hexdigest()
+
+        def fetch(_url: str, destination: Path) -> None:
+            """Supply a fresh release body without network access."""
+            destination.write_bytes(content)
+
+        monkeypatch.setattr(installer, "_download", fetch)
+        installer.checked_download("https://example.invalid/asset", archive, digest)
+        assert archive.read_bytes() == content, "the missing entry was not installed"
+
+    def test_plain_http_is_rejected(self, tmp_path: Path) -> None:
+        """The installer cannot fetch an artefact over an unauthenticated scheme."""
+        with pytest.raises(ValueError, match="HTTPS"):
+            installer.checked_download(
+                "http://example.invalid/asset", tmp_path / "binary", "0" * 64
+            )
+
+    @pytest.mark.parametrize(
+        "redirect",
+        [
+            ("http://example.invalid/asset", "require HTTPS"),
+            (None, "no Location"),
+            ("/another-redirect", "redirect limit"),
+        ],
+    )
+    def test_release_redirects_fail_closed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        redirect: tuple[str | None, str],
+    ) -> None:
+        """Insecure, malformed, and looping redirects cannot install a binary."""
+        from unittest import mock
+
+        location, message = redirect
+
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 302
+        response.getheader.return_value = location
+        connection = mock.Mock()
+        connection.getresponse.return_value = response
+        monkeypatch.setattr(
+            installer.http.client,
+            "HTTPSConnection",
+            lambda *_args, **_kwargs: connection,
+        )
+        with pytest.raises(ValueError, match=message):
+            installer._download("https://example.invalid/asset", tmp_path / "binary")
+        connection.close.assert_called()
+        assert not (tmp_path / "binary").exists(), "rejected redirect created a binary"
