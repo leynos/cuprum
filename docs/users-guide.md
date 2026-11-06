@@ -2943,18 +2943,29 @@ the child already exists at that point and no caller has been handed a run for
 it. Cuprum terminates and reaps that child before the hook's exception
 propagates, releases its stdin, stdout, and stderr pipes, and leaves no writer
 or consumer task behind. Any capture spill file that setup had already opened
-is removed too, so a failed start never leaves a temporary file behind. The
-same reclaim covers a failure in the setup that follows the spawn, such as
-creating the stdin writer or starting a stream consumer, so the guarantee holds
-for `run()`, `run_sync()`, and every stage of a pipeline. `start()` and
-`lines()` reach the same outcome through their own unwind helpers, which reap
-the child and settle every task the failed setup had started. When the run owns
-its process group (`OWN_GROUP`), the teardown signals that group rather than
-the child alone. Pipe release is bounded: a descendant that escaped the group
-can hold a pipe end open, so Cuprum waits no longer than its fixed end-of-file
-grace before surfacing the original error, and then closes its own end of the
-pipe rather than leave the descriptor to be collected later; see
-[ADR-021](adrs/adr-0021-process-group-ownership.md).
+is removed too, so a failed start never leaves a temporary file behind. That
+guarantee covers every route that spawns a child: `run()`, `run_sync()`,
+`start()`, `lines()`, and each stage of a pipeline.
+
+A failure in the setup that follows the spawn — creating the stdin writer or
+starting a stream consumer — is reclaimed the same way on `run()` and
+`run_sync()`. `start()` and `lines()` reach their own outcome through separate
+unwind helpers: they reap the child, settle every task the failed setup had
+started, and drain and release the capture accumulators, but they do not close
+an output transport. A descendant that escaped the process group can therefore
+still hold the parent's descriptor open on those two routes until the transport
+is collected; that gap belongs to the running-command ownership work and is not
+covered by the startup reclaim.
+
+When the run owns its process group (`OWN_GROUP`), the teardown signals that
+group rather than the child alone. The output discard is bounded: a descendant
+that escaped the group can hold a pipe end open, so Cuprum waits no longer than
+its fixed end-of-file grace before surfacing the original error, and then
+closes its own end of the pipe rather than leave the descriptor to be collected
+later; see [ADR-021](adrs/adr-0021-process-group-ownership.md). That grace
+bounds the discard step alone. The rest of the reclaim, including the child
+teardown, is bounded by the run's own cancel grace instead, so a slow teardown
+is not truncated by the end-of-file window.
 
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
 reject unknown values. The set of phases can grow between releases, so such a
@@ -2997,7 +3008,10 @@ The hook collects:
   `output_discard`, `transport_close`, and `capture_cleanup` for a reclaim of a
   child whose startup failed after its spawn. A `teardown_error` event naming
   any other operation is counted as `unknown`, so a hand-built event cannot
-  shatter the series
+  shatter the series. Treat the label set as a compatibility surface: a release
+  may add an operation, so a collector, dashboard, or alert that enumerates
+  these values should tolerate an unfamiliar one rather than drop the sample or
+  fail the scrape
 - `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn

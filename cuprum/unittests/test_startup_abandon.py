@@ -53,6 +53,7 @@ from cuprum.unittests._startup_abandon_support import (
     _spawn_output_pipe_holder,
     _spawn_output_pipe_holder_fallback,
     _spawn_sleeper,
+    _StalledReader,
     _wait_for_pid_file,
 )
 from cuprum.unittests._wait4_process_support import _wait4_only
@@ -292,29 +293,6 @@ def test_abandon_releases_output_pipes_a_descendant_keeps_open(
             _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())
-
-
-class _StalledReadResumedError(AssertionError):
-    """A stalled read was resumed instead of being cancelled."""
-
-    def __init__(self) -> None:
-        """Say what the violation means for the case that reads it."""
-        super().__init__("a stalled read must be cancelled, never resumed")
-
-
-class _StalledReader:
-    """A stream whose read never completes, as a pipe a descendant holds open."""
-
-    def __init__(self, entered: list[str], name: str) -> None:
-        """Record entries in *entered* under the stream *name*."""
-        self._entered = entered
-        self._name = name
-
-    async def read(self, _size: int) -> bytes:
-        """Record that this read was entered, then wait to be cancelled."""
-        self._entered.append(self._name)
-        await asyncio.Event().wait()
-        raise _StalledReadResumedError
 
 
 def test_both_outputs_share_one_end_of_file_grace() -> None:

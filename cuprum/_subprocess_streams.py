@@ -161,15 +161,16 @@ def _build_run_task_ownership(
 ) -> _RunTaskOwnership:
     """Start a run's stdin writer and stream consumers as one owned set.
 
-    Every path that owns both comes through here: the direct run, the line
-    iterator, and the owned handle. Each starts the same writer and the same
-    consumers, so the record they retain is assembled in one place rather than
-    three, and the paths cannot drift on capture, echo, or sink selection.
+    Every path that owns both comes through here: the streamed run, the line
+    iterator, and the owned handle. Each starts the same writer and consumers,
+    so one helper assembles their record and the paths cannot drift on capture,
+    echo, or sink selection. The direct run is not one of them: it wires no
+    consumers and starts its own stdin writer, so it calls neither builder.
 
-    *recorded* receives each task the moment it exists rather than after the
-    whole set is built — a failure while starting a later task must not lose an
-    earlier one, since the tuple this returns is never built. The direct run
-    and the handle pass one, for their own reclaim routes; the line iterator's
+    *recorded* receives each task the moment it exists, not after the whole set
+    is built: a failure while starting a later task must not lose an earlier
+    one, since the tuple this returns is never built. The streamed run and the
+    handle pass one, for their own reclaim routes; the line iterator's
     post-spawn window settles a larger record, so it passes none.
 
     Returns

@@ -1583,9 +1583,12 @@ The owned handle's `_attach_run_tasks` had the same problem in a different
 shape, and closing it also removed the last reason for it to keep a copy of the
 task construction. Its reclaim is `_detach_run_tasks` rather than this helper,
 but it too starts one consumer per stream and can fail while the pair is being
-built, so it passes its own `started` list to `_build_run_task_ownership`
-exactly as the direct run does; that shared helper records each task as it is
-created and is now the only place the writer and the consumers are started.
+built, so it passes its own `started` list to `_build_run_task_ownership`, the
+helper the streamed run and the line iterator also use; that helper records
+each task as it is created and is now the only place the writer and the
+consumers are started. The direct run is the exception: it wires no consumers
+and starts its own stdin writer through `_spawn_stdin_writer`, recording it in
+its own `recorded` list, so it calls neither builder.
 
 The same guarantee already existed for `SafeCmd.lines()` and `SafeCmd.start()`,
 whose post-spawn windows end in their own unwind helpers with their own records

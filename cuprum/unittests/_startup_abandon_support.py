@@ -43,6 +43,8 @@ if typ.TYPE_CHECKING:
 
 __all__ = [
     "_DESCENDANT_SCRIPT",
+    "_StalledReadResumedError",
+    "_StalledReader",
     "_execution",
     "_is_fd_open",
     "_is_running",
@@ -54,6 +56,30 @@ __all__ = [
     "_spawn_sleeper",
     "_wait_for_pid_file",
 ]
+
+
+class _StalledReadResumedError(AssertionError):
+    """A stalled read was resumed instead of being cancelled."""
+
+    def __init__(self) -> None:
+        """Say what the violation means for the case that reads it."""
+        super().__init__("a stalled read must be cancelled, never resumed")
+
+
+class _StalledReader:
+    """A stream whose read never completes, as a pipe a descendant holds open."""
+
+    def __init__(self, entered: list[str], name: str) -> None:
+        """Record entries in *entered* under the stream *name*."""
+        self._entered = entered
+        self._name = name
+
+    async def read(self, _size: int) -> bytes:
+        """Record that this read was entered, then wait to be cancelled."""
+        self._entered.append(self._name)
+        await asyncio.Event().wait()
+        raise _StalledReadResumedError
+
 
 #: The inherited-pipe case decides liveness with ``os.kill(pid, 0)`` and cleans
 #: up with ``SIGKILL``. Windows documents the first as terminating the process

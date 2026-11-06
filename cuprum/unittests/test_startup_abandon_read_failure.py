@@ -9,6 +9,10 @@ failure from cancelling the other, so the failure has to be collected and
 re-raised rather than left in the results: dropped, it would leave only the
 transport close behind it and no record of why that close was needed.
 
+A failure that completes just before the shared grace does not lose to it: the
+discard raises the failure it already holds rather than report only an expiry,
+and the transport close still runs for the stream that never settled.
+
 Read stubs are used for the discard's own contract, because the question there
 is what the discard does with a failure, not how a pipe comes to fail. The
 descriptor case is different: it drives a real child on both backends, because
@@ -38,6 +42,7 @@ from cuprum.unittests._startup_abandon_support import (
     _recorded_pid,
     _spawn_output_pipe_holder,
     _spawn_output_pipe_holder_fallback,
+    _StalledReader,
     _wait_for_pid_file,
 )
 from cuprum.unittests._wait4_process_support import _wait4_only
@@ -115,18 +120,7 @@ def test_a_failed_read_is_reported_and_the_transports_still_close() -> None:
         """Release one process whose only stream fails its read."""
         error = _ReadFailureError("the pipe was reset")
         closed: list[bool] = []
-        reported: list[tuple[str, BaseException]] = []
-
-        def record(
-            _process: object,
-            _execution: object,
-            *,
-            operation: str,
-            error: BaseException,
-        ) -> None:
-            """Record the operation a suppressed failure was attributed to."""
-            reported.append((operation, error))
-
+        reporter = _RecordingReporter()
         pipes = types.SimpleNamespace(
             stdin=None,
             stdout=_RaisingReader(error, [], "stdout"),
@@ -135,21 +129,71 @@ def test_a_failed_read_is_reported_and_the_transports_still_close() -> None:
         )
         execution = typ.cast("_SubprocessExecution", types.SimpleNamespace())
 
-        with mock.patch.object(reclaim, "_report_reclaim_failure", record):
+        with mock.patch.object(reclaim, "_report_reclaim_failure", reporter):
             await reclaim._release_pipes(
                 typ.cast("asyncio.subprocess.Process", pipes),
                 execution,
             )
 
-        assert [operation for operation, _ in reported] == ["output_discard"], (
+        assert reporter.operations == ["output_discard"], (
             "a failed read must be reported under the step that owns it"
         )
-        assert reported[0][1] is error, (
+        assert reporter.reports[0][1] is error, (
             "the report must carry the read's own failure, not a replacement"
         )
         assert closed, (
             "the transport close must still run after a failed drain, or the "
             "parent-side descriptor leaks"
+        )
+
+    asyncio.run(run_case())
+
+
+def test_a_failed_read_is_reported_when_the_other_read_stalls() -> None:
+    """A failure the grace outlived must still be the reported one.
+
+    One stream fails at once and its neighbour never returns, so the shared
+    grace expires while the failure is already in hand. Reporting the pair as a
+    plain expiry would drop that failure and leave an operator knowing only
+    that the discard timed out; the transport close must still run, because no
+    end-of-file is coming for the stalled pipe either.
+    """
+
+    async def run_case() -> None:
+        """Release one process whose streams fail and stall."""
+        error = _ReadFailureError("the pipe was reset")
+        entered: list[str] = []
+        closed: list[bool] = []
+        reporter = _RecordingReporter()
+        pipes = types.SimpleNamespace(
+            stdin=None,
+            stdout=_RaisingReader(error, [], "stdout"),
+            stderr=_StalledReader(entered, "stderr"),
+            close_output_transports=lambda: closed.append(True),
+        )
+        execution = typ.cast("_SubprocessExecution", types.SimpleNamespace())
+
+        with mock.patch.object(reclaim, "_report_reclaim_failure", reporter):
+            await reclaim._release_pipes(
+                typ.cast("asyncio.subprocess.Process", pipes),
+                execution,
+            )
+
+        assert entered == ["stderr"], (
+            "the stalled read must be entered inside the same grace as the "
+            "failure, or this case says nothing about a shared window"
+        )
+        assert reporter.operations == ["output_discard"], (
+            "the discard must report the step that owned both reads, got "
+            f"{reporter.reports!r}"
+        )
+        assert reporter.reports[0][1] is error, (
+            "the completed read failure must be the reported error, not the "
+            "expiry that outlived it"
+        )
+        assert closed, (
+            "the transport close must still run with a stalled neighbour, or "
+            "the parent-side descriptor leaks"
         )
 
     asyncio.run(run_case())

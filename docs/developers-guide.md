@@ -3117,8 +3117,9 @@ Three rules matter when adding or moving a post-spawn step:
   means the finished tuple never exists, and a consumer started before the
   failure would then have no owner for the reclaim to cancel. The same rule
   applies to the owned handle, whose `_attach_run_tasks` passes its own
-  `started` list to `_build_run_task_ownership` — the shared helper the direct
-  run uses — so the writer and both consumers are recorded as each is created.
+  `started` list to `_build_run_task_ownership` — the helper the streamed run
+  and the line iterator also use — so the writer and both consumers are
+  recorded as each is created.
 - A new post-spawn failure point belongs inside the existing guard, passing the
   run's `recorded` list. Do not add a second unwind route and do not release
   the pipes before stopping the child: both drain policies wait for their

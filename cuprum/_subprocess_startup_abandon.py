@@ -241,33 +241,47 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
 
     One window covers both readers, as it does in the drain itself
     (:func:`cuprum._stream_drain._await_eof_grace`), so two pipes kept open by
-    a descendant cost one grace rather than one each — which is what the
-    documented bound promises. Each read is still settled on its own:
+    a descendant cost one grace rather than one each — what the documented
+    bound promises. Each read is still settled on its own:
     ``return_exceptions=True`` keeps a failure on one stream from cancelling
-    the other, and a grace that expires reaches the caller as a ``TimeoutError``
-    to suppress.
+    the other.
 
     A read that fails is re-raised once both have settled, because the module's
     contract is that an operator can see a failed discard: collected and
     dropped, the result would leave only the transport close behind it and the
     failure itself nowhere. The caller reports it and then releases the
     transports, so the descriptor still goes. Only an ordinary ``Exception`` is
-    re-raised; a cancellation is the caller's own and keeps its own path
-    outward, and a non-``Exception`` result is not a read failure to report.
+    re-raised; a cancellation keeps its own path outward, and a non-``Exception``
+    result is not a read failure. A failure already held is raised even with a
+    neighbour still running; the expiry is raised only when no read failed.
+
+    Raises
+    ------
+    TimeoutError
+        When the grace expired with a read still pending and none failed.
     """
     streams = tuple(
         stream for stream in (process.stdout, process.stderr) if stream is not None
     )
     if not streams:
         return
-    async with asyncio.timeout(_CAPTURE_EOF_GRACE_S):
-        results = await asyncio.gather(
-            *(_discard_to_eof(stream) for stream in streams),
-            return_exceptions=True,
-        )
-    for result in results:
-        if isinstance(result, Exception):
-            raise result
+    reads = tuple(asyncio.ensure_future(_discard_to_eof(stream)) for stream in streams)
+    try:
+        _, pending = await asyncio.wait(reads, timeout=_CAPTURE_EOF_GRACE_S)
+    finally:
+        # Settle every read, not only those the grace outlived: one still
+        # running would hold its transport past this step.
+        for task in reads:
+            task.cancel()
+        await asyncio.gather(*reads, return_exceptions=True)
+    for task in reads:
+        if task.cancelled():
+            continue
+        error = task.exception()
+        if isinstance(error, Exception):
+            raise error
+    if pending:
+        raise TimeoutError
 
 
 async def _release_output_transports(
