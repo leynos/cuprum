@@ -117,21 +117,17 @@ pub(super) fn write_to_pipe_on_worker(
 
 /// Await a worker's write, failing rather than hanging when it is late.
 ///
-/// Completion means every byte was accepted; `write_all_payload` reports a
-/// short or zero accept as an error rather than returning a count.
-///
-/// # Errors
-/// Returns the worker's I/O failure unchanged, so a test can tell a short
-/// accept from a blocked transfer.
-pub(super) fn await_written(receiver: &mpsc::Receiver<io::Result<()>>) -> io::Result<()> {
+/// Returning normally means every byte was accepted; `write_all_payload`
+/// reports a short or zero accept as an error rather than returning a count.
+/// Like `await_payload`, this is test support, so a late or failed worker
+/// panics with the reason instead of returning it.
+pub(super) fn await_written(receiver: &mpsc::Receiver<io::Result<()>>) {
     match receiver.recv_timeout(READ_DEADLINE) {
-        Ok(result) => result,
-        Err(RecvTimeoutError::Timeout) => {
-            panic!(
-                "worker did not finish writing within {READ_DEADLINE:?}; the reader is not \
-                 draining"
-            )
-        }
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("worker write failed: {error:?}"),
+        Err(RecvTimeoutError::Timeout) => panic!(
+            "worker did not finish writing within {READ_DEADLINE:?}; the reader is not draining"
+        ),
         Err(RecvTimeoutError::Disconnected) => panic!("worker dropped its sender without a result"),
     }
 }

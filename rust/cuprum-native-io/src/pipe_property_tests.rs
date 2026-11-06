@@ -90,7 +90,7 @@ proptest! {
         // drains it, so a reader that stopped early surfaces here as a
         // bounded write failure instead of a hung case. `await_written`
         // returns only when every byte was accepted.
-        await_written(&written).unwrap_or_else(|error| panic!("write pipe: {error:?}"));
+        await_written(&written);
 
         let received = await_payload(&receiver);
         prop_assert_eq!(
