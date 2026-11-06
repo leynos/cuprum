@@ -26,13 +26,16 @@
 
 ### Fixed
 
-- **Awaitable observe hooks are bounded per run:** an observed run now retains
-  at most 256 unfinished observe-hook tasks, shared by every stage of a
-  pipeline. Line observation waits for a slot at the ceiling, which holds the
-  read loop and, through it, the child's pipe, so a slow observer applies
-  backpressure instead of growing parent memory without limit. The bound is
-  `256 + hooks_per_event - 1` unfinished tasks plus at most one retained
-  settled failure; non-line events are not admitted. Retention logs
+- **Awaitable observe hooks are bounded per run:** an observed run now admits
+  line observation against a ceiling of 256 unfinished observe-hook tasks,
+  shared by every stage of a pipeline. Line observation waits for a slot at the
+  ceiling, which holds the read loop and, through it, the child's pipe, so a
+  slow observer applies backpressure instead of growing parent memory without
+  limit. The bound is `256 + hooks_per_event - 1` unfinished tasks plus at most
+  one retained settled failure; non-line events are not admitted and can still
+  add tasks to the shared list. The bound covers observer-task retention only:
+  with capture enabled, the child's retained output can still grow parent
+  memory with the number of lines it writes. Retention logs
   `observe_task_capacity_wait` at `INFO` and its decisions at `DEBUG`, each
   with a fixed `cuprum_*` field set. A hook that never settles now holds
   completion indefinitely, because the final drain runs outside the configured

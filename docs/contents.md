@@ -15,8 +15,8 @@ open each document.
 - [0.2.0 migration guide][migration-020] - upgrade guidance for catalogue
   construction, line observation, result measurements, stream metrics,
   diagnostics, idle heartbeats, presentation sinks and their group and annotate
-  flags, the benchmark ratchet's measurement protocol, and the beta2 bound on
-  awaitable observe hooks.
+  flags, the benchmark ratchet's measurement protocol, and the post-beta2 bound
+  on awaitable observe hooks.
 - [Developers' guide](developers-guide.md) - maintainer workflows for native
   builds, profiling, linting, benchmarking, and internal development practices.
 - [Repository layout](repository-layout.md) - path responsibilities and

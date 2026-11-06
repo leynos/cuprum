@@ -3084,9 +3084,10 @@ number of lines it writes, whether or not capture and echo are enabled.
 
 Settled successes are pruned as the run proceeds, along with every failure
 later than the first: finalization reports the earliest failed or cancelled
-task, and a later failure could never be raised. Each failure is still logged
-when its task fails, so pruning hides nothing from the logs. Delivery stays
-lossless and per-stream ordered throughout.
+task, and a later failure could never be raised. Each failure derived from
+`Exception` is still logged when its task fails, so pruning hides nothing from
+the logs; cancellations and other `BaseException` instances are not logged.
+Delivery stays lossless and per-stream ordered throughout.
 
 When the bound is reached, Cuprum stops reading new output until a hook task
 settles. A slow hook therefore slows how fast the child's output is read; a
@@ -3171,6 +3172,20 @@ The hook collects:
 
 All metrics carry `program` and `project` labels; missing, empty, or explicit
 `None` project tags fall back to `unknown`.
+
+The observe-hook retention metrics are the exception: they describe the run's
+shared retention list rather than one child, so they carry only the closed
+`phase` and `outcome` labels and never the per-run execution token. They are:
+
+- `cuprum_observe_hook_depth`: Histogram of the unfinished observe-hook tasks
+  the prune path measured
+- `cuprum_observe_hook_saturations_total`: Counter of refused line admissions
+- `cuprum_observe_hook_pruned_total`: Counter of settled tasks dropped
+- `cuprum_observe_hook_pruned_failures_total`: Counter of dropped failures,
+  incremented only when at least one was dropped
+- `cuprum_observe_hook_capacity_wait_seconds`: Histogram of how long a line
+  waited for capacity, labelled by `outcome` (`resumed`, `cancelled`, or
+  `interrupted`)
 
 `cuprum_executions_total` and `cuprum_failures_total` additionally carry an
 `env_mode` label holding the execution's effective policy — `inherit`,

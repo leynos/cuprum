@@ -83,6 +83,7 @@ from cuprum.adapters._tracing_fields import (
 )
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
+from cuprum.adapters._tracing_retention import _RetentionTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.events import TerminalOutcome
 from cuprum.tracing_protocols import Span, Tracer
@@ -105,6 +106,7 @@ class TracingHook(
     _ControlJoinTracingMixin,
     _LineStreamTracingMixin,
     _NativePumpCleanupTracingMixin,
+    _RetentionTracingMixin,
 ):
     """Project correlated execution events onto backend spans.
 

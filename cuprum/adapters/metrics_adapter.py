@@ -90,6 +90,7 @@ from cuprum.adapters._metrics_operations import (
 from cuprum.adapters._metrics_operations import (
     _UnhandledMetricsPhaseError as _UnhandledMetricsPhaseError,
 )
+from cuprum.adapters._retention_metrics import _RetentionMetricsMixin
 from cuprum.adapters._support import (
     _LockedStore,
     _project_tag,
@@ -199,7 +200,7 @@ class InMemoryMetrics(_LockedStore):
         self.histograms.clear()
 
 
-class MetricsHook:
+class MetricsHook(_RetentionMetricsMixin):
     """Observe hook that collects Prometheus-style metrics.
 
     The hook emits the following metrics:
@@ -227,8 +228,21 @@ class MetricsHook:
       the attributable ``wait4`` path only
     - ``cuprum_child_user_cpu_seconds``: Histogram of child user CPU time
     - ``cuprum_child_system_cpu_seconds``: Histogram of child system CPU time
+    - ``cuprum_observe_hook_depth``: Histogram of unfinished observer tasks
+    - ``cuprum_observe_hook_saturations_total``: Counter of admission refusals
+    - ``cuprum_observe_hook_pruned_total``: Counter of settled tasks dropped
+    - ``cuprum_observe_hook_pruned_failures_total``: Counter of dropped
+      failures
+    - ``cuprum_observe_hook_capacity_wait_seconds``: Histogram of time the line
+      reader spent suspended waiting for observer capacity
 
-    All metrics include ``program`` and ``project`` labels. The three resource
+    The retention metrics are labelled by the closed event phase, and the
+    capacity-wait histogram additionally by the closed wait outcome. They carry
+    no ``program`` or ``project`` label: the recorder is per stage and does not
+    know them, and the execution's correlation token is deliberately excluded
+    because it would make the series unbounded.
+
+    All other metrics include ``program`` and ``project`` labels. The three resource
     histograms and their counter additionally carry a low-cardinality
     ``resource_usage_mode`` label naming their source — ``wait4_child``,
     ``aggregate_cpu_delta``, or ``unavailable`` — so a run that measures

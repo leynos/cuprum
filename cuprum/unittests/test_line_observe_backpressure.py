@@ -31,6 +31,7 @@ import pytest
 from cuprum import sh
 from cuprum._observe_task_retention import _OBSERVE_TASK_CEILING
 from cuprum.context import ScopeConfig, scoped
+from cuprum.sh import RunOutputOptions
 from cuprum.unittests.test_line_observe_support import (
     _LINE_COUNT,
     _assert_bounded_delivery,
@@ -49,6 +50,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecEvent
+    from cuprum.lines import LineEvent
 
 _CAPTURE_MODES = [
     pytest.param(True, id="captured"),
@@ -224,4 +226,150 @@ async def _blocked_timeout_case(
     )
     assert len(hook.seen) < line_count, (
         "the blocked child must not have delivered every line before the timeout"
+    )
+
+
+@pytest.mark.parametrize("capture", _CAPTURE_MODES)
+def test_deferred_async_on_line_runs_and_holds_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+) -> None:
+    """A line deferred by saturation must still await its async ``on_line``."""
+    asyncio.run(_async_on_line_case(monkeypatch, capture))
+
+
+async def _async_on_line_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+) -> None:
+    """Saturate the observers, then hold the deferred line's async callback."""
+    line_count = 5_000
+    cmd, catalogue = _chatty_command(line_count)
+    hook = _GatedHook()
+    probe = _RetentionProbe()
+    probe.install(monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    seen: list[str] = []
+    # The callback must stay inert until the observer list is saturated, or it
+    # would block the very first line and the ceiling would never be reached.
+    is_armed = False
+
+    async def on_line(event: LineEvent) -> None:
+        """Record the line, then hold the first deferred delivery."""
+        nonlocal is_armed
+        seen.append(event.text)
+        if is_armed:
+            is_armed = False
+            started.set()
+            await release.wait()
+
+    options = RunOutputOptions(capture=capture, on_line=on_line)
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(hook),
+    ):
+        run_task = asyncio.create_task(cmd.run(output=options))
+        await asyncio.wait_for(probe.saturated.wait(), timeout=10.0)
+        is_armed = True
+        hook.gate.set()
+        await asyncio.wait_for(started.wait(), timeout=10.0)
+        await asyncio.sleep(0.05)
+
+        assert not run_task.done(), (
+            "completion must wait for the deferred async callback to settle"
+        )
+
+        release.set()
+        await asyncio.wait_for(run_task, timeout=20.0)
+
+    assert seen[0] == "line-0", "the first line must still reach the callback"
+    assert seen == [f"line-{index}" for index in range(line_count)], (
+        "deferred delivery must reach the callback once per line, in order"
+    )
+    assert probe.high_water <= _OBSERVE_TASK_CEILING, (
+        f"retained tasks reached {probe.high_water}, above the ceiling "
+        f"{_OBSERVE_TASK_CEILING}"
+    )
+
+
+@pytest.mark.parametrize("capture", _CAPTURE_MODES)
+def test_lines_stream_delivers_every_line_deferred_by_saturation(
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+) -> None:
+    """``SafeCmd.lines`` must lose nothing while its observers are saturated."""
+    asyncio.run(_deferred_lines_case(monkeypatch, capture))
+
+
+async def _settled_delivery_count(
+    delivered: list[str],
+    *,
+    timeout: float = 5.0,
+) -> int:
+    """Return the delivered count once it has stopped growing.
+
+    A fixed sleep would either sample the stream's own queue while it is still
+    draining or wait needlessly long; polling for two unchanged samples
+    measures the halt itself.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    previous = len(delivered)
+    stable = 0
+    while loop.time() < deadline:
+        await asyncio.sleep(0.05)
+        current = len(delivered)
+        stable = stable + 1 if current == previous else 0
+        previous = current
+        if stable >= 2:
+            return current
+    msg = f"line delivery never settled: {previous} lines delivered"
+    raise AssertionError(msg)
+
+
+async def _deferred_lines_case(
+    monkeypatch: pytest.MonkeyPatch,
+    capture: bool,
+) -> None:
+    """Iterate ``lines()`` across a saturation window and collect the result."""
+    line_count = 5_000
+    cmd, catalogue = _chatty_command(line_count)
+    hook = _GatedHook()
+    probe = _RetentionProbe()
+    probe.install(monkeypatch)
+    delivered: list[str] = []
+
+    async def drain() -> None:
+        """Iterate the stream to exhaustion, recording every delivered line."""
+        async with cmd.lines(output=_output_options(capture)) as stream:
+            async for event in stream:
+                delivered.append(event.text)
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(hook),
+    ):
+        drain_task = asyncio.create_task(drain())
+        await asyncio.wait_for(probe.saturated.wait(), timeout=10.0)
+        # The stream has its own queue, so lines already read are still
+        # delivered after the driver blocks. Wait for that queue to drain
+        # before measuring, or the sample catches the tail rather than the halt.
+        stalled = await _settled_delivery_count(delivered)
+
+        assert stalled < line_count, (
+            "a saturated observer must pause the line stream short of the "
+            f"whole flood, but {stalled} of {line_count} lines arrived"
+        )
+
+        hook.gate.set()
+        await asyncio.wait_for(drain_task, timeout=20.0)
+
+    assert delivered == [f"line-{index}" for index in range(line_count)], (
+        "the line stream must deliver every line the saturation deferred"
+    )
+    assert probe.high_water <= _OBSERVE_TASK_CEILING, (
+        f"retained tasks reached {probe.high_water}, above the ceiling "
+        f"{_OBSERVE_TASK_CEILING}"
     )

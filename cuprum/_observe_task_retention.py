@@ -16,11 +16,13 @@ recorder the helpers log through lives in :mod:`cuprum._retention_telemetry`.
 from __future__ import annotations
 
 import asyncio
-import time
-import typing as typ
 
-if typ.TYPE_CHECKING:
-    from cuprum._retention_telemetry import _RetentionTelemetry
+from cuprum._retention_telemetry import (
+    _WAIT_CANCELLED,
+    _WAIT_INTERRUPTED,
+    _WAIT_RESUMED,
+    _RetentionTelemetry,
+)
 
 # How many unfinished async observe-hook tasks one execution may retain before
 # line observation applies backpressure. The value matches
@@ -59,6 +61,11 @@ def _prune_finished_hook_tasks(
     exception was never retrieved" at garbage-collection time, which would
     blame the drop for a failure that was never going to be reported.
 
+    This is also the only place the depth is measured. Counting the tasks kept
+    as they go costs nothing here, whereas doing it on every line would add a
+    full scan of the shared list to the hot path; the depth telemetry and the
+    admission decision both reuse the count recorded here.
+
     Parameters
     ----------
     pending_tasks:
@@ -77,11 +84,13 @@ def _prune_finished_hook_tasks(
 
     """
     kept: list[asyncio.Task[None]] = []
+    unfinished = 0
     retained_failure = False
     pruned_failures = 0
     for task in pending_tasks:
         if not task.done():
             kept.append(task)
+            unfinished += 1
             continue
         # ``cancelled()`` must be checked first: calling ``exception()`` on a
         # cancelled task raises the ``CancelledError`` it was cancelled with.
@@ -95,6 +104,7 @@ def _prune_finished_hook_tasks(
     pruned = len(pending_tasks) - len(kept)
     pending_tasks[:] = kept
     if telemetry is not None:
+        telemetry.record_depth(unfinished, phase=phase)
         telemetry.record_prune(
             pruned=pruned,
             pruned_failures=pruned_failures,
@@ -104,7 +114,7 @@ def _prune_finished_hook_tasks(
     return pruned
 
 
-def _admit_hook_capacity(
+def _has_hook_capacity(
     pending_tasks: list[asyncio.Task[None]],
     ceiling: int,
     *,
@@ -115,10 +125,15 @@ def _admit_hook_capacity(
 
     This is a command, not a query. Reaching the ceiling prunes settled tasks
     in place and retrieves their exceptions before the slot count is judged, so
-    the mutation is part of the admission decision rather than a hidden side
-    effect of a read. The fast path below the ceiling only counts the raw list:
+    the mutation is part of the decision rather than a hidden side effect of a
+    read. The fast path below the ceiling only compares the raw list length:
     the extra scan would be pure overhead, and the list only ever holds settled
     tasks long enough to cross that threshold.
+
+    It records no admission. The capacity-wait loop re-checks after every
+    completion, and those re-checks belong to one deferred line rather than to
+    new admissions, so only the caller that decides to schedule a task records
+    one.
 
     Parameters
     ----------
@@ -128,7 +143,7 @@ def _admit_hook_capacity(
     ceiling:
         Maximum number of unfinished hook tasks to retain; must be positive.
     telemetry:
-        Optional recorder for the depth and admission decision.
+        Optional recorder for the depth the prune computes.
     phase:
         Closed event-phase label for the log record.
 
@@ -139,21 +154,58 @@ def _admit_hook_capacity(
 
     """
     if len(pending_tasks) < ceiling:
-        admitted = True
-    else:
-        _prune_finished_hook_tasks(
-            pending_tasks,
-            telemetry=telemetry,
-            phase=phase,
-            ceiling=ceiling,
-        )
-        admitted = sum(1 for task in pending_tasks if not task.done()) < ceiling
+        return True
+    _prune_finished_hook_tasks(
+        pending_tasks,
+        telemetry=telemetry,
+        phase=phase,
+        ceiling=ceiling,
+    )
     if telemetry is not None:
-        telemetry.observe_depth(pending_tasks)
+        # The prune counted the unfinished tasks it kept while walking the
+        # list, exactly the quantity this query needs.
+        return telemetry.depth < ceiling
+    return sum(1 for task in pending_tasks if not task.done()) < ceiling
+
+
+def _admit_hook_capacity(
+    pending_tasks: list[asyncio.Task[None]],
+    ceiling: int,
+    *,
+    telemetry: _RetentionTelemetry | None = None,
+    phase: str | None = None,
+) -> bool:
+    """Decide one admission and record it.
+
+    Parameters
+    ----------
+    pending_tasks:
+        The execution's shared retention list; pruned in place by the decision.
+    ceiling:
+        Maximum number of unfinished hook tasks to retain; must be positive.
+    telemetry:
+        Optional recorder for the decision and the resulting depth.
+    phase:
+        Closed event-phase label for the log record.
+
+    Returns
+    -------
+    bool
+        ``True`` when a task may be scheduled.
+
+    """
+    admitted = _has_hook_capacity(
+        pending_tasks,
+        ceiling,
+        telemetry=telemetry,
+        phase=phase,
+    )
+    if telemetry is not None:
         telemetry.record_admission(
             admitted=admitted,
             ceiling=ceiling,
             phase=phase,
+            retained=len(pending_tasks),
         )
     return admitted
 
@@ -176,6 +228,12 @@ async def _await_hook_capacity(
     settled by its final drain, so a cancelled line driver must not be able to
     cancel them out from under it.
 
+    Each re-check prunes and observes depth but records no admission: the
+    completions that free capacity belong to the one line already waiting, and
+    counting them would inflate the admission total. The wait itself is
+    recorded on every exit path, including cancellation, so a suspended-then-
+    abandoned line is not invisible to an operator.
+
     Parameters
     ----------
     pending_tasks:
@@ -195,30 +253,43 @@ async def _await_hook_capacity(
         phase=phase,
     ):
         return
-    started = time.perf_counter()
+    started = 0.0
     if telemetry is not None:
+        started = telemetry.clock()
         telemetry.log_capacity_wait(ceiling=ceiling, phase=phase)
-    while True:
-        # The refused admission above guarantees at least ``ceiling`` (and
-        # therefore at least one) unfinished task, so this list is never empty.
-        unfinished = [task for task in pending_tasks if not task.done()]
-        _ = await asyncio.wait(unfinished, return_when=asyncio.FIRST_COMPLETED)
-        # Only the first decision is recorded: the loop re-checks after each
-        # completion, and counting those re-checks would inflate the admission
-        # total with attempts that belong to one deferred line.
-        if _admit_hook_capacity(pending_tasks, ceiling, phase=phase):
-            break
-    if telemetry is not None:
-        telemetry.record_wait(
-            elapsed=time.perf_counter() - started,
-            ceiling=ceiling,
-            phase=phase,
-        )
+    outcome = _WAIT_INTERRUPTED
+    try:
+        while True:
+            # The refused admission above guarantees at least ``ceiling`` (and
+            # therefore at least one) unfinished task, so this list is never
+            # empty.
+            unfinished = [task for task in pending_tasks if not task.done()]
+            _ = await asyncio.wait(unfinished, return_when=asyncio.FIRST_COMPLETED)
+            if _has_hook_capacity(
+                pending_tasks,
+                ceiling,
+                telemetry=telemetry,
+                phase=phase,
+            ):
+                outcome = _WAIT_RESUMED
+                break
+    except asyncio.CancelledError:
+        outcome = _WAIT_CANCELLED
+        raise
+    finally:
+        if telemetry is not None:
+            telemetry.record_wait(
+                elapsed=telemetry.clock() - started,
+                ceiling=ceiling,
+                phase=phase,
+                outcome=outcome,
+            )
 
 
 __all__ = [
     "_OBSERVE_TASK_CEILING",
     "_admit_hook_capacity",
     "_await_hook_capacity",
+    "_has_hook_capacity",
     "_prune_finished_hook_tasks",
 ]
