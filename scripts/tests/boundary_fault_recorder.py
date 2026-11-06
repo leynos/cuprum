@@ -11,6 +11,7 @@ from __future__ import annotations
 import typing as typ
 from pathlib import Path
 
+from scripts import boundary_fault_invocations
 from scripts import check_boundary_faults as faults
 from scripts.tests.boundary_harness_support import (
     copy_boundary_repository,
@@ -88,6 +89,11 @@ class _RecordedRun:
         """
         self.calls.append((program, args))
         self.target_dirs.append(target_dir)
+        if target_dir is not None:
+            # A real Cargo run populates the target directory it is given.
+            # Creating it here keeps the harness's per-pair cleanup observable
+            # instead of passing vacuously against an empty filesystem.
+            target_dir.mkdir(parents=True, exist_ok=True)
         proof = Path(args[0])
         is_proof = proof.name == PROOF_TARGET
         if is_proof:
@@ -119,6 +125,9 @@ def drive(
     root = copy_boundary_repository(tmp_path)
     runner = _RecordedRun(root / "rust")
     monkeypatch.setattr(faults, "ROOT", root)
+    # The pin reader resolves `ROOT` in the module that defines it, so patching
+    # only the re-exporting module would leave pin reads on the real checkout.
+    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
     stub_cargo_preparation(monkeypatch, faults)
     faults.main()

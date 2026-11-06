@@ -182,6 +182,7 @@ def _run_with_recorded_cargo(
     args: tuple[str, ...],
     *,
     after_run: cabc.Callable[[Path], None] | None = None,
+    target_dir: Path | None = None,
 ) -> tuple[list[tuple[str, ...]], list[ExecutionContext], tuple[int, str]]:
     """Drive one Cargo fault route through an argument-recording seam."""
     cargo_home = workspace.parent / "cargo-home"
@@ -226,23 +227,28 @@ def _run_with_recorded_cargo(
         "scoped",
         lambda _config: nullcontext(),
     )
-    result = boundary_fault_invocations._run("cargo", args, workspace)
+    result = boundary_fault_invocations._run("cargo", args, workspace, target_dir)
     return calls, contexts, result
 
 
+@pytest.mark.parametrize("has_target_dir", [False, True], ids=["shared", "override"])
 def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    has_target_dir: bool,
 ) -> None:
     """The fault Cargo child inherits jobs but terminates as one owned group."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     cargo_home = tmp_path / "cargo-home"
+    target_dir = tmp_path / "separate-target" if has_target_dir else None
 
     calls, contexts, (code, output) = _run_with_recorded_cargo(
         monkeypatch,
         workspace,
         ("test", "--package", "cuprum-native-io"),
+        target_dir=target_dir,
     )
 
     assert code == 0, "the controlled Cargo result must preserve its exit code"
@@ -266,6 +272,12 @@ def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     )
     assert context.env["CARGO_BUILD_JOBS"] == "6", (
         "the fault route must preserve caller-selected Cargo parallelism"
+    )
+    expected_target = target_dir or (
+        workspace.parent / "target/boundary-faults-debug-all-features"
+    )
+    assert context.env["CARGO_TARGET_DIR"] == str(expected_target), (
+        "an override must win, and the shared fallback must be used when absent"
     )
 
 

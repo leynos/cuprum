@@ -166,6 +166,18 @@ def test_ownership_faults_are_detected_and_their_mutations_restored(
     assert (root / MEMORY).read_text(encoding="utf-8") == production, (
         "the ownership fault was not restored after checking"
     )
+    build_root = logs.parent / "build"
+    # Absent is the normal case once the last pair has cleaned up; present and
+    # empty is equally fine. Anything left behind is scratch the pair failed to
+    # remove.
+    leftovers = list(build_root.iterdir()) if build_root.exists() else []
+    assert not leftovers, (
+        "each pair's scratch build directories must be removed once it finishes"
+    )
+    assert logs.is_dir(), "the archived log directory must survive the cleanup"
+    assert any(logs.iterdir()), (
+        "per-pair build cleanup must not touch the archived logs"
+    )
 
 
 def test_unexpected_verifier_results_archive_the_log_and_fail_closed(

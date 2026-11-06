@@ -26,10 +26,9 @@ from scripts.boundary_cargo import (
 )
 from scripts.boundary_fault_invocations import (
     ROOT,
-    ToolPins,
     _Check,
-    _read_pin,
     _run,
+    read_tool_pins,
 )
 from scripts.boundary_fault_invocations import (
     _LockfileRewriteError as _LockfileRewriteError,
@@ -57,35 +56,6 @@ class BoundaryFaultError(RuntimeError):
         self.check_name = check_name
         self.exit_code = exit_code
         self.log_path = log_path
-
-
-def read_tool_pins() -> ToolPins:
-    """Read the pinned Kani and Verus versions from the repository.
-
-    The manifests are read when a verification path runs, not at import time,
-    so importing :func:`mutate` does not require either pin file to exist.
-
-    A missing, unreadable, or empty pin is a hard failure rather than a default:
-    a blank version would otherwise build a verifier path that does not exist
-    and report the resulting launch failure as a failed proof.
-
-    Returns
-    -------
-    ToolPins
-        The versions pinned by ``tools/kani/VERSION`` and
-        ``tools/verus/VERSION``.
-
-    Raises
-    ------
-    OSError
-        If a pin file cannot be read.
-    ValueError
-        If a pin file exists but records no version.
-    """  # ruff: ignore[docstring-extraneous-exception] - OSError/ValueError propagate from _read_pin.
-    return ToolPins(
-        kani=_read_pin("kani"),
-        verus=_read_pin("verus"),
-    )
 
 
 def mutate(source: str, old: str, new: str) -> str:
@@ -258,7 +228,14 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
                 build_root / name,
             )
         finally:
+            # Restore the source first so a cleanup failure cannot leave the
+            # copied workspace holding a planted fault. The two build trees are
+            # scratch: their verdicts are already archived under `logs`, and
+            # they exist only to keep the control from reusing the mutation's
+            # prebuilt harness.
             memory.write_text(original, encoding="utf-8")
+            shutil.rmtree(build_root / f"{name}-control", ignore_errors=True)
+            shutil.rmtree(build_root / name, ignore_errors=True)
 
 
 if __name__ == "__main__":

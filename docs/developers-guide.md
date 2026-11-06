@@ -5531,20 +5531,23 @@ and `CI` run 35004943782 succeeded with its
 The boundary installer and fault harnesses have narrow reuse policies.
 `scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
 installers only: HTTPS-only bounded redirects, digest validation, and no source
-builds. `scripts/check_boundary_faults.py` scopes its runner to the four
+builds. `scripts/boundary_fault_invocations.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
-abstraction. Its progress and ownership checks have separate private runners;
-their scope is the existing four mutations, with the same controls and failure
-diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
-cannot: Cargo consumes a global `--frozen` before dispatching an external
-subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
-therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
-the copied workspace's lockfile digest after every run so a build that rewrites
-it fails closed. The download helpers separate bounded redirect traversal, one
-connection's lifetime, and response classification. They remain private to the
-pinned binary installer. The compiler-contract checker uses a named predicate
-requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
-failures cannot pass the probe.
+abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
+calls that runner rather than defining its own. The runner upholds the
+allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
+progress and ownership checks have separate private runners; their scope is the
+existing four mutations, with the same controls and failure diagnostics. Native
+`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
+a global `--frozen` before dispatching an external subcommand, and cargo-kani
+`0.67.0` rejects that flag itself. The Kani route therefore relies on the
+run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
+lockfile digest after every run so a build that rewrites it fails closed. The
+download helpers separate bounded redirect traversal, one connection's
+lifetime, and response classification. They remain private to the pinned binary
+installer. The compiler-contract checker uses a named predicate requiring both
+failure and an unsafe-forbid diagnostic, so unrelated compiler failures cannot
+pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
@@ -5555,11 +5558,21 @@ Unix adapters retain their direct syscall and buffer contracts.
 scheduled `extended` job. Each run writes per-command output under
 `.cache/boundary-faults/runs/run-<id>/logs/`, and the workflow archives the
 whole run directory. Run roots are retained deliberately: the harnesses do not
-prune during a run, because a concurrent invocation may be active and the
-workflow archives the directory after the step completes. `make clean` removes
-`.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The final
-run passed its controls and detected all four mutations; see
+prune a run root during a run, because a concurrent invocation may be active
+and the workflow archives the directory after the step completes. `make clean`
+removes `.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The
+final run passed its controls and detected all four mutations; see
 `/tmp/issue379-round27-faults.log`.
+
+Each ownership control and its fault use a distinct directory under
+`<run-root>/build`, never under `<run-root>/logs`, because CI archives the run
+root wholesale with `include-hidden-files` and a Cargo target tree in `logs/`
+would bury the evidence. The control and the fault must never share one build
+directory, because Kani would then treat the unchanged control as needing no
+rebuild and hand it the mutation's prebuilt harness. They are scratch: their
+verdicts are already archived, so each pair's directories are removed once that
+pair finishes, including when the check fails. That per-pair cleanup is not
+run-root pruning; `logs/` and the run root survive it.
 
 ### Python-side native pump descriptor lifetime
 
