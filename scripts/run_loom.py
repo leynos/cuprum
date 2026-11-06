@@ -39,7 +39,7 @@ if typ.TYPE_CHECKING:
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 LOOM_MANIFEST = Path("rust/cuprum-rust/Cargo.toml")
 LOOM_TARGET = "loom"
-RUST_TOOLCHAIN = "1.85.0"
+RUST_TOOLCHAIN = "1.87.0"
 CARGO_PROGRAM = Program("cargo")
 GIT_PROGRAM = Program("git")
 RUSTC_PROGRAM = Program("rustc")

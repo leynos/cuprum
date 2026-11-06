@@ -188,7 +188,7 @@ def test_run_loom_uses_the_cfg_target_and_nonzero_discovery(
     assert all(
         "--test" in command and "loom" in command for command in loom_commands
     ), "both Cargo invocations must select the dedicated Loom target"
-    assert all("+1.85.0" in command for command in loom_commands), (
+    assert all("+1.87.0" in command for command in loom_commands), (
         "both Cargo invocations must select the pinned Rust toolchain"
     )
     assert result.discovered_tests == 2, "discovery count must be retained"
@@ -259,7 +259,7 @@ def test_run_loom_reports_cargo_failure_details(
 def test_error_factories_retain_their_typed_inputs(loom_driver: LoomDriver) -> None:
     """Rendered driver errors also expose their source values to callers."""
     run_errors = typ.cast("type[_LoomRunErrorFactory]", loom_driver.LoomRunError)
-    command = ["cargo", "+1.85.0", "test"]
+    command = ["cargo", "+1.87.0", "test"]
     command_failure = run_errors.command_failed(command, "branch limit")
     discovery_failure = run_errors.discovery_unreadable("not Cargo output")
     execution_failure = run_errors.execution_unreadable("not test output")

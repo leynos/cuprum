@@ -11,6 +11,7 @@ publish = false
 libc = "0.2.186"
 
 [dev-dependencies]
+proptest = "1.11.0"
 rstest = "0.27.0"
 
 [lints]
@@ -18,4 +19,7 @@ workspace = true
 
 [target.'cfg(windows)'.dependencies]
 cap-std = "4.0.2"
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Pipes"] }
+# `std::io::pipe` replaced the direct `CreatePipe` call, so `Win32_System_Pipes`
+# and the `Win32_Security` types its signature needed are no longer reachable
+# from this crate. `Win32_Foundation` remains: handle observation queries it.
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation"] }

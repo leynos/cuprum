@@ -257,7 +257,7 @@ working on the Rust portions of the project:
     doctests. Use `make fmt`
     (`cargo +nightly-2026-05-28 fmt --all`) to apply formatting fixes reported
     by the formatter check alongside the Python and Markdown formatters.
-- The project toolchain stays pinned to Rust `1.85.0` and declares `rustfmt`,
+- The project toolchain stays pinned to Rust `1.87.0` and declares `rustfmt`,
   `clippy`, and `rust-analyzer`. CI also provisions `nightly-2026-05-28` for
   the maintenance formatter, then restores the project toolchain. The current
   `fmt` and `check-fmt` recipes explicitly select the pinned nightly only for
@@ -267,11 +267,11 @@ working on the Rust portions of the project:
   `rustc-codegen-cranelift` and `clippy` components. The stable toolchain
   remains mandatory for release, coverage, Whitaker, the explicit
   `make msrv-check` verification target, and the macOS and Windows platform
-  alternatives. All Rust packages inherit Cargo's `rust-version = "1.85.0"`
+  alternatives. All Rust packages inherit Cargo's `rust-version = "1.87.0"`
   contract, which also keeps MSRV-aware Clippy findings valid when debug
   linting uses the dev-fast nightly.
   - `make modern-stable` is a separate, explicitly selected validation route
-    pinned to Rust/Cargo `1.99.1`; it does not change the Rust 1.85.0 source
+    pinned to Rust/Cargo `1.99.1`; it does not change the Rust 1.87.0 source
     contract or MSRV check. Its check, Clippy, test, and Maturin commands use
     `CARGO_BUILD_WARNINGS=deny` on Cargo 1.97 or later with a dedicated
     `rust/target/modern-stable` directory. Rustdoc and doctests retain

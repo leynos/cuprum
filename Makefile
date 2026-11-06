@@ -16,9 +16,11 @@ TOOLS = $(MDLINT) $(YAMLLINT) $(ACTIONLINT) uv
 VENV_TOOLS = pytest ruff
 RUST_DIR ?= rust
 CARGO ?= cargo
-# Rust 1.85.0 remains Cuprum's published compatibility toolchain. This
-# separately pinned nightly is selected only for compatible Linux debug work.
-MSRV_TOOLCHAIN ?= 1.85.0
+# Rust 1.87.0 is Cuprum's published compatibility floor: the pipe constructor
+# calls `std::io::pipe`, which stabilized in that release. The floor moved from
+# 1.85.0 only for that reason; the stable toolchain remains the required route
+# for release, coverage, Whitaker, and the explicit `make msrv-check` run.
+MSRV_TOOLCHAIN ?= 1.87.0
 # A separately selected stable toolchain exercises Cargo's cache-friendly
 # warning policy without changing the published source compatibility floor.
 override MODERN_STABLE_TOOLCHAIN := 1.99.1

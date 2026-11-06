@@ -109,3 +109,14 @@ the contract tests and the developers' guide moved with it.
 `test_the_fragment_carries_the_estate_fast_flags_on_linux` and
 `test_the_recorded_exception_names_this_fragment_and_its_decision` hold the
 conditions the exception relies on.
+
+## Addendum, 2026-11-06: the workspace MSRV moves to 1.87.0
+
+The body above and the addenda dated 2026-10-27 and 2026-10-31 record the
+workspace source contract as Rust 1.85.0. That is what those dates decided.
+Issue #507 adopts `std::io::pipe`, which stabilized in Rust 1.87.0, so every
+workspace member now inherits Rust 1.87.0 and `make msrv-check` compiles every
+target at that version without the fragment. The routing decision itself is
+unchanged: the stable route still owns release, coverage, verification,
+Whitaker, MSRV checks, and macOS and Windows, and the modern-stable `1.99.1`
+route still validates separately.

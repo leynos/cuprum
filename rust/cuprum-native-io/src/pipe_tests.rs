@@ -1,0 +1,384 @@
+//! Constructor semantics for the standard-library-backed pipe.
+//!
+//! These are real-resource tests: they exercise OS endpoints, so the module is
+//! compiled out under Miri. Every blocking read runs on a spawned thread and
+//! returns through a channel with a deadline, so a lost EOF fails the test
+//! instead of hanging the suite.
+//!
+//! Each test takes `descriptor_guard` before its `endpoints` fixture, and
+//! `rstest` expands fixture arguments in parameter order. Tests in this
+//! module, `ownership_tests`, and `windows_tests` share one test binary and
+//! therefore one descriptor table: an unguarded pipe elsewhere in the binary
+//! can be handed the number a guarded test is about to observe as closed.
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(windows)]
+use std::os::windows::io::{AsHandle, AsRawHandle};
+use std::{
+    io,
+    sync::{
+        LockResult,
+        MutexGuard,
+        mpsc::{self, RecvTimeoutError},
+    },
+    thread,
+    time::Duration,
+};
+
+use rstest::{fixture, rstest};
+
+use super::{
+    BorrowedStream,
+    OwnedStream,
+    borrow,
+    fd_is_open,
+    ownership_tests::descriptor_guard,
+    pipe,
+    read_once,
+    write_once,
+};
+
+/// How long a spawned transfer may take before the test fails.
+///
+/// The pipe is local and in-process, so a correct transfer completes in
+/// microseconds. The margin exists only so a lost EOF or a deadlocked writer
+/// reports as a failure rather than wedging the run. Both directions share the
+/// value: a payload larger than the pipe buffer blocks in `write`, so bounding
+/// only the read would leave the write free to wait out the job's own timeout.
+const READ_DEADLINE: Duration = Duration::from_secs(10);
+
+/// Owned endpoints created once per test, in reader-first order.
+#[fixture]
+fn endpoints() -> Result<(OwnedStream, OwnedStream), io::Error> {
+    // `fn_single_line` in rustfmt 1.9.0-nightly collapses a lone-expression body
+    // to `{ pipe() }`, which `unused_braces` rejects under the compiled profile.
+    // This comment keeps the body multi-line; `descriptor_guard` in
+    // `ownership_tests.rs` records the same constraint as a `#[rustfmt::skip]`.
+    pipe()
+}
+
+/// Consume the reader on a worker thread and return everything it read.
+///
+/// A writer that is still open makes the read block; the caller turns that
+/// into a deadline failure, so a forgotten writer can never hang the suite.
+pub(super) fn read_to_eof_on_worker(
+    reader: OwnedStream,
+    chunk_len: usize,
+) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // A failed send means the test already went away with the receiver;
+        // the worker has nothing left to report in that case.
+        drop(sender.send(read_all(&reader, chunk_len)));
+    });
+    receiver
+}
+
+/// Write an entire payload through the platform's single-call primitive.
+///
+/// The primitive may accept fewer bytes than offered, so a caller that needs
+/// the whole payload has to drive it to completion. A zero-byte acceptance is
+/// reported as `WriteZero` rather than retried forever.
+pub(super) fn write_all_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < payload.len() {
+        let remaining = payload
+            .get(written..)
+            .ok_or_else(|| io::Error::other("pipe write lost its remaining slice"))?;
+        let accepted = write_payload(stream, remaining)?;
+        if accepted == 0 {
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        written += accepted;
+    }
+    Ok(())
+}
+
+/// Write a payload on a worker thread through the single-call primitive.
+///
+/// The endpoint is moved to the worker, so this suits a caller that closes its
+/// writer immediately afterwards: the caller keeps the returned receiver and
+/// awaits it, and the descriptor stays open until the worker is done with it.
+/// A payload larger than the pipe buffer blocks part-way through `write` until
+/// someone drains; putting the write on its own thread lets the caller bound
+/// that wait instead of blocking the test thread for as long as the OS allows.
+pub(super) fn write_to_pipe_on_worker(
+    writer: OwnedStream,
+    payload: Vec<u8>,
+) -> mpsc::Receiver<io::Result<()>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // Same reasoning as the reader: a failed send means nobody is waiting.
+        drop(sender.send(write_all_payload(borrow(&writer), &payload)));
+    });
+    receiver
+}
+
+/// Await a worker's write, failing rather than hanging when it is late.
+///
+/// Returning normally means every byte was accepted; `write_all_payload`
+/// reports a short or zero accept as an error rather than returning a count.
+/// Like `await_payload`, this is test support, so a late or failed worker
+/// panics with the reason instead of returning it.
+pub(super) fn await_written(receiver: &mpsc::Receiver<io::Result<()>>) {
+    match receiver.recv_timeout(READ_DEADLINE) {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => panic!("worker write failed: {error:?}"),
+        Err(RecvTimeoutError::Timeout) => panic!(
+            "worker did not finish writing within {READ_DEADLINE:?}; the reader is not draining"
+        ),
+        Err(RecvTimeoutError::Disconnected) => panic!("worker dropped its sender without a result"),
+    }
+}
+
+/// Receive a worker's payload, failing rather than hanging when it is late.
+pub(super) fn await_payload(receiver: &mpsc::Receiver<io::Result<Vec<u8>>>) -> Vec<u8> {
+    match receiver.recv_timeout(READ_DEADLINE) {
+        Ok(Ok(payload)) => payload,
+        Ok(Err(error)) => panic!("worker read failed: {error:?}"),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("worker did not reach EOF within {READ_DEADLINE:?}; a writer is still open")
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("worker dropped its sender without a result"),
+    }
+}
+
+/// Read to EOF in chunks of at most `chunk_len` bytes.
+///
+/// A chunk smaller than the payload forces a transfer to need several
+/// iterations, so a reader that stopped after one call would return a short
+/// payload rather than passing.
+fn read_all(reader: &OwnedStream, chunk_len: usize) -> io::Result<Vec<u8>> {
+    let mut collected = Vec::new();
+    // `read` with an empty buffer would report EOF, so a caller asking for a
+    // zero-length chunk gets one byte instead of a false end of stream.
+    let buffer_len = chunk_len.max(1);
+    let mut buffer = vec![0_u8; buffer_len];
+    loop {
+        let count = read_payload(borrow(reader), &mut buffer)?;
+        if count == 0 {
+            return Ok(collected);
+        }
+        let chunk = buffer.get(..count).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "pipe read exceeded its buffer")
+        })?;
+        collected.extend_from_slice(chunk);
+    }
+}
+
+/// Convert a signed native count into a length, rejecting impossible values.
+fn count_of(count: isize) -> io::Result<usize> {
+    usize::try_from(count).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+/// Present a borrowed endpoint as the platform's single-call stream type.
+///
+/// A Unix descriptor needs no narrowing: `read` and `write` block, so the
+/// borrowed descriptor is already what the primitive takes.
+#[cfg(unix)]
+const fn primitive_stream(stream: BorrowedStream<'_>) -> BorrowedStream<'_> { stream }
+
+/// Present a borrowed endpoint as the platform's single-call stream type.
+///
+/// Windows is the asymmetric arm: its primitives demand the synchronous-I/O
+/// capability, which the platform cannot verify from a bare handle. The
+/// endpoint nonetheless qualifies, because `pipe`'s Windows half
+/// `synchronous_pipe` documents it as `CreatePipe`-backed and synchronous.
+#[cfg(windows)]
+const fn primitive_stream(stream: BorrowedStream<'_>) -> super::SynchronousBorrowedStream<'_> {
+    // SAFETY: the process's own `pipe` constructor made this endpoint, so it is
+    // not an overlapped handle.
+    unsafe { super::SynchronousBorrowedStream::new_unchecked(stream) }
+}
+
+/// Read once through the platform's borrowed-reader primitive.
+pub(super) fn read_payload(stream: BorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<usize> {
+    count_of(read_once(primitive_stream(stream), buffer)?)
+}
+
+/// Write a payload through the platform's borrowed-writer primitive.
+pub(super) fn write_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<usize> {
+    count_of(write_once(primitive_stream(stream), payload)?)
+}
+
+/// A transferred payload arrives intact and the reader reaches EOF.
+#[rstest]
+fn payload_transfers_and_reader_reaches_eof(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
+    let payload = b"cuprum pipes bytes";
+    let receiver = read_to_eof_on_worker(reader, 7);
+
+    let written = write_payload(borrow(&writer), payload)
+        .unwrap_or_else(|error| panic!("write payload: {error:?}"));
+    assert_eq!(written, payload.len(), "the pipe accepts the whole payload");
+    drop(writer);
+
+    assert_eq!(await_payload(&receiver), payload);
+    drop(guard);
+}
+
+/// EOF waits for the last writer owner, not the first one dropped.
+#[rstest]
+fn last_writer_owner_governs_eof(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
+    let duplicate = writer
+        .try_clone()
+        .unwrap_or_else(|error| panic!("clone writer: {error:?}"));
+    let receiver = read_to_eof_on_worker(reader, 7);
+
+    // Drop the original first: the duplicate still holds the write end open,
+    // so the worker must not observe EOF yet.
+    drop(writer);
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(100)).is_err(),
+        "a live duplicate writer must keep the read blocked",
+    );
+
+    let payload = b"written through the duplicate";
+    let written = write_payload(borrow(&duplicate), payload)
+        .unwrap_or_else(|error| panic!("write through duplicate: {error:?}"));
+    assert_eq!(written, payload.len());
+    drop(duplicate);
+
+    assert_eq!(
+        await_payload(&receiver),
+        payload,
+        "the full payload, then EOF, follows the last writer being dropped",
+    );
+    drop(guard);
+}
+
+/// An early reader close makes the writer fail without failing the process.
+#[rstest]
+fn early_reader_close_reports_broken_pipe(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
+    let reader_raw = raw_of(&reader);
+    drop(reader);
+    assert!(
+        !descriptor_is_open(reader_raw),
+        "the early close took effect before the write",
+    );
+
+    // A payload larger than the platform's pipe capacity cannot be buffered by
+    // a pipe with no reader, so the failure is deterministic rather than a
+    // race against a small payload fitting in the buffer.
+    let payload = vec![b'x'; 1 << 16];
+    let error =
+        write_payload(borrow(&writer), &payload).expect_err("a write with no reader must fail");
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::BrokenPipe,
+        "the native error reaches the caller unchanged",
+    );
+    drop(guard);
+}
+
+/// Both endpoints are created close-on-exec.
+#[rstest]
+#[cfg(unix)]
+fn unix_endpoints_are_close_on_exec(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+    endpoints: Result<(OwnedStream, OwnedStream), io::Error>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
+    assert!(
+        !exec_inheritable(raw_of(&reader))
+            .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}")),
+        "the reader must not survive an exec",
+    );
+    assert!(
+        !exec_inheritable(raw_of(&writer))
+            .unwrap_or_else(|error| panic!("observe FD_CLOEXEC: {error:?}")),
+        "the writer must not survive an exec",
+    );
+    drop(guard);
+}
+
+/// Both endpoints are created non-inheritable and work synchronously.
+#[rstest]
+#[cfg(windows)]
+fn windows_endpoints_are_non_inheritable_and_synchronous(
+    #[from(descriptor_guard)] guard_result: LockResult<MutexGuard<'static, ()>>,
+) {
+    let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
+    let (reader, writer) = pipe().unwrap_or_else(|error| panic!("create pipe: {error:?}"));
+    assert!(
+        !inheritable(raw_of(&reader))
+            .unwrap_or_else(|error| panic!("observe HANDLE_FLAG_INHERIT: {error:?}")),
+        "the reader handle must not be inheritable",
+    );
+    assert!(
+        !inheritable(raw_of(&writer))
+            .unwrap_or_else(|error| panic!("observe HANDLE_FLAG_INHERIT: {error:?}")),
+        "the writer handle must not be inheritable",
+    );
+
+    // The capability wrapper is only sound over handles the constructor claims
+    // are synchronous; a round trip through the single-call primitives proves
+    // that claim holds for these endpoints.
+    let (synchronous_reader, synchronous_writer) = super::synchronous_pipe()
+        .unwrap_or_else(|error| panic!("create synchronous pipe: {error:?}"));
+    let payload = b"synchronous";
+    let written = write_once(synchronous_writer.as_synchronous_borrowed(), payload)
+        .unwrap_or_else(|error| panic!("synchronous write: {error:?}"));
+    assert_eq!(
+        count_of(written).unwrap_or_else(|error| panic!("bad write count: {error:?}")),
+        payload.len()
+    );
+    drop(synchronous_writer);
+
+    let mut buffer = [0_u8; 32];
+    let count = read_once(synchronous_reader.as_synchronous_borrowed(), &mut buffer)
+        .unwrap_or_else(|error| panic!("synchronous read: {error:?}"));
+    assert_eq!(
+        count_of(count).unwrap_or_else(|error| panic!("bad read count: {error:?}")),
+        payload.len()
+    );
+    assert_eq!(buffer.get(..payload.len()), Some(payload.as_slice()));
+    drop(guard);
+}
+
+/// Observe a descriptor, failing loudly when observation itself fails.
+fn descriptor_is_open(raw: super::PlatformFd) -> bool {
+    match fd_is_open(raw) {
+        Ok(is_open) => is_open,
+        Err(error) => panic!("descriptor observation failed: {error:?}"),
+    }
+}
+
+/// Report a raw endpoint identity for the current platform.
+fn raw_of(resource: &OwnedStream) -> super::PlatformFd {
+    #[cfg(unix)]
+    {
+        resource.as_raw_fd()
+    }
+    #[cfg(windows)]
+    {
+        resource.as_handle().as_raw_handle() as usize
+    }
+}
+
+/// Report whether a Unix descriptor inherits across `exec`.
+///
+/// The observation is fallible, so this helper stays a query: the caller turns
+/// a refusal into the panic that names which assertion could not be made.
+#[cfg(unix)]
+fn exec_inheritable(fd: super::PlatformFd) -> io::Result<bool> { super::fd_is_exec_inheritable(fd) }
+
+/// Report whether a Windows handle inherits into a child process.
+#[cfg(windows)]
+fn inheritable(raw: super::PlatformFd) -> io::Result<bool> { super::handle_is_inheritable(raw) }

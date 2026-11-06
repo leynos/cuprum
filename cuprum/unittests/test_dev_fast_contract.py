@@ -299,7 +299,7 @@ def test_every_workspace_member_inherits_the_published_msrv() -> None:
     """Keep Clippy's MSRV-aware diagnostics aligned with Cargo metadata."""
     rust_root = repo_root() / "rust"
     workspace = tomllib.loads((rust_root / "Cargo.toml").read_text(encoding="utf-8"))
-    assert workspace["workspace"]["package"]["rust-version"] == "1.85.0", (
+    assert workspace["workspace"]["package"]["rust-version"] == "1.87.0", (
         "the workspace must publish the agreed Rust compatibility version"
     )
     assert tuple(workspace["workspace"]["members"]) == RUST_MEMBERS, (
@@ -490,7 +490,7 @@ def test_msrv_verification_keeps_the_stable_route_fragment_free() -> None:
     """The accelerated lint compiler cannot replace published-MSRV verification."""
     output = _dry_run("msrv-check")
     route = next(line for line in output.splitlines() if "probe-cargo check" in line)
-    assert "RUSTUP_TOOLCHAIN=1.85.0" in route, "MSRV check must pin Rust 1.85.0"
+    assert "RUSTUP_TOOLCHAIN=1.87.0" in route, "MSRV check must pin Rust 1.87.0"
     assert "--config" not in route, "MSRV check must not select the fragment"
     assert DEV_FAST_TOOLCHAIN not in route, "MSRV check must not use nightly"
 

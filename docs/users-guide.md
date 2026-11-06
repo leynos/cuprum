@@ -3611,9 +3611,10 @@ unchanged — the counters supplement them rather than replacing them.
 Building the optional Rust extension from source, for example on a platform
 without a native wheel, needs:
 
-- **Rust 1.85 or later**, including `cargo`, because the crates use
-  `edition = "2024"`. Install the toolchain with [rustup](https://rustup.rs/),
-  which provides `cargo` as well.
+- **Rust 1.87 or later**, including `cargo`, because the crates use
+  `edition = "2024"` and the pipe constructor needs `std::io::pipe`. Install
+  the toolchain with [rustup](https://rustup.rs/), which provides `cargo` as
+  well.
 - **maturin**, the Rust-to-Python build bridge. The project pins
   `maturin==1.15.0`.
 

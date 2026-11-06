@@ -1,7 +1,7 @@
 """Scanner for the Rust doctests that pin compile-time contracts.
 
 A `compile_fail` doctest passes whenever its snippet fails to compile. Stable
-rustdoc, including the pinned 1.85.0 that CI uses, accepts the error code in
+rustdoc, including the pinned 1.87.0 that CI uses, accepts the error code in
 ``compile_fail,E0308`` without checking it; only nightly rustdoc, which the
 dev-fast route of `make test` uses, enforces it. On the other toolchains a
 negative case passes just as readily for an unresolved import, so the positive

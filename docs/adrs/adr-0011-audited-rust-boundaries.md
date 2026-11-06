@@ -178,6 +178,7 @@ remains in force. Scheduled Loom interleaving work is a separate deliverable.
 [#89]: https://github.com/leynos/cuprum/issues/89
 [#125]: https://github.com/leynos/cuprum/issues/125
 [#233]: https://github.com/leynos/cuprum/issues/233
+[#428]: https://github.com/leynos/cuprum/issues/428
 
 The safe crate's descriptor fixtures use `cap_std::fs::File` constructed from
 owned descriptors. The Windows native adapter uses the same capability file
@@ -253,3 +254,42 @@ guarantee the synchronous, non-overlapped property. Python's
 Python fallback remains in place until a separately designed overlapped-I/O
 adapter exists. The `cap-std` file and handle adapters remain trusted
 dependencies, not verifier-proved implementations.
+
+## Addendum (2026-11-04): standard-library pipe construction
+
+Issue #507 replaces Cuprum's handwritten anonymous-pipe constructors with
+`std::io::pipe`, stabilized in Rust 1.87.0. The Unix branch previously called
+`libc::pipe` and adopted both descriptors with `OwnedFd::from_raw_fd`; the
+Windows branch called `CreatePipe` and adopted both handles with
+`OwnedHandle::from_raw_handle`. Both are gone. `cuprum_native_io::pipe` now
+calls `std::io::pipe` once and converts each endpoint through the safe
+`From<PipeReader>`/`From<PipeWriter>` implementations. The constructor holds no
+unsafe block, so the crate owns four fewer unsafe adoption sites and one fewer
+raw Win32 call.
+
+The stream policy is unchanged. Endpoints are still uniquely owned, dropping
+one closes only that endpoint, a read returns EOF after the last writer owner
+closes, reads and writes remain blocking, and the native error still reaches
+`PumpError::Io` unchanged. Construction failure now leaves nothing to clean up,
+because no owner exists until the standard library returns `Ok`.
+
+`windows::synchronous_pipe` keeps its capability contract but derives it from
+the standard library instead of from its own `CreatePipe` call. That rests on
+implementation evidence at the pinned compiler rather than on a public `std`
+guarantee: Rust 1.87.0 passes null security attributes to `CreatePipe`, which
+makes the handles non-inheritable, and Microsoft documents that anonymous pipes
+do not support asynchronous I/O at all, which makes every operation on them
+synchronous. Win32 still exposes no query for overlapped mode, so a compiler
+bump must re-check the standard library's arguments at
+`library/std/src/sys/anonymous_pipe/windows.rs` and
+`library/std/src/sys/pal/unix/pipe.rs`. This does not close issue [#428][]; the
+`ProactorEventLoop` fallback, the audited `borrow_reader` and `adopt_writer`
+hand-offs, and the trusted `cap-std` adapters are all unchanged.
+
+The MSRV moves to exactly 1.87.0 to admit the constructor. `rust-version`, the
+root toolchain pin, `make msrv-check`, the coverage, Loom, and native-boundary
+lanes, and their contract tests all name that version, and
+`cargo metadata --locked` reports no host-reachable dependency above it. The
+modern-stable `1.99.1`, formatter, dev-fast, Miri, Kani, Verus, and Whitaker
+pins are untouched. The semantic audit and its evidence classes are tabulated in
+[Rust boundary verification](../rust-boundary-verification.md).

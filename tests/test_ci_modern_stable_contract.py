@@ -103,11 +103,11 @@ def test_modern_stable_pull_requests_use_a_dedicated_changes_filter() -> None:
 
 
 def test_job_installs_both_toolchains_without_changing_the_default() -> None:
-    """Retain the 1.85 project toolchain and install modern stable separately."""
+    """Retain the 1.87 project toolchain and install modern stable separately."""
     project = _named_step("Install project Rust toolchain")
     project_inputs = project.get("with")
     assert isinstance(project_inputs, dict), "the MSRV toolchain action needs inputs"
-    assert project_inputs.get("toolchain") == "1.85.0", (
+    assert project_inputs.get("toolchain") == "1.87.0", (
         "the modern job must retain the project compatibility toolchain"
     )
     assert project_inputs.get("cache-provider") == "external", (
@@ -180,7 +180,7 @@ def test_modern_job_uses_locked_fetch_and_existing_sccache_policy() -> None:
     assert "cargo fetch --locked" in fetch, (
         "dependency preparation must use the committed lockfile"
     )
-    assert "RUSTUP_TOOLCHAIN=1.85.0" in fetch, (
+    assert "RUSTUP_TOOLCHAIN=1.87.0" in fetch, (
         "dependency preparation must resolve against the declared compatibility floor"
     )
 

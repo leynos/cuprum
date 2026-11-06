@@ -959,7 +959,7 @@ cranelift; the coverage gate cannot, because cranelift has no
 The lint job installs Nixie and Whitaker through the pinned
 `leynos/shared-actions` installers. Nixie's installer also provisions Merman;
 the bootstrap uses Rust `1.95.0` because Merman CLI `0.7.0` requires that
-compiler. The job then restores Rust `1.85.0`, the project's supported
+compiler. The job then restores Rust `1.87.0`, the project's supported
 toolchain, before installing Whitaker and running the project gates. On Linux,
 standard debug Rust build, test, Rustdoc, and Clippy commands select
 `nightly-2026-08-23` with the explicit `tools/dev-fast/config.toml` fragment.
@@ -1135,9 +1135,11 @@ bound test for every plain stanza lives there too, and
 [ADR-012](adrs/adr-0012-linux-dev-fast-routing.md) records the routing boundary
 and its compatibility rationale.
 
-Cuprum's Rust `1.85.0` pin remains the compatibility, release, coverage,
-verification, and Whitaker toolchain. On Linux only, ordinary debug Rust work
-uses the separately pinned `nightly-2026-08-23` and the
+Cuprum's Rust `1.87.0` pin remains the compatibility, release, coverage,
+verification, and Whitaker toolchain. The floor moved from 1.85.0 only to reach
+`std::io::pipe`, stabilized in 1.87.0; see
+[Rust boundary verification](rust-boundary-verification.md). On Linux only,
+ordinary debug Rust work uses the separately pinned `nightly-2026-08-23` and the
 `rustc-codegen-cranelift` component through `tools/dev-fast/config.toml`; the
 Clippy portion of `make rust-lint` additionally requires the `clippy` component
 on that nightly. The fragment is an approved local extension that began as a
@@ -1167,12 +1169,15 @@ Changing the fragment means changing the bytes that digest authorizes. Update
 `FRAGMENT_SHA256` in `cuprum/unittests/test_dev_fast_contract.py` and the
 digest quoted above in the same commit, or the contract test fails.
 
-Every workspace package inherits `rust-version = "1.85.0"` from the root
+Every workspace package inherits `rust-version = "1.87.0"` from the root
 manifest. Cargo treats that as the publication and compatibility contract, and
 MSRV-aware Clippy lints use it while the Linux debug lint route runs on the
 dev-fast nightly. `make msrv-check` separately compiles every workspace target
-on Rust `1.85.0` without the fragment, so the accelerated lint compiler cannot
-replace compatibility verification.
+on Rust `1.87.0` without the fragment, so the accelerated lint compiler cannot
+replace compatibility verification. `cargo metadata --locked` reports a single
+dependency, `wasip2`, that declares `rust_version` `1.87.0`. It is reachable
+only under the unsupported `wasm32-wasip2` target, so no host target raises the
+floor above the workspace pin.
 
 Maturin accepts a Cargo executable but cannot pass Cargo's configuration-file
 flag itself. The Linux-only `tools/dev-fast/cargo` adapter receives the injected
@@ -1219,7 +1224,7 @@ rather than as the three member manifests. The concordat rule
 `rust-dev-build-footprint` expects the governing workspace to be declared, not
 its members, and `cuprum/unittests/test_rust_dev_build_footprint.py` asserts
 both the profile settings and that declaration. The root toolchain pin is stable
-`1.85.0`, which is exempt from the unstable Cargo metadata key, so no such key
+`1.87.0`, which is exempt from the unstable Cargo metadata key, so no such key
 is set. The Linux accelerated route, selected by `tools/dev-fast/config.toml`
 with `nightly-2026-08-23`, already receives `-Z embed-metadata=no` from Cargo,
 as measured on this branch.
@@ -1235,7 +1240,7 @@ in the environment.
 
 Modern-stable validation is pinned to Rust/Cargo `1.99.1`. The Makefile owns
 this selection independently of `rust/rust-toolchain.toml`, which continues to
-pin Rust `1.85.0`. CI installs the modern toolchain with the minimal profile
+pin Rust `1.87.0`. CI installs the modern toolchain with the minimal profile
 and Clippy without changing the default toolchain. A modern-stable pass does
 not prove the MSRV, and `--locked` does not change that.
 
@@ -3711,8 +3716,9 @@ caller-supplied mappings.
 The optional Rust extension needs two tools beyond the Python development
 environment:
 
-- **Rust 1.85 or later**, including `cargo`. The crates use `edition = "2024"`,
-  which requires Rust 1.85. Install the toolchain with
+- **Rust 1.87 or later**, including `cargo`. The crates use `edition = "2024"`,
+  which requires Rust 1.85, and the pipe constructor needs `std::io::pipe`,
+  stabilized in 1.87.0. Install the toolchain with
   [rustup](https://rustup.rs/); `rust/rust-toolchain.toml` pins the exact
   version used inside `rust/`.
 - **maturin**, the Rust-to-Python build bridge. It is pinned in the `dev`
@@ -5402,10 +5408,10 @@ evidence and real OS effects lives in
 `CloseLog` in `rust/cuprum-native-io/src/fd_ownership_model.rs` counts modelled
 closes for the bounded model, and its accessor is
 `const fn closes(self) -> u32`. Both details of that signature follow from the
-workspace's Rust 1.85.0 toolchain rather than from an ownership decision.
+workspace's Rust 1.87.0 toolchain rather than from an ownership decision.
 
 The workspace denies `missing_const_for_fn`, so an accessor with no reason to
-run at runtime must be `const`. `Cell::get` is not const-stable on 1.85; the
+run at runtime must be `const`. `Cell::get` is not const-stable on 1.87; the
 compiler reports that `Cell::<T>::get` is not yet stable as a const fn.
 `Cell::into_inner` is const-stable, and it consumes the cell, so reaching it
 requires taking `self` by value. The consuming receiver is therefore what keeps
@@ -5525,20 +5531,23 @@ and `CI` run 35004943782 succeeded with its
 The boundary installer and fault harnesses have narrow reuse policies.
 `scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
 installers only: HTTPS-only bounded redirects, digest validation, and no source
-builds. `scripts/check_boundary_faults.py` scopes its runner to the four
+builds. `scripts/boundary_fault_invocations.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
-abstraction. Its progress and ownership checks have separate private runners;
-their scope is the existing four mutations, with the same controls and failure
-diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
-cannot: Cargo consumes a global `--frozen` before dispatching an external
-subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
-therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
-the copied workspace's lockfile digest after every run so a build that rewrites
-it fails closed. The download helpers separate bounded redirect traversal, one
-connection's lifetime, and response classification. They remain private to the
-pinned binary installer. The compiler-contract checker uses a named predicate
-requiring both failure and an unsafe-forbid diagnostic, so unrelated compiler
-failures cannot pass the probe.
+abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
+calls that runner rather than defining its own. The runner upholds the
+allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
+progress and ownership checks have separate private runners; their scope is the
+existing four mutations, with the same controls and failure diagnostics. Native
+`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
+a global `--frozen` before dispatching an external subcommand, and cargo-kani
+`0.67.0` rejects that flag itself. The Kani route therefore relies on the
+run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
+lockfile digest after every run so a build that rewrites it fails closed. The
+download helpers separate bounded redirect traversal, one connection's
+lifetime, and response classification. They remain private to the pinned binary
+installer. The compiler-contract checker uses a named predicate requiring both
+failure and an unsafe-forbid diagnostic, so unrelated compiler failures cannot
+pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
@@ -5549,11 +5558,21 @@ Unix adapters retain their direct syscall and buffer contracts.
 scheduled `extended` job. Each run writes per-command output under
 `.cache/boundary-faults/runs/run-<id>/logs/`, and the workflow archives the
 whole run directory. Run roots are retained deliberately: the harnesses do not
-prune during a run, because a concurrent invocation may be active and the
-workflow archives the directory after the step completes. `make clean` removes
-`.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The final
-run passed its controls and detected all four mutations; see
+prune a run root during a run, because a concurrent invocation may be active
+and the workflow archives the directory after the step completes. `make clean`
+removes `.cache/boundary-contract/runs` and `.cache/boundary-faults/runs`. The
+final run passed its controls and detected all four mutations; see
 `/tmp/issue379-round27-faults.log`.
+
+Each ownership control and its fault use a distinct directory under
+`<run-root>/build`, never under `<run-root>/logs`, because CI archives the run
+root wholesale with `include-hidden-files` and a Cargo target tree in `logs/`
+would bury the evidence. The control and the fault must never share one build
+directory, because Kani would then treat the unchanged control as needing no
+rebuild and hand it the mutation's prebuilt harness. They are scratch: their
+verdicts are already archived, so each pair's directories are removed once that
+pair finishes, including when the check fails. That per-pair cleanup is not
+run-root pruning; `logs/` and the run root survive it.
 
 ### Python-side native pump descriptor lifetime
 
@@ -6010,7 +6029,7 @@ present in the environment. CI's `extension-tests` and
 the extension identically. The Makefile keeps only a pointer to this section
 rather than repeating the reasoning.
 
-The Windows job provisions Python 3.13, `uv`, Rust 1.85.0, and GNU Make before
+The Windows job provisions Python 3.13, `uv`, Rust 1.87.0, and GNU Make before
 it runs those targets in Git Bash. To reproduce it from a Windows checkout,
 make those tools available in Git Bash, let `setup-uv` (or an equivalent
 installation) add `uv` to PATH, then run `make develop` and
@@ -6257,7 +6276,7 @@ keeps its explicit crate-level prohibition, which the boundary contract checks.
 The
 [ADR-011 addendum](adrs/adr-0011-audited-rust-boundaries.md#addendum-2026-09-20-lint-baseline-and-target-discovery)
 records why that source-level contract complements the shared lint tables. The
-The Rust 1.85.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
+Rust 1.87.0 maintenance toolchain provides `clippy` and `rust-analyzer`;
 `RUSTFMT_TOOLCHAIN=nightly-2026-05-28` provides `rustfmt`. Linux debug Rustdoc,
 Clippy, and doctests use the separately pinned dev-fast configuration, while
 MSRV, coverage, release, verification, and Whitaker retain their prescribed
@@ -6280,9 +6299,9 @@ assertions remain mandatory.
 ### Rustfmt fixture compatibility
 
 The formatter maintenance pin is `nightly-2026-05-28`; Continuous Integration
-(CI) provisions it before restoring the supported Rust 1.85.0 project
+(CI) provisions it before restoring the supported Rust 1.87.0 project
 toolchain. The formatter profile's `fn_single_line` option formats some
-`rstest` fixtures into a form that triggers `unused_braces` when Rust 1.85.0
+`rstest` fixtures into a form that triggers `unused_braces` when Rust 1.87.0
 compiles the configured profile. This is a formatter and `rstest` compatibility
 constraint, not a lint-policy exception.
 
@@ -6294,7 +6313,7 @@ remains incompatible:
 - `rust/cuprum-streams/src/splice/tests.rs`: `pipe`
 
 Remove each skip only when the pinned formatter formats the source first and
-Rust 1.85.0 then compiles the formatted `rstest` fixture with warnings denied,
+Rust 1.87.0 then compiles the formatted `rstest` fixture with warnings denied,
 reporting no `unused_braces` diagnostic. Do not add another skip merely to
 preserve a formatter shape. Reproduce the incompatibility with the pinned
 toolchains first, then update the exact approved set in
@@ -6413,7 +6432,7 @@ exactly the requested one.
 The 0.5.1 floor belongs to the action rather than to Cuprum. The recipes above
 need `mdtablefix` 0.6.0 or later, so a lower pin is outside what `make fmt` and
 `make check-fmt` support here, and 0.6.1 is the version CI actually installs.
-Cuprum's project toolchain remains Rust 1.85.0.
+Cuprum's project toolchain remains Rust 1.87.0.
 
 Install the pinned prebuilt version locally with `cargo-binstall` so formatter
 output matches CI:
@@ -7662,7 +7681,7 @@ Every compile-fail doctest must:
 
 - name the error code it expects. Only nightly rustdoc, which the dev-fast
   route of `make test` uses, checks it. Stable rustdoc, including the pinned
-  1.85.0 that CI uses, accepts any code and passes the case for any compile
+  1.87.0 that CI uses, accepts any code and passes the case for any compile
   error; and
 - share its doc comment with a positive control, a doctest of the same shape
   without the violation that must compile, and have that control import

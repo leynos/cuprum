@@ -4,7 +4,6 @@
 //! integration boundary may reconstruct resources from raw integers.
 #![deny(unsafe_op_in_unsafe_fn)]
 
-#[cfg(unix)]
 use std::io;
 #[cfg(kani)]
 mod kani_proofs;
@@ -21,6 +20,8 @@ pub mod loom_support;
 
 #[cfg(unix)]
 pub use std::os::fd::{AsFd as AsStream, BorrowedFd as BorrowedStream, OwnedFd as OwnedStream};
+// `FromRawFd` survives for `adopt_writer`, whose caller transfers a raw
+// integer across the Python boundary. Pipe construction no longer needs it.
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(windows)]
@@ -174,26 +175,40 @@ pub fn splice_once(
     syscall_result(result, length)
 }
 
-/// Create two uniquely owned pipe endpoints.
+/// Create two uniquely owned pipe endpoints, reader first.
+///
+/// Both endpoints are distinct owners: dropping either closes only that
+/// endpoint, and a read on the reader returns EOF once every writer owner is
+/// closed. Reads block until the pipe is non-empty and writes block while it
+/// is full, both for a duration the operation cannot bound.
+///
+/// The [Rust 1.87.0 standard library][implementation] creates the pipe with
+/// `pipe2(O_CLOEXEC)` on Linux and BSD-class targets, falling back to `pipe`
+/// followed by `set_cloexec` elsewhere; on Windows it calls `CreatePipe` with
+/// null security attributes. Neither endpoint is inherited across `exec` or a
+/// child-process creation, and an anonymous pipe supports only synchronous
+/// blocking `ReadFile`/`WriteFile`. Those are implementation facts at the
+/// pinned compiler, verified in
+/// `library/std/src/sys/pal/unix/pipe.rs` and
+/// `library/std/src/sys/anonymous_pipe/windows.rs`, not public `std`
+/// guarantees: `pipe`'s own documentation says the platform mechanism "may
+/// change in the future". `pipe_tests` pins the close-on-exec and
+/// non-inheritance consequences, and the Windows `synchronous_pipe` relies on
+/// the Windows half of this behaviour when it establishes its capability. A
+/// compiler bump must re-check both source files.
+///
+/// The constructor cannot enforce a direction: the reader end also accepts a
+/// write, which fails with a native error rather than a type error. Callers
+/// that need the guarantee use the owned endpoint types with the policy layer.
+///
+/// [implementation]: https://doc.rust-lang.org/1.87.0/std/io/fn.pipe.html
 ///
 /// # Errors
-/// Returns the pipe creation error without constructing owners on failure.
-#[cfg(unix)]
+/// Returns the operating-system error unchanged. No owner is constructed when
+/// creation fails, so a failure leaves nothing to clean up.
 pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
-    let mut endpoints = [0; 2];
-    // SAFETY: endpoints provides writable storage for exactly two integers.
-    let result = unsafe { libc::pipe(endpoints.as_mut_ptr()) };
-    if result != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let [reader, writer] = endpoints;
-    // SAFETY: successful pipe returns two distinct, newly owned descriptors.
-    Ok(unsafe {
-        (
-            OwnedStream::from_raw_fd(reader),
-            OwnedStream::from_raw_fd(writer),
-        )
-    })
+    let (reader, writer) = io::pipe()?;
+    Ok((OwnedStream::from(reader), OwnedStream::from(writer)))
 }
 
 /// Observe whether a descriptor is currently open, for native regressions.
@@ -226,18 +241,61 @@ pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
     }
 }
 
+/// Report whether a descriptor is marked close-on-exec, for native regressions.
+///
+/// This observes the creation policy of an endpoint, not its liveness. It is
+/// test support, so it is neither exported nor compiled into the shipped
+/// library.
+///
+/// # Errors
+/// Returns the kernel's error for any failure, including a closed descriptor.
+/// Folding one into either answer would report an inheritance verdict the
+/// observation never established.
+///
+/// Its only caller lives in `pipe_tests`, which Miri excludes, so the `miri`
+/// gate keeps this from becoming dead code in that configuration.
+#[cfg(all(test, unix, not(miri)))]
+pub(crate) fn fd_is_exec_inheritable(fd: i32) -> io::Result<bool> {
+    let flags = loop {
+        // SAFETY: F_GETFD accepts arbitrary descriptor integers, has no pointer
+        // argument, and reports EBADF without touching memory for closed FDs.
+        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if result != -1 {
+            break result;
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => {}
+            _ => return Err(error),
+        }
+    };
+    Ok(flags & libc::FD_CLOEXEC == 0)
+}
+
 #[cfg(test)]
 mod ownership_tests;
+// The stream crate compiles real-descriptor tests out under Miri because they
+// need real pipes. These need the same, and Miri's isolation also puts the
+// descriptor observations (`fcntl`) out of reach, so exclude them for the same
+// reason rather than letting them fail on a missing shim.
+#[cfg(all(test, not(miri)))]
+mod pipe_tests;
+// Property tests over the same seam: they transfer generated payloads and
+// close writer owners in generated orders, so they need the same real
+// descriptors and the same exclusion from Miri's isolation.
+#[cfg(all(test, not(miri)))]
+mod pipe_property_tests;
 #[cfg(windows)]
 mod windows;
-#[cfg(all(test, windows))]
-pub(crate) use windows::fd_is_open;
+// `pipe` is not re-exported from here: the cross-platform constructor above
+// already owns that name, and a second Windows-only binding would shadow it.
 #[cfg(windows)]
 pub use windows::{
     SynchronousBorrowedStream,
     SynchronousOwnedStream,
-    pipe,
     read_once,
     synchronous_pipe,
     write_once,
 };
+#[cfg(all(test, windows))]
+pub(crate) use windows::{fd_is_open, handle_is_inheritable};

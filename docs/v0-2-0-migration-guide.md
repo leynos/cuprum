@@ -66,6 +66,8 @@ first eight can need an edit:
 - [Metrics count failures from the settled event](#metrics-count-failures-from-the-settled-event).
 - The reserved builder keywords include `env_mode` and `process_group`, which
   are new `ExecutionContext` fields.
+- [Building the native extension now requires Rust 1.87](#building-the-native-extension-now-requires-rust-187):
+  source builds on Rust 1.85 or earlier must upgrade their toolchain.
 - [Captured single-command results](#captured-single-command-results) now use
   `CapturedResult` for default text capture; explicit `RunOutputOptions` calls
   keep the broader `CommandResult` type.
@@ -83,6 +85,20 @@ The rest is additive:
 - [streaming stdin and standard-stream redirection](#streaming-stdin-and-standard-stream-redirection);
 - [redaction for telemetry](#opt-in-redaction-for-telemetry-projections); and
 - the `py.typed` marker.
+
+### Building the native extension now requires Rust 1.87
+
+The optional Rust extension now creates its anonymous pipes with
+`std::io::pipe`, which stabilized in Rust 1.87. The crates therefore declare
+`rust-version = "1.87.0"`, and a source build of the extension needs that
+toolchain or later. Users on Rust 1.85 or earlier must upgrade before building
+from source.
+
+This affects only builds that compile the extension. Pure-Python installations
+and the pre-built wheels are unaffected: they contain no Rust compilation step,
+so they keep working on the same Python versions as before. See
+[build prerequisites for native extensions](users-guide.md#build-prerequisites-for-native-extensions)
+for the full toolchain requirements.
 
 ## Breaking changes
 

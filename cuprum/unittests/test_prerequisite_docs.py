@@ -77,7 +77,7 @@ def troubleshooting_section(users_guide: str) -> str:
         "maturin",
         "cargo",
         "rustup",
-        "1.85",
+        "1.87",
         "`maturin develop`",
         "is_rust_available()",
     ],
@@ -130,9 +130,9 @@ def test_troubleshooting_mentions_backend_env_var(
 
 
 def test_design_doc_states_correct_minimum_rust_version() -> None:
-    """Design doc should state Rust 1.85+ as the minimum toolchain version."""
+    """Design doc should state Rust 1.87+ as the minimum toolchain version."""
     design_doc = read_doc("docs/cuprum-design.md")
 
-    assert "rustc 1.85+" in design_doc or "Rust 1.85" in design_doc, (
-        "Design doc should state Rust 1.85+ as the minimum toolchain version"
+    assert "rustc 1.87+" in design_doc or "Rust 1.87" in design_doc, (
+        "Design doc should state Rust 1.87+ as the minimum toolchain version"
     )

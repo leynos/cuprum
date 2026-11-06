@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import typing as typ
 from contextlib import nullcontext
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import boundary_compile, check_boundary_faults
+from scripts import boundary_compile, boundary_fault_invocations
 from scripts.boundary_cargo import offline_cargo_environment
 from scripts.tests import boundary_harness_support
 
@@ -176,21 +177,42 @@ def test_cargo_metadata_passes_its_named_timeout_and_propagates_expiry(
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _FaultRoute:
+    """The per-case adjustments one recorded Cargo fault route may apply.
+
+    Attributes
+    ----------
+    after_run
+        Change applied to the workspace immediately after the command runs,
+        so a test can simulate a side effect the harness must notice.
+    target_dir
+        Explicit Cargo target directory. ``None`` exercises the shared
+        fallback the harness derives from the workspace.
+    """
+
+    after_run: cabc.Callable[[Path], None] | None = None
+    target_dir: Path | None = None
+
+
+# The unchanged route. A shared instance is safe because the type is frozen,
+# and naming it avoids a call in a default argument.
+_DEFAULT_ROUTE = _FaultRoute()
+
+
 def _run_with_recorded_cargo(
     monkeypatch: pytest.MonkeyPatch,
     workspace: Path,
     args: tuple[str, ...],
     *,
-    after_run: cabc.Callable[[Path], None] | None = None,
+    route: _FaultRoute = _DEFAULT_ROUTE,
 ) -> tuple[list[tuple[str, ...]], list[ExecutionContext], tuple[int, str]]:
     """Drive one Cargo fault route through an argument-recording seam."""
     cargo_home = workspace.parent / "cargo-home"
     cargo_home.mkdir(exist_ok=True)
-    monkeypatch.setattr(check_boundary_faults, "ROOT", workspace.parent)
-    monkeypatch.setattr(
-        check_boundary_faults,
-        "read_tool_pins",
-        lambda: SimpleNamespace(kani="0.1", verus="0.2"),
+    context = boundary_fault_invocations.VerifierContext(
+        workspace.parent,
+        boundary_fault_invocations.ToolPins(kani="0.1", verus="0.2"),
     )
     monkeypatch.setenv("CARGO_BUILD_JOBS", "6")
     contexts: list[ExecutionContext] = []
@@ -202,8 +224,8 @@ def _run_with_recorded_cargo(
         def run_sync(self, *, context: ExecutionContext) -> SimpleNamespace:
             """Record the context, apply any post-run change, and pass."""
             contexts.append(context)
-            if after_run is not None:
-                after_run(workspace)
+            if route.after_run is not None:
+                route.after_run(workspace)
             return SimpleNamespace(exit_code=0, stdout="checked", stderr="")
 
     command = RecordingCommand()
@@ -217,32 +239,43 @@ def _run_with_recorded_cargo(
             return command
 
     monkeypatch.setattr(
-        check_boundary_faults.sh,
+        boundary_fault_invocations.sh,
         "make",
         lambda _program, *, catalogue: RecordingCargo(),
     )
     monkeypatch.setattr(
-        check_boundary_faults,
+        boundary_fault_invocations,
         "scoped",
         lambda _config: nullcontext(),
     )
-    result = check_boundary_faults._run("cargo", args, workspace)
+    result = boundary_fault_invocations._run(
+        boundary_fault_invocations._Check(
+            "timeout-contract", "cargo", args, target_dir=route.target_dir
+        ),
+        workspace,
+        context,
+    )
     return calls, contexts, result
 
 
+@pytest.mark.parametrize("has_target_dir", [False, True], ids=["shared", "override"])
 def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    has_target_dir: bool,
 ) -> None:
     """The fault Cargo child inherits jobs but terminates as one owned group."""
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     cargo_home = tmp_path / "cargo-home"
+    target_dir = tmp_path / "separate-target" if has_target_dir else None
 
     calls, contexts, (code, output) = _run_with_recorded_cargo(
         monkeypatch,
         workspace,
         ("test", "--package", "cuprum-native-io"),
+        route=_FaultRoute(target_dir=target_dir),
     )
 
     assert code == 0, "the controlled Cargo result must preserve its exit code"
@@ -252,7 +285,7 @@ def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     )
     context = contexts[0]
     assert (
-        context.process_group is check_boundary_faults.ProcessGroupPolicy.OWN_GROUP
+        context.process_group is boundary_fault_invocations.ProcessGroupPolicy.OWN_GROUP
     ), "fault checks must own descendants for bounded termination"
     assert context.timeout == 1200, "the fault workload must keep its finite timeout"
     assert context.env is not None, (
@@ -266,6 +299,12 @@ def test_fault_cargo_route_is_frozen_and_owns_its_process_group(
     )
     assert context.env["CARGO_BUILD_JOBS"] == "6", (
         "the fault route must preserve caller-selected Cargo parallelism"
+    )
+    expected_target = target_dir or (
+        workspace.parent / "target/boundary-faults-debug-all-features"
+    )
+    assert context.env["CARGO_TARGET_DIR"] == str(expected_target), (
+        "an override must win, and the shared fallback must be used when absent"
     )
 
 
@@ -304,5 +343,5 @@ def test_fault_kani_route_guards_the_copied_lockfile(
             monkeypatch,
             workspace,
             kani_args,
-            after_run=rewrite_lockfile,
+            route=_FaultRoute(after_run=rewrite_lockfile),
         )

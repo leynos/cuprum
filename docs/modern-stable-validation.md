@@ -1,8 +1,10 @@
 # Modern-stable Rust validation
 
 This document records the independent modern-stable Rust route, the Cargo
-warning-policy boundary, and the evidence that supports it. Rust 1.85.0 remains
-Cuprum's published source compatibility floor.
+warning-policy boundary, and the evidence that supports it. Rust 1.87.0 remains
+Cuprum's published source compatibility floor; this route still validates
+against that floor rather than redefining it, and it is not a runtime speedup
+claim.
 
 The roadmap 6.1.1 implementation, its required Linux and Windows runtime
 evidence, and plan closeout were complete in merged PR #432 before this work
@@ -16,7 +18,7 @@ vtable miscompilation fixed by the 1.98.1 patch release[^1]. At implementation,
 the official Rust release index[^2] identified Rust 1.99.1, released on
 15 October 2026, as current stable. The route therefore selects Rust/Cargo
 1.99.1. It is an explicit Makefile pin; `rust/rust-toolchain.toml` and the
-workspace's `rust-version = "1.85.0"` remain unchanged.
+workspace's `rust-version = "1.87.0"` remain unchanged.
 
 Cargo 1.97 introduced `build.warnings` and the matching `CARGO_BUILD_WARNINGS`
 environment variable. See the Cargo configuration reference[^3] and Rust 1.97
@@ -56,14 +58,14 @@ compiler-cache shape is shared with the existing routes.
 | Modern documentation      | Rust/Cargo `1.99.1`                  | `RUSTDOC_FLAGS` with `-D warnings`; Cargo policy omitted                     | Retained                           |
 | Modern doctests           | Rust/Cargo `1.99.1`                  | Stable-compatible `RUSTDOC_FLAGS` (rustdoc lints only); Cargo policy omitted | Retained                           |
 | Linux debug and lint      | Pinned dev-fast nightly and fragment | Existing `-D warnings`, codegen, and linker flags                            | Unchanged                          |
-| Published MSRV check      | Rust/Cargo `1.85.0`                  | Existing check command and manifest levels                                   | Unchanged                          |
+| Published MSRV check      | Rust/Cargo `1.87.0`                  | Existing check command and manifest levels                                   | Unchanged                          |
 | Whitaker                  | Independently pinned verifier        | `WHITAKER_RUSTFLAGS` includes `-D warnings`                                  | Unchanged                          |
 | Release and wheel builds  | Existing release selection           | Existing route and manifest policy                                           | Unchanged                          |
 | Coverage and verification | Existing independent toolchains      | Existing route and manifest policy                                           | Unchanged                          |
 
 _Table 2: Routes, toolchains, and the policy boundary exercised by this change._
 
-The published MSRV route uses Cargo 1.85.0, which predates Cargo 1.97 and does
+The published MSRV route uses Cargo 1.87.0, which predates Cargo 1.97 and does
 not support `build.warnings`; it keeps its existing check and manifest policy.
 The shared Linux dev-fast route and Whitaker retain their explicit
 `-D warnings` flags because their compiler and verifier selections remain
@@ -99,7 +101,7 @@ CI adds one Linux `modern-stable` job, with a 90-minute ceiling and no matrix.
 Pull requests run it only when the dedicated `modern` path filter finds a
 validation input; documentation-only changes skip this paid route. Pushes to
 `main` and manual dispatches continue to run it. It installs the project Rust
-1.85.0 toolchain and separately installs the modern pin with the minimal
+1.87.0 toolchain and separately installs the modern pin with the minimal
 profile and Clippy, without changing rustup's default toolchain. Cargo build
 jobs and test threads follow `LINUX_RUNNER_VCPUS`. Nextest is installed from
 the official prebuilt release and checked against pinned archive and binary
@@ -179,7 +181,7 @@ speedup.
 | Check                                               | Result                                  | Evidence                                                              |
 | --------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
 | Modern toolchain guard                              | Passed                                  | Exact `rustc -vV` and `cargo -V` output above                         |
-| Rust 1.85.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
+| Rust 1.87.0 MSRV check                              | Passed                                  | `make msrv-check`; versions recorded below                            |
 | Modern stable check, lint, tests, docs and doctests | Passed                                  | `make modern-stable`                                                  |
 | Native extension suite                              | 142 passed; 4 Windows-only skips        | `make test-extension` on Linux                                        |
 | Cargo warning fixture and warm-cache controls       | 34 passed; no skips                     | `make test-modern-stable-contract`                                    |
@@ -196,12 +198,18 @@ which executes the shipped warning-control entry point against a throwaway
 one-crate Git repository. The later 34-pass remeasurement did not record
 whether the wrapper was configured.
 
-The 1.85.0 compatibility check reported `rustc 1.85.0 (4d91de4e4 2025-02-17)`
-and `cargo 1.85.0 (d73d2caf9 2024-12-31)`. The modern route ran with the
-versions printed above. Its Rust test run reported 165 passed and no skipped
-tests; the separate doctest run reported 8 passed and 3 ignored. The extension
-suite reported 142 passed and 4 skipped; those skips are Windows-only tests and
-are not Linux runtime evidence. The lockfile SHA-256 was
+At the revision those measurements cover, the compatibility check reported
+`rustc 1.85.0 (4d91de4e4 2025-02-17)` and
+`cargo 1.85.0 (d73d2caf9 2024-12-31)`. That was the MSRV then; issue #507 moved
+the floor to 1.87.0, so those 1.85.0 figures describe the historical run rather
+than the current pin. The floor was re-measured on Rust `1.87.0` after the
+move, reporting `rustc 1.87.0 (17067e9ac 2025-05-09)` and
+`cargo 1.87.0 (99624be96 2025-05-06)`, and that run is the one the MSRV row
+above records. The modern route ran with the versions printed above. Its Rust
+test run reported 165 passed and no skipped tests; the separate doctest run
+reported 8 passed and 3 ignored. The extension suite reported 142 passed and 4
+skipped; those skips are Windows-only tests and are not Linux runtime evidence.
+The lockfile SHA-256 was
 `f28db8538186391b44b89c77f73530e2d82c879116ee2e25b9644ba4192c0591` at that
 commit. This branch does not modify `rust/Cargo.lock`: after the base advanced
 to take the `pyo3` bump (#682), the file is byte-identical to the base and

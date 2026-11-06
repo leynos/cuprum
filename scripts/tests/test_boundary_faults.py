@@ -11,13 +11,14 @@ from pathlib import Path
 
 import pytest
 
+from scripts import boundary_fault_invocations
 from scripts import check_boundary_faults as faults
 from scripts.check_boundary_faults import mutate
+from scripts.tests.boundary_fault_recorder import PROOF_FAULTS, _RecordedRun
 from scripts.tests.boundary_harness_support import (
     copy_boundary_repository,
-    latest_run_root,
-    recorded_phases,
-    stub_cargo_preparation,
+    pinned_context,
+    stubbed_context,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,103 +26,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # Repository-relative, for reading the fixture root the harness is pointed at.
 PROGRESS = "rust/cuprum-native-io/src/progress.rs"
 MEMORY = "rust/cuprum-native-io/src/memory.rs"
-# Workspace-relative, because the harness copies the crate tree to its root.
-MEMORY_IN_WORKSPACE = "cuprum-native-io/src/memory.rs"
-
-# What the harness archives each proof fault under, and the fragments that must
-# only ever appear in a rendered fault.
-PROOF_FAULTS = {
-    "invalid-bound": "count >= capacity",
-    "incorrect-accounting": "total - written",
-}
-
-# Fragments proving an ownership fault is currently planted in the workspace.
-OWNERSHIP_FAULTS = ("core::mem::forget(writer)", "core::mem::forget(retained)")
-
-# Exit codes chosen to be distinct, so a control that returned a fault's code
-# would not have run and a fault that returned a control's code was not caught.
-CONTROL_EXIT = 0
-FAULT_EXIT = 7
-
-# The diagnostic each verifier emits for a rejected check. Only the demanded
-# one is reported, so a harness that accepted any failure would fail.
-#
-# A rendered proof is checked by Verus (its `program` is the absolute verus
-# path). An ownership fault is a Cargo run, and which diagnostic it must
-# produce depends on the subcommand: `cargo kani` reports a failed
-# verification, while `cargo test` reports a failed test result.
-VERUS_DIAGNOSTIC = "verification results::"
-KANI_DIAGNOSTIC = "VERIFICATION:- FAILED"
-TEST_DIAGNOSTIC = "test result: FAILED"
-CARGO_DIAGNOSTICS = {"kani": KANI_DIAGNOSTIC, "test": TEST_DIAGNOSTIC}
-PROOF_TARGET = "progress-fault.rs"
-
-
-class _RecordedRun:
-    """Record every invocation while returning a result derived from the workspace.
-
-    A control is identified by the workspace still holding production source; a
-    fault is identified by the planted mutation. Deriving the result from the
-    workspace rather than from call order keeps the seam honest: if the harness
-    ran a control while a fault was planted, or ran without planting anything,
-    the expected diagnostic would not match and the test would fail.
-    """
-
-    def __init__(self, workspace: Path) -> None:
-        """Record the workspace under test and start with no calls."""
-        self.workspace = workspace
-        self.calls: list[tuple[str, tuple[str, ...]]] = []
-
-    def __call__(
-        self, program: str, args: tuple[str, ...], workspace: Path
-    ) -> tuple[int, str]:
-        """Record one invocation and return the result its workspace implies.
-
-        Only the diagnostic that this specific check demands is returned, so a
-        harness that accepted any failure — rather than the designated one —
-        would still be caught.
-
-        Returns
-        -------
-        tuple[int, str]
-            The exit code and output the harness will classify.
-        """
-        self.calls.append((program, args))
-        proof = Path(args[0])
-        is_proof = proof.name == PROOF_TARGET
-        if is_proof:
-            source = proof.read_text(encoding="utf-8")
-            planted = any(fragment in source for fragment in PROOF_FAULTS.values())
-            rejected = VERUS_DIAGNOSTIC
-        else:
-            memory = (workspace / MEMORY_IN_WORKSPACE).read_text(encoding="utf-8")
-            planted = any(fragment in memory for fragment in OWNERSHIP_FAULTS)
-            rejected = CARGO_DIAGNOSTICS[args[0]]
-        if not planted:
-            return CONTROL_EXIT, f"{VERUS_DIAGNOSTIC}\n"
-        return FAULT_EXIT, f"{rejected}\n"
-
-    def names(self) -> list[str]:
-        """Return the invocation programs in call order."""
-        return [program for program, _args in self.calls]
-
-    def proof_targets(self) -> list[str]:
-        """Return the rendered proof file paths in call order."""
-        return [args[0].rsplit("/", 1)[-1] for _program, args in self.calls]
-
-
-def _drive(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[Path, _RecordedRun]:
-    """Run the whole harness against a temporary repository copy."""
-    root = copy_boundary_repository(tmp_path)
-    runner = _RecordedRun(root / "rust")
-    monkeypatch.setattr(faults, "ROOT", root)
-    monkeypatch.setattr(faults, "_run", runner)
-    stub_cargo_preparation(monkeypatch, faults)
-    faults.main()
-    return root, runner
 
 
 def test_the_harness_launches_the_pinned_installer_versions() -> None:
@@ -144,26 +48,42 @@ def test_every_pin_is_read_from_its_manifest() -> None:
         assert version == expected != "", f"the {name} pin is not the manifest version"
 
 
-def test_an_empty_pin_is_refused_rather_than_defaulted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_empty_pin_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     """A blank pin must fail closed instead of naming a verifier that cannot exist."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/kani/VERSION").write_text("\n", encoding="utf-8")
-    monkeypatch.setattr(faults, "ROOT", root)
     with pytest.raises(ValueError, match="records no version"):
-        faults.read_tool_pins()
+        faults.read_tool_pins(root)
 
 
-def test_a_missing_pin_is_a_hard_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_missing_pin_is_a_hard_failure(tmp_path: Path) -> None:
     """An absent pin propagates rather than silently defaulting a version."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/verus/VERSION").unlink()
-    monkeypatch.setattr(faults, "ROOT", root)
     with pytest.raises(FileNotFoundError):
-        faults.read_tool_pins()
+        faults.read_tool_pins(root)
+
+
+def test_a_pin_read_uses_the_root_it_is_given(tmp_path: Path) -> None:
+    """The pins follow the root argument, not the checkout they were imported from.
+
+    A run against a copy must not silently verify with the checkout's pins.
+    Recording distinct versions in the copy makes the two roots produce
+    different answers, so reading the wrong one cannot pass.
+    """
+    root = copy_boundary_repository(tmp_path)
+    (root / "tools/kani/VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (root / "tools/verus/VERSION").write_text("8.8.8\n", encoding="utf-8")
+
+    pins = faults.read_tool_pins(root)
+
+    assert (pins.kani, pins.verus) == ("9.9.9", "8.8.8"), (
+        "the pins must be read from the root the caller named"
+    )
+    checkout = faults.read_tool_pins(ROOT)
+    assert checkout != pins, (
+        "a copy's pins must differ from the checkout's for this test to mean anything"
+    )
 
 
 @pytest.mark.parametrize("source", ["absent", "old old"])
@@ -180,31 +100,6 @@ def test_fault_changes_only_the_named_fragment() -> None:
     )
 
 
-def test_main_runs_both_fault_families_over_a_copied_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """main() copies the workspace and drives the proof and ownership faults."""
-    root, runner = _drive(tmp_path, monkeypatch)
-    run_root = latest_run_root(root, "boundary-faults")
-    workspace = run_root / "workspace"
-    assert workspace.is_dir(), "the harness must copy the workspace before mutating"
-    assert not (workspace / "target").exists(), (
-        "the workspace copy must exclude Cargo build output"
-    )
-    # One control plus the two progress faults, and a control plus the fault for
-    # each of the two ownership faults.
-    assert runner.proof_targets().count("progress-fault.rs") == 3, (
-        "each progress fault must be preceded by a control, plus the baseline"
-    )
-    assert runner.names().count("cargo") == 4, (
-        "each ownership fault must be preceded by a control"
-    )
-    assert recorded_phases(run_root) == [
-        "dependency_preparation",
-        "workload",
-    ], "preparation and fault execution must have separate timing records"
-
-
 def test_every_proof_fault_reaches_the_verus_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -215,12 +110,12 @@ def test_every_proof_fault_reaches_the_verus_input(
     runner = _RecordedRun(root / "rust")
     logs = root / "logs"
     logs.mkdir()
-    monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
     monkeypatch.setattr(
         faults, "render", lambda source: rendered.append(source) or source
     )
-    faults._verify_progress_faults(root / "rust", logs)
+    context = pinned_context(root)
+    faults._verify_progress_faults(context, root / "rust", logs)
 
     for name, fragment in PROOF_FAULTS.items():
         assert any(fragment in source for source in rendered), (
@@ -240,9 +135,8 @@ def test_ownership_faults_are_detected_and_their_mutations_restored(
     runner = _RecordedRun(root / "rust")
     logs = root / "logs"
     logs.mkdir()
-    monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
-    faults._verify_ownership_faults(root / "rust", logs)
+    faults._verify_ownership_faults(pinned_context(root), root / "rust", logs)
 
     # Each fault logs its control and the fault itself, in that order: the
     # control proves the check passes on production, and the fault's own log
@@ -256,6 +150,18 @@ def test_ownership_faults_are_detected_and_their_mutations_restored(
     assert (root / MEMORY).read_text(encoding="utf-8") == production, (
         "the ownership fault was not restored after checking"
     )
+    build_root = logs.parent / "build"
+    # Absent is the normal case once the last pair has cleaned up; present and
+    # empty is equally fine. Anything left behind is scratch the pair failed to
+    # remove.
+    leftovers = list(build_root.iterdir()) if build_root.exists() else []
+    assert not leftovers, (
+        "each pair's scratch build directories must be removed once it finishes"
+    )
+    assert logs.is_dir(), "the archived log directory must survive the cleanup"
+    assert any(logs.iterdir()), (
+        "per-pair build cleanup must not touch the archived logs"
+    )
 
 
 def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
@@ -265,11 +171,14 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (3, "no verdict")
+        faults,
+        "_run",
+        lambda _check, _workspace, _context: (3, "no verdict"),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
         faults._check(
             faults._Check("compactness-control", "verus", ("proof.rs",)),
+            stubbed_context(tmp_path),
             tmp_path,
             logs,
         )
@@ -291,7 +200,9 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     logs.mkdir()
 
     def rewrite(
-        _program: str, _args: tuple[str, ...], _workspace: Path
+        _check: faults._Check,
+        _workspace: Path,
+        _context: boundary_fault_invocations.VerifierContext,
     ) -> tuple[int, str]:
         """Fail the guarded run as though it had rewritten the lockfile."""
         error = faults._LockfileRewriteError(
@@ -303,6 +214,7 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     with pytest.raises(faults._LockfileRewriteError):
         faults._check(
             faults._Check("kani-control", "cargo", ("kani", "--package", "x")),
+            stubbed_context(tmp_path),
             tmp_path,
             logs,
         )
@@ -318,11 +230,16 @@ def test_a_control_that_fails_closed_is_not_accepted(
     logs = tmp_path / "logs"
     logs.mkdir()
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (1, "unexpected failure")
+        faults,
+        "_run",
+        lambda _check, _workspace, _context: (1, "unexpected failure"),
     )
     with pytest.raises(faults.BoundaryFaultError):
         faults._check(
-            faults._Check("verus-control", "verus", ("proof.rs",)), tmp_path, logs
+            faults._Check("verus-control", "verus", ("proof.rs",)),
+            stubbed_context(tmp_path),
+            tmp_path,
+            logs,
         )
 
 
@@ -335,16 +252,25 @@ def test_a_fault_is_only_accepted_for_its_own_diagnostic(
     check = faults._Check(
         "invalid-bound", "verus", ("proof.rs",), "verification results::"
     )
+    context = stubbed_context(tmp_path)
     monkeypatch.setattr(
-        faults, "_run", lambda _program, _args, _workspace: (1, "error: build failed")
+        faults,
+        "_run",
+        lambda _check, _workspace, _context: (
+            1,
+            "error: build failed",
+        ),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
-        faults._check(check, tmp_path, logs)
+        faults._check(check, context, tmp_path, logs)
     assert caught.value.check_name == "invalid-bound", "the check must be named"
 
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace: (1, "verification results::"),
+        lambda _check, _workspace, _context: (
+            1,
+            "verification results::",
+        ),
     )
-    faults._check(check, tmp_path, logs)
+    faults._check(check, context, tmp_path, logs)

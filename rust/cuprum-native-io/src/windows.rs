@@ -2,12 +2,15 @@
 
 use std::{
     io::{self, Read, Write},
-    os::windows::io::{AsRawHandle, FromRawHandle},
+    os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle, RawHandle},
 };
 
 #[cfg(test)]
-use windows_sys::Win32::Foundation::{ERROR_INVALID_HANDLE, GetHandleInformation};
-use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::Foundation::{
+    ERROR_INVALID_HANDLE,
+    GetHandleInformation,
+    HANDLE_FLAG_INHERIT,
+};
 
 #[cfg(test)]
 use crate::PlatformFd;
@@ -66,37 +69,36 @@ impl AsStream for SynchronousOwnedStream {
     fn as_handle(&self) -> BorrowedStream<'_> { self.0.as_handle() }
 }
 
-/// Create two uniquely owned, non-inheritable anonymous pipe handles.
-///
-/// # Errors
-/// Returns the Win32 error if no pipe could be created.
-pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
-    let mut reader = std::ptr::null_mut();
-    let mut writer = std::ptr::null_mut();
-    // SAFETY: both outputs are writable HANDLE slots. Null security attributes
-    // select default security and non-inheritance; zero selects default size.
-    let result = unsafe { CreatePipe(&mut reader, &mut writer, std::ptr::null(), 0) };
-    if result == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: success produced distinct valid pipe handles owned only here.
-    Ok(unsafe {
-        (
-            OwnedStream::from_raw_handle(reader),
-            OwnedStream::from_raw_handle(writer),
-        )
-    })
+impl IntoRawHandle for SynchronousOwnedStream {
+    fn into_raw_handle(self) -> RawHandle { self.0.into_raw_handle() }
 }
 
 /// Create two owned anonymous-pipe handles for synchronous native I/O.
 ///
-/// [`CreatePipe`] creates synchronous anonymous-pipe handles, so the returned
-/// wrappers may safely lend [`SynchronousBorrowedStream`].
+/// [`crate::pipe`] forwards to `std::io::pipe`, whose Rust 1.87.0 Windows half
+/// calls `CreatePipe(&mut reader, &mut writer, ptr::null_mut(), 0)`. Two
+/// documented Win32 facts make that result fit to lend
+/// [`SynchronousBorrowedStream`]: `lpPipeAttributes` of `NULL` means the
+/// returned handles cannot be inherited, and anonymous pipes do not support
+/// asynchronous read or write operations at all — `ReadFile` and `WriteFile`
+/// ignore their `lpOverlapped` argument for such a pipe. Every operation on
+/// these ends is therefore synchronous and blocking.
+///
+/// The standard library documents only that the call currently corresponds to
+/// `CreatePipe` and "may change in the future", so this is implementation
+/// evidence from the pinned compiler rather than a public `std` guarantee. A
+/// compiler bump must re-check the arguments at
+/// `library/std/src/sys/anonymous_pipe/windows.rs` before the capability is
+/// trusted again.
+///
+/// Foreign handles are unaffected: they still cannot enter the capability
+/// except through [`SynchronousBorrowedStream::new_unchecked`] at an audited
+/// hand-off.
 ///
 /// # Errors
 /// Returns the Win32 error if no pipe could be created.
 pub fn synchronous_pipe() -> io::Result<(SynchronousOwnedStream, SynchronousOwnedStream)> {
-    pipe().map(|(reader, writer)| {
+    crate::pipe().map(|(reader, writer)| {
         (
             SynchronousOwnedStream::from_known_synchronous(reader),
             SynchronousOwnedStream::from_known_synchronous(writer),
@@ -132,6 +134,29 @@ pub(crate) fn fd_is_open(raw: PlatformFd) -> io::Result<bool> {
         Some(ERROR_INVALID_HANDLE) => Ok(false),
         _ => Err(error),
     }
+}
+
+/// Report whether a handle carries `HANDLE_FLAG_INHERIT`, for native
+/// regressions.
+///
+/// This is the Windows analogue of the Unix `FD_CLOEXEC` assertion: it
+/// observes the creation policy of an endpoint, not its liveness, and it is
+/// test support, so it is neither exported nor compiled into the shipped
+/// library.
+///
+/// # Errors
+/// Returns the Win32 error for any failure, including an invalid handle.
+/// Folding one into either answer would report an inheritance verdict the
+/// observation never established.
+#[cfg(test)]
+pub(crate) fn handle_is_inheritable(raw: PlatformFd) -> io::Result<bool> {
+    let mut flags = 0;
+    // SAFETY: GetHandleInformation validates the opaque handle and writes
+    // flags only through the live output pointer. No ownership is acquired.
+    if unsafe { GetHandleInformation(raw as _, &mut flags) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(flags & HANDLE_FLAG_INHERIT != 0)
 }
 
 /// Read once into initialized storage, retaining the handle borrow.

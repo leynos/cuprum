@@ -31,7 +31,7 @@ use crate::{
 /// tests, so the shared setup lives in one place rather than a repeated
 /// `make_pipe()` call per test.
 // `fn_single_line` in rustfmt 1.9.0-nightly turns this rstest fixture into a
-// form that triggers `unused_braces` under Rust 1.85. Remove this skip when
+// form that triggers `unused_braces` under Rust 1.87. Remove this skip when
 // that formatter/rstest combination compiles the configured profile cleanly.
 #[cfg(not(miri))]
 #[rustfmt::skip]
