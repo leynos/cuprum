@@ -148,6 +148,29 @@ def _base_stage_tags(
     }
 
 
+def _warn_hook_failure(
+    event: ExecEvent,
+    error: BaseException,
+    scheduled: list[asyncio.Task[None]],
+) -> None:
+    """Log a hook failure, except cancellation, which is not a failure."""
+    if isinstance(error, asyncio.CancelledError):
+        return
+    _LOGGER.warning(
+        "observe_hook_failed phase=%s program=%s error=%s",
+        event.phase,
+        event.program,
+        type(error).__name__,
+        exc_info=error,
+        extra={
+            "cuprum_phase": event.phase,
+            "cuprum_program": str(event.program),
+            "cuprum_error_type": type(error).__name__,
+            "cuprum_scheduled_task_count": len(scheduled),
+        },
+    )
+
+
 def _emit_exec_event(
     hooks: tuple[ExecHook, ...],
     event: ExecEvent,
@@ -201,24 +224,16 @@ def _emit_observe_hook(
     """Invoke one hook, retaining any async task for the caller to await."""
     try:
         result = hook(event)
-    except asyncio.CancelledError as exc:
-        raise _ExecEventEmissionError(exc, scheduled) from exc
     except BaseException as exc:
-        _LOGGER.warning(
-            "observe_hook_failed phase=%s program=%s error=%s",
-            event.phase,
-            event.program,
-            type(exc).__name__,
-            exc_info=True,
-            extra={
-                "cuprum_phase": event.phase,
-                "cuprum_program": str(event.program),
-                "cuprum_error_type": type(exc).__name__,
-                "cuprum_scheduled_task_count": len(scheduled),
-            },
-        )
+        _warn_hook_failure(event, exc, scheduled)
         raise _ExecEventEmissionError(exc, scheduled) from exc
-    if inspect.isawaitable(result):
+    # ``None`` is the only result a synchronous hook returns and a native
+    # coroutine the only one an ``async def`` returns, so the general test runs
+    # only for the remaining shapes. This path is entered once per observed
+    # line, so the two exact checks keep it off the hot path.
+    if result is None:
+        return
+    if type(result) is types.CoroutineType or inspect.isawaitable(result):
         _schedule_observe_hook_task(result, event, scheduled)
 
 

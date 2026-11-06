@@ -4569,6 +4569,49 @@ uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml
 uv run python benchmarks/profile_tee_hotpath.py --profiler perf run
 ```
 
+### Hot-path frame census (`benchmarks/summarize_hot_path_frames.py`)
+
+Roadmap item 5.2.2's gate asks a narrower question than the 5.2.1
+construction-share classifier: after the change, does any sampled weight still
+reach a named detector frame while sitting under a named anchor frame?
+`benchmarks/summarize_hot_path_frames.py` answers it from one py-spy raw-stack
+capture:
+
+```bash
+python -m benchmarks.summarize_hot_path_frames <stacks.folded> \
+  --anchor FUNCTION@LOCATION --target FUNCTION@LOCATION \
+  --min-anchor-weight N --output <out.json>
+```
+
+Both frame specs are exact: `FUNCTION@LOCATION` must split into exactly two
+non-empty halves, and an over- or under-specified value is rejected rather than
+silently truncated. `--min-anchor-weight` is required and must not be negative,
+so a caller cannot inherit a default floor that would weaken the claim.
+
+The result document reports `total_weight`, `anchor_weight`, `target_weight`,
+`target_weight_any_location`, `target_weight_outside_anchor`, and `status`.
+Every weight counts a stack once, however many matching frames it holds.
+`target_weight` matches the target at its own location, while
+`target_weight_any_location` matches the function name alone, because py-spy
+renders different `inspect.py` line numbers across interpreters; the two must
+agree or the run is inconclusive. `target_weight_outside_anchor` counts samples
+that reach the target without passing through the anchor, which shows whether
+the detector is reachable by another route.
+
+Exit status 0 means both target weights are zero and the anchor meets the
+floor; 1 means they agree and are non-zero; 2 means the input was malformed,
+the anchor fell below the floor, or the two target weights disagreed. A floor
+failure is reported even when the target weight is zero, because observing no
+target samples is only evidence of absence when the anchored region carried
+enough samples to have shown one.
+
+The command reuses `parse_capture`, `Frame`, and `FramePattern` from
+`benchmarks/_line_event_profile_model.py`, so a capture that the 5.2.1
+classifier accepts is parsed identically here. Its arithmetic is checked
+against an independent brute-force recount in
+`cuprum/unittests/test_hot_path_frame_census.py`, whose generated inputs always
+cover the five stack shapes that decide the answer.
+
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 
 `FixtureConfig` describes deterministic fixture generation with three fields:
@@ -5045,10 +5088,12 @@ retained generated `ExecEvent.__init__`, so an optimization that removes work
 **raises** the share. A higher share after a successful optimization is this
 metric's known behaviour, not a regression; judge such work by the per-frame
 contributions the classifier reports instead. The 5.2.1 measurement records the
-case concretely, and its successor is already forecast: item 5.2.2's
-`inspect.isawaitable` removal is expected to move the share 0.9686 points
-*above* the bar by succeeding. See
-[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
+case concretely, and item 5.2.2 has since measured it: removing the per-line
+`inspect.isawaitable` call moved the share from a control median of 30.7670% to
+a candidate median of 33.0662%, 2.2992 points *above* the bar, while the
+detector's sampled weight fell to zero in every candidate capture. See
+[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md) and
+[the 5.2.2 evidence](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 ## Cargo cache snapshots
 
@@ -8120,14 +8165,17 @@ path can score a higher share. The share is an attribution metric, not a
 stopwatch, and it must not be used as an acceptance instrument for a change
 whose goal is speed.
 
-The concrete instance is roadmap item 5.2.2, which removes the per-line
-`inspect.isawaitable` call — 589 samples, all denominator-only. Deleting it
-moves the share from 29.9414% to a **conditional forecast** of 30.9686%, which
-is worse by the gate's own criterion while being faster in fact. Read that
-number as the direction and rough size of the inversion, not as a measurement:
-no capture exists with the call absent. The full analysis, including the
-sampling caveats, is in
-[`docs/tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md).
+The concrete instance is roadmap item 5.2.2, which removed the per-line
+`inspect.isawaitable` call. 5.2.1 counted 589 samples on that frame, all
+denominator-only, and forecast from that leaf count that the share would rise
+0.9686 points to 30.9686%. The measured rise is larger: the census counts every
+stack that *reaches* the detector, including the `abc.__instancecheck__` work
+beneath it, which is 1,887 to 1,964 samples per capture at repeat count 2. The
+share moved from a control median of 30.7670% to a candidate median of
+33.0662%, a rise of 2.2992 points, while the detector's sampled weight fell to
+zero in every candidate capture. The forecast's direction was right and its
+size was low. The full analysis is in
+[`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 To re-run or re-judge the gate, the committed captures and the classifier rules
 are in `docs/profiling/5-2-1-line-event-emission/`, whose `README.md` documents
