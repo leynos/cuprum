@@ -239,11 +239,6 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     One window covers both readers, as in the drain itself
     (:func:`cuprum._stream_drain._await_eof_grace`): two pipes kept open by a
     descendant cost one grace, not one each — the documented bound.
-
-    Raises
-    ------
-    TimeoutError
-        When the grace expired with a read still pending and none failed.
     """
     streams = tuple(
         stream for stream in (process.stdout, process.stderr) if stream is not None
@@ -251,6 +246,17 @@ async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
     if not streams:
         return
     reads = tuple(asyncio.ensure_future(_discard_to_eof(stream)) for stream in streams)
+    await _discard_within_grace(reads)
+
+
+async def _discard_within_grace(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
+    """Wait within the capture drain's grace, settle the reads, then report.
+
+    Raises
+    ------
+    TimeoutError
+        When the grace expired with a read still pending and none failed.
+    """
     try:
         _, pending = await asyncio.wait(reads, timeout=_CAPTURE_EOF_GRACE_S)
     finally:
@@ -272,9 +278,8 @@ async def _settle_reads(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
 def _first_read_failure(reads: cabc.Sequence[asyncio.Task[None]]) -> Exception | None:
     """Return the first ordinary read failure, in stream order.
 
-    Only an ordinary ``Exception`` counts: a cancellation keeps its own path
-    outward. A failure is preferred to the grace's expiry, so the operator
-    still sees why the discard ended.
+    Only an ordinary ``Exception`` counts, and the failure is preferred to the
+    grace's expiry so the operator still sees why the discard ended.
 
     Returns
     -------
@@ -304,16 +309,13 @@ async def _release_output_transports(
     a caller could still have wanted.
 
     Which close to ask is decided through ``getattr`` rather than a type test,
-    because the two backends release a descriptor differently. The ``wait4``
-    owner reaps with ``wait4`` alone and closes nothing of its own accord, so
-    it is asked directly. The fallback hands back asyncio's own subprocess,
-    whose read pipes belong to transports that close only at end-of-file —
-    exactly what a descendant holding the write end prevents — so each is
-    asked to close rather than left to collect the descriptor later.
-
-    A transport releases its descriptor from the loop callback its close
-    schedules, so the yield makes "close requested" mean "descriptor released"
-    before this hands control back.
+    because the two backends release a descriptor differently: the ``wait4``
+    owner reaps with ``wait4`` alone and closes nothing by itself, so it is
+    asked directly, while the fallback's read pipes belong to asyncio
+    transports that close only at end-of-file — exactly what the descendant
+    prevents — so each is asked to close. A transport releases its descriptor
+    from the loop callback its close schedules, so the yield makes "close
+    requested" mean "descriptor released" before control returns.
     """
     close_owned = getattr(process, "close_output_transports", None)
     if callable(close_owned):
@@ -341,10 +343,9 @@ def _close_asyncio_output_transports(
     each stream is asked instead: the project's
     :func:`cuprum._pipeline_stream_fds._stream_transport` already tolerates
     both spellings of that attribute. A stream answers with its own pipe
-    transport rather than the subprocess transport, so closing it releases
-    exactly that descriptor and leaves termination and group ownership
-    untouched; asyncio finishes the subprocess transport once every pipe it
-    owns has disconnected.
+    transport, so closing it releases exactly that descriptor and leaves
+    termination and group ownership untouched; asyncio finishes the
+    subprocess transport once every pipe it owns has disconnected.
     """
     # Imported here rather than at module scope for the reason ``_release_pipes``
     # gives: this module sits on a shorter load path than the pipeline internals.
@@ -374,10 +375,9 @@ async def _release_captures(
 ) -> None:
     """Remove any spill file the started consumers had opened.
 
-    Runs after the tasks are settled: a consumer still draining into its
-    accumulator could otherwise recreate the file this is removing. Every
-    accumulator gets its own turn, so one failure does not strand the other
-    stream's file, and the first failure is recorded here rather than dropped.
+    Runs after settlement, since a consumer still draining could recreate the
+    file this removes. Every accumulator gets its own turn, so one failure
+    does not strand the other stream's file, and the first is recorded here.
     """
     try:
         await _cleanup_capture_sinks(captures)
