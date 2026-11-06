@@ -61,7 +61,7 @@ The shared CI action downloads only checksum-pinned upstream mold binaries for
 supported Linux architectures. It has no source-build fallback. CI installs the
 same nightly and component for debug jobs. The stable route remains mandatory
 for release, coverage, verification, Whitaker, MSRV checks, and macOS and
-Windows. Every workspace member inherits Rust 1.87.0, and `make msrv-check`
+Windows. Every workspace member inherits Rust 1.85.0, and `make msrv-check`
 compiles every target at that version without the fragment.
 
 ## Consequences
@@ -82,7 +82,7 @@ configuration digest, tests, and this decision if the routing boundary changes.
 
 PR #672, addressing issue #506, added an independent, fragment-free validation
 route that explicitly selects Rust/Cargo `1.99.1`. It preserves the workspace's
-Rust 1.87.0 source contract and the separate MSRV check. Its Cargo
+Rust 1.85.0 source contract and the separate MSRV check. Its Cargo
 warning-policy migration is recorded in
 [modern-stable validation](../modern-stable-validation.md). The dev-fast route
 keeps its existing `-D warnings` compiler flags because it uses an
@@ -109,3 +109,14 @@ the contract tests and the developers' guide moved with it.
 `test_the_fragment_carries_the_estate_fast_flags_on_linux` and
 `test_the_recorded_exception_names_this_fragment_and_its_decision` hold the
 conditions the exception relies on.
+
+## Addendum, 2026-11-06: the workspace MSRV moves to 1.87.0
+
+The body above and the addenda dated 2026-10-27 and 2026-10-31 record the
+workspace source contract as Rust 1.85.0. That is what those dates decided.
+Issue #507 adopts `std::io::pipe`, which stabilized in Rust 1.87.0, so every
+workspace member now inherits Rust 1.87.0 and `make msrv-check` compiles every
+target at that version without the fragment. The routing decision itself is
+unchanged: the stable route still owns release, coverage, verification,
+Whitaker, MSRV checks, and macOS and Windows, and the modern-stable `1.99.1`
+route still validates separately.

@@ -210,7 +210,7 @@ build-script paths. Filesystem access, UTF-8 decoding, and TOML parsing fail
 closed with the affected path; pure discovery and policy evaluation remain
 separately testable. The Linux debug doctest gate uses the pinned dev-fast
 nightly rustdoc route to display and deny doctest-body warnings. Stable Rust
-1.87.0 remains the published MSRV and retains its separate verification route.
+1.85.0 remains the published MSRV and retains its separate verification route.
 
 ## Addendum (2026-09-27): Expanded Miri coverage across the stream boundary
 

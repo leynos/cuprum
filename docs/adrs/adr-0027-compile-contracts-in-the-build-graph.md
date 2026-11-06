@@ -76,7 +76,7 @@ Each compile-fail case is a `compile_fail,EXXXX` doctest that shares its doc
 comment with a positive control: a doctest of the same shape without the
 violation, which must compile. The two do different work on different
 toolchains. Nightly rustdoc, which the dev-fast route of `make test` uses,
-checks that the named error occurs. Stable rustdoc, including the pinned 1.87.0
+checks that the named error occurs. Stable rustdoc, including the pinned 1.85.0
 that CI uses for the native-contract matrix and the coverage lane, accepts the
 code without checking it: on 2026-10-25 a snippet that failed with `E0308` but
 pinned `E0603` passed on both stable and 1.85.0 and failed on
@@ -147,3 +147,14 @@ compile-fail doctests so that one cannot be deleted silently.
   minutes beyond the retired 1800 s tier, and the cargo watchdog and the
   boundary-harness marker are sized against it, so narrowing it is a separate,
   measured change.
+
+## Addendum (2026-11-06): the pinned stable rustdoc is 1.87.0
+
+The decision outcome records that stable rustdoc accepts a `compile_fail` body
+without checking it, and names the pinned 1.85.0 as the stable compiler the
+native-contract matrix and the coverage lane use. Issue #507 raises the
+workspace MSRV to 1.87.0, so the pinned stable rustdoc those lanes use is now
+1.87.0. The date and the observation behind the decision — that a snippet
+failing with `E0308` passed when it pinned `E0603`, on stable and on 1.85.0
+alike — are unchanged history, and the positive-control requirement they
+justify is unchanged too.
