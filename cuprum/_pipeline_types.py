@@ -29,6 +29,7 @@ from cuprum._observe_task_retention import (
     _OBSERVE_TASK_CEILING,
     _prune_finished_hook_tasks,
 )
+from cuprum._retention_telemetry import _RetentionTelemetry
 from cuprum.events import (
     CaptureMode,
     ExecEvent,
@@ -167,6 +168,21 @@ class _StageObservation:
     # capture mode must be able to rely on it. ``None`` only for a hand-built
     # observation; both builders resolve it.
     capture_mode: CaptureMode | None = None
+    # Created on first use rather than in the constructor so every existing
+    # positional construction keeps its arguments. It is appended last for the
+    # reason ``ExecEvent`` documents: a positional construction would otherwise
+    # rebind the field ahead of it.
+    _retention_telemetry: _RetentionTelemetry | None = dc.field(
+        default=None,
+        init=False,
+    )
+
+    @property
+    def retention_telemetry(self) -> _RetentionTelemetry:
+        """The stage's retention recorder, created on first use."""
+        if self._retention_telemetry is None:
+            self._retention_telemetry = _RetentionTelemetry(exec_id=self.exec_id)
+        return self._retention_telemetry
 
     @property
     def argv0(self) -> str:
@@ -326,12 +342,25 @@ class _StageObservation:
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
-            self._retain_hook_tasks(exc.scheduled_tasks)
+            self._retain_hook_tasks(exc.scheduled_tasks, phase=event.phase)
             raise exc.error from exc
-        self._retain_hook_tasks(scheduled_tasks)
+        self._retain_hook_tasks(scheduled_tasks, phase=event.phase)
 
-    def _retain_hook_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
+    def _retain_hook_tasks(
+        self,
+        tasks: list[asyncio.Task[None]],
+        *,
+        phase: str | None = None,
+    ) -> None:
         """Extend the shared retention list, pruning once it reaches the ceiling."""
         self.pending_tasks.extend(tasks)
+        telemetry = self.retention_telemetry
+        telemetry.observe_depth(self.pending_tasks)
         if len(self.pending_tasks) >= _OBSERVE_TASK_CEILING:
-            _prune_finished_hook_tasks(self.pending_tasks)
+            _prune_finished_hook_tasks(
+                self.pending_tasks,
+                telemetry=telemetry,
+                phase=phase,
+                ceiling=_OBSERVE_TASK_CEILING,
+            )
+            telemetry.observe_depth(self.pending_tasks)

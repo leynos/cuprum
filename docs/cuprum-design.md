@@ -1990,15 +1990,16 @@ The following design decisions were made during implementation:
 ### 8.1.3 Structured execution events (observe hooks)
 
 Implemented as `_LineEventEmitter`, a frozen slotted private dataclass in
-`cuprum/_line_callbacks.py`, built once per observed stream, after spawn, when
-the pid is known. It binds the invariant half of a line event — program, argv
-with the program name first, cwd, env, pid, stream, tags, project, and exec_id
-— together with the observation's own `_emit_event` dispatcher. The factory
-returns `None` when no observe hook is installed, so a stream nobody emits
-events for prepares nothing. Every line then needs only itself: `emit_line`
-passes a fresh frozen `ExecEvent`, one fresh clock read, and the line to that
-unchanged dispatcher. The per-line `_EventDetails` construction and the per-line
-`argv_with_program` walk are gone.
+`cuprum/_line_event_emitter.py`, built once per observed stream, after spawn,
+when the pid is known. The composition table and factory remain in
+`cuprum/_line_callbacks.py`. It binds the invariant half of a line event —
+program, argv with the program name first, cwd, env, pid, stream, tags,
+project, and exec_id — together with the observation's own `_emit_event`
+dispatcher. The factory returns `None` when no observe hook is installed, so a
+stream nobody emits events for prepares nothing. Every line then needs only
+itself: `emit_line` passes a fresh frozen `ExecEvent`, one fresh clock read,
+and the line to that unchanged dispatcher. The per-line `_EventDetails`
+construction and the per-line `argv_with_program` walk are gone.
 
 **The construction share is measured, not projected.** Pre-hoist the median was
 34.2928%; post-hoist it is 29.9087%, over three matched capture pairs with a

@@ -25,12 +25,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from cuprum._observe_task_retention import (
-    _OBSERVE_TASK_CEILING,
-    _await_hook_capacity,
-    _has_hook_capacity,
-)
-from cuprum.events import ExecEvent
+from cuprum._line_event_emitter import _LineEventEmitter
 from cuprum.lines import (
     LineEvent,
     LineStreamName,
@@ -40,14 +35,9 @@ from cuprum.lines import (
 )
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
-    from pathlib import Path
 
     from cuprum._pipeline_types import _StageObservation
-    from cuprum.context.env_overlay import EnvMode, EnvOverlay
-    from cuprum.events import CaptureMode, ExecId
-    from cuprum.program import Program
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -113,113 +103,6 @@ def _stamp_line(line: str, *, context: _LineEmissionContext) -> LineEvent:
     )
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _LineEventEmitter:
-    """The invariant half of a line ``ExecEvent``, bound once per stream.
-
-    Every field here is fixed for the life of one observed stream, so a line
-    event needs only a line and a timestamp to complete it. ``emit`` rebuilds
-    all of them — including ``argv_with_program``, which walks the whole argv
-    tuple — for every line, which is the cost this type exists to remove.
-
-    Attributes
-    ----------
-    program:
-        The allowlisted program, read from the command once.
-    argv:
-        The full argv with the program name first, resolved once.
-    cwd:
-        Working directory for the execution, when set.
-    env:
-        Environment overlay for the execution, when set.
-    env_mode:
-        The effective environment policy for this execution. It is invariant
-        per stage observation like the other fields here, and it is carried on
-        *every* phase rather than only the terminal one, so each line event
-        must report it or the mode would appear to change mid-stream.
-    resolved_path:
-        The executable this execution actually ran, when a binding named one.
-        Invariant per stage observation for the same reason as ``env_mode``:
-        resolution happens once, before the child is spawned, so a line event
-        that omitted it would disagree with the ``plan`` and ``exit`` events
-        around it about which executable ran.
-    capture_mode:
-        Whether this execution's captured streams are reported as text or as
-        the child's own bytes. Invariant per stage observation for the same
-        reason as ``env_mode``: it is decided before the child is spawned, so a
-        line event that omitted it would report a different mode from the
-        events around it.
-    pid:
-        Subprocess identifier, ``None`` before spawn.
-    stream:
-        Which output stream the lines arrive on; this doubles as the event
-        phase, so no ``Literal["stdout", "stderr"]`` alias is needed.
-    tags:
-        The observation's tag mapping, shared not copied.
-    project:
-        Trusted project name, read from the command once.
-    exec_id:
-        Correlation token minted once per stage observation.
-    wall_clock:
-        The clock read once per emitted line.
-    emit_event:
-        The observation's own dispatcher, bound rather than called, so the
-        emission still runs through ``_emit_event``.
-    pending_tasks:
-        The run-wide list the observation retains its async hook tasks on.
-        It is shared by every stage of a pipeline, so capacity measured here
-        is capacity for the whole run rather than for this stream alone.
-
-    """
-
-    program: Program
-    argv: tuple[str, ...]
-    cwd: Path | None
-    env: EnvOverlay | None
-    env_mode: EnvMode | None
-    resolved_path: str | None
-    capture_mode: CaptureMode | None
-    pid: int | None
-    stream: LineStreamName
-    tags: cabc.Mapping[str, object]
-    project: str
-    exec_id: ExecId
-    wall_clock: cabc.Callable[[], float]
-    emit_event: cabc.Callable[[ExecEvent], None]
-    pending_tasks: list[asyncio.Task[None]]
-
-    def has_capacity(self) -> bool:
-        """Return whether another observer task may be scheduled now."""
-        return _has_hook_capacity(self.pending_tasks, _OBSERVE_TASK_CEILING)
-
-    async def await_capacity(self) -> None:
-        """Wait until another observer task may be scheduled."""
-        await _await_hook_capacity(self.pending_tasks, _OBSERVE_TASK_CEILING)
-
-    def emit_line(self, line: str) -> None:
-        """Emit one line event from the values bound at preparation time."""
-        self.emit_event(
-            ExecEvent(
-                phase=self.stream,
-                program=self.program,
-                argv=self.argv,
-                cwd=self.cwd,
-                env=self.env,
-                env_mode=self.env_mode,
-                resolved_path=self.resolved_path,
-                capture_mode=self.capture_mode,
-                pid=self.pid,
-                timestamp=self.wall_clock(),
-                line=line,
-                exit_code=None,
-                duration_s=None,
-                tags=self.tags,
-                project=self.project,
-                exec_id=self.exec_id,
-            ),
-        )
-
-
 def _line_event_emitter(
     observation: _StageObservation,
     context: _LineEmissionContext,
@@ -260,6 +143,7 @@ def _line_event_emitter(
         wall_clock=observation.wall_clock,
         emit_event=observation._emit_event,
         pending_tasks=observation.pending_tasks,
+        telemetry=observation.retention_telemetry,
     )
 
 
@@ -298,7 +182,7 @@ def _compose_line_callbacks(
         """Fan one line out, deferring observation when the bound is reached."""
         if emitter is None:
             return _invoke_on_line(line, context=context)
-        if emitter.has_capacity():
+        if emitter.admit_observation():
             emitter.emit_line(line)
             return _invoke_on_line(line, context=context)
         # Stamp the line now, while it is still the line just decoded. The wait
