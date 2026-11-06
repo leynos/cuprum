@@ -251,7 +251,10 @@ pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
 /// Returns the kernel's error for any failure, including a closed descriptor.
 /// Folding one into either answer would report an inheritance verdict the
 /// observation never established.
-#[cfg(all(test, unix))]
+///
+/// Its only caller lives in `pipe_tests`, which Miri excludes, so the `miri`
+/// gate keeps this from becoming dead code in that configuration.
+#[cfg(all(test, unix, not(miri)))]
 pub(crate) fn fd_is_exec_inheritable(fd: i32) -> io::Result<bool> {
     let flags = loop {
         // SAFETY: F_GETFD accepts arbitrary descriptor integers, has no pointer
@@ -277,6 +280,11 @@ mod ownership_tests;
 // reason rather than letting them fail on a missing shim.
 #[cfg(all(test, not(miri)))]
 mod pipe_tests;
+// Property tests over the same seam: they transfer generated payloads and
+// close writer owners in generated orders, so they need the same real
+// descriptors and the same exclusion from Miri's isolation.
+#[cfg(all(test, not(miri)))]
+mod pipe_property_tests;
 #[cfg(windows)]
 mod windows;
 // `pipe` is not re-exported from here: the cross-platform constructor above

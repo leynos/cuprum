@@ -215,6 +215,7 @@ version = "0.1.0"
 dependencies = [
  "cap-std 4.0.3",
  "libc",
+ "proptest",
  "rstest",
  "windows-sys 0.61.2",
 ]

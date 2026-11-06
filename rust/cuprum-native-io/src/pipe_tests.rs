@@ -60,18 +60,21 @@ fn endpoints() -> Result<(OwnedStream, OwnedStream), io::Error> {
 ///
 /// A writer that is still open makes the read block; the caller turns that
 /// into a deadline failure, so a forgotten writer can never hang the suite.
-fn read_to_eof_on_worker(reader: OwnedStream) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+pub(super) fn read_to_eof_on_worker(
+    reader: OwnedStream,
+    chunk_len: usize,
+) -> mpsc::Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         // A failed send means the test already went away with the receiver;
         // the worker has nothing left to report in that case.
-        drop(sender.send(read_all(&reader)));
+        drop(sender.send(read_all(&reader, chunk_len)));
     });
     receiver
 }
 
 /// Receive a worker's payload, failing rather than hanging when it is late.
-fn await_payload(receiver: &mpsc::Receiver<io::Result<Vec<u8>>>) -> Vec<u8> {
+pub(super) fn await_payload(receiver: &mpsc::Receiver<io::Result<Vec<u8>>>) -> Vec<u8> {
     match receiver.recv_timeout(READ_DEADLINE) {
         Ok(Ok(payload)) => payload,
         Ok(Err(error)) => panic!("worker read failed: {error:?}"),
@@ -82,10 +85,17 @@ fn await_payload(receiver: &mpsc::Receiver<io::Result<Vec<u8>>>) -> Vec<u8> {
     }
 }
 
-/// Read to EOF in small chunks so a transfer needs several iterations.
-fn read_all(reader: &OwnedStream) -> io::Result<Vec<u8>> {
+/// Read to EOF in chunks of at most `chunk_len` bytes.
+///
+/// A chunk smaller than the payload forces a transfer to need several
+/// iterations, so a reader that stopped after one call would return a short
+/// payload rather than passing.
+fn read_all(reader: &OwnedStream, chunk_len: usize) -> io::Result<Vec<u8>> {
     let mut collected = Vec::new();
-    let mut buffer = [0_u8; 7];
+    // `read` with an empty buffer would report EOF, so a caller asking for a
+    // zero-length chunk gets one byte instead of a false end of stream.
+    let buffer_len = chunk_len.max(1);
+    let mut buffer = vec![0_u8; buffer_len];
     loop {
         let count = read_payload(borrow(reader), &mut buffer)?;
         if count == 0 {
@@ -124,12 +134,12 @@ const fn primitive_stream(stream: BorrowedStream<'_>) -> super::SynchronousBorro
 }
 
 /// Read once through the platform's borrowed-reader primitive.
-fn read_payload(stream: BorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<usize> {
+pub(super) fn read_payload(stream: BorrowedStream<'_>, buffer: &mut [u8]) -> io::Result<usize> {
     count_of(read_once(primitive_stream(stream), buffer)?)
 }
 
 /// Write a payload through the platform's borrowed-writer primitive.
-fn write_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<usize> {
+pub(super) fn write_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<usize> {
     count_of(write_once(primitive_stream(stream), payload)?)
 }
 
@@ -142,7 +152,7 @@ fn payload_transfers_and_reader_reaches_eof(
     let guard = guard_result.unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
     let (reader, writer) = endpoints.unwrap_or_else(|error| panic!("create pipe: {error:?}"));
     let payload = b"cuprum pipes bytes";
-    let receiver = read_to_eof_on_worker(reader);
+    let receiver = read_to_eof_on_worker(reader, 7);
 
     let written = write_payload(borrow(&writer), payload)
         .unwrap_or_else(|error| panic!("write payload: {error:?}"));
@@ -164,7 +174,7 @@ fn last_writer_owner_governs_eof(
     let duplicate = writer
         .try_clone()
         .unwrap_or_else(|error| panic!("clone writer: {error:?}"));
-    let receiver = read_to_eof_on_worker(reader);
+    let receiver = read_to_eof_on_worker(reader, 7);
 
     // Drop the original first: the duplicate still holds the write end open,
     // so the worker must not observe EOF yet.

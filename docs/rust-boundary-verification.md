@@ -121,6 +121,23 @@ exercise the creation mode itself, and a compiler bump requires re-checking
 synchronous-compatible handle work; nothing here closes it, and the
 `ProactorEventLoop` fallback described below is unchanged.
 
+Two properties of the seam are stated over generated inputs in
+`pipe_property_tests`: any bounded payload round trips byte-for-byte and is
+followed by EOF, and EOF arrives only after the last writer owner closes,
+whatever order the owners close in. Payload sizes cover the empty case, a
+single byte, and both sides of one pipe buffer's capacity, so a reader that
+stopped after its first chunk is caught rather than passing on a payload small
+enough to arrive in one call. Writer-owner sequences are generated per case and
+each intermediate close is followed by an EOF probe, so an EOF reported while
+an owner is still live fails the case. Failure persistence is disabled: a
+shrinking seed for a generated payload would land a multi-kilobyte file inside
+the crate, and the bounded sizes the strategies name are the interesting inputs
+anyway. These tests add no evidence for the Windows synchronous-I/O row above;
+that row still rests on the Microsoft contract plus the Windows lane's
+round-trip execution, and `new_unchecked` at
+`rust/cuprum-native-io/src/pipe_tests.rs` remains an audited external platform
+assumption rather than a proven lemma.
+
 The Python dispatch continues to decline native pumping on Windows because
 `ProactorEventLoop` subprocess pipes are overlapped. The cross-reference at
 `cuprum/_pipeline_streams.py:65-78` keeps that policy tied to the Rust
