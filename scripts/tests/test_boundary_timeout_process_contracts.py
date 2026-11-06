@@ -210,11 +210,9 @@ def _run_with_recorded_cargo(
     """Drive one Cargo fault route through an argument-recording seam."""
     cargo_home = workspace.parent / "cargo-home"
     cargo_home.mkdir(exist_ok=True)
-    monkeypatch.setattr(boundary_fault_invocations, "ROOT", workspace.parent)
-    monkeypatch.setattr(
-        boundary_fault_invocations,
-        "read_tool_pins",
-        lambda: SimpleNamespace(kani="0.1", verus="0.2"),
+    context = boundary_fault_invocations.VerifierContext(
+        workspace.parent,
+        boundary_fault_invocations.ToolPins(kani="0.1", verus="0.2"),
     )
     monkeypatch.setenv("CARGO_BUILD_JOBS", "6")
     contexts: list[ExecutionContext] = []
@@ -250,7 +248,13 @@ def _run_with_recorded_cargo(
         "scoped",
         lambda _config: nullcontext(),
     )
-    result = boundary_fault_invocations._run("cargo", args, workspace, route.target_dir)
+    result = boundary_fault_invocations._run(
+        boundary_fault_invocations._Check(
+            "timeout-contract", "cargo", args, target_dir=route.target_dir
+        ),
+        workspace,
+        context,
+    )
     return calls, contexts, result
 
 

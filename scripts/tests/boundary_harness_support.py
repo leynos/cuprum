@@ -69,6 +69,21 @@ def _no_preparation_time(_run_root: Path, _workspace: Path) -> float:
     return 0.0
 
 
+def _no_fault_preparation_time(_root: Path, _run_root: Path, _workspace: Path) -> float:
+    """Report a fault run's dependency preparation as consuming no time.
+
+    The fault harness binds its repository root before handing the callable to
+    the run context, so its preparation seam takes the bound root as well as
+    the run's own paths.
+
+    Returns
+    -------
+    float
+        Zero, in place of a measured preparation duration.
+    """
+    return 0.0
+
+
 def stub_cargo_preparation(monkeypatch: pytest.MonkeyPatch, module: object) -> None:
     """Make one harness skip Cargo-home preparation in its orchestration test.
 

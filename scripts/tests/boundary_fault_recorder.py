@@ -14,8 +14,8 @@ from pathlib import Path
 from scripts import boundary_fault_invocations
 from scripts import check_boundary_faults as faults
 from scripts.tests.boundary_harness_support import (
+    _no_fault_preparation_time,
     copy_boundary_repository,
-    stub_cargo_preparation,
 )
 
 if typ.TYPE_CHECKING:
@@ -68,13 +68,13 @@ class _RecordedRun:
         self.workspace = workspace
         self.calls: list[tuple[str, tuple[str, ...]]] = []
         self.target_dirs: list[Path | None] = []
+        self.contexts: list[boundary_fault_invocations.VerifierContext] = []
 
     def __call__(
         self,
-        program: str,
-        args: tuple[str, ...],
+        check: faults._Check,
         workspace: Path,
-        target_dir: Path | None = None,
+        context: boundary_fault_invocations.VerifierContext,
     ) -> tuple[int, str]:
         """Record one invocation and return the result its workspace implies.
 
@@ -82,19 +82,25 @@ class _RecordedRun:
         harness that accepted any failure — rather than the designated one —
         would still be caught.
 
+        The bound context is recorded too: it is the value that decides which
+        pins and repository the real run would have used, so a harness that
+        bound the wrong one is an observable defect rather than an internal
+        detail.
+
         Returns
         -------
         tuple[int, str]
             The exit code and output the harness will classify.
         """
-        self.calls.append((program, args))
-        self.target_dirs.append(target_dir)
-        if target_dir is not None:
+        self.calls.append((check.program, check.args))
+        self.target_dirs.append(check.target_dir)
+        self.contexts.append(context)
+        if check.target_dir is not None:
             # A real Cargo run populates the target directory it is given.
             # Creating it here keeps the harness's per-pair cleanup observable
             # instead of passing vacuously against an empty filesystem.
-            target_dir.mkdir(parents=True, exist_ok=True)
-        proof = Path(args[0])
+            check.target_dir.mkdir(parents=True, exist_ok=True)
+        proof = Path(check.args[0])
         is_proof = proof.name == PROOF_TARGET
         if is_proof:
             source = proof.read_text(encoding="utf-8")
@@ -103,7 +109,7 @@ class _RecordedRun:
         else:
             memory = (workspace / MEMORY_IN_WORKSPACE).read_text(encoding="utf-8")
             planted = any(fragment in memory for fragment in OWNERSHIP_FAULTS)
-            rejected = CARGO_DIAGNOSTICS[args[0]]
+            rejected = CARGO_DIAGNOSTICS[check.args[0]]
         if not planted:
             return CONTROL_EXIT, f"{VERUS_DIAGNOSTIC}\n"
         return FAULT_EXIT, f"{rejected}\n"
@@ -123,14 +129,26 @@ def drive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, _RecordedRun]:
-    """Run the whole harness against a temporary repository copy."""
+    """Run the whole harness against a temporary repository copy.
+
+    The copy is passed as ``main``'s root rather than patched into a module
+    global: the run root, the workspace copy, and the tool pins all derive from
+    that one argument, so they cannot disagree about which repository they
+    belong to.
+
+    Only the command seam is patched. ``_prepare_run_cargo_home`` keeps its
+    real signature, because that signature is part of what the run binds: it
+    receives the same root as everything else.
+
+    Returns
+    -------
+    tuple[Path, _RecordedRun]
+        The copied root the harness ran against, and the recorder holding every
+        invocation it made.
+    """
     root = copy_boundary_repository(tmp_path)
     runner = _RecordedRun(root / "rust")
-    monkeypatch.setattr(faults, "ROOT", root)
-    # The pin reader resolves `ROOT` in the module that defines it, so patching
-    # only the re-exporting module would leave pin reads on the real checkout.
-    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
-    stub_cargo_preparation(monkeypatch, faults)
-    faults.main()
+    monkeypatch.setattr(faults, "_prepare_run_cargo_home", _no_fault_preparation_time)
+    faults.main(root)
     return root, runner

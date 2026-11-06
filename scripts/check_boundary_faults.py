@@ -11,6 +11,7 @@ and real-unwind failures, and a successful control precedes each mutation.
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 from pathlib import Path
@@ -26,6 +27,7 @@ from scripts.boundary_cargo import (
 )
 from scripts.boundary_fault_invocations import (
     ROOT,
+    VerifierContext,
     _Check,
     _run,
     read_tool_pins,
@@ -87,15 +89,12 @@ def mutate(source: str, old: str, new: str) -> str:
 
 
 def _check(
-    check: _Check,
-    workspace: Path,
-    logs: Path,
-    target_dir: Path | None = None,
+    check: _Check, context: VerifierContext, workspace: Path, logs: Path
 ) -> None:
     """Archive a control or require the specific counterexample diagnostic."""
     log_path = logs / f"{check.name}.log"
     try:
-        code, output = _run(check.program, check.args, workspace, target_dir)
+        code, output = _run(check, workspace, context)
     except _LockfileRewriteError as error:
         log_path.write_text(error.output, encoding="utf-8")
         raise
@@ -109,31 +108,36 @@ def _check(
         raise BoundaryFaultError(check.name, code, log_path)
 
 
-def main() -> None:
-    """Execute controls and four deliberate faults without editing live sources."""
-    run_root = _new_run_root()
+def main(root: Path = ROOT) -> None:
+    """Execute controls and four deliberate faults without editing live sources.
+
+    ``root`` is the repository the run is bound to. Everything the run needs —
+    the workspace copy, the private run root, and the verifier pins — is
+    derived from it here and passed down explicitly, so a caller can point the
+    whole chain at a copy without patching a module global.
+    """
+    run_root = _new_boundary_run_root(root / ".cache/boundary-faults/runs")
     workspace = run_root / "workspace"
-    shutil.copytree(ROOT / "rust", workspace, ignore=shutil.ignore_patterns("target"))
-    with _boundary_cargo_run(run_root, workspace, _prepare_run_cargo_home):
+    shutil.copytree(root / "rust", workspace, ignore=shutil.ignore_patterns("target"))
+    context = VerifierContext(root, read_tool_pins(root))
+    prepare = functools.partial(_prepare_run_cargo_home, root)
+    with _boundary_cargo_run(run_root, workspace, prepare):
         logs = run_root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
-        _verify_progress_faults(workspace, logs)
-        _verify_ownership_faults(workspace, logs)
+        _verify_progress_faults(context, workspace, logs)
+        _verify_ownership_faults(context, workspace, logs)
 
 
-def _new_run_root() -> Path:
-    """Create a private workspace root for one fault-sensitivity run."""
-    return _new_boundary_run_root(ROOT / ".cache/boundary-faults/runs")
+def _prepare_run_cargo_home(root: Path, run_root: Path, workspace: Path) -> float:
+    """Prepare a copied workspace against the repository it was copied from."""
+    return _prepare_boundary_cargo_home(root, run_root, workspace)
 
 
-def _prepare_run_cargo_home(run_root: Path, workspace: Path) -> float:
-    """Prepare the copied workspace with this harness's repository root."""
-    return _prepare_boundary_cargo_home(ROOT, run_root, workspace)
-
-
-def _verify_progress_faults(workspace: Path, logs: Path) -> None:
+def _verify_progress_faults(
+    context: VerifierContext, workspace: Path, logs: Path
+) -> None:
     """Check the production progress kernels against bound and accounting faults."""
-    pins = read_tool_pins()
+    pins = context.pins
     install = Path(
         os.environ.get(
             "VERUS_INSTALL_DIR",
@@ -147,7 +151,7 @@ def _verify_progress_faults(workspace: Path, logs: Path) -> None:
     proof = workspace / "progress-fault.rs"
     proof.write_text(render(progress), encoding="utf-8")
     args = (str(proof), "--crate-type=lib")
-    _check(_Check("verus-control", verus, args), workspace, logs)
+    _check(_Check("verus-control", verus, args), context, workspace, logs)
     for name, old, new in (
         ("invalid-bound", "count <= capacity", "count >= capacity"),
         ("incorrect-accounting", "total + written", "total - written"),
@@ -155,12 +159,15 @@ def _verify_progress_faults(workspace: Path, logs: Path) -> None:
         proof.write_text(render(mutate(progress, old, new)), encoding="utf-8")
         _check(
             _Check(name, verus, args, "verification results::"),
+            context,
             workspace,
             logs,
         )
 
 
-def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
+def _verify_ownership_faults(
+    context: VerifierContext, workspace: Path, logs: Path
+) -> None:
     """Check writer drop and real-unwind retention faults against their controls."""
     memory = workspace / "cuprum-native-io/src/memory.rs"
     original = memory.read_text(encoding="utf-8")
@@ -215,17 +222,22 @@ def _verify_ownership_faults(workspace: Path, logs: Path) -> None:
     ):
         try:
             _check(
-                _Check(f"{name}-control", "cargo", args),
+                _Check(
+                    f"{name}-control",
+                    "cargo",
+                    args,
+                    target_dir=build_root / f"{name}-control",
+                ),
+                context,
                 workspace,
                 logs,
-                build_root / f"{name}-control",
             )
             memory.write_text(mutate(original, old, new), encoding="utf-8")
             _check(
-                _Check(name, "cargo", args, diagnostic),
+                _Check(name, "cargo", args, diagnostic, build_root / name),
+                context,
                 workspace,
                 logs,
-                build_root / name,
             )
         finally:
             # Restore the source first so a cleanup failure cannot leave the

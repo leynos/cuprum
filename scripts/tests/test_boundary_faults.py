@@ -15,11 +15,13 @@ from scripts import boundary_fault_invocations
 from scripts import check_boundary_faults as faults
 from scripts.check_boundary_faults import mutate
 from scripts.tests.boundary_fault_recorder import (
+    MEMORY_IN_WORKSPACE,
     PROOF_FAULTS,
     _RecordedRun,
     drive,
 )
 from scripts.tests.boundary_harness_support import (
+    _no_fault_preparation_time,
     copy_boundary_repository,
     latest_run_root,
     recorded_phases,
@@ -30,6 +32,24 @@ ROOT = Path(__file__).resolve().parents[2]
 # Repository-relative, for reading the fixture root the harness is pointed at.
 PROGRESS = "rust/cuprum-native-io/src/progress.rs"
 MEMORY = "rust/cuprum-native-io/src/memory.rs"
+
+
+def _context(root: Path) -> boundary_fault_invocations.VerifierContext:
+    """Bind a root and the pins recorded in that same root."""
+    return boundary_fault_invocations.VerifierContext(
+        root, boundary_fault_invocations.read_tool_pins(root)
+    )
+
+
+# Pins for a run whose verifier results are recorded rather than launched.
+# `_check` never builds an invocation when `_run` is patched, so these only have
+# to be present and distinct.
+_STUB_PINS = boundary_fault_invocations.ToolPins(kani="stub-kani", verus="stub-verus")
+
+
+def _stub_context(root: Path) -> boundary_fault_invocations.VerifierContext:
+    """Bind a root for a run whose verifier results are recorded, not launched."""
+    return boundary_fault_invocations.VerifierContext(root, _STUB_PINS)
 
 
 def test_the_harness_launches_the_pinned_installer_versions() -> None:
@@ -52,28 +72,42 @@ def test_every_pin_is_read_from_its_manifest() -> None:
         assert version == expected != "", f"the {name} pin is not the manifest version"
 
 
-def test_an_empty_pin_is_refused_rather_than_defaulted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_empty_pin_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     """A blank pin must fail closed instead of naming a verifier that cannot exist."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/kani/VERSION").write_text("\n", encoding="utf-8")
-    # Patching the re-exporting module would not reach the pin reader, which
-    # resolves `ROOT` in the module that defines it.
-    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     with pytest.raises(ValueError, match="records no version"):
-        faults.read_tool_pins()
+        faults.read_tool_pins(root)
 
 
-def test_a_missing_pin_is_a_hard_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_missing_pin_is_a_hard_failure(tmp_path: Path) -> None:
     """An absent pin propagates rather than silently defaulting a version."""
     root = copy_boundary_repository(tmp_path)
     (root / "tools/verus/VERSION").unlink()
-    monkeypatch.setattr(boundary_fault_invocations, "ROOT", root)
     with pytest.raises(FileNotFoundError):
-        faults.read_tool_pins()
+        faults.read_tool_pins(root)
+
+
+def test_a_pin_read_uses_the_root_it_is_given(tmp_path: Path) -> None:
+    """The pins follow the root argument, not the checkout they were imported from.
+
+    A run against a copy must not silently verify with the checkout's pins.
+    Recording distinct versions in the copy makes the two roots produce
+    different answers, so reading the wrong one cannot pass.
+    """
+    root = copy_boundary_repository(tmp_path)
+    (root / "tools/kani/VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (root / "tools/verus/VERSION").write_text("8.8.8\n", encoding="utf-8")
+
+    pins = faults.read_tool_pins(root)
+
+    assert (pins.kani, pins.verus) == ("9.9.9", "8.8.8"), (
+        "the pins must be read from the root the caller named"
+    )
+    checkout = faults.read_tool_pins(ROOT)
+    assert checkout != pins, (
+        "a copy's pins must differ from the checkout's for this test to mean anything"
+    )
 
 
 @pytest.mark.parametrize("source", ["absent", "old old"])
@@ -115,6 +149,40 @@ def test_main_runs_both_fault_families_over_a_copied_workspace(
     ], "preparation and fault execution must have separate timing records"
 
 
+def test_every_verifier_run_is_bound_to_the_repository_it_was_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run against a copy must not verify with the checkout's pins or root.
+
+    The root decides both the workspace that is mutated and the tool versions
+    the mutations are verified with. Binding the two separately would let a run
+    plant a fault in the copy and then verify it with the checkout's Verus, so
+    every recorded invocation has to carry the copy's root and the pins read
+    from that same root.
+
+    The copy's pins are overwritten first. Copying the repository brings the
+    checkout's pins along, and equal pins would make the assertion below pass
+    whichever root they were read from.
+    """
+    root = copy_boundary_repository(tmp_path)
+    (root / "tools/kani/VERSION").write_text("9.9.9\n", encoding="utf-8")
+    (root / "tools/verus/VERSION").write_text("8.8.8\n", encoding="utf-8")
+    runner = _RecordedRun(root / "rust")
+    monkeypatch.setattr(faults, "_run", runner)
+    monkeypatch.setattr(faults, "_prepare_run_cargo_home", _no_fault_preparation_time)
+    faults.main(root)
+
+    assert len(runner.contexts) == len(runner.calls), (
+        "every recorded invocation must carry the context it ran under"
+    )
+    assert {context.root for context in runner.contexts} == {root}, (
+        "every verifier run must be bound to the copy's root"
+    )
+    assert {context.pins for context in runner.contexts} == {
+        boundary_fault_invocations.ToolPins(kani="9.9.9", verus="8.8.8")
+    }, "the pins must be read from the root the run is bound to, not the checkout"
+
+
 def test_every_proof_fault_reaches_the_verus_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -125,12 +193,12 @@ def test_every_proof_fault_reaches_the_verus_input(
     runner = _RecordedRun(root / "rust")
     logs = root / "logs"
     logs.mkdir()
-    monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
     monkeypatch.setattr(
         faults, "render", lambda source: rendered.append(source) or source
     )
-    faults._verify_progress_faults(root / "rust", logs)
+    context = _context(root)
+    faults._verify_progress_faults(context, root / "rust", logs)
 
     for name, fragment in PROOF_FAULTS.items():
         assert any(fragment in source for source in rendered), (
@@ -150,9 +218,8 @@ def test_ownership_faults_are_detected_and_their_mutations_restored(
     runner = _RecordedRun(root / "rust")
     logs = root / "logs"
     logs.mkdir()
-    monkeypatch.setattr(faults, "ROOT", root)
     monkeypatch.setattr(faults, "_run", runner)
-    faults._verify_ownership_faults(root / "rust", logs)
+    faults._verify_ownership_faults(_context(root), root / "rust", logs)
 
     # Each fault logs its control and the fault itself, in that order: the
     # control proves the check passes on production, and the fault's own log
@@ -189,11 +256,12 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace, _target_dir=None: (3, "no verdict"),
+        lambda _check, _workspace, _context: (3, "no verdict"),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
         faults._check(
             faults._Check("compactness-control", "verus", ("proof.rs",)),
+            _stub_context(tmp_path),
             tmp_path,
             logs,
         )
@@ -216,38 +284,50 @@ def test_a_failing_pair_restores_the_source_and_cleans_up_its_build_dirs(
     logs = root / "logs"
     logs.mkdir()
     build_root = logs.parent / "build"
-    monkeypatch.setattr(faults, "ROOT", root)
+    workspace = root / "rust"
 
-    # Populate each build tree the way a real Cargo run would, then fail the
-    # pair from inside its second check so only the `finally` can clean up.
-    def populate_then_fail(
-        _program: str,
-        _args: tuple[str, ...],
-        _workspace: Path,
-        target_dir: Path | None = None,
+    # Let the control pass so the harness reaches the mutation, then fail the
+    # fault check. That order is what makes the assertions below non-vacuous:
+    # an earlier failure would leave the source unmutated and the fault's
+    # build tree uncreated, so restoring and removing them would prove nothing.
+    #
+    # Each check creates the build tree its real Cargo run would populate, so
+    # cleanup has something to remove whichever one fails.
+    def populate_then_fail_the_fault(
+        check: faults._Check,
+        _check_workspace: Path,
+        _context: boundary_fault_invocations.VerifierContext,
     ) -> tuple[int, str]:
-        """Create the check's build tree, then report an unclassifiable result."""
-        if target_dir is not None:
-            target_dir.mkdir(parents=True, exist_ok=True)
-        return 3, "no verdict"
+        """Create the check's build tree, passing the control and failing the fault."""
+        if check.target_dir is None:
+            return 0, "control passed"
+        check.target_dir.mkdir(parents=True, exist_ok=True)
+        if check.target_dir.name == "leaked-writer":
+            return 3, "no verdict"
+        return 0, "control passed"
 
-    monkeypatch.setattr(faults, "_run", populate_then_fail)
+    monkeypatch.setattr(faults, "_run", populate_then_fail_the_fault)
     with pytest.raises(faults.BoundaryFaultError) as caught:
-        faults._verify_ownership_faults(root / "rust", logs)
+        faults._verify_ownership_faults(_context(root), workspace, logs)
 
-    assert caught.value.check_name == "leaked-writer-control", (
-        "the failing pair must name the check that failed"
+    assert caught.value.check_name == "leaked-writer", (
+        "the failing pair must name the fault check that failed"
     )
-    assert (root / MEMORY).read_text(encoding="utf-8") == production, (
-        "a failed pair must still restore the copied source"
+    memory = (workspace / MEMORY_IN_WORKSPACE).read_text(encoding="utf-8")
+    assert memory == production, "a failed pair must still restore the planted source"
+    assert "core::mem::forget(writer)" not in memory, (
+        "the planted fault must not survive the failed pair"
     )
     assert not (build_root / "leaked-writer-control").exists(), (
         "a failed pair must still remove its control build directory"
     )
-    assert any(logs.iterdir()), "the failing pair's log must be archived"
+    assert not (build_root / "leaked-writer").exists(), (
+        "a failed pair must still remove the fault build directory"
+    )
     assert [path.name for path in sorted(logs.iterdir())] == [
-        "leaked-writer-control.log"
-    ], "only the attempted pair's log belongs in the archive"
+        "leaked-writer-control.log",
+        "leaked-writer.log",
+    ], "only the attempted pair's logs belong in the archive"
 
 
 def test_a_lockfile_rewrite_archives_output_before_failing(
@@ -258,10 +338,9 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     logs.mkdir()
 
     def rewrite(
-        _program: str,
-        _args: tuple[str, ...],
+        _check: faults._Check,
         _workspace: Path,
-        _target_dir: Path | None = None,
+        _context: boundary_fault_invocations.VerifierContext,
     ) -> tuple[int, str]:
         """Fail the guarded run as though it had rewritten the lockfile."""
         error = faults._LockfileRewriteError(
@@ -273,6 +352,7 @@ def test_a_lockfile_rewrite_archives_output_before_failing(
     with pytest.raises(faults._LockfileRewriteError):
         faults._check(
             faults._Check("kani-control", "cargo", ("kani", "--package", "x")),
+            _stub_context(tmp_path),
             tmp_path,
             logs,
         )
@@ -290,11 +370,14 @@ def test_a_control_that_fails_closed_is_not_accepted(
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace, _target_dir=None: (1, "unexpected failure"),
+        lambda _check, _workspace, _context: (1, "unexpected failure"),
     )
     with pytest.raises(faults.BoundaryFaultError):
         faults._check(
-            faults._Check("verus-control", "verus", ("proof.rs",)), tmp_path, logs
+            faults._Check("verus-control", "verus", ("proof.rs",)),
+            _stub_context(tmp_path),
+            tmp_path,
+            logs,
         )
 
 
@@ -307,27 +390,28 @@ def test_a_fault_is_only_accepted_for_its_own_diagnostic(
     check = faults._Check(
         "invalid-bound", "verus", ("proof.rs",), "verification results::"
     )
+    context = _stub_context(tmp_path)
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace, _target_dir=None: (
+        lambda _check, _workspace, _context: (
             1,
             "error: build failed",
         ),
     )
     with pytest.raises(faults.BoundaryFaultError) as caught:
-        faults._check(check, tmp_path, logs)
+        faults._check(check, context, tmp_path, logs)
     assert caught.value.check_name == "invalid-bound", "the check must be named"
 
     monkeypatch.setattr(
         faults,
         "_run",
-        lambda _program, _args, _workspace, _target_dir=None: (
+        lambda _check, _workspace, _context: (
             1,
             "verification results::",
         ),
     )
-    faults._check(check, tmp_path, logs)
+    faults._check(check, context, tmp_path, logs)
 
 
 def test_an_ownership_control_builds_apart_from_its_fault(
