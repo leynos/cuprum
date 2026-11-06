@@ -7,18 +7,21 @@
 //! under Miri for the same reason as `pipe_tests`, and it takes that module's
 //! shared descriptor lock so the two suites cannot interleave their descriptor
 //! tables within one test binary.
+//!
+//! Neither direction runs on the test thread. A generated payload can exceed
+//! the pipe buffer, which blocks `write` until the reader drains it; bounding
+//! only the read would let a stalled transfer wait out the job's own timeout
+//! instead of failing here.
 
-use std::{io, sync::mpsc::RecvTimeoutError, time::Duration};
+use std::{sync::mpsc::RecvTimeoutError, time::Duration};
 
 use proptest::prelude::*;
 
 use super::{
-    BorrowedStream,
     OwnedStream,
-    borrow,
     ownership_tests::descriptor_guard,
     pipe,
-    pipe_tests::{await_payload, read_to_eof_on_worker, write_payload},
+    pipe_tests::{await_payload, await_written, read_to_eof_on_worker, write_to_pipe_on_worker},
 };
 
 /// A size whose transfer cannot complete in one pipe buffer.
@@ -65,26 +68,6 @@ fn payload_size() -> impl Strategy<Value = usize> {
     ]
 }
 
-/// Write an entire payload through the platform's single-call primitive.
-///
-/// The primitive may accept fewer bytes than offered, so a caller that needs
-/// the whole payload has to drive it to completion. A zero-byte acceptance is
-/// reported as `WriteZero` rather than retried forever.
-fn write_all_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<()> {
-    let mut written = 0;
-    while written < payload.len() {
-        let remaining = payload
-            .get(written..)
-            .ok_or_else(|| io::Error::other("pipe write lost its remaining slice"))?;
-        let accepted = write_payload(stream, remaining)?;
-        if accepted == 0 {
-            return Err(io::Error::from(io::ErrorKind::WriteZero));
-        }
-        written += accepted;
-    }
-    Ok(())
-}
-
 proptest! {
     #![proptest_config(pipe_proptest_config())]
 
@@ -100,12 +83,14 @@ proptest! {
             .unwrap_or_else(|error| panic!("descriptor test lock: {error:?}"));
         let (reader, writer) = pipe().unwrap_or_else(|error| panic!("create pipe: {error:?}"));
         let receiver = read_to_eof_on_worker(reader, chunk_len);
+        let written = write_to_pipe_on_worker(writer, payload.clone());
 
-        write_all_payload(borrow(&writer), &payload)
-            .unwrap_or_else(|error| panic!("write {} bytes: {error:?}", payload.len()));
-        // EOF is defined by the writer closing, so the payload must be
-        // complete before the last owner goes away.
-        drop(writer);
+        // Both directions are awaited under the same deadline. A payload
+        // larger than the pipe buffer blocks the write until the worker
+        // drains it, so a reader that stopped early surfaces here as a
+        // bounded write failure instead of a hung case. `await_written`
+        // returns only when every byte was accepted.
+        await_written(&written).unwrap_or_else(|error| panic!("write pipe: {error:?}"));
 
         let received = await_payload(&receiver);
         prop_assert_eq!(

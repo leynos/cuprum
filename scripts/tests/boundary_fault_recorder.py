@@ -114,7 +114,9 @@ class _RecordedRun:
 
     def proof_targets(self) -> list[str]:
         """Return the rendered proof file paths in call order."""
-        return [args[0].rsplit("/", 1)[-1] for _program, args in self.calls]
+        # `Path.name` splits on the host's separator, so a recorded Windows
+        # path still yields its filename rather than the whole path.
+        return [Path(args[0]).name for _program, args in self.calls]
 
 
 def drive(

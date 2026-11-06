@@ -207,6 +207,49 @@ def test_unexpected_verifier_results_archive_the_log_and_fail_closed(
     )
 
 
+def test_a_failing_pair_restores_the_source_and_cleans_up_its_build_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The per-pair `finally` runs when a check fails, not only on success."""
+    root = copy_boundary_repository(tmp_path)
+    production = (root / MEMORY).read_text(encoding="utf-8")
+    logs = root / "logs"
+    logs.mkdir()
+    build_root = logs.parent / "build"
+    monkeypatch.setattr(faults, "ROOT", root)
+
+    # Populate each build tree the way a real Cargo run would, then fail the
+    # pair from inside its second check so only the `finally` can clean up.
+    def populate_then_fail(
+        _program: str,
+        _args: tuple[str, ...],
+        _workspace: Path,
+        target_dir: Path | None = None,
+    ) -> tuple[int, str]:
+        """Create the check's build tree, then report an unclassifiable result."""
+        if target_dir is not None:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        return 3, "no verdict"
+
+    monkeypatch.setattr(faults, "_run", populate_then_fail)
+    with pytest.raises(faults.BoundaryFaultError) as caught:
+        faults._verify_ownership_faults(root / "rust", logs)
+
+    assert caught.value.check_name == "leaked-writer-control", (
+        "the failing pair must name the check that failed"
+    )
+    assert (root / MEMORY).read_text(encoding="utf-8") == production, (
+        "a failed pair must still restore the copied source"
+    )
+    assert not (build_root / "leaked-writer-control").exists(), (
+        "a failed pair must still remove its control build directory"
+    )
+    assert any(logs.iterdir()), "the failing pair's log must be archived"
+    assert [path.name for path in sorted(logs.iterdir())] == [
+        "leaked-writer-control.log"
+    ], "only the attempted pair's log belongs in the archive"
+
+
 def test_a_lockfile_rewrite_archives_output_before_failing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

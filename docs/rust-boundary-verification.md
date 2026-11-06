@@ -101,7 +101,7 @@ constructors with `std::io::pipe`.
 | Windows creation call             | `CreatePipe` plus two `OwnedHandle::from_raw_handle` unsafe adoptions | `CreatePipe(..., null SECURITY_ATTRIBUTES, 0)`                                         | Public std behaviour for the *call*; implementation evidence for the argument values                                                         |
 | Windows inheritance               | Not specified by the constructor                                      | Null security attributes mean the handles are non-inheritable                          | Microsoft `CreatePipe` contract, not a public `std` guarantee; pinned by `pipe_tests::windows_endpoints_are_non_inheritable_and_synchronous` |
 | Windows synchronous I/O mode      | Not specified by the constructor                                      | Anonymous pipes support no asynchronous I/O, so every operation is synchronous         | Microsoft "Anonymous Pipe Operations"; **no runtime query exists**, so the nightly Windows lane is the only execution evidence               |
-| Blocking behaviour                | Blocking `read`/`write`                                               | Blocking `ReadFile`/`WriteFile`, blocking `read`/`write`                               | Unchanged; covered by the deadline-bounded runtime tests                                                                                     |
+| Blocking behaviour                | Blocking `read`/`write`                                               | Blocking `ReadFile`/`WriteFile`, blocking `read`/`write`                               | Unchanged; covered by the runtime tests, which bound the write as well as the read                                                           |
 | Error propagation                 | `io::Error::last_os_error()` from the raw call                        | `io::Result` returned by the standard library unchanged                                | Public `std` behaviour; `PumpError::Io` classification already tested                                                                        |
 | Construction-failure cleanup      | Two unsafe adoptions had to agree, or an endpoint leaked              | No owner exists until `io::pipe` returns `Ok`, so a failure leaves nothing to clean up | Structural; the constructor holds no intermediate state                                                                                      |
 | Cuprum-owned unsafe sites removed | Two per platform in the constructor                                   | None in the constructor                                                                | `pipe()` at `rust/cuprum-native-io/src/lib.rs:209-212` contains no unsafe block                                                              |
@@ -127,16 +127,19 @@ followed by EOF, and EOF arrives only after the last writer owner closes,
 whatever order the owners close in. Payload sizes cover the empty case, a
 single byte, and both sides of one pipe buffer's capacity, so a reader that
 stopped after its first chunk is caught rather than passing on a payload small
-enough to arrive in one call. Writer-owner sequences are generated per case and
-each intermediate close is followed by an EOF probe, so an EOF reported while
-an owner is still live fails the case. Failure persistence is disabled: a
-shrinking seed for a generated payload would land a multi-kilobyte file inside
-the crate, and the bounded sizes the strategies name are the interesting inputs
-anyway. These tests add no evidence for the Windows synchronous-I/O row above;
-that row still rests on the Microsoft contract plus the Windows lane's
-round-trip execution, and `new_unchecked` at
-`rust/cuprum-native-io/src/pipe_tests.rs` remains an audited external platform
-assumption rather than a proven lemma.
+enough to arrive in one call. The write runs on its own thread under the same
+deadline as the read, because a payload past the pipe buffer blocks `write`
+until the reader drains it: bounding only the read would leave a stalled
+transfer to wait out the CI job's limit instead of failing here. Writer-owner
+sequences are generated per case and each intermediate close is followed by an
+EOF probe, so an EOF reported while an owner is still live fails the case.
+Failure persistence is disabled: a shrinking seed for a generated payload would
+land a multi-kilobyte file inside the crate, and the bounded sizes the
+strategies name are the interesting inputs anyway. These tests add no evidence
+for the Windows synchronous-I/O row above; that row still rests on the
+Microsoft contract plus the Windows lane's round-trip execution, and
+`new_unchecked` at `rust/cuprum-native-io/src/pipe_tests.rs` remains an audited
+external platform assumption rather than a proven lemma.
 
 The Python dispatch continues to decline native pumping on Windows because
 `ProactorEventLoop` subprocess pipes are overlapped. The cross-reference at

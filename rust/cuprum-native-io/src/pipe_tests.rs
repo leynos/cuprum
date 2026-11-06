@@ -39,11 +39,13 @@ use super::{
     write_once,
 };
 
-/// How long a spawned reader may take before the test fails.
+/// How long a spawned transfer may take before the test fails.
 ///
 /// The pipe is local and in-process, so a correct transfer completes in
 /// microseconds. The margin exists only so a lost EOF or a deadlocked writer
-/// reports as a failure rather than wedging the run.
+/// reports as a failure rather than wedging the run. Both directions share the
+/// value: a payload larger than the pipe buffer blocks in `write`, so bounding
+/// only the read would leave the write free to wait out the job's own timeout.
 const READ_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Owned endpoints created once per test, in reader-first order.
@@ -71,6 +73,67 @@ pub(super) fn read_to_eof_on_worker(
         drop(sender.send(read_all(&reader, chunk_len)));
     });
     receiver
+}
+
+/// Write an entire payload through the platform's single-call primitive.
+///
+/// The primitive may accept fewer bytes than offered, so a caller that needs
+/// the whole payload has to drive it to completion. A zero-byte acceptance is
+/// reported as `WriteZero` rather than retried forever.
+pub(super) fn write_all_payload(stream: BorrowedStream<'_>, payload: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < payload.len() {
+        let remaining = payload
+            .get(written..)
+            .ok_or_else(|| io::Error::other("pipe write lost its remaining slice"))?;
+        let accepted = write_payload(stream, remaining)?;
+        if accepted == 0 {
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        written += accepted;
+    }
+    Ok(())
+}
+
+/// Write a payload on a worker thread through the single-call primitive.
+///
+/// The endpoint is moved to the worker, so this suits a caller that closes its
+/// writer immediately afterwards: the caller keeps the returned receiver and
+/// awaits it, and the descriptor stays open until the worker is done with it.
+/// A payload larger than the pipe buffer blocks part-way through `write` until
+/// someone drains; putting the write on its own thread lets the caller bound
+/// that wait instead of blocking the test thread for as long as the OS allows.
+pub(super) fn write_to_pipe_on_worker(
+    writer: OwnedStream,
+    payload: Vec<u8>,
+) -> mpsc::Receiver<io::Result<()>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // Same reasoning as the reader: a failed send means nobody is waiting.
+        drop(sender.send(write_all_payload(borrow(&writer), &payload)));
+    });
+    receiver
+}
+
+/// Await a worker's write, failing rather than hanging when it is late.
+///
+/// Completion means every byte was accepted; `write_all_payload` reports a
+/// short or zero accept as an error rather than returning a count.
+///
+/// # Errors
+/// Returns the worker's I/O failure unchanged, so a test can tell a short
+/// accept from a blocked transfer.
+pub(super) fn await_written(receiver: &mpsc::Receiver<io::Result<()>>) -> io::Result<()> {
+    match receiver.recv_timeout(READ_DEADLINE) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => {
+            panic!(
+                "worker did not finish writing within {READ_DEADLINE:?}; the reader is not \
+                 draining"
+            )
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("worker dropped its sender without a result"),
+    }
 }
 
 /// Receive a worker's payload, failing rather than hanging when it is late.
