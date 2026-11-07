@@ -793,7 +793,9 @@ help: ## Show available targets
 
 # Boundary verifiers use their own pinned binary toolchains; normal gates keep
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
-PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@37fd9f830bc98a7434b93cb0f0c965eca9ad6fa5
+# The pin lives in its own file so the verifier cache key can hash exactly what
+# decides the downloaded binaries, rather than every unrelated Makefile edit.
+PROVER_TOOLS_SOURCE ?= $(file < tools/prover-tools/VERSION)
 PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
 # The shared CLI reads these ambient names as flag defaults. Every delegated
 # invocation passes its paths explicitly, so a stray CI or shell value must not
@@ -827,7 +829,7 @@ boundary-verus: ## Verify actual production length/accounting kernels
 	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
 
 boundary-kani: ## Check bounded native ownership and existing policy proofs
-	$(PROVER_TOOLS) kani check-version
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) kani check-version
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
 
