@@ -11,13 +11,17 @@ from __future__ import annotations
 import asyncio
 import os
 import typing as typ
+from unittest import mock
 
 import pytest
 
 from cuprum import (
+    ScopeConfig,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
+    scoped,
+    sh,
 )
 from cuprum._testing import set_rust_availability_for_testing
 from cuprum.unittests._pump_stream_dispatch_support import (
@@ -27,6 +31,7 @@ from cuprum.unittests._pump_stream_dispatch_support import (
     clear_backend_caches,
 )
 from cuprum.unittests._rust_pump_test_helpers import owned_fds
+from tests.helpers.catalogue import python_catalogue
 
 __all__ = ["clear_backend_caches"]
 
@@ -113,6 +118,9 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
     resume_calls = 0
     acquired: list[int] = []
     original_open = _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+    close_worker_fd = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
+    )
 
     def record_open(
         **kwargs: int,
@@ -148,6 +156,11 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
         "_open_native_pump_worker_fds",
         record_open,
     )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_close_native_pump_worker_fd",
+        close_worker_fd,
+    )
 
     with owned_fds() as (reader_fd, writer_fd):
         handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
@@ -155,7 +168,7 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
             writer_fd=writer_fd,
             cleanup_grace_s=0.5,
         )
-        with pytest.raises(type(error)):
+        with pytest.raises(type(error)) as exc_info:
             asyncio.run(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
@@ -163,7 +176,13 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
                     handoff=handoff,
                 )
             )
+        if isinstance(error, OSError):
+            assert exc_info.value is error, "the drain failure must propagate unchanged"
         assert len(acquired) == 2, "acquisition must open both worker descriptors"
+        assert close_worker_fd.call_args_list == [
+            mock.call(acquired[0]),
+            mock.call(acquired[1]),
+        ], "the unactivated pair must be closed exactly once in reader-first order"
         for fd in acquired:
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(fd)
@@ -171,3 +190,39 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
         os.fstat(writer_fd)
 
     assert resume_calls == 1, "the failure must resume the paused reader once"
+
+
+def test_acquisition_failure_keeps_public_pipeline_output_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed acquisition falls back without disturbing the public pipeline.
+
+    The hop is forced onto the native backend and its acquisition seam is made
+    to decline, so the end-to-end run proves the Python fallback carries the
+    payload and both stages complete rather than that the private seam merely
+    returns ``False``.
+    """
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+    set_rust_availability_for_testing(is_available=True)
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        lambda **_kwargs: None,
+    )
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    producer = python("-c", "import sys; sys.stdout.write('buffered prefix')")
+    consumer = python(
+        "-c",
+        "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    )
+
+    with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
+        result = (producer | consumer).run_sync(timeout=5.0)
+
+    assert result.stdout == "BUFFERED PREFIX", (
+        "the Python fallback must deliver the pipeline payload unchanged"
+    )
+    assert [stage.exit_code for stage in result.stages] == [0, 0], (
+        "both stages must complete despite the failed acquisition"
+    )

@@ -2388,11 +2388,13 @@ Pipeline byte movement is split so each module has one reason to change:
 
 Table 1: pipeline stream modules and their responsibilities
 
-| Module                        | Owns                                               |
-| ----------------------------- | -------------------------------------------------- |
-| `_pipeline_streams.py`        | Backend choice and the Python/Rust pump dispatch   |
-| `_pipeline_stream_results.py` | Stream-task collection, cancellation, and outcomes |
-| `_pipeline_stream_fds.py`     | Raw-descriptor hand-off for the Rust pump          |
+| Module                                  | Owns                                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `_pipeline_streams.py`                  | Backend choice and the Python/Rust pump dispatch                                           |
+| `_pipeline_stream_results.py`           | Stream-task collection, cancellation, and outcomes                                         |
+| `_pipeline_stream_fds.py`               | Raw-descriptor hand-off for the Rust pump                                                  |
+| `_pipeline_stream_native_cleanup.py`    | Native hand-off ordering: acquisition, buffered drain, blocking activation, and submission |
+| `_pipeline_stream_native_completion.py` | Post-submission settlement: descriptor cleanup, blocking restoration, and reader resume    |
 
 ### Rust pump raw-descriptor lifecycle
 
