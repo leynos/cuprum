@@ -26,7 +26,11 @@ from cuprum import (
     sh,
 )
 from cuprum._testing import set_rust_availability_for_testing
-from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
+from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_HANDOFF_TOTAL,
+    RUST_PUMP_HELD_PAIRS,
+    PumpMetricsHook,
+)
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import (
@@ -113,13 +117,20 @@ def test_acquisition_failure_skips_drain_and_falls_back(
 class _DrainFailureHarness:
     """Drive a drain failure over an acquired pair and record its release."""
 
-    def __init__(self, error: BaseException) -> None:
+    def __init__(
+        self,
+        error: BaseException,
+        *,
+        shutdown_signal: BaseException | None = None,
+    ) -> None:
         """Capture the failure and the seams that observe cleanup."""
         self.error = error
+        self.shutdown_signal = shutdown_signal
         self.resume_calls = 0
         self.acquired: list[int] = []
         self.events: list[PumpEvent] = []
         self.collector = RecordingCollector()
+        self.held_during_drain: float | None = None
         self.close_worker_fd = mock.Mock(
             wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
         )
@@ -176,31 +187,61 @@ class _DrainFailureHarness:
         """Raise the parametrized drain failure."""
         del reader, writer
         await asyncio.sleep(0)
+        self.held_during_drain = self._latest_held_pairs()
         raise self.error
+
+    def _latest_held_pairs(self) -> float | None:
+        """Return the held-pair gauge as the drain sees it."""
+        values = self.collector.gauge_values(RUST_PUMP_HELD_PAIRS)
+        return values[-1] if values else None
+
+    def raise_shutdown_signal(self, event: PumpEvent) -> None:
+        """Raise the configured shutdown signal from the drain outcome."""
+        signal = self.shutdown_signal
+        if signal is not None and event.phase == "handoff":
+            raise signal
 
     def run(self) -> None:
         """Run the hand-off over a private pipe and assert its rollback."""
+        observed: list[BaseException] = []
+
+        async def exercise(
+            handoff: _pipeline_stream_native_cleanup._RustPumpHandoff,
+        ) -> None:
+            """Record the exception the hand-off raises inside the loop."""
+            try:
+                await _pipeline_streams._run_rust_pump(
+                    reader=typ.cast("asyncio.StreamReader", object()),
+                    writer=None,
+                    handoff=handoff,
+                )
+            except BaseException as exc:
+                observed.append(exc)
+                raise
+
         with (
             owned_fds() as (reader_fd, writer_fd),
             observe_pump(self.events.append),
             observe_pump(PumpMetricsHook(self.collector)),
+            observe_pump(self.raise_shutdown_signal),
         ):
             handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
                 reader_fd=reader_fd,
                 writer_fd=writer_fd,
                 cleanup_grace_s=0.5,
             )
-            with pytest.raises(type(self.error)) as exc_info:
-                asyncio.run(
-                    _pipeline_streams._run_rust_pump(
-                        reader=typ.cast("asyncio.StreamReader", object()),
-                        writer=None,
-                        handoff=handoff,
-                    )
-                )
-            if isinstance(self.error, OSError):
-                assert exc_info.value is self.error, (
-                    "the drain failure must propagate unchanged"
+            expected = self.shutdown_signal or self.error
+            with pytest.raises(type(expected)):
+                asyncio.run(exercise(handoff))
+            # ``asyncio.run`` rebuilds a cancelled task's exception, so identity
+            # is asserted where the hand-off actually raises it.
+            assert len(observed) == 1, "the drain failure must be observed exactly once"
+            assert observed[0] is expected, (
+                "the drain failure must propagate unchanged inside the loop"
+            )
+            if self.shutdown_signal is not None:
+                assert observed[0].__context__ is self.error, (
+                    "the drain error must stay reachable as the raised context"
                 )
             self._assert_released(reader_fd, writer_fd)
         assert self.resume_calls == 1, "the failure must resume the paused reader once"
@@ -217,7 +258,13 @@ class _DrainFailureHarness:
                 os.fstat(fd)
         os.fstat(reader_fd)
         os.fstat(writer_fd)
-        assert [event.outcome for event in self.events] == [
+        assert self.held_during_drain == pytest.approx(1.0), (
+            "the acquired pair must be reported as held while the drain runs"
+        )
+        assert self.collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+            "the hold must be released exactly once, after the pair is closed"
+        )
+        assert [event.outcome for event in self.events if event.phase == "handoff"] == [
             RustPumpHandoffOutcome.DRAIN_FAILED
         ], "the drain failure must settle the hop with its own bounded outcome"
         assert self.collector.counters == [
@@ -245,6 +292,111 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
     harness.run()
 
 
+def test_drain_failure_observer_shutdown_signal_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shutdown signal from a pump observer outranks the drain error."""
+    harness = _DrainFailureHarness(
+        OSError("drain failed"),
+        shutdown_signal=KeyboardInterrupt(),
+    )
+    harness.install(monkeypatch)
+
+    harness.run()
+
+
+def test_blocking_setup_failure_releases_the_hold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused activation releases the held pair and keeps the fallback."""
+    collector = RecordingCollector()
+    events: list[PumpEvent] = []
+
+    def refuse_blocking(**_kwargs: int) -> typ.NoReturn:
+        """Refuse the blocking switch the real activation must roll back."""
+        msg = "blocking mode refused"
+        raise OSError(msg)
+
+    monkeypatch.setattr(
+        _pipeline_stream_fds,
+        "_set_stream_fds_blocking",
+        refuse_blocking,
+    )
+
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        with observe_pump(events.append), observe_pump(PumpMetricsHook(collector)):
+            handled = asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=typ.cast("asyncio.StreamReader", object()),
+                    writer=None,
+                    handoff=handoff,
+                )
+            )
+
+    assert handled is False, "a refused activation must keep the Python fallback"
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+        "the activation exit must release the hold exactly once"
+    )
+    assert [event.outcome for event in events if event.phase == "handoff"] == [
+        RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED
+    ], "the activation refusal must report its own bounded outcome"
+
+
+def test_submission_releases_the_hold_before_native_work_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hold ends when activation hands the pair to the completion callback."""
+    collector = RecordingCollector()
+    held_at_submission: list[float | None] = []
+
+    def record_submission(
+        *,
+        state: _pipeline_stream_native_cleanup._RustPumpState,
+    ) -> None:
+        """Record the hold and release the pair the callback would own."""
+        held_at_submission.append(
+            (collector.gauge_values(RUST_PUMP_HELD_PAIRS) or [None])[-1]
+        )
+        _pipeline_stream_native_cleanup._close_native_pump_worker_fd(state.reader_fd)
+        _pipeline_stream_native_cleanup._close_native_pump_worker_fd(state.writer_fd)
+
+    # The seam is awaited, so the synchronous double is wrapped rather than
+    # given a dummy await just to satisfy the coroutine contract.
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_run_rust_pump_with_blocking_fds",
+        mock.AsyncMock(side_effect=record_submission),
+    )
+
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        with observe_pump(PumpMetricsHook(collector)):
+            handled = asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=typ.cast("asyncio.StreamReader", object()),
+                    writer=None,
+                    handoff=handoff,
+                )
+            )
+
+    assert handled is True, "an activation that succeeds must report the hand-off"
+    assert held_at_submission == [0.0], (
+        "the coordinator must hold nothing once the worker owns the pair"
+    )
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+        "the submission exit must release the hold exactly once"
+    )
+
+
 def test_acquisition_failure_keeps_public_pipeline_output_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -257,10 +409,11 @@ def test_acquisition_failure_keeps_public_pipeline_output_intact(
     """
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
     set_rust_availability_for_testing(is_available=True)
+    open_worker_fds = mock.Mock(return_value=None)
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup,
         "_open_native_pump_worker_fds",
-        lambda **_kwargs: None,
+        open_worker_fds,
     )
     catalogue, python_program = python_catalogue()
     python = sh.make(python_program, catalogue=catalogue)
@@ -273,6 +426,12 @@ def test_acquisition_failure_keeps_public_pipeline_output_intact(
     with scoped(ScopeConfig(allowlist=frozenset([python_program]))):
         result = (producer | consumer).run_sync(timeout=5.0)
 
+    assert open_worker_fds.call_count == 1, (
+        "the hop must reach the acquisition seam, or this test proves nothing"
+    )
+    assert open_worker_fds.call_args_list[0].kwargs, (
+        "acquisition must be asked for the hand-off's descriptors"
+    )
     assert result.stdout == "BUFFERED PREFIX", (
         "the Python fallback must deliver the pipeline payload unchanged"
     )

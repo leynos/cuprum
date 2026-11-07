@@ -30,9 +30,11 @@ Example
 
 from __future__ import annotations
 
+import threading
 import types
 import typing as typ
 
+from cuprum.adapters.gauge_metrics import GaugeMetricsCollector
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 
 if typ.TYPE_CHECKING:
@@ -61,6 +63,19 @@ RUST_PUMP_CLEANUP_GRACE_EXPIRED_TOTAL = "cuprum_rust_pump_cleanup_grace_expired_
 
 RUST_PUMP_CLEANUP_DEFERRED_TOTAL = "cuprum_rust_pump_cleanup_deferred_total"
 """Deferred native-pump cleanups completed after the caller had returned."""
+
+RUST_PUMP_HELD_PAIRS = "cuprum_rust_pump_held_pairs"
+"""Descriptor pairs currently held across a pending native-pump drain.
+
+A gauge, reported only to collectors that implement
+:class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`. It rises by one
+when a hop takes its acquired pair and falls by one on every settling path, so
+it returns to zero when no drain is pending.
+"""
+
+# The only deltas a hold event may carry. A hand-built event with any other
+# value is ignored rather than allowed to corrupt the gauge.
+_HELD_DELTAS = frozenset({-1, 1})
 
 # One counter per phase, keyed by phase so the metric names have exactly one
 # definition. Read-only so an importing module cannot rewrite them at runtime.
@@ -138,6 +153,10 @@ class PumpMetricsHook:
     - ``cuprum_rust_pump_handoff_total``: a counter labelled ``outcome`` by
       the closed :class:`~cuprum.pump_events.RustPumpHandoffOutcome` vocabulary,
       including the Windows raw-handle rejection.
+    - ``cuprum_rust_pump_held_pairs``: a gauge of the descriptor pairs held
+      across pending drains, reported only when the collector implements
+      :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`. Gauges are
+      optional so an existing two-method collector keeps working.
 
     All labels are closed and bounded; descriptor values, exception details,
     and other event data are never labels. Unknown phases are ignored so a
@@ -163,6 +182,8 @@ class PumpMetricsHook:
     def __init__(self, collector: MetricsCollector) -> None:
         """Initialize the pump metrics hook with a collector."""
         self._collector = collector
+        self._held_lock = threading.Lock()
+        self._held_pairs = 0
 
     def __call__(self, event: PumpEvent) -> None:
         """Increment the counter this pump event calls for, if any.
@@ -173,6 +194,9 @@ class PumpMetricsHook:
         :func:`cuprum.pump_observation._emit_pump_event`.
         """
         phase: PumpPhase = event.phase
+        if phase == "handoff_hold":
+            self._apply_held_delta(event.held_delta)
+            return
         if phase == "handoff" and not isinstance(
             event.outcome,
             RustPumpHandoffOutcome,
@@ -188,6 +212,22 @@ class PumpMetricsHook:
             event.duration_s,
             {},
         )
+
+    def _apply_held_delta(self, delta: int) -> None:
+        """Move the held-pair gauge by one balanced acquisition or release.
+
+        The count is kept per hook under a lock because hold events for
+        concurrent drains can arrive from different threads. A collector that
+        does not offer gauges is left alone rather than required to add one.
+        """
+        if delta not in _HELD_DELTAS:
+            return
+        if not isinstance(self._collector, GaugeMetricsCollector):
+            return
+        with self._held_lock:
+            self._held_pairs += delta
+            held = self._held_pairs
+        self._collector.set_gauge(RUST_PUMP_HELD_PAIRS, float(held), {})
 
 
 def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
@@ -224,6 +264,7 @@ __all__ = [
     "RUST_PUMP_DECLINED_TOTAL",
     "RUST_PUMP_FAILED_AFTER_CANCEL_TOTAL",
     "RUST_PUMP_HANDOFF_TOTAL",
+    "RUST_PUMP_HELD_PAIRS",
     "UNKNOWN_DECLINE_REASON",
     "PumpMetricsHook",
     "pump_metrics_hook",

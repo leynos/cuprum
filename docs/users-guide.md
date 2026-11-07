@@ -3601,6 +3601,12 @@ resumes the reader, and re-raises the original exception; it counts the
 so the counter is the only record that the drain window closed without a
 submission.
 
+One exception outranks that re-raise. If a pump observer raises a shutdown
+signal, such as `KeyboardInterrupt`, while the `drain_failed` outcome is being
+emitted, the signal propagates and the drain error stays reachable as its
+`__context__`. Shutdown signals must travel, and the pair has already been
+released by then, so nothing is stranded.
+
 Two setup failures still reach the caller. A rejected executor submission
 reports `executor_submission_rejected` and re-raises after rollback, because
 every later hop would be rejected the same way. A failure to duplicate
@@ -3624,6 +3630,13 @@ emits a `handoff` event and increments
 `cuprum_rust_pump_handoff_total{outcome="submitted"}` once. The same counter
 records each failed hand-off outcome once, so it can show both the number of
 hops that were submitted successfully and each terminal hand-off failure.
+
+A hand-off also emits two `handoff_hold` events around the window in which it
+holds its acquired descriptor pair: one with `PumpEvent.held_delta` set to `1`
+before the buffered drain, and one with `held_delta` set to `-1` when the pair
+is released. Every settling path releases exactly once, so a consumer that
+accumulates the deltas reports the pairs currently held across pending drains
+and returns to zero when none are.
 
 #### Cleanup after cancellation
 
@@ -3716,8 +3729,22 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_cleanup_grace_expired_total` | none      | caller-facing cleanup grace expired                              |
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
+| `cuprum_rust_pump_held_pairs`                  | none      | a hand-off acquired or released the pair held across a drain     |
 
 _Table 8: Metrics emitted by `PumpMetricsHook`._
+
+`cuprum_rust_pump_held_pairs` is a gauge rather than a counter: it is set to
+the number of descriptor pairs currently held across pending buffered drains. A
+hand-off sets it one higher on acquisition and one lower on release, and the
+release lands on every settling path — submission, activation failure, drain
+failure, and cancellation.
+
+Gauge support is optional. A collector receives this gauge by implementing
+`GaugeMetricsCollector` from `cuprum.adapters.gauge_metrics`; a collector
+written against the two-method `MetricsCollector` protocol keeps receiving the
+counters and histograms and is skipped for gauges. `InMemoryMetrics` implements
+both, and stores the latest gauge value in its `gauges` mapping, which
+`reset()` clears.
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is

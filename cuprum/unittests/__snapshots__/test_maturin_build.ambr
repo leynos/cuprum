@@ -163,6 +163,7 @@
       'cuprum/adapters/_tracing_span_events.py',
       'cuprum/adapters/control_metrics.py',
       'cuprum/adapters/echo_metrics.py',
+      'cuprum/adapters/gauge_metrics.py',
       'cuprum/adapters/line_stream_metrics.py',
       'cuprum/adapters/logging_adapter.py',
       'cuprum/adapters/metrics_adapter.py',

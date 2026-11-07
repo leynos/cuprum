@@ -41,9 +41,10 @@ class RecordingCollector:
     """
 
     def __init__(self) -> None:
-        """Start with no recorded counter or histogram calls."""
+        """Start with no recorded counter, histogram, or gauge calls."""
         self.counters: list[tuple[str, float, dict[str, str]]] = []
         self.histograms: list[tuple[str, float, dict[str, str]]] = []
+        self.gauges: list[tuple[str, float, dict[str, str]]] = []
 
     def inc_counter(
         self,
@@ -63,9 +64,22 @@ class RecordingCollector:
         """Record a histogram observation and the labels it carried."""
         self.histograms.append((name, value, dict(labels)))
 
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record a gauge value and the labels it carried."""
+        self.gauges.append((name, value, dict(labels)))
+
     def counter_names(self) -> list[str]:
         """Return the names of the counters recorded, in call order."""
         return [name for name, _value, _labels in self.counters]
+
+    def gauge_values(self, name: str) -> list[float]:
+        """Return the values recorded for gauge ``name``, in call order."""
+        return [value for gauge, value, _labels in self.gauges if gauge == name]
 
 
 @dc.dataclass(slots=True)

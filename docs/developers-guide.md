@@ -2622,14 +2622,18 @@ switching early would make asyncio's own descriptor blocking while the drain
 still awaits. If the drain raises or is cancelled, the unactivated pair is
 closed exactly once, the reader is resumed, and the original exception
 propagates unchanged; blocking mode was never engaged, so there is nothing to
-restore. Once the drain completes, the acquired pair is switched to blocking
-mode and handed to the worker, which receives a further duplicate reader and
-duplicate writer descriptor and handles the remaining raw bytes. Rust borrows
-the reader duplicate and consumes the writer duplicate. After the worker
-settles, Python closes the remaining reader duplicate; it closes the writer
-duplicate itself only when preparation or executor submission fails. If any
-preparation step cannot be completed safely, dispatch falls back to the Python
-pump. That fall-back has one exception, and it is test-only:
+restore. The one exception is an observer that raises a shutdown signal while
+the `drain_failed` outcome is emitted: `_emit_pump_event` lets `BaseException`
+travel, so that signal wins, with the drain error kept as its `__context__`.
+The pair has already been released before the outcome is emitted, so the signal
+cannot strand it. Once the drain completes, the acquired pair is switched to
+blocking mode and handed to the worker, which receives a further duplicate
+reader and duplicate writer descriptor and handles the remaining raw bytes.
+Rust borrows the reader duplicate and consumes the writer duplicate. After the
+worker settles, Python closes the remaining reader duplicate; it closes the
+writer duplicate itself only when preparation or executor submission fails. If
+any preparation step cannot be completed safely, dispatch falls back to the
+Python pump. That fall-back has one exception, and it is test-only:
 `_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
 overrules the closing-reader decline — and only that one — when the dispatch
 test seam has installed its own descriptor supply
@@ -2733,6 +2737,7 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_cleanup_total`             | none      |
 | `cuprum_rust_pump_cleanup_duration_seconds`  | none      |
 | `cuprum_rust_pump_handoff_total`             | `outcome` |
+| `cuprum_rust_pump_held_pairs`                | none      |
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
 six in Table 1 above. The `outcome` label is also closed: it is exactly
@@ -2748,6 +2753,16 @@ Windows handle values, errno values, exception types, exception messages, and
 tracebacks are never metric labels. Observer failures are logged and do not
 alter the successful fallback or the caller's cancellation.
 [ADR-008](adrs/adr-0008-rust-pump-observation-channel.md) records the decision.
+
+`cuprum_rust_pump_held_pairs` is the channel's only gauge. The coordinator
+emits a `handoff_hold` event with `held_delta=1` after acquisition and before
+the buffered drain, and one with `held_delta=-1` once the pair has been closed
+or handed on; `PumpMetricsHook` accumulates those deltas under a lock and calls
+`set_gauge` with the running total. Gauges are a separate, optional capability:
+`GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a runtime
+checkable protocol, and a collector that does not implement it keeps working
+for counters and histograms and is simply skipped for gauges. This keeps the
+existing two-method `MetricsCollector` contract intact.
 
 #### Pump hook failure policy
 

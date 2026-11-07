@@ -96,6 +96,70 @@ def test_closing_reader_declines_native_borrow(pipe_at_eof: typ.BinaryIO) -> Non
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix read-pipe EOF callback contract")
+@pytest.mark.usefixtures("clear_backend_caches")
+def test_real_eof_closing_transport_completes_the_python_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    pipe_at_eof: typ.BinaryIO,
+) -> None:
+    """A real EOF close preserves output and completes through the fallback."""
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+    set_rust_availability_for_testing(is_available=True)
+    events: list[PumpEvent] = []
+
+    def forbid_acquisition(**_kwargs: int) -> typ.NoReturn:
+        """Fail the test if a closing reader ever opens worker descriptors."""
+        msg = "a closing reader must never open worker descriptors"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        forbid_acquisition,
+    )
+
+    async def exercise() -> tuple[bytes, bool, bool, bool]:
+        """Dispatch the real-EOF reader and report the completed fallback."""
+        reader = asyncio.StreamReader()
+        outcome: asyncio.Future[_ReaderPause] = (
+            asyncio.get_running_loop().create_future()
+        )
+        protocol = _ClosingReaderProtocol(reader, outcome)
+        transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+            lambda: protocol, pipe_at_eof
+        )
+        writer = _RecordingWriter(write_fd)
+        try:
+            pause = await outcome
+            await _pipeline_streams._pump_stream_dispatch(
+                reader,
+                typ.cast("asyncio.StreamWriter", writer),
+            )
+        finally:
+            transport.close()
+        return bytes(writer.written), writer.eof, writer.closed, pause.may_hand_off
+
+    with _nonblocking_pipe_pair() as (
+        read_fd,
+        read_write_fd,
+        write_read_fd,
+        write_fd,
+    ):
+        del read_fd, read_write_fd, write_read_fd
+        with observe_pump(events.append):
+            delivered, eof, closed, may_hand_off = asyncio.run(exercise())
+
+    assert may_hand_off is False, "a real EOF close cannot be handed off"
+    assert delivered == _PREFIX, (
+        "the fallback must deliver bytes asyncio buffered before the real EOF"
+    )
+    assert eof, "the fallback must signal downstream EOF after the real close"
+    assert closed, "the fallback must close the writer once the hop completes"
+    assert [event.phase for event in events] == ["declined"], (
+        f"the real EOF close must only report a decline, found {events!r}"
+    )
+
+
 class _ClosingFdTransport(_FdTransport):
     """Transport double that reports itself as already closing."""
 

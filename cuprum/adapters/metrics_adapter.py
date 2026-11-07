@@ -7,6 +7,8 @@ adapter demonstrates how to collect:
 - **Counters**: Total executions, failures, output lines
 - **Byte counters**: Successful stdin bytes written
 - **Histograms**: Execution duration distribution
+- **Gauges**: current values, reported by collectors that implement
+  :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`
 
 The implementation uses protocol classes to remain decoupled from specific
 metrics libraries. Projects can implement the protocols with their preferred
@@ -165,11 +167,14 @@ class InMemoryMetrics(_LockedStore):
         Dict mapping metric names to accumulated counter values.
     histograms:
         Dict mapping metric names to lists of observed values.
+    gauges:
+        Dict mapping gauge names to their most recently reported value.
 
     """
 
     counters: dict[str, float] = dc.field(default_factory=dict)
     histograms: dict[str, list[float]] = dc.field(default_factory=dict)
+    gauges: dict[str, float] = dc.field(default_factory=dict)
 
     def inc_counter(
         self,
@@ -193,11 +198,22 @@ class InMemoryMetrics(_LockedStore):
                 self.histograms[name] = []
             self.histograms[name].append(value)
 
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Set a gauge value, ignoring labels for simplicity."""
+        with self._lock:
+            self.gauges[name] = value
+
     @typ.override
     def _clear(self) -> None:
         """Clear all collected metrics; called under the store lock."""
         self.counters.clear()
         self.histograms.clear()
+        self.gauges.clear()
 
 
 class MetricsHook(_RetentionMetricsMixin):

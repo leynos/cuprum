@@ -59,7 +59,10 @@ class RustPumpHandoffOutcome(enum.StrEnum):
 
     ``DRAIN_FAILED`` covers a failed buffered drain and a cancellation during
     it. The acquired pair is released and the original exception is re-raised,
-    so the hop settles without a submission.
+    so the hop settles without a submission. A pump observer that raises a
+    shutdown signal while this outcome is emitted takes precedence over that
+    re-raise, because a shutdown signal must still travel; the drain error
+    remains reachable as the raised signal's ``__context__``.
     """
 
     SUBMITTED = "submitted"
@@ -78,6 +81,7 @@ class RustPumpHandoffOutcome(enum.StrEnum):
 type PumpPhase = typ.Literal[
     "declined",
     "handoff",
+    "handoff_hold",
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
@@ -91,6 +95,11 @@ type PumpPhase = typ.Literal[
 ``handoff``
     A Rust writer-resource hand-off reached one of the closed ``outcome``
     states.
+``handoff_hold``
+    The hand-off took its acquired descriptor pair into, or handed it back
+    from, the coordinator's hold around the buffered drain. ``held_delta`` is
+    ``+1`` on acquisition and ``-1`` on release, so a consumer that accumulates
+    the deltas reports the pairs currently held across pending drains.
 ``failed_after_cancel``
     A cancelled hop's Rust worker had failed, and the failure was consumed
     rather than resurfacing detached at garbage collection.
@@ -131,6 +140,9 @@ class PumpEvent:
     outcome:
         For ``handoff``, the closed outcome of the writer-resource hand-off.
         ``None`` for every other phase.
+    held_delta:
+        For ``handoff_hold``, ``+1`` when the coordinator takes the acquired
+        pair and ``-1`` when it releases it. ``0`` for every other phase.
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
@@ -162,11 +174,17 @@ class PumpEvent:
         cleanup = PumpEvent(phase="cleanup_completed", duration_s=0.25)
         assert cleanup.duration_s == 0.25
 
+    A hold reports the acquired pair as it is taken and released::
+
+        taken = PumpEvent(phase="handoff_hold", held_delta=1)
+        assert taken.held_delta == 1
+
     """
 
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
     outcome: RustPumpHandoffOutcome | None = None
+    held_delta: int = 0
     duration_s: float | None = None
     elapsed_s: float | None = None
     exec_id: ExecId | None = None

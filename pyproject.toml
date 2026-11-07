@@ -449,6 +449,7 @@ type = "parameter"
 full_name = [
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
     "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
+    "cuprum.adapters.metrics_adapter.InMemoryMetrics.set_gauge.labels",
 ]
 reason = "InMemoryMetrics preserves the MetricsCollector protocol signature while intentionally discarding labels."
 

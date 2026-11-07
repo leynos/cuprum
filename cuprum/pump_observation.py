@@ -173,6 +173,22 @@ def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
     _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
 
 
+def _emit_rust_pump_hold(delta: int) -> None:
+    """Publish one transition of a hand-off's acquired descriptor pair.
+
+    ``delta`` is ``+1`` when the coordinator takes the pair before the buffered
+    drain and ``-1`` when it releases it. Every ``+1`` is matched by exactly one
+    ``-1`` on each settling path — submission, activation failure, drain failure
+    and cancellation — so a consumer that accumulates the deltas reports the
+    pairs held across pending drains and returns to zero when none are.
+
+    Hook failures follow :func:`_emit_pump_event`. The coordinator emits each
+    release only after the descriptors are closed, so a propagating shutdown
+    signal cannot strand the pair.
+    """
+    _emit_pump_event(PumpEvent(phase="handoff_hold", held_delta=delta))
+
+
 def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:
     """Log and emit the Windows raw-handle capability rejection."""
     outcome = RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED

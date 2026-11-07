@@ -17,7 +17,8 @@ await, drains the buffered prefix, and submits the worker. The two failure
 paths differ. A failed acquisition resumes the reader and falls back to the
 Python pump with the buffered prefix intact; a drain failure or cancellation
 closes the unactivated pair, resumes the reader, and re-raises the original
-error unchanged.
+error — unless a pump observer raises a shutdown signal while that outcome is
+emitted, which takes precedence because shutdown signals must still travel.
 """
 
 from __future__ import annotations
@@ -55,7 +56,10 @@ from cuprum._pipeline_stream_native_cleanup import (
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
-from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_observation import (
+    _emit_rust_pump_handoff_outcome,
+    _emit_rust_pump_hold,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -232,13 +236,19 @@ async def _pump_over_raw_fds(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
         return False
     try:
+        # Publish the hold before the first await so an operator can see the
+        # pair while the drain is pending. Every path below releases it once,
+        # after the descriptors are closed or handed on.
+        _emit_rust_pump_hold(1)
         await _drain_reader_buffer(reader, writer)
     except BaseException:
         # Blocking activation never ran, so there is no mode to restore; only
-        # the acquired pair must be released before the reader returns to
-        # asyncio and the fallback reads the preserved prefix.
+        # the acquired pair must be released. The hop does not fall back from
+        # here: the drain error propagates, and the reader resumes so asyncio
+        # can settle the transport it still owns.
         _close_unactivated_rust_pump_fds(worker_fds)
         _resume_reader_transport(reader_pause.resume)
+        _emit_rust_pump_hold(-1)
         # The hop owns no descriptors past this point, so the outcome is the
         # only signal an operator has that the drain window closed without a
         # submission. Emitting after the release keeps a propagating shutdown
@@ -252,10 +262,14 @@ async def _pump_over_raw_fds(
         state = _activate_rust_pump_state(worker_fds, reader_pause, handoff)
     except _RustPumpBlockingModeError:
         _resume_reader_transport(reader_pause.resume)
+        _emit_rust_pump_hold(-1)
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return False
 
+    # Activation transferred ownership to the completion callback, so the
+    # coordinator holds nothing from here on.
+    _emit_rust_pump_hold(-1)
     await _run_rust_pump_with_blocking_fds(state=state)
     return True
 
