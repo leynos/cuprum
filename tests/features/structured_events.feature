@@ -53,3 +53,9 @@ Feature: Structured execution events
     When the command runs with captured and echoed output
     Then each stream has exactly the expected ordered line sequence
     And that command exits with the expected status
+
+  Scenario: A chatty command with capture disabled and an async observer
+    Given an observed command that floods stdout without capture
+    When the command runs with an asynchronous observing hook
+    Then every line is delivered to the observer in order
+    And the retained observer tasks stay bounded

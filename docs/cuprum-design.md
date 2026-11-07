@@ -1990,15 +1990,16 @@ The following design decisions were made during implementation:
 ### 8.1.3 Structured execution events (observe hooks)
 
 Implemented as `_LineEventEmitter`, a frozen slotted private dataclass in
-`cuprum/_line_callbacks.py`, built once per observed stream, after spawn, when
-the pid is known. It binds the invariant half of a line event — program, argv
-with the program name first, cwd, env, pid, stream, tags, project, and exec_id
-— together with the observation's own `_emit_event` dispatcher. The factory
-returns `None` when no observe hook is installed, so a stream nobody emits
-events for prepares nothing. Every line then needs only itself: `emit_line`
-passes a fresh frozen `ExecEvent`, one fresh clock read, and the line to that
-unchanged dispatcher. The per-line `_EventDetails` construction and the per-line
-`argv_with_program` walk are gone.
+`cuprum/_line_event_emitter.py`, built once per observed stream, after spawn,
+when the pid is known. The composition table and factory remain in
+`cuprum/_line_callbacks.py`. It binds the invariant half of a line event —
+program, argv with the program name first, cwd, env, pid, stream, tags,
+project, and exec_id — together with the observation's own `_emit_event`
+dispatcher. The factory returns `None` when no observe hook is installed, so a
+stream nobody emits events for prepares nothing. Every line then needs only
+itself: `emit_line` passes a fresh frozen `ExecEvent`, one fresh clock read,
+and the line to that unchanged dispatcher. The per-line `_EventDetails`
+construction and the per-line `argv_with_program` walk are gone.
 
 **The construction share is measured, not projected.** Pre-hoist the median was
 34.2928%; post-hoist it is 29.9087%, over three matched capture pairs with a
@@ -2107,7 +2108,29 @@ implemented with the following decisions:
   production code alone.
 - **Async observers:** Observe hooks may be synchronous or async. Async hooks
   are scheduled as background tasks during execution and awaited before
-  returning results, so `run_sync()` does not leak pending tasks.
+  returning results, so `run_sync()` does not leak pending tasks. Retention is
+  bounded per execution, not per stream: every stage of a pipeline shares one
+  `pending_tasks` list, and the unfinished count is admitted against
+  `_OBSERVE_TASK_CEILING` (256). Without a bound, a child that floods output
+  while an async hook is installed schedules one task per line and retains
+  every one of them until finalization, exhausting parent memory even when
+  capture and echo are off. Two rules keep it bounded. First, settled tasks are
+  pruned *during* execution: a successful task can never fail, and finalization
+  reports only the earliest failed or cancelled task in list order, so
+  everything else is discarded once its exception has been retrieved. Second,
+  line observation admits work before dispatch — it checks the shared list and,
+  when the unfinished count has reached the ceiling, waits for a task to settle
+  before scheduling the next line's observation. Delivery therefore stays
+  lossless and per-stream ordered, while a slow or blocked observer applies
+  backpressure to the child through its pipe rather than growing the list.
+  Capacity is checked once per event, so one event carrying several async hooks
+  can leave the unfinished count at the ceiling plus one fewer than that hook
+  count; the one settled failure finalization still needs may add one more
+  entry to the raw list. Retention is observable through the same hooks: one
+  that implements the one-method retention sink port receives each bounded
+  sample, so the metrics and tracing adapters project depth, saturation,
+  pruning, and capacity-wait duration without a second registration API, and a
+  run nothing observes pays nothing.
 
 ### 8.1.4 Timeouts
 

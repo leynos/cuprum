@@ -18,7 +18,10 @@ import dataclasses as dc
 import io
 import typing as typ
 
+import pytest
+
 from cuprum import ScopeConfig, scoped, sh
+from cuprum._pipeline_types import _StageObservation
 from cuprum.events import ExecEvent
 from cuprum.sh import (
     ExecutionContext,
@@ -31,6 +34,7 @@ from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     from cuprum.catalogue import ProgramCatalogue
+    from cuprum.lines import LineEvent
     from cuprum.program import Program
 
 # A fixed, JSON-like tag every scenario sets so correlation is checkable.
@@ -181,6 +185,75 @@ def run_twice_with_distinct_contexts(
         asyncio.run(both_runs())
 
     behaviour_state["runs"] = runs
+
+
+def run_with_async_observation(
+    behaviour_state: dict[str, object],
+    catalogue: CommandCatalogue,
+    cmd: Runnable,
+) -> None:
+    """Run ``cmd`` without capture under an async level-triggered observer.
+
+    The hook appends each stdout line and then yields once, so every line gets
+    its own short-lived task rather than completing inline. A spy on the
+    stage observation records the high-water mark of the run-wide pending-task
+    list, which is the quantity the retention bound applies to.
+
+    A no-op ``on_line`` sink keeps stdout piped. With capture and echo both
+    off, cuprum only reads a stream something still consumes for lines; the
+    sink is that consumer, and it is what lets the observer see the flood at
+    all. The retention bound is the observer's, not the sink's.
+
+    Parameters
+    ----------
+    behaviour_state
+        Scenario state; receives ``observed_lines`` and
+        ``retention_high_water``.
+    catalogue
+        The program catalogue whose allowlist gates the run.
+    cmd
+        The command to execute. It must be a :class:`~cuprum.sh.SafeCmd`; the
+        scenario only builds commands, and ``Runnable`` is what the shared
+        step signature accepts.
+    """
+    command = typ.cast("SafeCmd", cmd)
+    seen: list[str] = []
+    high_water = 0
+    original = _StageObservation._emit_event
+
+    def spy(observation: _StageObservation, event: ExecEvent) -> None:
+        """Record the retained-list size after the real dispatcher runs."""
+        nonlocal high_water
+        original(observation, event)
+        high_water = max(high_water, len(observation.pending_tasks))
+
+    async def hook(event: ExecEvent) -> None:
+        """Collect each stdout line, then yield so its task stays unfinished."""
+        if event.phase != "stdout":
+            return
+        seen.append(typ.cast("str", event.line))
+        await asyncio.sleep(0)
+
+    def keep_stdout_piped(_event: LineEvent) -> None:
+        """Consume each line so an uncaptured stream is still read."""
+
+    async def execute() -> None:
+        """Run the command without capture but with its stdout still read."""
+        _ = await command.run(
+            output=RunOutputOptions(
+                capture=False,
+                on_line=keep_stdout_piped,
+            ),
+            context=ExecutionContext(tags={"run_id": RUN_TAG}),
+        )
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(_StageObservation, "_emit_event", spy)
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)), sh.observe(hook):
+            asyncio.run(execute())
+
+    behaviour_state["observed_lines"] = seen
+    behaviour_state["retention_high_water"] = high_water
 
 
 def run_lifecycle_probe() -> list[ExecEvent]:

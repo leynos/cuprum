@@ -121,6 +121,12 @@ _RUNTIME_METHOD_ENTRY_POINTS: typ.Final = frozenset({
 })
 _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     "cuprum.adapters._tracing_line_stream._line_stream_attributes",
+    # The two retention projections are called only from
+    # ``_RetentionTracingMixin.report_retention``, which the recorder reaches
+    # through the ``_RetentionMetricsSink`` protocol; the graph never enters
+    # that implementation, so the helpers read as unreferenced.
+    "cuprum.adapters._tracing_retention._capacity_wait_event",
+    "cuprum.adapters._tracing_retention._retention_event",
     "cuprum.capture_policy._is_positive_int",
     "cuprum.control_observation._discard_hook_result",
     "cuprum.control_observation._emit_control_event",

@@ -25,6 +25,11 @@ from cuprum._observability import (
     _emit_exec_event,
     _ExecEventEmissionError,
 )
+from cuprum._observe_task_retention import (
+    _OBSERVE_TASK_CEILING,
+    _prune_finished_hook_tasks,
+)
+from cuprum._retention_telemetry import _RetentionMetricsSink, _RetentionTelemetry
 from cuprum.events import (
     CaptureMode,
     ExecEvent,
@@ -163,6 +168,34 @@ class _StageObservation:
     # capture mode must be able to rely on it. ``None`` only for a hand-built
     # observation; both builders resolve it.
     capture_mode: CaptureMode | None = None
+    # Created on first use rather than in the constructor so every existing
+    # positional construction keeps its arguments. It is appended last for the
+    # reason ``ExecEvent`` documents: a positional construction would otherwise
+    # rebind the field ahead of it.
+    _retention_telemetry: _RetentionTelemetry | None = dc.field(
+        default=None,
+        init=False,
+    )
+
+    @property
+    def retention_telemetry(self) -> _RetentionTelemetry:
+        """The stage's retention recorder, created on first use.
+
+        Adapter hooks that implement the retention sink port are discovered
+        here, once, the same way :meth:`report_pipeline_wait` discovers its
+        reporters. Resolving them at construction keeps the per-event path free
+        of a scan over the hook list.
+        """
+        if self._retention_telemetry is None:
+            self._retention_telemetry = _RetentionTelemetry(
+                exec_id=self.exec_id,
+                sinks=tuple(
+                    hook
+                    for hook in self.hooks.observe_hooks
+                    if isinstance(hook, _RetentionMetricsSink)
+                ),
+            )
+        return self._retention_telemetry
 
     @property
     def argv0(self) -> str:
@@ -322,6 +355,28 @@ class _StageObservation:
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
-            self.pending_tasks.extend(exc.scheduled_tasks)
+            self._retain_hook_tasks(exc.scheduled_tasks, phase=event.phase)
             raise exc.error from exc
-        self.pending_tasks.extend(scheduled_tasks)
+        self._retain_hook_tasks(scheduled_tasks, phase=event.phase)
+
+    def _retain_hook_tasks(
+        self,
+        tasks: list[asyncio.Task[None]],
+        *,
+        phase: str | None = None,
+    ) -> None:
+        """Extend the shared retention list, pruning once it reaches the ceiling.
+
+        Depth is measured only by the prune, which already walks the list to
+        decide what to keep. Scanning the shared list on every event would put
+        an O(n) pass on the per-line path to learn a number the prune computes
+        for free.
+        """
+        self.pending_tasks.extend(tasks)
+        if len(self.pending_tasks) >= _OBSERVE_TASK_CEILING:
+            _prune_finished_hook_tasks(
+                self.pending_tasks,
+                telemetry=self.retention_telemetry,
+                phase=phase,
+                ceiling=_OBSERVE_TASK_CEILING,
+            )

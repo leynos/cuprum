@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import typing as typ
 
+from cuprum.adapters._tracing_span_events import record_span_event
+
 if typ.TYPE_CHECKING:
     from cuprum.adapters.tracing_adapter import TracingHook
     from cuprum.line_stream_events import LineStreamEvent
@@ -14,15 +16,12 @@ class _LineStreamTracingMixin:
 
     def record_line_stream_event(self, event: LineStreamEvent) -> None:
         """Record one correlated lifecycle event when the execution span is open."""
-        hook = typ.cast("TracingHook", self)
-        with hook._lock:
-            active = hook._active_spans.get(event.exec_id)
-        if active is None:
-            return
-        attributes = _line_stream_attributes(event)
-        with active.lock:
-            if not active.is_closed:
-                active.span.add_event("cuprum.line_stream", attributes)
+        record_span_event(
+            typ.cast("TracingHook", self),
+            event.exec_id,
+            "cuprum.line_stream",
+            _line_stream_attributes(event),
+        )
 
 
 def _line_stream_attributes(event: LineStreamEvent) -> dict[str, object]:
