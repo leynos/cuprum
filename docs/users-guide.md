@@ -2786,6 +2786,29 @@ The drain failure is absorbed so it cannot displace `TimeoutExpired` or
 `CancelledError`. Logging is best-effort; the same values are emitted as
 `timeout` and `teardown_error` events, so the two channels cannot disagree.
 
+#### Startup reclaim diagnostics
+
+A startup that fails after the child was spawned is reclaimed before the
+failure reaches the caller. Each step of that reclaim is suppressed
+independently, so one cleanup failure cannot abort the rest or replace the
+error being unwound. A suppressed failure is still reported, on two channels
+that carry the same bounded category:
+
+- a `WARNING` record on the `cuprum.reclaim` logger with the message
+  `subprocess_reclaim_failed exec_id=… pid=… operation=… error=…`, carrying the
+  matching `cuprum_exec_id`, `cuprum_pid`, `cuprum_operation`, and
+  `cuprum_error_type` attributes;
+- a `teardown_error` observe event carrying `pid`, `operation`, and
+  `error_type`.
+
+`operation` is one of `terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, or `capture_cleanup`, so an operator can
+tell a child that could not be stopped from a descriptor or spill file that
+could not be released. Only the error's class name is recorded, never its
+message, so a path or command payload does not reach a log. Reporting is
+best-effort: a handler that raises cannot replace the error the caller is
+already unwinding, and the steps after the failed one still run.
+
 ### Structured execution events
 
 For richer observability, register an observe hook with `sh.observe()`. Observe
@@ -2828,8 +2851,11 @@ hooks receive `ExecEvent` values describing:
 - `timeout` — the run exceeded its deadline (ancillary; emitted before the
   preserved `exit` event and the public `TimeoutExpired`).
 
-- `teardown_error` — a stream consumer drained with an unexpected error during
-  cleanup (ancillary; the error is absorbed to preserve the primary exception).
+- `teardown_error` — a cleanup step failed and its error was absorbed to
+  preserve the primary exception (ancillary). The bounded `operation` names the
+  step: `drain` for a stream consumer drained with an unexpected error, or one
+  of the startup reclaim's categories listed under
+  [Startup reclaim diagnostics](#startup-reclaim-diagnostics).
 
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).
@@ -2867,9 +2893,12 @@ The `timeout` event carries `operation` (`"wait"`), `pid`, `timeout_s`,
 `error_type` (`"TimeoutError"`), and `timeout_mode`: `"elapsed_deadline"` for a
 positive elapsed deadline or `"non_positive_immediate"` for a non-positive
 deadline that expires without awaiting the process. The `teardown_error` event
-carries `operation` (`"drain"`), `pid`, and `error_type`, the comma-joined
-classes raised while cancelling and draining stream consumers. It fires at most
-once per execution and excludes expected `CancelledError` failures.
+carries `pid`, `operation`, and `error_type`. A `drain` event reports the
+comma-joined classes raised while cancelling and draining stream consumers and
+fires at most once per execution. A startup reclaim reports one event per
+failed step, so an execution can emit several; each names its step and the
+class of the error that step absorbed. Both forms exclude expected
+`CancelledError` failures.
 
 The `capture_eof_grace_expired` event carries the execution's `exec_id` and
 `pid`, `operation` (`"drain"`), `eof_grace_s`, and `pending_readers` (one or
@@ -2992,6 +3021,51 @@ differ in when a failure surfaces:
   tasks before the run returns. When several awaitable hooks fail, only the
   first is raised.
 
+A synchronous hook that raises on `start` needs one extra guarantee, because
+the child already exists at that point and no caller has been handed a run for
+it. Cuprum terminates and reaps that child before the hook's exception
+propagates, releases its stdin, stdout, and stderr pipes, and leaves no writer
+or consumer task behind. Any capture spill file that setup had already opened
+is removed too, so a failed start never leaves a temporary file behind. That
+guarantee holds on `run()`, `run_sync()`, and each stage of a pipeline, and on
+`lines()` when its builder fails partway and hands the partial run to the
+reclaim. It does not hold in full on `start()`, nor on `lines()` whose tasks
+were all built and whose `start` hook then raised: both reap the child and
+settle its tasks, but neither closes an output transport. The next paragraph
+records why.
+
+A failure in the setup that follows the spawn — creating the stdin writer or
+starting a stream consumer — is reclaimed the same way on `run()`,
+`run_sync()`, and `lines()`. The line iterator builds its tasks inside the same
+guard, so a builder that fails partway still has every task it had already
+started cancelled and settled, and the child is stopped, reaped, and its pipes
+and capture accumulators released. `start()` reaches its own outcome through a
+separate unwind helper: it reaps the child, settles every task the failed setup
+had started, and releases the capture accumulators, but it does not close an
+output transport. A descendant that escaped the process group can therefore
+still hold the parent's descriptor open on that route until the transport is
+collected; that gap belongs to the running-command ownership work and is not
+covered by the startup reclaim. `lines()` shares that gap for a failure that
+happens after its tasks are built — a raising `start` hook — because that path
+drains the consumers rather than closing the transports.
+
+When the run owns its process group (`OWN_GROUP`), the teardown signals that
+group rather than the child alone. The output discard is bounded: a descendant
+that escaped the group can hold a pipe end open, so Cuprum waits no longer than
+its fixed end-of-file grace for stdout and stderr to reach end-of-file, and
+then closes its own end of each pipe rather than leave the descriptor to be
+collected later. That close happens on every route that releases transports:
+`run()`, `run_sync()`, `lines()` whose builder failed partway, and each stage
+of a pipeline. `start()` omits it, and so does `lines()` when a raising `start`
+hook leaves a whole run to drain instead, as the paragraphs above record; see
+[ADR-021](adrs/adr-0021-process-group-ownership.md). That grace bounds the
+discard step alone. A cleanup step that fails is reported and suppressed, so
+the error the caller meets is always the setup failure that ended the run,
+never a failure of the reclaim itself. The child teardown and the stdin close
+are bounded separately, by the run's cancel grace and the close grace
+respectively, so neither is truncated by the end-of-file window; settling the
+started tasks and removing capture spill files carry no separate deadline.
+
 This matters most for hooks that match exhaustively on `ExecEvent.phase` and
 reject unknown values. The set of phases can grow between releases, so such a
 hook raises on a new phase — and so fails the run — until it grows an arm for
@@ -3027,8 +3101,22 @@ The hook collects:
 - `cuprum_stdio_errors_total`: Counter of standard-stream boundary failures,
   labelled by `error_category`
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
-- `cuprum_teardown_errors_total`: Counter of stream-consumer drain failures
-  during cleanup
+- `cuprum_teardown_errors_total`: Counter of teardown failures, labelled by
+  the bounded `operation` naming the cleanup step that failed, alongside the
+  `program` and `project` labels every metric carries. `drain` counts a
+  stream-consumer drain that could not finish on a run that was handed back to
+  its caller. The remaining values — `terminate`, `task_settle`, `stdin_close`,
+  `output_discard`, `transport_close`, and `capture_cleanup` — each count one
+  step of the reclaim that runs when a child's startup fails after its spawn,
+  and only the routes that implement that reclaim emit them. A `teardown_error`
+  event naming any other operation is counted as `unknown`, so a hand-built
+  event cannot shatter the series. If you previously summed this counter
+  expecting drain failures alone, filter on `operation="drain"`: a sum over
+  every operation also includes reclaim failures. Grouping by `operation` gives
+  the breakdown. Treat the label set as a compatibility surface: a release may
+  add an operation, so a collector, dashboard, or alert that enumerates these
+  values should tolerate an unfamiliar one rather than drop the sample or fail
+  the scrape
 - `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn

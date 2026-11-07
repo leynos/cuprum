@@ -1492,3 +1492,122 @@ implemented by private accumulators, and the four `cuprum/_capture_*.py`
 modules that existed before keep their names and responsibilities.
 `max-module-lines = 400` still has no suppression: the largest capture module is
 `cuprum/_capture_file.py` at 361 lines.
+
+## Addendum (2026-10-30): startup abandonment between the spawn and the hand-back
+
+A spawn returns a child, but the run does not own that child until the setup
+that follows the spawn has finished. On the `SafeCmd.run()` path that window
+holds three fallible steps: the `start` event, which runs synchronous observe
+hooks inline and re-raises their failures; the streamed run's consumer wiring;
+and the direct run's stdin writer. A failure in any of them escapes the helper
+that spawned the child, so every route that would otherwise wait for, drain,
+and reap it is never entered. The child is then running, unreaped, with pipes
+nobody will read.
+
+`cuprum/_subprocess_startup_abandon.py` owns the reclaim those three steps
+share. `_abandon_started_process` runs a fixed sequence behind a single
+`_shielded_cleanup`: terminate and reap the child, signalling its process group
+when the run owns one; cancel and gather the tasks the failed setup had already
+started; release the pipes by closing stdin, discarding stdout and stderr to
+end-of-file, and closing the output transports; and finally release the capture
+accumulators the setup had resolved, which it receives as a separate `captures`
+argument so a route that never reached its stream wiring can omit them. Each
+step catches its own ordinary failures, reports them, and then carries on, so a
+cleanup failure neither aborts a later step nor replaces the error the caller
+is already unwinding. Reporting uses the two diagnostic channels this package
+already has: a structured `cuprum.reclaim` warning naming the execution, the
+child, and the failed step, and a `teardown_error` observe event carrying the
+same category. A reclaim that leaves a child, a descriptor, or a spill file
+behind is therefore visible to an operator instead of being silently discarded.
+The categories are literals — `terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, and `capture_cleanup` — which is what lets
+`cuprum_teardown_errors_total` label them as `operation` without unbounded
+cardinality; an event naming any other operation is counted under the single
+fallback value `unknown` rather than repeated verbatim. Reporting is itself
+best-effort, because a misconfigured log handler must not replace the error
+being described. A cancellation is not suppressed; it propagates only once the
+whole sequence has completed, which is exactly what the one shield buys — three
+sequential shields would let a cancellation cut the reclaim short between steps.
+
+The order is not incidental. The child is stopped first because both drain
+policies wait for their consumers to reach end-of-file, and a live child can
+hold its own pipe open. Tasks are settled before the pipes are released so no
+writer or consumer outlives the attempt that failed. Pipe release itself is
+bounded by `_CAPTURE_EOF_GRACE_S`: a descendant that escaped the owned group
+can keep a pipe end open, and ADR-021 records why waiting longer cannot settle
+that case. The bound governs the read, not the descriptor. Once the discard has
+ended — at end-of-file, at the grace, or in a read error — the reclaim closes
+the output transports, so the parent-side descriptor does not outlive the run
+that abandoned it. Reaping cannot stand in for that close: `_Wait4Process`
+collects the child with `wait4` and releases nothing of the parent's, and no
+other step closes its transports, so without the close the descriptor would be
+released only once the transport was collected. Both backends are asked,
+because neither releases the descriptor by itself. `_Wait4Process` reaps with
+`wait4` and settles nothing else, so it is asked through its own
+`close_output_transports`. The fallback hands back asyncio's own subprocess,
+whose read pipes are held by the transports belonging to its streams; those
+close a pipe only once it reports end-of-file — precisely what a descendant
+holding the write end prevents — so each output pipe's transport is closed as
+well. Only those pipe transports are closed, never the subprocess transport
+itself, so the child's termination and process-group ownership are untouched.
+
+The capture accumulators are released last, for two reasons. A cancelled drain
+never builds the result that would have carried its spill handle, so the
+accumulator is the last reference to a temporary file cuprum created and
+therefore must remove; and a consumer that is still draining into its
+accumulator could recreate the file the release has just removed, so the
+release has to follow the tasks being settled rather than precede it.
+
+The module is separate from `_subprocess_spawn` because the spawn module sits
+at the 400-line ceiling and its responsibility is creating and announcing a
+child, not reclaiming one. It is separate from `_process_lifecycle` because
+that module owns generic teardown primitives — `_shielded_cleanup`,
+`_terminate_all_shielded` — while this one composes them into one
+route-specific sequence. The import direction follows: this module imports the
+lifecycle primitives, the stream drain's EOF grace, and `_TeardownPolicy`, and
+the lifecycle module knows nothing about it. The reporting helpers are the one
+piece that did not stay: adding them pushed the reclaim module past the
+400-line ceiling, so they live in `cuprum/_reclaim_reporting.py`, which the
+reclaim imports and which knows nothing about the sequence it reports on.
+
+Three guard sites call it. `_start_owned_process` wraps the `start` emission,
+and `_subprocess_stream_run` and `_subprocess_direct_run` wrap their post-spawn
+setup. The setup guards pass a list, because a tuple returned later never
+exists when a later step fails: `_record_started` appends each task the moment
+it is created, so a consumer that fails to start leaves the consumer already
+running in the reclaim's hands. Recording one at a time rather than building a
+pair in one expression is what makes the failure of the second consumer safe
+for the first.
+
+The owned handle's `_attach_run_tasks` had the same problem in a different
+shape, and closing it also removed the last reason for it to keep a copy of the
+task construction. Its reclaim is `_detach_run_tasks` rather than this helper,
+but it too starts one consumer per stream and can fail while the pair is being
+built, so it passes its own `started` list to `_build_run_task_ownership`, the
+helper the streamed run and the line iterator also use; that helper records
+each task as it is created and is now the only place the writer and the
+consumers are started. The direct run is the exception: it wires no consumers
+and starts its own stdin writer through `_spawn_stdin_writer`, recording it in
+its own `recorded` list, so it calls neither builder.
+
+The same guarantee already existed for `SafeCmd.lines()` and `SafeCmd.start()`,
+whose post-spawn windows end in their own unwind helpers with their own records
+to settle — the line-stream run's queue telemetry and settlement latch, and the
+handle's attached task set. The handle's stays there: it abandons a different
+record, not a bare process. The line iterator keeps its own helper for a run
+whose tasks were all built. A builder that fails partway is a different shape:
+no run exists to drain, and the tasks it recorded as they started are the only
+handle the reclaim has, so that shape now arrives here as well.
+`cuprum/unittests/test_line_stream_ownership.py` pins it with a real child.
+What the two single-command shapes gained here is the shared route, and
+`cuprum/unittests/test_direct_start_ownership.py` pins it with real children,
+including the streamed and owned-group cases.
+
+Moving `_abandon_started_process` into `_subprocess_streams` was not an option
+for the usual reason: that module was already at 423 lines. Its own 400-line
+ceiling forced a second split, and `_build_stream_config` moved to
+`cuprum/_stream_config.py`, beside `_resolve_stream_configs`, whose docstring
+already said it "lives beside the config it builds rather than beside the spawn
+that asks for it". `_subprocess_streams` re-exports the name so the call path
+that reaches it there keeps working, and `_record_started` stayed with the
+reclaim module because that is the only code that consumes it.

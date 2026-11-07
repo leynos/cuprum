@@ -19,6 +19,19 @@ from cuprum import (
 from cuprum._testing import _prepare_pipeline_config, _spawn_pipeline_processes
 from cuprum.events import ExecEvent, TerminalOutcome
 from cuprum.sh import RunOutputOptions
+from cuprum.unittests._start_ownership_support import (
+    _BLOCKING_CHILD,
+    _assert_strictly_reaped,
+    _failing_start_hook,
+    _python_catalogue,
+    _StartHookError,
+)
+from cuprum.unittests._wait4_process_support import _abandon, _wait4_only
+from tests.helpers.timeouts import (
+    pending_tasks,
+    started_pids,
+    wait_for_process_death,
+)
 
 
 class _StubSpawnProcess:
@@ -146,9 +159,9 @@ def test_stage_preparation_failure_reaps_every_spawned_stage(
     the earlier stage's capture task is cancelled, and every spawned process —
     the failing stage's included — is terminated and awaited.
 
-    This pins the pipeline path only. The two command paths leak the child on
-    the same injection; that gap is recorded as contradicted in the plan and
-    deliberately has no test here.
+    The two command paths reclaim the child on their own post-spawn setup
+    failures through the same startup reclaim;
+    ``test_direct_start_ownership.py`` pins that.
     """
     echo = sh.make(ECHO)
     stages = (echo("-n", "first"), echo("-n", "second"))
@@ -226,6 +239,47 @@ def test_stage_preparation_failure_reaps_every_spawned_stage(
     assert prepared[0].cancelled(), (
         "the earlier stage's capture task must be cancelled by the cleanup"
     )
+
+
+@_wait4_only
+def test_start_hook_failure_reaps_every_started_stage() -> None:
+    """A raising start hook cannot orphan a stage the pipeline already spawned.
+
+    The first stage is spawned and recorded before its ``start`` event runs the
+    synchronous hook inline, so the observer's failure escapes with a live
+    child behind it. The pipeline's own spawn cleanup terminates and reaps that
+    stage, and the caller still meets the hook's error.
+    """
+    program, catalogue = _python_catalogue("pipeline-start-ownership")
+    builder = sh.make(program, catalogue=catalogue)
+    pipeline = builder("-c", _BLOCKING_CHILD) | builder("-c", _BLOCKING_CHILD)
+    events: list[ExecEvent] = []
+
+    async def run_case() -> set[asyncio.Task[object]]:
+        """Run the pipeline and report the loop's leftovers."""
+        with pytest.raises(_StartHookError):
+            await pipeline.run(output=RunOutputOptions(capture=True, echo=False))
+        return pending_tasks()
+
+    with (
+        scoped(ScopeConfig(allowlist=catalogue.allowlist)),
+        sh.observe(_failing_start_hook(events)),
+    ):
+        still_pending = asyncio.run(run_case())
+
+    pids = started_pids(events)
+    try:
+        assert len(pids) == 1, (
+            f"only the first stage must spawn before its hook fails, got {pids!r}"
+        )
+        assert not still_pending, (
+            f"a failed pipeline start must leave no task pending, got {still_pending!r}"
+        )
+        _assert_strictly_reaped(pids[0])
+        wait_for_process_death(pids[0], context="a failed pipeline start hook")
+    finally:
+        for pid in pids:
+            _abandon(pid)
 
 
 def test_spawn_pipeline_processes_records_times_before_stage_spawn(

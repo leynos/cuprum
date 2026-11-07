@@ -215,7 +215,8 @@ class MetricsHook:
     - ``cuprum_stdin_bytes_total``: Counter of successful stdin bytes written
     - ``cuprum_stdin_errors_total``: Counter of stdin writer failures
     - ``cuprum_timeouts_total``: Counter of subprocess and pipeline expiries
-    - ``cuprum_teardown_errors_total``: Counter of consumer drain failures
+    - ``cuprum_teardown_errors_total``: Counter of teardown failures, labelled
+      by the bounded ``operation`` naming the cleanup step that failed
     - ``cuprum_capture_eof_grace_expired_total``: Counter of capture EOF grace
       expiries with readers still pending
     - ``cuprum_pipeline_fail_fast_total``: Counter of pipelines terminated

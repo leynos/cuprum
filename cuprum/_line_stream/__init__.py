@@ -44,7 +44,6 @@ from cuprum._line_stream.reader_wait import (
 )
 from cuprum._line_stream.spawn import (
     _abandon_unstarted_run,
-    _build_unstarted_run,
     _start_line_stream_run,
     _with_line_sink_hooks,
 )
@@ -61,7 +60,6 @@ __all__ = [
     "_LineStreamTelemetry",
     "_abandon_unstarted_run",
     "_await_consumers",
-    "_build_unstarted_run",
     "_cleanup_failed_line_stream_run",
     "_collect_line_stream_after_exit",
     "_coordinate_line_stream",
