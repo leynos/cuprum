@@ -861,7 +861,7 @@ boundary-download-integration: ## Exercise bounded downloads over controlled HTT
 	CUPRUM_RUN_DOWNLOAD_INTEGRATION=1 \
 	  CUPRUM_PROVER_TOOLS_SOURCE="$(PROVER_TOOLS_SOURCE)" \
 	  $(PYTEST) -v scripts/tests/test_boundary_download_integration.py \
-	    scripts/tests/test_boundary_pypy_transfer.py
+	    scripts/tests/test_boundary_pypy_https.py
 
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build

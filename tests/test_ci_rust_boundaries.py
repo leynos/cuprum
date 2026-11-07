@@ -231,7 +231,7 @@ def test_the_download_integration_target_supplies_its_opt_in() -> None:
         "$(PYTEST)",
         "-v",
         "scripts/tests/test_boundary_download_integration.py",
-        "scripts/tests/test_boundary_pypy_transfer.py",
+        "scripts/tests/test_boundary_pypy_https.py",
     ), "the target must switch the suite on, pass the pin, and name both modules"
 
 

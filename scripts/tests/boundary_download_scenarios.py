@@ -34,16 +34,10 @@ def _head(status: str, headers: str = "") -> bytes:
     return f"HTTP/1.1 {status}\r\n{headers}\r\n".encode("ascii")
 
 
-def _body_response(body: bytes) -> bytes:
-    """Build a complete 200 response for `body`."""
-    return _head("200 OK", f"Content-Length: {len(body)}\r\n") + body
-
-
 def fixed(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     """Serve one complete, correctly sized body."""
     server.requests.append(support.read_request(connection))
-    connection.sendall(_body_response(FIXED_BODY))
-    server.emitted += len(FIXED_BODY)
+    support.respond_with_body(connection, server, FIXED_BODY)
 
 
 def declared_oversize(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
@@ -144,8 +138,7 @@ def https_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     """Redirect `/start` to a complete body at `/asset.bin`."""
     if _redirect_to_asset(connection, server):
         return
-    connection.sendall(_body_response(FIXED_BODY))
-    server.emitted += len(FIXED_BODY)
+    support.respond_with_body(connection, server, FIXED_BODY)
 
 
 def redirect_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:

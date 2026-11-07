@@ -5838,32 +5838,39 @@ holds the assertions and is skipped unless `CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`,
 so the default suite never reaches the network.
 
 `make boundary-download-integration` runs that module together with
-`test_boundary_pypy_transfer.py`, which drives the PyPy installer's own
-`checked_download` over the same loopback server. The target needs the
-`openssl` binary to mint the throwaway certificate authority, `uv` with a
-Python 3.14 interpreter for the isolated driver, network access to install the
-pinned `rust-prover-tools` revision, and a loopback socket for each scenario.
-The PyPy cases need only `openssl` and the loopback socket; they trust the test
-certificate authority through `SSL_CERT_FILE` for the duration of one test.
+`test_boundary_pypy_https.py`, which drives the PyPy downloader and the
+`install` entry point over the same loopback server.
+`test_boundary_pypy_transfer.py` holds the unit and property cases that need no
+socket. The PyPy downloader keeps one deadline across the redirects, the header
+parse, and the body, and a watchdog shuts the connection's socket down when
+that deadline passes, so a server that trickles header bytes cannot hold the
+transfer open. The target needs the `openssl` binary to mint the throwaway
+certificate authority, `uv` with a Python 3.14 interpreter for the isolated
+driver, network access to install the pinned `rust-prover-tools` revision, and
+a loopback socket for each scenario. The PyPy cases need only `openssl` and the
+loopback socket; they trust the test certificate authority through
+`SSL_CERT_FILE` for the duration of one test.
 
 The retired `scripts/install_boundary_kani.py` and
-`scripts/install_boundary_z3.py` entry points are gone;
-`scripts/install_pypy312.py` keeps a private `checked_download` for the linter
-interpreter. `scripts/boundary_fault_invocations.py` scopes its runner to the
-four verification commands and a disposable source copy; it is not a general
-process abstraction. `scripts/check_boundary_faults.py` owns the fault
-catalogue and calls that runner rather than defining its own. The runner
-upholds the allowlisted-verifier, offline-Cargo and lockfile contract described
-below. Its progress and ownership checks have separate private runners; their
-scope is the existing four mutations, with the same controls and failure
-diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
-cannot: Cargo consumes a global `--frozen` before dispatching an external
-subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
-therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
-the copied workspace's lockfile digest after every run so a build that rewrites
-it fails closed. The compiler-contract checker uses a named predicate requiring
-both failure and an unsafe-forbid diagnostic, so unrelated compiler failures
-cannot pass the probe.
+`scripts/install_boundary_z3.py` entry points are gone.
+`scripts/pypy_download.py` owns the linter interpreter's bounded HTTPS fetch,
+including its byte ceiling, transfer deadline, and digest check, and
+`scripts/install_pypy312.py` owns the release layout and the extraction that
+turns a verified archive into the configured interpreter.
+`scripts/boundary_fault_invocations.py` scopes its runner to the four
+verification commands and a disposable source copy; it is not a general process
+abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
+calls that runner rather than defining its own. The runner upholds the
+allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
+progress and ownership checks have separate private runners; their scope is the
+existing four mutations, with the same controls and failure diagnostics. Native
+`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
+a global `--frozen` before dispatching an external subcommand, and cargo-kani
+`0.67.0` rejects that flag itself. The Kani route therefore relies on the
+run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
+lockfile digest after every run so a build that rewrites it fails closed. The
+compiler-contract checker uses a named predicate requiring both failure and an
+unsafe-forbid diagnostic, so unrelated compiler failures cannot pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains

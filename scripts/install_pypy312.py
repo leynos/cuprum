@@ -10,244 +10,30 @@ through environment variables. Keeping those values at the call site preserves
 Make overrides while moving download and extraction behaviour into testable
 Python code.
 
-This module also owns the small HTTPS downloader used for the PyPy archive.
-Verifier binaries no longer use it: Kani and Z3 installs are delegated to the
-shared `rust-prover-tools` dependency, which applies byte ceilings and a
-transfer deadline before the digest check.
-
-The PyPy downloader applies the same two bounds itself: it refuses a declared
-length above `_MAX_BODY_BYTES`, stops once the streamed body passes that
-ceiling, and abandons a body that outlives `_TRANSFER_DEADLINE_SECONDS`. The
-deadline spans every redirect hop, but each header or body read is bounded only
-by the connection's own 60-second socket timeout. Without these bounds a
-stalled or oversized response would fill the disk before the digest check could
-reject it.
+`scripts.pypy_download` owns the bounded HTTPS fetch: it applies a byte ceiling
+and a single transfer deadline before the digest check, so a stalled or
+oversized response cannot fill the host disk. This module owns the release
+layout and the extraction that turns a verified archive into the configured
+interpreter.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import hashlib
-import http.client
 import os
 import platform
 import tarfile
-import time
-import typing as typ
-import urllib.parse
 from pathlib import Path
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from scripts.pypy_download import checked_download
 
-    type Clock = cabc.Callable[[], float]
-
-# Large enough for the pinned PyPy archive with room to spare, small enough
-# that a hostile or broken response cannot exhaust the host disk.
-_MAX_BODY_BYTES = 512 * 1024 * 1024
-# One deadline covers every redirect hop plus the body, so a server that
-# trickles bytes cannot extend the transfer indefinitely.
-_TRANSFER_DEADLINE_SECONDS = 900.0
-_CHUNK_BYTES = 64 * 1024
-
-
-def checked_download(url: str, destination: Path, digest: str) -> None:
-    """Fetch an HTTPS artefact and fail closed on any checksum mismatch.
-
-    Parameters
-    ----------
-    url : str
-        HTTPS release asset URL.
-    destination : Path
-        Local cache path; an existing file is reused only if its digest matches.
-    digest : str
-        Expected SHA-256 digest from the approved release manifest.
-
-    Raises
-    ------
-    ValueError
-        If the URL is not HTTPS or downloaded bytes do not match the pin.
-    OSError
-        If an existing cache entry cannot be inspected, or the download cannot
-        be transferred into the cache.
-    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _cache_is_current and _digest.
-    if not url.startswith("https://"):
-        msg = "binary downloads require HTTPS"
-        raise ValueError(msg)
-    if _cache_is_current(destination, digest):
-        return
-    pending = destination.with_suffix(".download")
-    try:
-        _download(url, pending)
-        _require_digest(pending, destination, digest)
-        pending.replace(destination)
-    finally:
-        pending.unlink(missing_ok=True)
-
-
-def _cache_is_current(destination: Path, digest: str) -> bool:
-    """Report whether an existing cache entry already matches the pin.
-
-    An entry that cannot be read is not a miss: the failure is raised, so
-    `checked_download` never answers an unreadable entry with a fresh download
-    that would overwrite it.
-
-    Returns
-    -------
-    bool
-        ``True`` only for a readable entry whose digest already matches.
-    """
-    try:
-        current = _digest(destination)
-    except FileNotFoundError:
-        return False
-    return current == digest
-
-
-def _require_digest(pending: Path, destination: Path, digest: str) -> None:
-    """Refuse downloaded bytes that do not match the approved digest."""
-    if _digest(pending) != digest:
-        msg = f"binary checksum mismatch: {destination.name}"
-        raise ValueError(msg)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class _Transfer:
-    """The one deadline and clock every redirect hop of a download shares."""
-
-    deadline: float
-    clock: Clock
-
-    def expired(self) -> bool:
-        """Report whether the transfer has outlived its deadline."""
-        return self.clock() > self.deadline
-
-
-def _download(
-    url: str,
-    destination: Path,
-    *,
-    clock: Clock = time.monotonic,
-) -> None:
-    """Follow bounded HTTPS-only release redirects into a temporary file."""
-    # Tests pass a controlled clock so a deadline is reached without waiting.
-    transfer = _Transfer(clock() + _TRANSFER_DEADLINE_SECONDS, clock)
-    for _ in range(6):
-        redirect = _download_once(url, destination, transfer)
-        if redirect is None:
-            return
-        url = redirect
-    msg = "release redirect limit exceeded"
-    raise ValueError(msg)
-
-
-def _connect(url: str) -> tuple[http.client.HTTPSConnection, str]:
-    """Validate one hop's URL and open its HTTPS connection."""
-    parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        msg = "binary downloads and redirects require HTTPS"
-        raise ValueError(msg)
-    target = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, "")) or "/"
-    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
-    return connection, target
-
-
-def _redirect_url(url: str, response: http.client.HTTPResponse) -> str | None:
-    """Resolve a redirect target or validate a terminal download response."""
-    if response.status in {301, 302, 303, 307, 308}:
-        location = response.getheader("Location")
-        if location is None:
-            msg = "release redirect has no Location"
-            raise ValueError(msg)
-        return urllib.parse.urljoin(url, location)
-    if response.status != http.client.OK:
-        msg = f"release download failed: HTTP {response.status}"
-        raise OSError(msg)
-    return None
-
-
-def _fetch_body(
-    connection: http.client.HTTPSConnection,
-    url: str,
-    destination: Path,
-    transfer: _Transfer,
-) -> str | None:
-    """Save the response body, or resolve one redirect hop instead."""
-    with connection.getresponse() as response:
-        redirect = _redirect_url(url, response)
-        if redirect is not None:
-            return redirect
-        _reject_oversize_declaration(response)
-        with destination.open("wb") as output:
-            _copy_body(response, output, transfer)
-        return None
-
-
-def _reject_oversize_declaration(response: http.client.HTTPResponse) -> None:
-    """Refuse a declared body length above the asset ceiling before reading."""
-    declared = response.getheader("Content-Length")
-    if declared is None:
-        return
-    try:
-        length = int(declared)
-    except ValueError:
-        msg = f"release download declared a non-numeric Content-Length: {declared}"
-        raise ValueError(msg) from None
-    if length > _MAX_BODY_BYTES:
-        msg = (
-            f"release download declared {length} bytes, above the "
-            f"{_MAX_BODY_BYTES}-byte limit"
-        )
-        raise ValueError(msg)
-
-
-def _copy_body(
-    response: http.client.HTTPResponse,
-    output: typ.BinaryIO,
-    transfer: _Transfer,
-) -> None:
-    """Copy chunks until EOF, refusing an overflow or an expired deadline."""
-    written = 0
-    while True:
-        if transfer.expired():
-            msg = "release download exceeded the transfer deadline"
-            raise TimeoutError(msg)
-        # `read` blocks until it fills the buffer or reaches EOF, so a server
-        # trickling one byte per socket timeout could hold a single call far
-        # past the deadline. `read1` returns after at most one socket read, so
-        # the check above runs again within the socket timeout.
-        chunk = response.read1(_CHUNK_BYTES)
-        if not chunk:
-            return
-        written += len(chunk)
-        if written > _MAX_BODY_BYTES:
-            msg = f"release download exceeded the {_MAX_BODY_BYTES}-byte limit"
-            raise ValueError(msg)
-        output.write(chunk)
-
-
-def _download_once(
-    url: str,
-    destination: Path,
-    transfer: _Transfer,
-) -> str | None:
-    """Close one HTTPS connection after saving its body or resolving a redirect."""
-    connection, target = _connect(url)
-    try:
-        connection.request(
-            "GET",
-            target,
-            headers={"User-Agent": "cuprum-boundary-verification"},
-        )
-        return _fetch_body(connection, url, destination, transfer)
-    finally:
-        connection.close()
-
-
-def _digest(path: Path) -> str:
-    """Hash a release artefact without loading the bundle into memory."""
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+__all__ = [
+    "PyPyInstallation",
+    "checked_download",
+    "install",
+    "installation_from_environment",
+    "main",
+]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
