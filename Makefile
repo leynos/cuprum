@@ -929,6 +929,11 @@ boundary-verus: ## Verify actual production length/accounting kernels
 	$(UV_RUN_ENV) uv run python scripts/render_boundary_proofs.py
 	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
 
+# `cargo kani` resolves `cargo-kani` on PATH. The install target places the
+# verified binaries under `.cache` rather than somewhere already on PATH, and
+# only its own setup line exports that directory. Prepend it here so the local
+# target verifies the same Kani the install target fetched.
+boundary-kani: export PATH := $(CURDIR)/.cache/boundary-kani/bin:$(PATH)
 boundary-kani: ## Check bounded native ownership and existing policy proofs
 	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) kani check-version
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
