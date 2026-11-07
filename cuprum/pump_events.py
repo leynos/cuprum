@@ -55,11 +55,17 @@ class RustPumpDeclineReason(enum.StrEnum):
 
 
 class RustPumpHandoffOutcome(enum.StrEnum):
-    """A bounded result of attempting the Rust writer-resource hand-off."""
+    """A bounded result of attempting the Rust writer-resource hand-off.
+
+    ``DRAIN_FAILED`` covers a failed buffered drain and a cancellation during
+    it. The acquired pair is released and the original exception is re-raised,
+    so the hop settles without a submission.
+    """
 
     SUBMITTED = "submitted"
     DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
+    DRAIN_FAILED = "drain_failed"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"
     READER_PREPARATION_FAILED = "reader_preparation_failed"

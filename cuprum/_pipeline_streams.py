@@ -239,6 +239,11 @@ async def _pump_over_raw_fds(
         # asyncio and the fallback reads the preserved prefix.
         _close_unactivated_rust_pump_fds(worker_fds)
         _resume_reader_transport(reader_pause.resume)
+        # The hop owns no descriptors past this point, so the outcome is the
+        # only signal an operator has that the drain window closed without a
+        # submission. Emitting after the release keeps a propagating shutdown
+        # signal from stranding the pair.
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
         raise
     try:
         # These duplicates outlive the caller-facing task. They carry the

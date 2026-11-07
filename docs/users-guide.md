@@ -3594,7 +3594,12 @@ declines with `duplicate_fds_unavailable`, and counts the
 `duplicate_writer_failed` hand-off outcome. Descriptors that could not be
 switched to blocking mode write no hand-off record: the hop declines with
 `blocking_mode_unavailable`, and `blocking_setup_failed` appears only as the
-hand-off outcome counted by the [pump metrics](#pump-metrics).
+hand-off outcome counted by the [pump metrics](#pump-metrics). A buffered drain
+that fails or is cancelled after the pair is acquired releases the pair,
+resumes the reader, and re-raises the original exception; it counts the
+`drain_failed` hand-off outcome. The hop owns no descriptors past that point,
+so the counter is the only record that the drain window closed without a
+submission.
 
 Two setup failures still reach the caller. A rejected executor submission
 reports `executor_submission_rejected` and re-raises after rollback, because
@@ -3724,10 +3729,10 @@ unlabelled. The `reason` label on the decline counter retains the bounded
 cardinality described below.
 
 The `outcome` label on `cuprum_rust_pump_handoff_total` is closed to exactly
-`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
-`native_load_failed`, `buffer_validation_failed`,
-`platform_writer_transfer_failed`, `native_io_failed`,
-`duplicate_writer_failed`, `reader_preparation_failed`, and
+`submitted`, `blocking_setup_failed`, `drain_failed`,
+`executor_submission_rejected`, `native_load_failed`,
+`buffer_validation_failed`, `platform_writer_transfer_failed`,
+`native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, and
 `windows_raw_handle_rejected`. The last value represents the deliberate Windows
 raw-handle rejection exposed by the Python shim. `outcome` is the only label on
 this counter. Descriptor numbers, Windows handle values, errno values,

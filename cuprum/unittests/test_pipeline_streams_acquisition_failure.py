@@ -24,13 +24,16 @@ from cuprum import (
     sh,
 )
 from cuprum._testing import set_rust_availability_for_testing
+from cuprum.adapters.pump_metrics import RUST_PUMP_HANDOFF_TOTAL, PumpMetricsHook
+from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import (
     _FdTransport,
     _nonblocking_pipe_pair,
     _RecordingWriter,
     clear_backend_caches,
 )
-from cuprum.unittests._rust_pump_test_helpers import owned_fds
+from cuprum.unittests._rust_pump_test_helpers import RecordingCollector, owned_fds
 from tests.helpers.catalogue import python_catalogue
 
 __all__ = ["clear_backend_caches"]
@@ -113,6 +116,8 @@ class _DrainFailureHarness:
         self.error = error
         self.resume_calls = 0
         self.acquired: list[int] = []
+        self.events: list[PumpEvent] = []
+        self.collector = RecordingCollector()
         self.close_worker_fd = mock.Mock(
             wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
         )
@@ -173,7 +178,11 @@ class _DrainFailureHarness:
 
     def run(self) -> None:
         """Run the hand-off over a private pipe and assert its rollback."""
-        with owned_fds() as (reader_fd, writer_fd):
+        with (
+            owned_fds() as (reader_fd, writer_fd),
+            observe_pump(self.events.append),
+            observe_pump(PumpMetricsHook(self.collector)),
+        ):
             handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
                 reader_fd=reader_fd,
                 writer_fd=writer_fd,
@@ -206,6 +215,16 @@ class _DrainFailureHarness:
                 os.fstat(fd)
         os.fstat(reader_fd)
         os.fstat(writer_fd)
+        assert [event.outcome for event in self.events] == [
+            RustPumpHandoffOutcome.DRAIN_FAILED
+        ], "the drain failure must settle the hop with its own bounded outcome"
+        assert self.collector.counters == [
+            (
+                RUST_PUMP_HANDOFF_TOTAL,
+                1.0,
+                {"outcome": RustPumpHandoffOutcome.DRAIN_FAILED},
+            )
+        ], "the drain failure must increment one bounded hand-off metric"
 
 
 @pytest.mark.parametrize(

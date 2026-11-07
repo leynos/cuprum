@@ -2736,10 +2736,10 @@ Table 1: metrics emitted by `PumpMetricsHook`
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
 six in Table 1 above. The `outcome` label is also closed: it is exactly
-`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
-`native_load_failed`, `buffer_validation_failed`,
-`platform_writer_transfer_failed`, `native_io_failed`,
-`duplicate_writer_failed`, `reader_preparation_failed`, or
+`submitted`, `blocking_setup_failed`, `drain_failed`,
+`executor_submission_rejected`, `native_load_failed`,
+`buffer_validation_failed`, `platform_writer_transfer_failed`,
+`native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, or
 `windows_raw_handle_rejected`. The last value records the deliberate Windows
 raw-handle rejection exposed by the Python shim. The hand-off counter
 increments once for each such outcome, including a successful submission.
@@ -5903,8 +5903,10 @@ exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
 and reader-preparation failure emits `reader_preparation_failed`. Executor
 rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure emits `blocking_setup_failed`. The outcome events are
-counted by `cuprum_rust_pump_handoff_total` as described above.
+Blocking-mode failure emits `blocking_setup_failed`. A drain failure or
+cancellation emits `drain_failed` once the acquired pair has been released. The
+outcome events are counted by `cuprum_rust_pump_handoff_total` as described
+above.
 
 Two setup failures still re-raise, and the distinction between them and the
 declines is what the two duplication stages exist to draw.
