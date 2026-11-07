@@ -2601,19 +2601,36 @@ partial-failure paths in one place rather than inlined in the pump:
   `may_hand_off` is derived rather than supplied: only a named `decline_reason`
   refuses the hand-off, so a permit and a decline reason cannot disagree.
 
-Before native I/O begins, the reader transport is paused and callbacks queued
-before the pause are allowed to settle. If `StreamReader._buffer` contains
-bytes, the hand-off delivers them once to the downstream writer and clears the
-buffer only after delivery succeeds or downstream closure is known. The worker
-then receives a duplicate reader and duplicate writer descriptor and handles
-the remaining raw bytes. Rust borrows the reader duplicate and consumes the
-writer duplicate. After the worker settles, Python closes the remaining reader
-duplicate; it closes the writer duplicate itself only when preparation or
-executor submission fails. If any preparation step cannot be completed safely,
-dispatch falls back to the Python pump. That fall-back has one exception, and
-it is test-only: `_permit_test_owned_descriptor_handoff` in
-`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
-that one — when the dispatch test seam has installed its own descriptor supply
+Before native I/O begins, the reader transport is paused, then the worker
+descriptor pair is acquired synchronously, before the hand-off first awaits.
+The hand-off carries descriptor *numbers*, so opening them after the buffered
+drain would let a transport that closed during that await release its number
+for another pipeline to reuse; the worker would then attach to the wrong pipe.
+Acquiring before the first suspension keeps the numbers naming the pipe the
+hand-off was authorized to borrow. If acquisition fails, the reader is resumed
+and dispatch falls back before draining, leaving the still-buffered prefix for
+the Python pump.
+
+Only after the acquisition does the hand-off settle callbacks queued before the
+pause and, if `StreamReader._buffer` contains bytes, deliver them once to the
+downstream writer, clearing the buffer only after delivery succeeds or
+downstream closure is known. Blocking activation deliberately stays after the
+drain: on non-Linux platforms `os.dup` shares the transport's status flags, so
+switching early would make asyncio's own descriptor blocking while the drain
+still awaits. If the drain raises or is cancelled, the unactivated pair is
+closed exactly once, the reader is resumed, and the original exception
+propagates unchanged; blocking mode was never engaged, so there is nothing to
+restore. Once the drain completes, the acquired pair is switched to blocking
+mode and handed to the worker, which receives a further duplicate reader and
+duplicate writer descriptor and handles the remaining raw bytes. Rust borrows
+the reader duplicate and consumes the writer duplicate. After the worker
+settles, Python closes the remaining reader duplicate; it closes the writer
+duplicate itself only when preparation or executor submission fails. If any
+preparation step cannot be completed safely, dispatch falls back to the Python
+pump. That fall-back has one exception, and it is test-only:
+`_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
+overrules the closing-reader decline — and only that one — when the dispatch
+test seam has installed its own descriptor supply
 (`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
 hand-off derives its worker descriptor from the transport and keeps the
 decline. The permitted verdict carries no resume hook, because nothing was
@@ -5892,15 +5909,27 @@ declines is what the two duplication stages exist to draw.
 
 The first stage, `_open_native_pump_worker_fds`, re-opens each transport's
 descriptor *from its number*: on Linux through `/proc/self/fd/N`, elsewhere
-through `os.dup`. The number was extracted a moment earlier and the re-open is
-therefore a race against asyncio's own close — an EOF'd transport like
-`echo -n hello` exits immediately, so the re-open can hit `ENOENT`. That is a
-*decline*: nothing was transferred, no state outlived the attempt, and the hop
-is perfectly serviceable on the Python pump. Re-raising it left the writer
-transport open, so the downstream stage never saw EOF and the pipeline hung
-until its deadline — an intermittent wedge that only the native fast path could
-produce. The decline records its own `duplicate_fds_unavailable` reason in
-Table 1 above, alongside `blocking_mode_unavailable`.
+through `os.dup`. Acquisition runs before the hand-off first awaits, in the
+same synchronous stretch as descriptor extraction, so no event-loop callback
+can close the transport and release the number for another pipeline between
+those two steps. Opening the pair after the buffered drain would leave exactly
+that window: the drain awaits `writer.drain()`, and a transport that closed in
+the meantime can have its descriptor number reassigned to another pipe, after
+which the worker would read the wrong one. A re-open can still fail for reasons
+outside the loop, such as descriptor exhaustion. That is a *decline*: nothing
+was transferred, no state outlived the attempt, and the hop is perfectly
+serviceable on the Python pump. Re-raising it left the writer transport open,
+so the downstream stage never saw EOF and the pipeline hung until its deadline
+— an intermittent wedge that only the native fast path could produce. The
+decline records its own `duplicate_fds_unavailable` reason in Table 1 above,
+alongside `blocking_mode_unavailable`.
+
+The acquisition is deliberately separate from blocking activation. The pair is
+acquired before the drain, but it is only switched to blocking mode and handed
+to `_RustPumpState` after the drain completes, because non-Linux `os.dup`
+duplicates share the transport's status flags. A drain failure or cancellation
+closes the unactivated pair exactly once and resumes the reader without
+restoring blocking mode, since none was engaged.
 
 The second stage, `_duplicate_native_pump_fds`, duplicates descriptors Cuprum
 already owns, so it cannot lose that race: a failure there means descriptor

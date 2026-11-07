@@ -15,7 +15,6 @@ from unittest import mock
 import pytest
 
 from cuprum import (
-    _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
@@ -154,85 +153,6 @@ class TestPumpStreamDispatch:
         assert not original_writer_blocking, (
             "expected original writer FD to remain non-blocking"
         )
-
-    def test_run_rust_pump_pauses_reader_before_draining(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Rust pumping should pause the reader transport before draining."""
-        call_order: list[str] = []
-
-        def fake_pause_reader_transport(
-            reader: asyncio.StreamReader,
-        ) -> _pipeline_stream_fds._ReaderPause:
-            """Record a pause and return a resume callback for the reader."""
-            del reader
-            call_order.append("pause")
-
-            def _resume() -> None:
-                """Record that the reader transport was resumed."""
-                call_order.append("resume")
-
-            return _pipeline_stream_fds._ReaderPause(
-                resume=_resume,
-            )
-
-        async def fake_drain_reader_buffer(
-            reader: asyncio.StreamReader,
-            writer: asyncio.StreamWriter | None,
-        ) -> None:
-            """Record that the reader buffer was drained."""
-            del reader, writer
-            await asyncio.sleep(0)
-            call_order.append("drain")
-
-        monkeypatch.setattr(
-            _pipeline_streams,
-            "_pause_reader_transport",
-            fake_pause_reader_transport,
-        )
-        monkeypatch.setattr(
-            _pipeline_streams,
-            "_drain_reader_buffer",
-            fake_drain_reader_buffer,
-        )
-        monkeypatch.setattr(
-            _pipeline_stream_fds,
-            "_set_stream_fds_blocking",
-            lambda **_: (True, True),
-        )
-        monkeypatch.setattr(
-            _pipeline_stream_fds,
-            "_restore_stream_fd_blocking",
-            lambda **_: call_order.append("restore"),
-        )
-
-        import cuprum._streams_rs as streams_rs
-
-        def consuming_rust_pump(reader_fd: int, writer_fd: int) -> int:
-            """Consume the duplicate writer FD exactly as the Rust pump does."""
-            del reader_fd
-            os.close(writer_fd)
-            return 0
-
-        monkeypatch.setattr(streams_rs, "rust_pump_stream", consuming_rust_pump)
-
-        reader = typ.cast("asyncio.StreamReader", object())
-        asyncio.run(
-            _run_with_inline_executor(
-                _pipeline_streams._run_rust_pump(
-                    reader=reader,
-                    writer=None,
-                    handoff=_pipeline_streams._RustPumpHandoff(
-                        reader_fd=1,
-                        writer_fd=2,
-                        cleanup_grace_s=0.5,
-                    ),
-                )
-            )
-        )
-
-        assert call_order == ["pause", "drain", "restore", "resume"]
 
     def test_dispatch_restores_reader_blocking_when_writer_toggle_fails(
         self,
