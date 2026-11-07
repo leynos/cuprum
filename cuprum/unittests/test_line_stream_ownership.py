@@ -164,15 +164,17 @@ class TestBuilderFailureOwnership:
         """
         command, catalogue = _blocking_command()
         pids: list[int] = []
+        spawned: list[asyncio.subprocess.Process] = []
         real_build = spawn_module._build_run_task_ownership
         real_spawn = spawn_module._spawn_subprocess
 
         async def recording_spawn(
             execution: _SubprocessExecution,
         ) -> asyncio.subprocess.Process:
-            """Spawn the child, noting the pid before anything can fail."""
+            """Spawn the child, noting it before anything can fail."""
             process = await real_spawn(execution)
             pids.append(process.pid)
+            spawned.append(process)
             return process
 
         def fail_after_starting_tasks(
@@ -207,11 +209,20 @@ class TestBuilderFailureOwnership:
             error, still_pending = asyncio.run(consume())
 
         (pid,) = pids
+        (process,) = spawned
         assert isinstance(error, _BuilderError), (
             f"the builder's failure must reach the caller, got {error!r}"
         )
         assert not still_pending, (
             f"a failed build must leave no task pending, got {still_pending!r}"
+        )
+        # The reclaim reaps before it re-raises, so the exit status is already
+        # collected by the time the caller sees the failure. Waiting for the
+        # pid to disappear would pass even if the child were merely killed and
+        # left for the loop to collect later.
+        assert process.returncode is not None, (
+            "the reclaim must reap the child before the failure reaches the "
+            f"caller, but returncode is {process.returncode!r}"
         )
         wait_for_process_death(pid, seconds=5.0, context="a failed run builder")
 

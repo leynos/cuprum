@@ -2944,10 +2944,12 @@ it. Cuprum terminates and reaps that child before the hook's exception
 propagates, releases its stdin, stdout, and stderr pipes, and leaves no writer
 or consumer task behind. Any capture spill file that setup had already opened
 is removed too, so a failed start never leaves a temporary file behind. That
-guarantee holds on `run()`, `run_sync()`, `lines()` whose builder has already
-produced its tasks, and each stage of a pipeline. `start()` reaps the child and
-settles its tasks on the same failure, but it does not close an output
-transport; the next paragraph records why.
+guarantee holds on `run()`, `run_sync()`, and each stage of a pipeline, and on
+`lines()` when its builder fails partway and hands the partial run to the
+reclaim. It does not hold in full on `start()`, nor on `lines()` whose tasks
+were all built and whose `start` hook then raised: both reap the child and
+settle its tasks, but neither closes an output transport. The next paragraph
+records why.
 
 A failure in the setup that follows the spawn — creating the stdin writer or
 starting a stream consumer — is reclaimed the same way on `run()`,
