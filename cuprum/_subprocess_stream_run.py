@@ -49,6 +49,7 @@ from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _decode_consumer_drains
+from cuprum._subprocess_startup_abandon import _abandon_started_process
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
@@ -77,6 +78,7 @@ from cuprum._subprocess_wait import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum._streams import _RelayDiagnostics
     from cuprum._subprocess_execution import _SubprocessExecution
@@ -253,18 +255,43 @@ async def _run_subprocess_with_streams(
         _prepare_stream_spawn,
     )
 
-    if execution.idle is not None:
-        # Armed here, once the child is running: the catalogue checks and the
-        # before hooks that preceded this spawn are the parent's work, not the
-        # child's silence.
-        execution.idle.launch()
-    # The spawn context is a value snapshot, not an ownership hand-off: the
-    # run keeps retaining the same collector tuple on _RunTaskOwnership so
-    # its single reconciliation point settles them exactly once. The helper
-    # resolves both stream configs, which is what makes each stream's capture
-    # accumulator reachable from that same point.
-    spawn = _prepare_stream_spawn(execution, pid)
-    tasks = _build_run_task_ownership(process, execution, spawn)
+    # Every step from here to the hand-back runs before any exit route exists,
+    # so a failure in one of them would otherwise leave the child running with
+    # pipes nobody drains. The list is filled as each task is created rather
+    # than after the set is built, because the step that fails is the one that
+    # would have returned the set.
+    recorded: list[asyncio.Task[typ.Any]] = []
+    # Resolved by the step that builds the stream inputs, so the reclaim can
+    # remove a spill file a started consumer opened. Empty until then: a
+    # failure before the stream configs exist has no accumulator to release.
+    captures: tuple[CaptureSink | None, CaptureSink | None] = (None, None)
+    try:
+        if execution.idle is not None:
+            # Armed here, once the child is running: the catalogue checks and
+            # the before hooks that preceded this spawn are the parent's work,
+            # not the child's silence.
+            execution.idle.launch()
+        # The spawn context is a value snapshot, not an ownership hand-off: the
+        # run keeps retaining the same collector tuple on _RunTaskOwnership so
+        # its single reconciliation point settles them exactly once. The helper
+        # resolves both stream configs, which is what makes each stream's
+        # capture accumulator reachable from that same point.
+        spawn = _prepare_stream_spawn(execution, pid)
+        captures = spawn.spawn_context.captures
+        tasks = _build_run_task_ownership(
+            process,
+            execution,
+            spawn,
+            recorded=recorded,
+        )
+    except BaseException:
+        await _abandon_started_process(
+            process,
+            execution,
+            recorded,
+            captures=captures,
+        )
+        raise
     exit_code, exited_at = await _wait_for_streamed_process_exit(
         process,
         execution,

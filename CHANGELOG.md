@@ -53,6 +53,17 @@
   looked like a local path could start a network transfer. `safe_path()` also
   decides absoluteness with the running host's grammar now, so a Windows drive
   prefix is rejected on POSIX instead of being accepted as absolute.
+- **A failed start no longer leaves a spawned child running:** a synchronous
+  observe hook that raises on `start`, or a failure while the child's stdin
+  writer or stream consumers are being set up, now terminates and reaps the
+  child, releases its pipes, settles the tasks that had already started, and
+  removes any capture spill file before the original error propagates.
+  Previously the caller saw the failure while the child kept running unowned. A
+  reclaim step that fails is still reported on both diagnostic channels — a
+  `cuprum.reclaim` warning and a `teardown_error` observe event — and
+  `cuprum_teardown_errors_total` gains an `operation` label naming the failed
+  step, so an incomplete reclaim is visible rather than silently suppressed
+  ([#545](https://github.com/leynos/cuprum/issues/545)).
 
 ## [0.2.0-beta2] - 2026-10-18
 

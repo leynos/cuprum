@@ -22,6 +22,7 @@ one path keep a temporary directory clean while the other leaks into it.
 
 from __future__ import annotations
 
+import asyncio
 import typing as typ
 
 from cuprum._stream_drain_finish import _finalize_drain_handles
@@ -43,16 +44,31 @@ async def _cleanup_capture_sinks(
 ) -> None:
     """Release every capture accumulator a finished run still holds.
 
+    Every sink is given its turn even when an earlier one fails: a sink that
+    cannot remove its own file must not leave another stream's file behind.
+    The failure is collected rather than raised in place, and the first one is
+    re-raised once the loop has finished, so the caller still learns that a
+    file may remain.
+
     Parameters
     ----------
     sinks : cabc.Iterable[CaptureSink | None]
         The accumulators the run created, in any order. ``None`` entries are
         skipped, so a caller can pass a fixed per-stream pair whose streams
         were not captured.
-    """
-    for sink in sinks:
-        if sink is not None:
-            await sink.cleanup()
+
+    Raises
+    ------
+    BaseException
+        The first failure any sink reported, once every sink has been asked.
+    """  # ruff: ignore[docstring-extraneous-exception] - a sink's own failure is re-raised after the loop
+    results = await asyncio.gather(
+        *(sink.cleanup() for sink in sinks if sink is not None),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
 
 
 async def _finalize_capture_handles(

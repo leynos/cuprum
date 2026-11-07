@@ -7,9 +7,9 @@ callback and the queue, and the teardown of a run that failed before it could be
 returned.
 
 :func:`_start_line_stream_run` is here rather than in the coordinator because
-its whole job is to *reach* the hand-back boundary; the three builders it drives
-are defined in this module, so it reads them from here and nothing has to be
-re-exported across a module boundary for the step to resolve.
+its whole job is to *reach* the hand-back boundary. Everything that boundary
+needs is built here, and :func:`_abandon_unstarted_run` reclaims exactly what a
+failure in that window had managed to start.
 """
 
 from __future__ import annotations
@@ -29,9 +29,11 @@ from cuprum._line_stream.telemetry import _LineStreamTelemetry
 from cuprum._pipeline_types import _EventDetails
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._subprocess_spawn import _spawn_subprocess
+from cuprum._subprocess_startup_abandon import _abandon_started_process
 from cuprum._subprocess_streams import (
     _build_run_task_ownership,
     _prepare_stream_spawn,
+    _StreamSpawnInputs,
 )
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
@@ -39,13 +41,13 @@ from cuprum.line_stream_events import LineStreamPhase
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._capture_types import CaptureSink
     from cuprum._line_stream.line_queue import _LineQueueItem
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.lines import LineEvent, _LineHookFn
 
 __all__ = [
     "_abandon_unstarted_run",
-    "_build_unstarted_run",
     "_start_line_stream_run",
     "_with_line_sink_hooks",
 ]
@@ -121,16 +123,93 @@ async def _start_line_stream_run(
     started_at = execution.observation.monotonic_clock()
     execution = dc.replace(execution, started_at=started_at)
     process = await _spawn_subprocess(execution)
+    return await _start_or_abandon(_StartProgress(process), execution, setup)
+
+
+@dc.dataclass(slots=True)
+class _StartProgress:
+    """What a line-stream startup has built so far, for its reclaim to read.
+
+    The spawn exists before anything else can fail, and each later step adds
+    what it produced as it succeeds. A failure therefore leaves the reclaim an
+    exact account of what to unwind, rather than a run-shaped object it would
+    have to assume was complete: the task builder can fail after starting a
+    task, and the tuple it would have returned is then never built.
+    """
+
+    process: asyncio.subprocess.Process
+    spawn: _StreamSpawnInputs | None = None
+    run: _LineStreamRun | None = None
+    recorded: list[asyncio.Task[typ.Any]] = dc.field(default_factory=list)
+
+    @property
+    def captures(self) -> tuple[CaptureSink | None, CaptureSink | None]:
+        """Report the accumulators resolved so far, or an empty pair."""
+        if self.spawn is None:
+            return (None, None)
+        return self.spawn.spawn_context.captures
+
+
+async def _start_or_abandon(
+    progress: _StartProgress,
+    execution: _SubprocessExecution,
+    setup: _LineStreamSetup,
+) -> _LineStreamRun:
+    """Build the run, emit its start boundary, and abandon both on failure.
+
+    Every step between the spawn and the return is owned by
+    :func:`_abandon_unstarted_run`, matching :func:`_spawn_pipeline_processes`.
+    The ``start`` event is not exempt: it invokes synchronous observe hooks
+    inline and re-raises their failures, so without that ownership a failing
+    ``start`` hook leaves the child running with undrained pipes, which a caller
+    that only drains observe tasks can never reclaim. The build is inside the
+    same guard for the same reason — it starts the tasks the reclaim has to
+    settle, and it can raise after starting some of them.
+
+    Returns
+    -------
+    _LineStreamRun
+        The spawned run, with the process, its task ownership, the queue,
+        and the monotonic start reference.
+
+    Whatever that setup raises propagates unchanged, once the child has been
+    stopped and reaped and its tasks drained.
+    """
+    process = progress.process
     pid = process.pid
-    run = _build_unstarted_run(process, execution, setup)
     try:
+        progress.spawn = _prepare_stream_spawn(
+            execution,
+            pid,
+            discard_on_cancel=setup.discard_on_cancel,
+            settlement_started=setup.settlement_started,
+        )
+        # The same wiring ``run()`` uses, so iterating lines can never silently
+        # diverge from it on capture, echo, or sink selection. The record is
+        # handed in so that a task which fails to start cannot lose the ones
+        # that already did.
+        tasks = _build_run_task_ownership(
+            process,
+            execution,
+            progress.spawn,
+            recorded=progress.recorded,
+        )
+        run = _LineStreamRun(
+            process=process,
+            tasks=tasks,
+            queue=setup.queue,
+            settlement_started=setup.settlement_started,
+            execution=execution,
+            telemetry=setup.telemetry,
+        )
+        progress.run = run
         if execution.idle is not None:
             # Armed here, once the child is running, exactly as the streamed
             # ``run()`` path arms it: the catalogue checks and before hooks that
             # preceded this spawn are the parent's work, not the child's
             # silence.
             execution.idle.launch()
-        telemetry.pid = pid
+        setup.telemetry.pid = pid
         # Emitted after the consumers exist, which is sound because creating a
         # task does not run it: nothing between that creation and this emit
         # suspends, so ``start`` is still the first thing an observer of this
@@ -138,18 +217,19 @@ async def _start_line_stream_run(
         # is what lets the reclaim path drain a whole run rather than guess at
         # how much of one exists.
         execution.observation.emit("start", _EventDetails(pid=pid))
-        telemetry.emit(LineStreamPhase.SPAWNED)
+        setup.telemetry.emit(LineStreamPhase.SPAWNED)
     except BaseException:
-        await _abandon_unstarted_run(run, execution)
+        await _abandon_unstarted_run(progress, execution, setup)
         raise
     return run
 
 
 async def _abandon_unstarted_run(
-    run: _LineStreamRun,
+    progress: _StartProgress,
     execution: _SubprocessExecution,
+    setup: _LineStreamSetup,
 ) -> None:
-    """Terminate, reap, and drain a run that failed before it was returned.
+    """Terminate, reap, and drain whatever a failed startup had built.
 
     Reached when post-spawn setup raised, so nothing holds the run: the caller
     never received it, and none of the exits that settle a handed-back run will
@@ -158,6 +238,12 @@ async def _abandon_unstarted_run(
     drained, because both drain policies wait for the consumers to reach EOF
     and a live child can hold its own pipe open. Discarding whatever the drain
     finds is what keeps the post-spawn failure the one that propagates.
+
+    Two shapes reach here, and they unwind differently. Once every task exists
+    the run is whole, and its consumers are drained exactly as a handed-back
+    run's would be. Before that the builder failed partway, so there is no run
+    to drain: the record of tasks it had already started is the only handle the
+    reclaim has, and those are cancelled and settled instead.
     """
     # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
     # lives in ``cuprum._line_stream.coordinator`` because a test patches its
@@ -165,19 +251,27 @@ async def _abandon_unstarted_run(
     # this one for the rest of the spawn machinery.
     from cuprum._line_stream.coordinator import _discard_drain
 
-    run.settlement_started.set()
+    setup.settlement_started.set()
     await _stop_idle_monitor(execution.idle)
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    await _terminate_all_shielded(
-        (run.process,),
-        _TeardownPolicy(
-            execution.ctx.cancel_grace,
-            owns_group=execution.owns_process_group,
-        ),
-        observations=(execution.observation,),
-    )
-    await _discard_drain(run, run.process.pid, execution)
-    run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+    setup.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
+    if progress.run is not None:
+        await _terminate_all_shielded(
+            (progress.process,),
+            _TeardownPolicy(
+                execution.ctx.cancel_grace,
+                owns_group=execution.owns_process_group,
+            ),
+            observations=(execution.observation,),
+        )
+        await _discard_drain(progress.run, progress.process.pid, execution)
+    else:
+        await _abandon_started_process(
+            progress.process,
+            execution,
+            progress.recorded,
+            captures=progress.captures,
+        )
+    setup.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
 
 
 def _with_line_sink_hooks(
@@ -235,40 +329,3 @@ def _stop_line_hook_after_settlement(
         return hook(event)
 
     return deliver
-
-
-def _build_unstarted_run(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-    setup: _LineStreamSetup,
-) -> _LineStreamRun:
-    """Build the run and own every task it will need, before anything can fail.
-
-    Splitting this from the spawn keeps ownership complete by construction:
-    by the time this returns, the stdin writer and both consumers exist, so
-    the caller's first fallible step — the ``start`` emission — already has a
-    whole run to abandon rather than a partial one to guess at. Nothing here
-    suspends or fails, so no exception can escape and leave a child running
-    with half-built ownership.
-
-    Returns
-    -------
-    _LineStreamRun
-        The unstarted run, owning the process and every task that reads it.
-    """
-    # The same wiring ``run()`` uses, so iterating lines can never silently
-    # diverge from it on capture, echo, or sink selection.
-    spawn = _prepare_stream_spawn(
-        execution,
-        process.pid,
-        discard_on_cancel=setup.discard_on_cancel,
-        settlement_started=setup.settlement_started,
-    )
-    return _LineStreamRun(
-        process=process,
-        tasks=_build_run_task_ownership(process, execution, spawn),
-        queue=setup.queue,
-        settlement_started=setup.settlement_started,
-        execution=execution,
-        telemetry=setup.telemetry,
-    )

@@ -21,6 +21,7 @@ import typing as typ
 import pytest
 
 from cuprum import scoped, sh
+from cuprum._line_stream import spawn as spawn_module
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import ScopeConfig
 from cuprum.program import Program
@@ -35,6 +36,9 @@ from tests.helpers.timeouts import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_streams import _StreamSpawnInputs
+    from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.events import ExecEvent
 
 # Long enough that the child cannot exit on its own, so a run that ends can
@@ -44,6 +48,10 @@ _BLOCKING_CHILD = "import time; time.sleep(300)"
 
 class _StartHookError(Exception):
     """Raised by a deliberately failing observe hook in these tests."""
+
+
+class _BuilderError(Exception):
+    """Raised by a task builder made to fail after it started its tasks."""
 
 
 def _blocking_command() -> tuple[sh.SafeCmd, ProgramCatalogue]:
@@ -137,6 +145,90 @@ class TestStartHookFailureOwnership:
         assert not still_pending, (
             f"a failed start must leave no task pending, got {still_pending!r}"
         )
+
+
+class TestBuilderFailureOwnership:
+    """A failure while the run's tasks are being built cannot strand the child."""
+
+    def test_a_builder_failure_settles_the_tasks_it_started(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The reclaim reaches tasks the failed builder never returned.
+
+        The builder records each task as it starts and hands the record back
+        only once every task exists. A failure after the stdin writer has
+        started therefore leaves live tasks that no ``_LineStreamRun`` names,
+        and no run for the drain to work from. The reclaim must still stop the
+        child and settle everything the record holds.
+        """
+        command, catalogue = _blocking_command()
+        pids: list[int] = []
+        spawned: list[asyncio.subprocess.Process] = []
+        real_build = spawn_module._build_run_task_ownership
+        real_spawn = spawn_module._spawn_subprocess
+
+        async def recording_spawn(
+            execution: _SubprocessExecution,
+        ) -> asyncio.subprocess.Process:
+            """Spawn the child, noting it before anything can fail."""
+            process = await real_spawn(execution)
+            pids.append(process.pid)
+            spawned.append(process)
+            return process
+
+        def fail_after_starting_tasks(
+            process: asyncio.subprocess.Process,
+            execution: _SubprocessExecution,
+            spawn: _StreamSpawnInputs,
+            *,
+            recorded: list[asyncio.Task[typ.Any]] | None = None,
+        ) -> _RunTaskOwnership:
+            """Start every task, then fail as the caller would see it fail."""
+            real_build(process, execution, spawn, recorded=recorded)
+            raise _BuilderError
+
+        monkeypatch.setattr(spawn_module, "_spawn_subprocess", recording_spawn)
+        monkeypatch.setattr(
+            spawn_module,
+            "_build_run_task_ownership",
+            fail_after_starting_tasks,
+        )
+
+        async def consume() -> tuple[
+            BaseException, int | None, set[asyncio.Task[object]]
+        ]:
+            """Start a line stream whose task builder fails partway."""
+            stream = command.lines(stdin=StdinInput(text="unread payload"))
+            try:
+                with pytest.raises(_BuilderError) as caught:
+                    await anext(stream)
+                # Read the exit status here, before ``aclose`` can reclaim
+                # anything: the claim is that the reclaim reaped the child
+                # before it re-raised, so the status must already be collected
+                # at the moment the failure reaches the caller.
+                returncode = spawned[0].returncode
+            finally:
+                await stream.aclose()
+            return typ.cast("BaseException", caught.value), returncode, pending_tasks()
+
+        with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
+            error, returncode, still_pending = asyncio.run(consume())
+
+        (pid,) = pids
+        assert isinstance(error, _BuilderError), (
+            f"the builder's failure must reach the caller, got {error!r}"
+        )
+        assert not still_pending, (
+            f"a failed build must leave no task pending, got {still_pending!r}"
+        )
+        # Waiting for the pid to disappear would pass even if the child were
+        # merely killed and left for the loop to collect later.
+        assert returncode is not None, (
+            "the reclaim must reap the child before the failure reaches the "
+            f"caller, but returncode is {returncode!r}"
+        )
+        wait_for_process_death(pid, seconds=5.0, context="a failed run builder")
 
 
 class TestPreSpawnHookFailureOwnership:

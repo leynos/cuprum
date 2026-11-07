@@ -1053,6 +1053,49 @@ platform, and is the default there as everywhere else.
 to it. The decision and its alternatives are recorded in
 [ADR-021](adrs/adr-0021-process-group-ownership.md).
 
+### Startup reclaim diagnostics
+
+A run that fails during the setup which follows its spawn — a `start` observe
+hook raising, a stream consumer failing to start, or the stdin writer failing —
+now reclaims the child before it re-raises. The child is stopped and reaped,
+whatever tasks the setup had already started are cancelled and gathered, stdin
+is closed, the output pipes are discarded and their transports released, and
+any capture spill file the run had opened is removed. The caller still receives
+the original exception, so no code needs to change to get this; before the fix
+the child was left running with nothing owning it.
+
+The line iterator takes the same route when the builder that starts its tasks
+fails partway: the tasks it had already started are cancelled and settled, and
+the child is stopped and reaped before the builder's error propagates. Its
+post-build path, and `start()`, still stop and reap the child without closing
+an output transport, so a descendant that escaped the process group can hold
+the parent's descriptor open there.
+
+The reclaim reports rather than hides a cleanup step that itself fails. Each
+failure emits a `teardown_error` observe event whose bounded `operation` is one
+of `terminate`, `task_settle`, `stdin_close`, `output_discard`,
+`transport_close`, or `capture_cleanup`, and writes a matching `cuprum.reclaim`
+log record. Applications that already consume these signals should expect two
+differences. First, `teardown_error` can now fire more than once for one
+execution — once per failed reclaim step — whereas a stream `drain` failure
+still fires at most once. Second, `cuprum_teardown_errors_total` previously
+counted only consumer drain failures; it now carries, besides the `program` and
+`project` labels it already had, an `operation` label naming the step that
+failed. A drain failure is labelled `drain`, and the reclaim steps use the
+values listed above. A value the metrics adapter does not recognize folds to
+`unknown`, so the label stays low-cardinality, which also means a dashboard
+grouped by `operation` gains an `unknown` series if a future step is not added
+to the bounded set.
+
+Update any collector, dashboard, or alert that reads this counter. A query that
+assumed one series per `program` and `project` now sees one series for each
+`operation` within them. To keep the previous drain-only total, filter on
+`operation="drain"`: a sum over every operation also includes the reclaim
+steps, which the previous counter never counted. Grouping by `operation` gives
+the breakdown, and filtering is how a query that cares about one step keeps its
+scope. The reclaim's own events carry the same `exec_id` as the rest of the
+execution, so existing correlation keeps working.
+
 ### Aggregate Python stream-operation observation
 
 An opt-in observation channel reports completed operations in the pure-Python

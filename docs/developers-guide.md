@@ -2828,7 +2828,12 @@ the drain settles. `cleanup` belongs to the run's teardown instead:
 assembly and by `_reconcile_run_tasks` after a teardown drain, and it closes
 the handles the drain results carry before calling `_cleanup_capture_sinks` on
 the accumulators. That second call is the only path reaching a drain that was
-cancelled mid-await and so never finalized. The two heap-backed accumulators
+cancelled mid-await and so never finalized. `_cleanup_capture_sinks` in
+`cuprum/_capture_cleanup.py` gives every non-`None` sink its own turn: it
+gathers every `sink.cleanup()` with `return_exceptions=True`, then re-raises
+the first collected failure once all attempts have finished. A sink that cannot
+remove its own file therefore cannot strand another stream's file, and the
+caller still learns that a file may remain. The two heap-backed accumulators
 answer without suspending, so awaiting costs one coroutine step per chunk; the
 file-backed one spills through `cuprum._capture_spill_io`, whose `_SpillIo`
 serializes that accumulator's blocking calls onto a worker thread so the loop
@@ -3100,6 +3105,107 @@ cleanup path as the backstop; a timeout, a cancellation, a callback failure,
 and a partial pipeline spawn all leave no task behind. The watchdog is a second
 owner of the run's lifetime, not of the child's: it observes silence and never
 terminates a process or extends a timeout.
+
+### Startup abandonment after a post-spawn failure
+
+A spawned child belongs to the run only once the setup that follows the spawn
+has returned. `cuprum/_subprocess_startup_abandon.py` is the route that
+reclaims it when that setup raises: `_abandon_started_process` takes the
+process, the run's execution bundle, whatever tasks the failed setup had
+already started, and, as a keyword-only `captures`, the capture accumulators it
+had resolved, and runs one fixed sequence inside a single `_shielded_cleanup`.
+Stop and reap the child under the run's own ownership policy, cancel and gather
+the recorded tasks, close stdin, discard stdout and stderr to end-of-file,
+close the output transports, then release the capture accumulators. Each step
+is suppressed independently, so an ordinary cleanup failure cannot abort a
+later step or replace the exception the caller is unwinding; a cancellation
+propagates only after the sequence completes. ADR-007's 2026-10-30 addendum
+records why the steps are ordered this way, and ADR-021 records why the pipe
+release is bounded. The close is not redundant with the reaping on either
+backend. The `wait4` owner collects the child and nothing else, and asyncio's
+read-pipe transports wait for end-of-file before closing, so a discard that
+ends at the grace rather than at end-of-file would otherwise leave the parent's
+descriptor to be released only when the transport holding it was collected. The
+reclaim asks the `wait4` owner through `close_output_transports`, and for the
+fallback closes each output pipe's own transport through the stream that holds
+it — never the subprocess transport, so termination and process-group ownership
+are untouched.
+
+Three rules matter when adding or moving a post-spawn step:
+
+- A step that starts a task must record it immediately through
+  `_record_started`, not after the whole set is built. A later step's failure
+  means the finished tuple never exists, and a consumer started before the
+  failure would then have no owner for the reclaim to cancel. The same rule
+  applies to the owned handle, whose `_attach_run_tasks` passes its own
+  `started` list to `_build_run_task_ownership` — the helper the streamed run
+  and the line iterator also use — so the writer and both consumers are
+  recorded as each is created.
+- A new post-spawn failure point belongs inside the existing guard, passing the
+  run's `recorded` list. Do not add a second unwind route and do not release
+  the pipes before stopping the child: both drain policies wait for their
+  consumers to reach end-of-file, which a live child can prevent.
+- A failure point placed after the stream configs are resolved must also pass
+  their accumulators through `captures`: a drain cancelled before it settles
+  never builds the result that would carry its spill handle, so the reclaim is
+  the only thing left that can remove the file.
+
+The assembly those rules depend on is split in two, and the split is the
+contract. `_build_run_task_ownership` starts the streamed run's stdin writer
+and stream consumers and hands each task to the `recorded` list as it is
+created; `_build_task_ownership` then assembles the record they are retained in
+— the latch, the relay diagnostics, the idle monitor, and the capture
+accumulators — without starting anything. The streamed run, the line iterator,
+and the owned handle all come through the pair, so capture, echo, and sink
+selection cannot drift between the three routes. The direct run
+(`_run_subprocess_without_streams`) is the exception: it wires no stream
+consumers and starts its own stdin writer through `_spawn_stdin_writer` and
+`_record_started`, so it calls neither builder. A step that starts a task
+belongs in `_build_run_task_ownership`; a field the run must keep belongs in
+`_build_task_ownership`, where it cannot introduce a failure the reclaim would
+have to cover.
+
+`_report_reclaim_failure` lives in `cuprum/_reclaim_reporting.py` rather than
+beside the reclaim sequence for two reasons: the sequence is already at the
+400-line ceiling, and reporting is a distinct responsibility from deciding what
+to reclaim. The reporter only writes the `cuprum.reclaim` log record and the
+`teardown_error` event, and never suppresses, retries, or reorders a step. Its
+operation categories are literals in the reclaim module, collected into
+`_TEARDOWN_OPERATIONS` beside the `_ReclaimOperation` type so the metrics
+adapter can bound the `operation` label by that set rather than by an open
+string; a test asserts the type and the set agree. A category the adapter does
+not recognize folds to `unknown` rather than being dropped, so a new step that
+forgets to extend the set still appears in telemetry, just without its own
+label.
+
+The `SafeCmd.lines()` coordinator keeps its own unwind helper for a run whose
+tasks were all built, because that abandons a larger record — the line stream
+settles its queue telemetry and settlement latch — rather than a bare process.
+When the builder itself fails partway there is no such record, so the line
+iterator calls `_abandon_started_process` with the tasks it recorded as they
+started. The owned-handle start keeps its own helper because it settles the
+task set it attached. The single-command routes are pinned by
+`test_direct_start_ownership.py` with real children: the failing `start` hook
+in both streamed and direct shapes with and without stdin, an injected consumer
+failure after the first consumer started, an injected stdin-writer failure, the
+POSIX `OWN_GROUP` case, and a successful start that must be delivered unchanged.
+`test_owned_group_start_failure.py` adds the case a single-pid teardown would
+also pass: a descendant left in the owned group must die too, which only a
+group signal reaches. `test_streamed_setup_capture_ownership.py` watches the
+hand-off at the seam, because a run that dropped the accumulators would still
+reap the child and leave no task pending. `test_startup_abandon.py` pins the
+reclaim's own obligations against a real child — the reaped process, the
+removal of a spill file the capture had already opened, and the release of an
+output pipe that a surviving descendant still holds.
+`test_startup_abandon_read_failure.py` covers a read that fails during the
+discard, which must be reported as `output_discard` rather than dropped in the
+gather's results. `test_startup_abandon_task_failure.py` separates a task that
+had already failed, which must be reported, from the cancellation the step
+itself requested, which must not. `test_startup_abandon_properties.py` states
+the orchestration contract over every pattern of step failure: each step gets
+its turn, each failure is reported and suppressed, and the caller's own error
+survives unchanged. `test_pipeline_process_lifecycle.py` pins the same
+guarantee for a pipeline stage.
 
 ### Canonical adapter projection, redaction, and locked-store base
 
@@ -8300,10 +8406,10 @@ consume, and leaves result construction to `_build_command_result` in
 `_subprocess_outcome.py`, which it re-exports. It also re-exports
 `_build_stream_config` and `_spawn_stream_consumers`, so a change in *which*
 streams a run consumes is an orchestration change and belongs here, while a
-change to how one `_StreamConfig` is assembled or how its consumer task is
-created belongs in `_subprocess_streams`. The split is what keeps the execution
-module under the Pylint module ceiling now that the idle-heartbeat wiring
-reaches into the stream configs; see the
+change to how one `_StreamConfig` is assembled belongs in `_stream_config`, and
+a change to how its consumer task is created belongs in `_subprocess_streams`.
+The split is what keeps the execution module under the Pylint module ceiling
+now that the idle-heartbeat wiring reaches into the stream configs; see the
 [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum of
 2026-09-16 for why this boundary was accepted after an earlier, differently
 shaped one was withdrawn.
@@ -8442,17 +8548,21 @@ unchanged. See the
 2026-10-11.
 
 `cuprum/_subprocess_streams.py` holds the consumer wiring itself:
+`_create_stream_callback` builds the per-line observability hook,
+`_prepare_stream_spawn` resolves the stdout and stderr configs before any
+consumer starts, and `_spawn_stream_consumers` creates both reader tasks. The
+config construction those consumers use lives in `cuprum/_stream_config.py`:
 `_resolve_stream_sink` picks the destination for one mirrored stream — a live
 presentation-sink session's log first, so mirrored output lands inside the
 adapter's framing (the GitHub Actions group, say) in the order the adapter
 received it, then the execution context's configured sink, then the process's
-own stream — `_create_stream_callback` builds the per-line observability hook,
-`_build_stream_config` assembles the stdout `_StreamConfig`, and
-`_spawn_stream_consumers` derives the stderr config from it and starts both
-reader tasks. It was split out of `_subprocess_execution` to keep both modules
-within the 400-line ceiling; `_subprocess_execution` re-exports these helpers,
-so callers and the tests that monkeypatch them by module path resolve the same
-names as before.
+own stream — `_build_stream_config` assembles the stdout `_StreamConfig`, and
+`_resolve_stream_configs` derives the stderr config from it.
+`cuprum/_subprocess_streams.py` re-exports all three config helpers, and
+`cuprum/_subprocess_execution.py` re-exports `_build_stream_config`, so callers
+and the tests that monkeypatch them by module path resolve the same names as
+before. `cuprum/_subprocess_streams.py` was split out of
+`_subprocess_execution` to keep both modules within the 400-line ceiling.
 
 `cuprum/_subprocess_outcome.py` owns what a settled run reports:
 `_DirectCompletion` is the record the waiting helpers produce, and
@@ -8486,7 +8596,8 @@ supplied and otherwise delegates to the bounded `_await_eof_grace`;
 `_settle_consumers` is the single optional settlement boundary that sets the
 discard event before cancelling pending readers.
 `_build_stream_config(execution, discard_on_cancel)` (in
-`cuprum/_subprocess_streams.py`) passes that shared event into each stream's
+`cuprum/_stream_config.py`, re-exported by `cuprum/_subprocess_streams.py` and
+`cuprum/_subprocess_execution.py`) passes that shared event into each stream's
 `_StreamConfig`, so timeout capture can hand back the bytes buffered so far —
 decoded for a text run, raw for a byte-exact one — while cancellation and
 failure cleanup can discard it. It was split out of `_subprocess_execution` so
@@ -9130,8 +9241,14 @@ is aggregated with the active error into a `BaseExceptionGroup` rather than
 replacing it, so the primary error is preserved within the aggregate. The
 metrics adapter counts timeout and teardown phases as `cuprum_timeouts_total`
 and `cuprum_teardown_errors_total`, and counts `capture_eof_grace_expired` as
-`cuprum_capture_eof_grace_expired_total`; these counters use only the `program`
-and `project` labels. The tracing adapter records them as ancillary span events
+`cuprum_capture_eof_grace_expired_total`. Those counters use the `program` and
+`project` labels; `cuprum_teardown_errors_total` additionally carries an
+`operation` label naming the failed cleanup step. Every emitter passes a
+literal, so the extra series stay bounded: `drain` from the timeout reporter,
+and the `_ReclaimOperation` values (`terminate`, `task_settle`, `stdin_close`,
+`output_discard`, `transport_close`, `capture_cleanup`) from the startup
+reclaim. A teardown error that names no step keeps the shared label set rather
+than inventing one. The tracing adapter records them as ancillary span events
 and leaves the span open until `settled` closes it.
 
 The parallel `cuprum.timeout` log records use the same field names under the

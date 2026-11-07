@@ -38,18 +38,16 @@ from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
 )
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_streams import (
+    _build_run_task_ownership,
     _prepare_stream_spawn,
-    _spawn_stream_consumers,
 )
-from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._execution_tracking import _ExecutionTracking
+    from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 __all__ = [
     "_HandleRun",
@@ -238,10 +236,12 @@ async def _attach_run_tasks(
 
     Attaching is all-or-nothing. The configuration is built before anything is
     started, because it can fail and a task started ahead of that failure would
-    have nobody holding it. Anything started once the tasks begin is reclaimed
-    by :func:`_detach_run_tasks` before the failure propagates, so a caller
-    that is told attaching failed is not also handed a writer still draining
-    into a pipe.
+    have nobody holding it. What follows is the record the streamed ``run()``
+    path builds too, through the same helper: the tasks are recorded one at a
+    time as each is created, so the second consumer's failure cannot hide the
+    first, and anything recorded is reclaimed by :func:`_detach_run_tasks`
+    before the failure propagates. A caller that is told attaching failed is
+    therefore not also handed a writer still draining into a pipe.
 
     Returns
     -------
@@ -262,29 +262,16 @@ async def _attach_run_tasks(
     spawn = _prepare_stream_spawn(execution, process.pid)
     started: list[asyncio.Task[typ.Any]] = []
     try:
-        stdin_task = _spawn_stdin_writer(
+        ownership = _build_run_task_ownership(
             process,
-            execution.stdio.stdin,
-            _stdin_codec(execution.ctx),
-            execution.observation,
+            execution,
+            spawn,
+            recorded=started,
         )
-        if stdin_task is not None:
-            started.append(stdin_task)
-        consumers = _spawn_stream_consumers(process, execution, spawn.spawn_context)
-        # A redirected stream gets no consumer and holds ``None`` in its slot,
-        # so only the tasks actually started are handed to the reclaim path.
-        started.extend(consumer for consumer in consumers if consumer is not None)
     except BaseException:
         await _detach_run_tasks(started)
         raise
-    return _RunTaskOwnership(
-        stdin_task=stdin_task,
-        consumers=consumers,
-        discard_on_cancel=spawn.discard_on_cancel,
-        relay_diagnostics=spawn.relay_diagnostics,
-        idle=execution.idle,
-        captures=spawn.spawn_context.captures,
-    )
+    return ownership
 
 
 async def _detach_run_tasks(tasks: cabc.Sequence[asyncio.Task[typ.Any]]) -> None:

@@ -1,0 +1,400 @@
+"""Reclaim a child whose startup failed after its spawn but before hand-back.
+
+A spawned child belongs to the run only once the setup that follows the spawn
+has returned. Several steps in that setup can fail: the ``start`` event runs
+synchronous observe hooks inline and re-raises their failures, the streamed run
+prepares and starts its consumers, and the direct run creates its stdin writer.
+A failure in any of them escapes the helper that spawned the child, so every
+route that would normally wait for, drain, and reap it is never entered. This
+module owns the reclaim those routes share.
+
+The scope is deliberately the pre-hand-back window of ``run()``: the ``start``
+event both run shapes share, the streamed run's consumer setup, and the direct
+run's stdin writer. The other routes normally reclaim from their own spawn
+helper: ``start()`` from ``_start_handle_run``, the line stream from
+``_abandon_unstarted_run``, and the pipeline from ``_cleanup_spawned_processes``.
+The line stream is the exception: a builder failure leaves no owned run to
+drain, so it arrives here with the tasks it recorded. The other routes'
+guarantees are not identical to this one and this module does not claim them.
+``_start_handle_run`` stops and reaps the child through ``_terminate_shielded``
+but releases no output transport, so a handle run whose descendant keeps a pipe
+open still has the descriptor question to answer; that belongs to the
+running-command ownership work, not to an abandoned startup. Once a run has
+handed its child back as a :class:`~cuprum.RunningCommand`, cleanup belongs to
+that handle and not here; the sequences are separate because the handle's
+caller decides when the child stops, whereas an abandoned startup has none.
+
+The sequence is fixed, and each step is given its own turn rather than
+aborting the rest:
+
+1. terminate the child and reap it, signalling its process group when the run
+   owns one. Reaping is not incidental: a stop that only kills still leaves a
+   child for this parent to collect.
+2. cancel every task the failed setup had already started and gather them, so
+   no writer or reader outlives the attempt that failed. A task that had
+   already failed is reported under ``task_settle``; the cancellation this step
+   itself requests is expected and is not.
+3. release the pipes: close stdin, read stdout and stderr to end-of-file under
+   the capture drain's own EOF grace, then close the output transports. Reading
+   is what lets a parent-side transport disconnect; the wait is bounded because
+   a descendant that inherited a pipe can outlive the group teardown — the limit
+   ADR 021 records. With no end-of-file, the close releases the descriptor.
+4. release the capture accumulators, now that no consumer can still be writing
+   into them. A drain cancelled rather than settled never builds the result
+   that would have carried its spill handle, so the accumulator is the last
+   reference to a temporary file the library owns.
+
+Ordinary cleanup failures are reported and then suppressed per step, so a later
+step still runs and the failure owed to the caller — the hook or setup step
+that raised — reaches it unchanged. Reporting is best-effort on the two
+diagnostic channels this package already uses: a structured ``cuprum.reclaim``
+log record and a ``teardown_error`` observe event naming the step that failed.
+A reclaim that leaves a child, descriptor, or spill behind is therefore
+visible to an operator without displacing the caller's error. A cancellation is
+not suppressed; it propagates once the sequence has completed, which is why the
+whole sequence runs inside one ``_shielded_cleanup`` rather than three
+sequential ones.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import typing as typ
+
+from cuprum._capture_cleanup import _cleanup_capture_sinks
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
+from cuprum._reclaim_reporting import _report_reclaim_failure
+from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
+from cuprum._teardown_policy import _TeardownPolicy
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum._capture_types import CaptureSink
+    from cuprum._subprocess_execution import _SubprocessExecution
+
+# Chunk size for the discard read. Reading to EOF in bounded pieces rather than
+# with a bare ``read()`` keeps a child that wrote a large backlog before it was
+# stopped from being copied into memory all at once; the bytes are discarded.
+_DISCARD_CHUNK_BYTES = 64 * 1024
+
+
+def _record_started(
+    recorded: list[asyncio.Task[typ.Any]] | None,
+    task: asyncio.Task[typ.Any] | None,
+) -> None:
+    """Record one started task, so a later startup failure can reclaim it."""
+    if recorded is not None and task is not None:
+        recorded.append(task)
+
+
+async def _abandon_started_process(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    tasks: cabc.Sequence[asyncio.Task[typ.Any]] = (),
+    *,
+    captures: cabc.Iterable[CaptureSink | None] = (),
+) -> None:
+    """Stop, reap, and release a child whose startup failed after the spawn.
+
+    Parameters
+    ----------
+    process : asyncio.subprocess.Process
+        The child the spawn returned. It is still this run's to reclaim even
+        though no caller was ever handed it.
+    execution : _SubprocessExecution
+        The run's bundle, read for the teardown grace, the process-group
+        ownership that decides what a signal targets, the observation a refused
+        delivery is reported against, and the stdin plan its pipe is closed
+        from.
+    tasks : collections.abc.Sequence[asyncio.Task[typing.Any]]
+        Tasks the failed setup had already started, in creation order; empty
+        when the failure preceded any task.
+    captures : collections.abc.Iterable[CaptureSink | None]
+        The capture accumulators the failed setup had resolved. Their spill
+        files are removed after the tasks are settled, because a cancelled
+        drain never builds the result that would otherwise have carried the
+        handle. Empty when the run captures nothing or never resolved its
+        streams.
+
+    Notes
+    -----
+    Nothing here raises for an ordinary failure of its own: the error the
+    caller is already unwinding is the one it re-raises, and a teardown that
+    replaced it would misreport why the run ended. A cancellation still
+    propagates, but only after every step has run.
+    """
+    recorded = tuple(tasks)
+    sinks = tuple(captures)
+
+    async def abandon() -> None:
+        """Run the whole reclaim as one sequence behind a single shield."""
+        await _stop_child(process, execution)
+        await _settle_recorded_tasks(process, execution, recorded)
+        await _release_pipes(process, execution)
+        await _release_captures(process, execution, sinks)
+
+    await _shielded_cleanup(abandon())
+
+
+async def _stop_child(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate and reap the child, signalling its group when the run owns one."""
+    try:
+        await _terminate_all_shielded(
+            (process,),
+            _TeardownPolicy(
+                execution.ctx.cancel_grace,
+                owns_group=execution.owns_process_group,
+            ),
+            observations=(execution.observation,),
+        )
+    except Exception as error:  # ruff: ignore[blind-except] - a cleanup failure is reported and the sequence continues, so the caller's own error survives.
+        _report_reclaim_failure(
+            process,
+            execution,
+            operation="terminate",
+            error=error,
+        )
+
+
+async def _settle_recorded_tasks(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    tasks: cabc.Sequence[asyncio.Task[typ.Any]],
+) -> None:
+    """Cancel and drain the tasks the failed setup had already started."""
+    if not tasks:
+        return
+    try:
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as error:  # ruff: ignore[blind-except] - a task that cannot be settled is reported; the caller's error is already propagating.
+        _report_reclaim_failure(
+            process,
+            execution,
+            operation="task_settle",
+            error=error,
+        )
+        return
+    # A task that failed rather than merely cancelling is a startup failure the
+    # caller never saw: the setup raised before it could await the task, so this
+    # is its only route out. The cancellation this step requested is expected
+    # and stays silent, which is why only an ordinary ``Exception`` counts.
+    for result in results:
+        if isinstance(result, Exception):
+            _report_reclaim_failure(
+                process,
+                execution,
+                operation="task_settle",
+                error=result,
+            )
+            return
+
+
+async def _release_pipes(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Close stdin, discard stdout and stderr, and release their transports."""
+    # Imported here rather than at module scope: the stdin module reaches the
+    # pipeline internals, and the spawn module that imports this one sits on a
+    # shorter load path than that.
+    from cuprum._subprocess_stdin import _close_stdin
+
+    stdin = process.stdin
+    # A writer task that was cancelled has already closed the pipe in its own
+    # ``finally``; asking again would report the second close as a pipe error.
+    if stdin is not None and not stdin.is_closing():
+        try:
+            await _close_stdin(process, stdin, execution.observation)
+        except Exception as error:  # ruff: ignore[blind-except] - the close is best-effort; its failure is reported and the output release still runs.
+            _report_reclaim_failure(
+                process,
+                execution,
+                operation="stdin_close",
+                error=error,
+            )
+    # Reported rather than suppressed in place, so a read that fails or a grace
+    # that expires still leaves the close below its chance to release both
+    # descriptors.
+    try:
+        await _discard_outputs(process)
+    except Exception as error:  # ruff: ignore[blind-except] - a failed drain is reported so the transport close below still runs.
+        _report_reclaim_failure(
+            process,
+            execution,
+            operation="output_discard",
+            error=error,
+        )
+    await _release_output_transports(process, execution)
+
+
+async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
+    """Discard both output streams within the capture drain's single grace.
+
+    One window covers both readers, as in the drain itself
+    (:func:`cuprum._stream_drain._await_eof_grace`): two pipes kept open by a
+    descendant cost one grace, not one each — the documented bound.
+    """
+    streams = tuple(
+        stream for stream in (process.stdout, process.stderr) if stream is not None
+    )
+    if not streams:
+        return
+    reads = tuple(asyncio.ensure_future(_discard_to_eof(stream)) for stream in streams)
+    await _discard_within_grace(reads)
+
+
+async def _discard_within_grace(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
+    """Wait within the capture drain's grace, settle the reads, then report.
+
+    Raises
+    ------
+    TimeoutError
+        When the grace expired with a read still pending and none failed.
+    """
+    try:
+        _, pending = await asyncio.wait(reads, timeout=_CAPTURE_EOF_GRACE_S)
+    finally:
+        await _settle_reads(reads)
+    failure = _first_read_failure(reads)
+    if failure is not None:
+        raise failure
+    if pending:
+        raise TimeoutError
+
+
+async def _settle_reads(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
+    """Cancel and gather every read, so none outlives the discard."""
+    for task in reads:
+        task.cancel()
+    await asyncio.gather(*reads, return_exceptions=True)
+
+
+def _first_read_failure(reads: cabc.Sequence[asyncio.Task[None]]) -> Exception | None:
+    """Return the first ordinary read failure, in stream order.
+
+    Only an ordinary ``Exception`` counts, and the failure is preferred to the
+    grace's expiry so the operator still sees why the discard ended.
+
+    Returns
+    -------
+    Exception | None
+        The first ordinary failure in stream order, or ``None`` if none.
+    """
+    for task in reads:
+        if task.cancelled():
+            continue
+        error = task.exception()
+        if isinstance(error, Exception):
+            return error
+    return None
+
+
+async def _release_output_transports(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Close the output transports the child's owner still holds open.
+
+    The discard above ends either at end-of-file, which closes the transport
+    itself, or at the EOF grace, which means a descendant still holds the
+    pipe's write end and no end-of-file is coming. The second case is why this
+    exists, and it covers a read that failed for the same reason: the stream
+    is never read again, so releasing the parent's descriptor discards nothing
+    a caller could still have wanted.
+
+    Which close to ask is decided through ``getattr`` rather than a type test,
+    because the two backends release a descriptor differently: the ``wait4``
+    owner reaps with ``wait4`` alone and closes nothing by itself, so it is
+    asked directly, while the fallback's read pipes belong to asyncio
+    transports that close only at end-of-file — exactly what the descendant
+    prevents — so each is asked to close. A transport releases its descriptor
+    from the loop callback its close schedules, so the yield makes "close
+    requested" mean "descriptor released" before control returns.
+    """
+    close_owned = getattr(process, "close_output_transports", None)
+    if callable(close_owned):
+        try:
+            close_owned()
+        except Exception as error:  # ruff: ignore[blind-except] - the owner's close is best-effort and its failure is reported here.
+            _report_reclaim_failure(
+                process,
+                execution,
+                operation="transport_close",
+                error=error,
+            )
+    else:
+        _close_asyncio_output_transports(process, execution)
+    await asyncio.sleep(0)
+
+
+def _close_asyncio_output_transports(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Ask each of the fallback's output pipes to close its parent-side end.
+
+    asyncio publishes no accessor for the transport carrying a read pipe, so
+    each stream is asked instead: the project's
+    :func:`cuprum._pipeline_stream_fds._stream_transport` already tolerates
+    both spellings of that attribute. A stream answers with its own pipe
+    transport, so closing it releases exactly that descriptor and leaves
+    termination and group ownership untouched; asyncio finishes the
+    subprocess transport once every pipe it owns has disconnected.
+    """
+    # Imported here rather than at module scope for the reason ``_release_pipes``
+    # gives: this module sits on a shorter load path than the pipeline internals.
+    from cuprum._pipeline_stream_fds import _stream_transport
+
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        close = getattr(_stream_transport(stream), "close", None)
+        if not callable(close):
+            continue
+        try:
+            close()
+        except Exception as error:  # ruff: ignore[blind-except] - each transport's close is best-effort; its failure is reported here.
+            _report_reclaim_failure(
+                process,
+                execution,
+                operation="transport_close",
+                error=error,
+            )
+
+
+async def _release_captures(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    captures: cabc.Iterable[CaptureSink | None],
+) -> None:
+    """Remove any spill file the started consumers had opened.
+
+    Runs after settlement, since a consumer still draining could recreate the
+    file this removes. Every accumulator gets its own turn, so one failure
+    does not strand the other stream's file, and the first is recorded here.
+    """
+    try:
+        await _cleanup_capture_sinks(captures)
+    except Exception as error:  # ruff: ignore[blind-except] - the shared cleanup reports its first failure here; the caller must not meet it.
+        _report_reclaim_failure(
+            process,
+            execution,
+            operation="capture_cleanup",
+            error=error,
+        )
+
+
+async def _discard_to_eof(stream: asyncio.StreamReader) -> None:
+    """Read a stream to end-of-file, discarding it, in bounded pieces."""
+    chunk = await stream.read(_DISCARD_CHUNK_BYTES)
+    while chunk:
+        chunk = await stream.read(_DISCARD_CHUNK_BYTES)
+
+
+__all__ = ["_abandon_started_process", "_record_started"]

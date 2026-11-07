@@ -2315,6 +2315,65 @@ preserving the `SafeCmd.run()` execution contract:
   monkeypatch targets resolve the same name as before. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-27.
+- `cuprum/_subprocess_startup_abandon.py` owns the reclaim of a child whose
+  startup failed after the spawn but before any route that would wait for,
+  drain, and reap it was entered. `_abandon_started_process` runs one fixed
+  sequence behind a single `_shielded_cleanup`: terminate and reap the child
+  under the run's own process-group policy, cancel and gather every task the
+  failed setup had already started, close stdin, discard stdout and stderr to
+  end-of-file, close their parent-side transports, then release the capture
+  accumulators. Ordinary cleanup failures are suppressed per step, so the error
+  the caller is already unwinding reaches it unchanged; a cancellation
+  propagates only after the sequence completes. `_record_started` is the
+  companion the setup calls as it creates each task, so a consumer that fails
+  to start cannot hide one that is already running. See the
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+  of 2026-10-30.
+
+For screen readers: The following sequence diagram shows how a child spawned by
+`_start_owned_process` is reclaimed when the startup step that follows the
+spawn fails. `_start_owned_process` guards only the `start` event emission and
+the construction of the started run, so it passes no task list to
+`_abandon_started_process`: a failure there means no consumer or writer had
+been started yet. The reclaim terminates and reaps the child, closes stdin,
+discards stdout and stderr to end-of-file, and closes their parent-side
+transports, so the observer's error reaches the caller only after the child and
+its pipes have been released. When the `start` event returns, the started run
+is returned instead. The streamed run and the direct run guard their own
+post-spawn setup the same way, passing the tasks and captures each had recorded
+by the point of failure.
+
+Figure 9: Startup abandonment after a post-spawn failure, from
+`_start_owned_process` to `_abandon_started_process`
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Spawn as _start_owned_process
+    participant Process as ChildProcess
+    participant Abandon as _abandon_started_process
+    participant Tasks as StartedTasks
+    participant Pipes as ProcessPipes
+
+    Caller->>Spawn: _start_owned_process()
+    Spawn->>Process: spawn child
+    Spawn->>Spawn: observation.emit("start")
+    alt the start event raises
+        Spawn->>Abandon: _abandon_started_process(process, stamped)
+        Abandon->>Process: _terminate_all_shielded()
+        Abandon->>Process: reap child
+        Abandon->>Tasks: no started task to cancel
+        Abandon->>Pipes: _close_stdin()
+        Abandon->>Pipes: _discard_to_eof(stdout, stderr)
+        Abandon->>Pipes: close output transports
+        Abandon-->>Spawn: cleanup complete
+        Spawn-->>Caller: re-raise the observer's error
+    else the start event returns
+        Spawn-->>Caller: return _StartedRun
+    end
+    Note over Caller,Abandon: Streamed and direct runs guard their own setup,<br/>passing recorded tasks and captures.
+```
+
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
   consumers exactly once, and returning their captured payloads and settled
@@ -2323,24 +2382,28 @@ preserving the `SafeCmd.run()` execution contract:
   consumer tasks; `_RunTaskOwnership` retains those consumers and collectors
   until the one success or teardown reconciliation point.
 - `cuprum/_subprocess_streams.py` owns single-command stream-consumer
-  *construction* and *routing*: `_resolve_stream_sink` chooses the destination
-  for each mirrored stream — a live presentation-sink session's log, the
-  execution context's configured sink, or the process's own stream — and
-  `_build_stream_config` assembles the stdout `_StreamConfig`, and
-  `_spawn_stream_consumers` derives the stderr config from it and creates the
-  pair of consumer tasks. Fixing the stderr config's echo, sink, and
+  *construction* and *routing*: `_create_stream_callback` composes the per-line
+  callback, `_prepare_stream_spawn` resolves the config pair before any
+  consumer starts, and `_spawn_stream_consumers` creates the pair of consumer
+  tasks. The config construction itself lives in `cuprum/_stream_config.py`:
+  `_resolve_stream_sink` chooses the destination for each mirrored stream — a
+  live presentation-sink session's log, the execution context's configured
+  sink, or the process's own stream — `_build_stream_config` assembles the
+  stdout `_StreamConfig`, and `_resolve_stream_configs` derives the stderr
+  config from it. Fixing the stderr config's echo, sink, and
   `EchoStream.STDERR` on the derived config is what keeps the two streams
   distinguishable when both sinks resolve to one object, and it is where the
   idle monitor's mirror cursor reaches the configs whose resolved sink is the
-  keepalive's destination. It also composes each stream's per-line callback
-  from the observe hooks and the caller's `on_line`, so `SafeCmd.run()` and
-  `SafeCmd.lines()` share one composition point. Because both entry points
-  reach the consumers through this one module, a patched reader covers both. It
-  is the single-command counterpart of `cuprum/_pipeline_stage_streams.py`;
-  `_subprocess_execution` re-exports the wiring helpers, so callers and
-  monkeypatch targets resolve the same names as before. This boundary exists to
-  keep `_subprocess_execution` within the Pylint module ceiling once the
-  idle-heartbeat wiring joined the stream configs; see the
+  keepalive's destination. The per-line callback is composed from the observe
+  hooks and the caller's `on_line`, so `SafeCmd.run()` and `SafeCmd.lines()`
+  share one composition point. Because both entry points reach the consumers
+  through this one module, a patched reader covers both. It is the
+  single-command counterpart of `cuprum/_pipeline_stage_streams.py`;
+  `cuprum/_subprocess_streams.py` re-exports the three config helpers, and
+  `cuprum/_subprocess_execution.py` re-exports `_build_stream_config`, so
+  callers and monkeypatch targets resolve the same names as before. This
+  boundary exists to keep `_subprocess_execution` within the Pylint module
+  ceiling once the idle-heartbeat wiring joined the stream configs; see the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-16.
 - `cuprum/_idle_heartbeat.py` owns the idle heartbeat's *timing*: interval
@@ -2465,7 +2528,7 @@ the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 9: Capturing drain EOF-grace sequence
+Figure 10: Capturing drain EOF-grace sequence
 
 ```mermaid
 sequenceDiagram
@@ -2610,7 +2673,7 @@ object once `exec` succeeds and a PID exists. `_launch_detached` builds the
 `DetachedLaunch` receipt from that object. Once the receipt reaches the caller,
 the worker is the caller's to terminate and reap.
 
-Figure 10: Detached launch sequence, from `launch_detached_sync` through the
+Figure 11: Detached launch sequence, from `launch_detached_sync` through the
 spawn to the caller-owned receipt
 
 ```mermaid
@@ -2671,7 +2734,7 @@ failure while building the receipt or a cancellation at that boundary abandons
 the worker, which cuprum kills and reaps. Every path ends with no child, a
 reported error, or a worker the caller owns.
 
-Figure 11: Detached launch outcomes, from validation to a caller-owned worker
+Figure 12: Detached launch outcomes, from validation to a caller-owned worker
 or a stopped one
 
 ```mermaid
@@ -2783,7 +2846,7 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 12: Fail-fast termination selection via the `_stages_to_terminate`
+Figure 13: Fail-fast termination selection via the `_stages_to_terminate`
 reducer
 
 ```mermaid
@@ -2982,7 +3045,7 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 13: Concurrent execution flow with allowlist validation and semaphore
+Figure 14: Concurrent execution flow with allowlist validation and semaphore
 gating
 
 ```mermaid
@@ -3028,7 +3091,7 @@ results — the commands that *completed*; cancelled ones produced no
 mapping each back to its original position and the failure indices within the
 compacted tuple.
 
-Figure 14: Fail-fast mode cancellation behaviour
+Figure 15: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -3208,7 +3271,7 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 15: Metrics hook dispatch, from `ExecEvent` to collector calls
+Figure 16: Metrics hook dispatch, from `ExecEvent` to collector calls
 
 ```mermaid
 sequenceDiagram
@@ -3754,7 +3817,7 @@ and re-resolves the timeout in the task that pulls it, so a scope entered after
 `lines()` returns can still refuse the spawn (transitioning straight to
 `Refused`) or shorten its deadline.
 
-Figure 16: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+Figure 17: Lifecycle of a `SafeCmd.lines()` iteration from creation through
 streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
@@ -3790,7 +3853,7 @@ actually ran under. Only then does `_start_line_stream_run()` spawn the
 subprocess and its consumers. Once streaming, the run ends either by publishing
 the `CommandResult` or by closing through `aclose()` or cancellation.
 
-Figure 17: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
+Figure 18: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
 through deferred authorization and spawning to completion or close
 
 ```mermaid
@@ -3812,7 +3875,7 @@ is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
 
-Figure 18: Line observation fan-out from decoded output to lifecycle events,
+Figure 19: Line observation fan-out from decoded output to lifecycle events,
 line events, capture, and echo
 
 ```mermaid
@@ -3841,7 +3904,7 @@ the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
 
-Figure 19: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+Figure 20: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
 per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
@@ -5144,7 +5207,7 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 20: Lifecycle of a `SafeCmd.start()` handle from creation through
+Figure 21: Lifecycle of a `SafeCmd.start()` handle from creation through
 waiting to completion, timeout, or control-driven termination
 
 ```mermaid
@@ -5174,7 +5237,7 @@ the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
 
-Figure 21: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+Figure 22: Sequence of a handle owned through `SafeCmd.start()`, from spawn
 through `terminate()` to the single published `CommandResult`
 
 ```mermaid

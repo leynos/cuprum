@@ -15,6 +15,7 @@ import dataclasses as dc
 import types
 import typing as typ
 
+from cuprum._reclaim_reporting import _teardown_operation_label
 from cuprum.events import TerminalOutcome
 
 if typ.TYPE_CHECKING:
@@ -256,6 +257,68 @@ def _group_teardown_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     return tuple(operations)
 
 
+def _stdio_error_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return the boundary counter for a ``stdio_error`` event.
+
+    A per-boundary label rather than a fourth common one: the boundary category
+    belongs only on this counter, and adding it to the common label set would
+    attach it to every series the hook emits, where it is ``None`` for all but
+    this phase. The metric name still comes from ``_PHASE_COUNTERS``, so it has
+    one definition like the other unit counters.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The boundary counter, labelled with the event's category when it has
+        one.
+    """
+    labels = (
+        {}
+        if event.error_category is None
+        else {"error_category": str(event.error_category)}
+    )
+    # Read from the mapping rather than repeated as a literal: the docstring
+    # above claims the metric name has one definition, and hardcoding it here
+    # would give it two that could drift apart.
+    return (_CounterOp(_PHASE_COUNTERS["stdio_error"], 1.0, labels),)
+
+
+def _teardown_error_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
+    """Return the step-labelled counter for a ``teardown_error`` event.
+
+    The operation names which cleanup step failed, which is what makes the
+    counter actionable: a failed drain, a child that could not be terminated,
+    and a descriptor that could not be released need different responses. The
+    label is bounded by ``_ReclaimOperation`` plus the timeout reporter's
+    ``drain``; anything else is folded into one fallback value.
+
+    Returns
+    -------
+    tuple[_MetricOp, ...]
+        The teardown counter, labelled with the failed step or the fallback.
+    """
+    return (
+        _CounterOp(
+            _PHASE_COUNTERS["teardown_error"],
+            1.0,
+            {"operation": _teardown_operation_label(event.operation)},
+        ),
+    )
+
+
+# Phases whose answer is one helper's own, keyed by event phase. Read-only, and
+# resolved as a lookup rather than a chain of equality tests so the reducer
+# below stays within the project's complexity bar as phases are added.
+_PHASE_HELPERS: cabc.Mapping[str, cabc.Callable[[ExecEvent], tuple[_MetricOp, ...]]] = (
+    types.MappingProxyType({
+        "exit": _resource_operations,
+        "settled": _settled_operations,
+        "group_teardown": _group_teardown_operations,
+        "stdio_error": _stdio_error_operations,
+    })
+)
+
+
 def _metric_operations(event: ExecEvent) -> tuple[_MetricOp, ...]:
     """Map an execution event to the metric operations it should produce."""
     # The pure event-to-operation reducer behind ``MetricsHook.__call__``: the
@@ -298,30 +361,14 @@ def _phase_operations(event: ExecEvent, phase: str) -> tuple[_MetricOp, ...]:
     _UnhandledMetricsPhaseError
         If *phase* is neither a helper-backed phase nor a known unit counter.
     """
-    if phase == "exit":
-        # Duration and failure metrics now come from ``settled``. The existing
-        # ``exit`` event remains the resource-measurement carrier.
-        return _resource_operations(event)
-    if phase == "settled":
-        return _settled_operations(event)
-    if phase == "group_teardown":
-        return _group_teardown_operations(event)
-    if phase == "stdio_error":
-        # A per-boundary label rather than a fourth common one: the boundary
-        # category belongs only on this counter, and adding it to the common
-        # label set would attach it to every series the hook emits, where it
-        # is ``None`` for all but this phase. The metric name still comes
-        # from ``_PHASE_COUNTERS``, so it has one definition like the other
-        # unit counters.
-        labels = (
-            {}
-            if event.error_category is None
-            else {"error_category": str(event.error_category)}
-        )
-        # Read from the mapping rather than repeated as a literal: the comment
-        # above claims the metric name has one definition, and hardcoding it
-        # here would give it two that could drift apart.
-        return (_CounterOp(_PHASE_COUNTERS["stdio_error"], 1.0, labels),)
+    # ``exit`` keeps only the resource measurement: duration and failure
+    # metrics now come from ``settled``. That mapping, and the others whose
+    # answer is a helper's own, is resolved through ``_PHASE_HELPERS``.
+    helper = _PHASE_HELPERS.get(phase)
+    if helper is not None:
+        return helper(event)
+    if phase == "teardown_error" and event.operation is not None:
+        return _teardown_error_operations(event)
     counter_name = _PHASE_COUNTERS.get(phase)
     if counter_name is None:
         raise _UnhandledMetricsPhaseError(phase)
@@ -348,4 +395,6 @@ __all__ = [
     "_metric_operations",
     "_phase_operations",
     "_resource_operations",
+    "_stdio_error_operations",
+    "_teardown_error_operations",
 ]
