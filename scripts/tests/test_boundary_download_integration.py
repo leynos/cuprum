@@ -9,6 +9,7 @@ sets both variables the module requires.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import os
 from pathlib import Path
 
@@ -33,6 +34,15 @@ pytestmark = [
     ),
     pytest.mark.timeout(600),
 ]
+
+
+@dc.dataclass(frozen=True, slots=True)
+class Refusal:
+    """A redirect failure the downloader must report without writing a file."""
+
+    case: runner.Case
+    message: str
+    requests: int
 
 
 @pytest.fixture(scope="module")
@@ -256,56 +266,55 @@ def test_an_insecure_redirect_is_refused_before_it_is_requested(
         assert not run.destination.exists(), "the destination must not be created"
 
 
-def test_the_redirect_limit_is_enforced(
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(
+            Refusal(
+                runner.Case(
+                    scenario="redirect_loop",
+                    sha256="0" * 64,
+                    max_redirects=2,
+                    path="/start",
+                ),
+                "too many redirects",
+                3,
+            ),
+            id="hop-limit",
+        ),
+        pytest.param(
+            Refusal(
+                runner.Case(
+                    scenario="redirect_without_location",
+                    sha256="0" * 64,
+                    path="/start",
+                ),
+                "has no Location header",
+                1,
+            ),
+            id="missing-location",
+        ),
+    ],
+)
+def test_a_refused_redirect_leaves_no_trace(
     tmp_path: Path,
     certificates: support.Certificates,
     source: str,
+    refusal: Refusal,
 ) -> None:
-    """No more than `max_redirects + 1` requests are made."""
+    """A redirect loop or a targetless redirect fails without writing a file."""
     with runner.run_download(
         tmp_path / DESTINATION,
         certificates,
         source,
-        runner.Case(
-            scenario="redirect_loop",
-            sha256="0" * 64,
-            max_redirects=2,
-            path="/start",
-        ),
+        refusal.case,
     ) as run:
         assert run.outcome == "error", run.message
-        assert "too many redirects" in run.message, (
-            "a redirect loop must fail at the configured hop limit"
+        assert refusal.message in run.message, (
+            f"the failure must report {refusal.message!r}"
         )
-        assert len(run.server.requests) == 3, (
-            "the downloader must stop after max_redirects + 1 requests"
-        )
-        assert not run.destination.exists(), "the destination must not be created"
-        assert not run.pending.exists(), "the pending file must be discarded"
-
-
-def test_a_redirect_without_a_location_is_refused(
-    tmp_path: Path,
-    certificates: support.Certificates,
-    source: str,
-) -> None:
-    """A redirect status with no target is a failure, not a success."""
-    with runner.run_download(
-        tmp_path / DESTINATION,
-        certificates,
-        source,
-        runner.Case(
-            scenario="redirect_without_location",
-            sha256="0" * 64,
-            path="/start",
-        ),
-    ) as run:
-        assert run.outcome == "error", run.message
-        assert "has no Location header" in run.message, (
-            "a redirect without a target must be reported"
-        )
-        assert len(run.server.requests) == 1, (
-            "a redirect without a target must not be retried"
+        assert len(run.server.requests) == refusal.requests, (
+            f"the downloader must make exactly {refusal.requests} request(s)"
         )
         assert not run.destination.exists(), "the destination must not be created"
         assert not run.pending.exists(), "the pending file must be discarded"

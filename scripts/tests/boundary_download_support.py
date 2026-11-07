@@ -28,6 +28,12 @@ _OPENSSL_TIMEOUT_SECONDS = 60
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _READ_LIMIT_BYTES = 64 * 1024
 _HEAD_END = b"\r\n\r\n"
+_SERVER_EXTENSIONS = (
+    "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
+    "basicConstraints=critical,CA:FALSE\n"
+    "keyUsage=critical,digitalSignature,keyEncipherment\n"
+    "extendedKeyUsage=serverAuth\n"
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -84,19 +90,18 @@ def create_certificates(directory: Path) -> Certificates:
         Paths the server and the isolated driver need.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    ca_key = directory / "ca.key"
-    ca_certificate = directory / "ca.crt"
-    server_key = directory / "server.key"
-    server_request = directory / "server.csr"
-    server_certificate = directory / "server.crt"
-    extensions = directory / "server.ext"
-    extensions.write_text(
-        "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
-        "basicConstraints=critical,CA:FALSE\n"
-        "keyUsage=critical,digitalSignature,keyEncipherment\n"
-        "extendedKeyUsage=serverAuth\n",
-        encoding="utf-8",
+    ca_key, ca_certificate = _create_ca(directory)
+    server_key, server_request = _create_server_request(directory)
+    server_certificate = _sign_server_certificate(
+        directory, (ca_key, ca_certificate), server_request
     )
+    return Certificates(ca_certificate, server_certificate, server_key)
+
+
+def _create_ca(directory: Path) -> tuple[Path, Path]:
+    """Create the test CA's private key and self-signed certificate."""
+    key = directory / "ca.key"
+    certificate = directory / "ca.crt"
     _openssl(
         "req",
         "-x509",
@@ -104,9 +109,9 @@ def create_certificates(directory: Path) -> Certificates:
         "rsa:2048",
         "-nodes",
         "-keyout",
-        str(ca_key),
+        str(key),
         "-out",
-        str(ca_certificate),
+        str(certificate),
         "-days",
         "1",
         "-subj",
@@ -116,36 +121,56 @@ def create_certificates(directory: Path) -> Certificates:
         "-addext",
         "keyUsage=critical,keyCertSign,cRLSign",
     )
+    return key, certificate
+
+
+def _create_server_request(directory: Path) -> tuple[Path, Path]:
+    """Create the server's private key and certificate signing request."""
+    key = directory / "server.key"
+    request = directory / "server.csr"
     _openssl(
         "req",
         "-newkey",
         "rsa:2048",
         "-nodes",
         "-keyout",
-        str(server_key),
+        str(key),
         "-out",
-        str(server_request),
+        str(request),
         "-subj",
         "/CN=localhost",
     )
+    return key, request
+
+
+def _sign_server_certificate(
+    directory: Path,
+    ca: tuple[Path, Path],
+    request: Path,
+) -> Path:
+    """Sign the server request with the test CA and return its certificate."""
+    extensions = directory / "server.ext"
+    extensions.write_text(_SERVER_EXTENSIONS, encoding="utf-8")
+    certificate = directory / "server.crt"
+    ca_key, ca_certificate = ca
     _openssl(
         "x509",
         "-req",
         "-in",
-        str(server_request),
+        str(request),
         "-CA",
         str(ca_certificate),
         "-CAkey",
         str(ca_key),
         "-CAcreateserial",
         "-out",
-        str(server_certificate),
+        str(certificate),
         "-days",
         "1",
         "-extfile",
         str(extensions),
     )
-    return Certificates(ca_certificate, server_certificate, server_key)
+    return certificate
 
 
 class LoopbackServer:
