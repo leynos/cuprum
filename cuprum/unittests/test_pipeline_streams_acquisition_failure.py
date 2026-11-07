@@ -105,6 +105,109 @@ def test_acquisition_failure_skips_drain_and_falls_back(
     assert eof, "the Python pump must signal downstream EOF"
 
 
+class _DrainFailureHarness:
+    """Drive a drain failure over an acquired pair and record its release."""
+
+    def __init__(self, error: BaseException) -> None:
+        """Capture the failure and the seams that observe cleanup."""
+        self.error = error
+        self.resume_calls = 0
+        self.acquired: list[int] = []
+        self.close_worker_fd = mock.Mock(
+            wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
+        )
+        self._original_open = (
+            _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+        )
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the pause, drain-failure, and recording seams."""
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            self.pause_reader,
+        )
+        monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", self.fail_drain)
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_open_native_pump_worker_fds",
+            self.record_open,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_close_native_pump_worker_fd",
+            self.close_worker_fd,
+        )
+
+    def pause_reader(
+        self,
+        reader: asyncio.StreamReader,
+    ) -> _pipeline_stream_fds._ReaderPause:
+        """Return a pause whose resume records restoration of the reader."""
+        del reader
+        return _pipeline_stream_fds._ReaderPause(resume=self.resume)
+
+    def resume(self) -> None:
+        """Record restoration of the paused reader."""
+        self.resume_calls += 1
+
+    def record_open(
+        self,
+        **kwargs: int,
+    ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
+        """Record the worker pair the acquisition actually opened."""
+        worker_fds = self._original_open(**kwargs)
+        if worker_fds is not None:
+            self.acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+        return worker_fds
+
+    async def fail_drain(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Raise the parametrized drain failure."""
+        del reader, writer
+        await asyncio.sleep(0)
+        raise self.error
+
+    def run(self) -> None:
+        """Run the hand-off over a private pipe and assert its rollback."""
+        with owned_fds() as (reader_fd, writer_fd):
+            handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+                cleanup_grace_s=0.5,
+            )
+            with pytest.raises(type(self.error)) as exc_info:
+                asyncio.run(
+                    _pipeline_streams._run_rust_pump(
+                        reader=typ.cast("asyncio.StreamReader", object()),
+                        writer=None,
+                        handoff=handoff,
+                    )
+                )
+            if isinstance(self.error, OSError):
+                assert exc_info.value is self.error, (
+                    "the drain failure must propagate unchanged"
+                )
+            self._assert_released(reader_fd, writer_fd)
+        assert self.resume_calls == 1, "the failure must resume the paused reader once"
+
+    def _assert_released(self, reader_fd: int, writer_fd: int) -> None:
+        """Assert the unactivated pair closed once and the transports survived."""
+        assert len(self.acquired) == 2, "acquisition must open both worker descriptors"
+        assert self.close_worker_fd.call_args_list == [
+            mock.call(self.acquired[0]),
+            mock.call(self.acquired[1]),
+        ], "the unactivated pair must be closed exactly once in reader-first order"
+        for fd in self.acquired:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(fd)
+        os.fstat(reader_fd)
+        os.fstat(writer_fd)
+
+
 @pytest.mark.parametrize(
     "error",
     [OSError("drain failed"), asyncio.CancelledError()],
@@ -115,81 +218,10 @@ def test_drain_failure_closes_acquired_pair_and_propagates(
     error: BaseException,
 ) -> None:
     """A drain failure releases the acquired pair and re-raises unchanged."""
-    resume_calls = 0
-    acquired: list[int] = []
-    original_open = _pipeline_stream_native_cleanup._open_native_pump_worker_fds
-    close_worker_fd = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
-    )
+    harness = _DrainFailureHarness(error)
+    harness.install(monkeypatch)
 
-    def record_open(
-        **kwargs: int,
-    ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
-        """Record the worker pair the acquisition actually opened."""
-        worker_fds = original_open(**kwargs)
-        if worker_fds is not None:
-            acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
-        return worker_fds
-
-    def resume() -> None:
-        """Record restoration of the paused reader."""
-        nonlocal resume_calls
-        resume_calls += 1
-
-    async def fail_drain(
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter | None,
-    ) -> None:
-        """Raise the parametrized drain failure."""
-        del reader, writer
-        await asyncio.sleep(0)
-        raise error
-
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(resume=resume),
-    )
-    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", fail_drain)
-    monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
-        "_open_native_pump_worker_fds",
-        record_open,
-    )
-    monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
-        "_close_native_pump_worker_fd",
-        close_worker_fd,
-    )
-
-    with owned_fds() as (reader_fd, writer_fd):
-        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            cleanup_grace_s=0.5,
-        )
-        with pytest.raises(type(error)) as exc_info:
-            asyncio.run(
-                _pipeline_streams._run_rust_pump(
-                    reader=typ.cast("asyncio.StreamReader", object()),
-                    writer=None,
-                    handoff=handoff,
-                )
-            )
-        if isinstance(error, OSError):
-            assert exc_info.value is error, "the drain failure must propagate unchanged"
-        assert len(acquired) == 2, "acquisition must open both worker descriptors"
-        assert close_worker_fd.call_args_list == [
-            mock.call(acquired[0]),
-            mock.call(acquired[1]),
-        ], "the unactivated pair must be closed exactly once in reader-first order"
-        for fd in acquired:
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(fd)
-        os.fstat(reader_fd)
-        os.fstat(writer_fd)
-
-    assert resume_calls == 1, "the failure must resume the paused reader once"
+    harness.run()
 
 
 def test_acquisition_failure_keeps_public_pipeline_output_intact(
