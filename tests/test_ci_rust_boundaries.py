@@ -231,7 +231,8 @@ def test_the_download_integration_target_supplies_its_opt_in() -> None:
         "$(PYTEST)",
         "-v",
         "scripts/tests/test_boundary_download_integration.py",
-    ), "the target must switch the suite on, pass the pin, and name the module"
+        "scripts/tests/test_boundary_pypy_transfer.py",
+    ), "the target must switch the suite on, pass the pin, and name both modules"
 
 
 def test_the_verus_job_runs_the_bounded_download_contracts() -> None:

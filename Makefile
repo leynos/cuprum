@@ -852,14 +852,16 @@ boundary-test: ## Run isolated native integration and verification-tool contract
 	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
 	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
 
-# The bounded-download contracts drive the pinned downloader against a
-# controlled loopback HTTPS server. They are opt-in because installing the
-# pinned revision needs the network and every scenario binds a socket, so the
-# default suite collects the module and skips it.
+# The bounded-download contracts drive the pinned downloader and the PyPy
+# installer's transfer against a controlled loopback HTTPS server. They are
+# opt-in because installing the pinned revision needs the network and every
+# scenario binds a socket, so the default suite collects the modules and skips
+# the loopback cases.
 boundary-download-integration: ## Exercise bounded downloads over controlled HTTPS
 	CUPRUM_RUN_DOWNLOAD_INTEGRATION=1 \
 	  CUPRUM_PROVER_TOOLS_SOURCE="$(PROVER_TOOLS_SOURCE)" \
-	  $(PYTEST) -v scripts/tests/test_boundary_download_integration.py
+	  $(PYTEST) -v scripts/tests/test_boundary_download_integration.py \
+	    scripts/tests/test_boundary_pypy_transfer.py
 
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build

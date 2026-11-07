@@ -5837,6 +5837,15 @@ the pinned revision is importable. `test_boundary_download_integration.py`
 holds the assertions and is skipped unless `CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`,
 so the default suite never reaches the network.
 
+`make boundary-download-integration` runs that module together with
+`test_boundary_pypy_transfer.py`, which drives the PyPy installer's own
+`checked_download` over the same loopback server. The target needs the
+`openssl` binary to mint the throwaway certificate authority, `uv` with a
+Python 3.14 interpreter for the isolated driver, network access to install the
+pinned `rust-prover-tools` revision, and a loopback socket for each scenario.
+The PyPy cases need only `openssl` and the loopback socket; they trust the test
+certificate authority through `SSL_CERT_FILE` for the duration of one test.
+
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone;
 `scripts/install_pypy312.py` keeps a private `checked_download` for the linter
