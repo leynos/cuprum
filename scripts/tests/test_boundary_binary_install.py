@@ -8,6 +8,7 @@ network access, and it keeps the retired local installers from creeping back.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import os
 import shlex
@@ -138,13 +139,19 @@ def _argv(record: dict[str, object]) -> list[str]:
     return [str(argument) for argument in argv]
 
 
+@dc.dataclass(frozen=True, slots=True)
+class MakeCall:
+    """One Make target with the assignments and environment it must receive."""
+
+    target: str
+    assignments: tuple[str, ...] = ()
+    environment: cabc.Mapping[str, str] = dc.field(default_factory=dict)
+
+
 def _run_make(
     workdir: Path,
-    target: str,
+    call: MakeCall,
     fakes: FakeTools,
-    *,
-    env: dict[str, str],
-    assignments: cabc.Iterable[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run one Make target in `workdir` with the fake tools in place."""
     command = [
@@ -153,16 +160,16 @@ def _run_make(
         str(workdir),
         "-f",
         str(MAKEFILE),
-        target,
+        call.target,
         f"PROVER_TOOLS={fakes.command(fakes.prover_tools)}",
         f"CARGO={fakes.command(fakes.cargo)}",
-        *assignments,
+        *call.assignments,
     ]
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
         command,
         capture_output=True,
         text=True,
-        env=env,
+        env=fakes.environment(**dict(call.environment)),
         timeout=120,
         check=False,
     )
@@ -192,7 +199,7 @@ def test_kani_install_delegates_download_setup_and_verification(
         "the setup bundle path must name the version the updater actually pins"
     )
 
-    result = _run_make(workdir, "install-boundary-kani", fakes, env=fakes.environment())
+    result = _run_make(workdir, MakeCall("install-boundary-kani"), fakes)
     assert result.returncode == 0, result.stderr
 
     records = fakes.records()
@@ -236,10 +243,8 @@ def test_verus_install_delegates_verus_and_z3(
     verus_dir = tmp_path / "verus install dir"
     result = _run_make(
         workdir,
-        "install-verus",
+        MakeCall("install-verus", assignments=(f"VERUS_INSTALL_DIR={verus_dir}",)),
         fakes,
-        env=fakes.environment(),
-        assignments=(f"VERUS_INSTALL_DIR={verus_dir}",),
     )
     assert result.returncode == 0, result.stderr
 
@@ -284,9 +289,8 @@ def test_verus_install_clears_the_z3_marker_first(
 
     result = _run_make(
         workdir,
-        "install-verus",
+        MakeCall("install-verus", environment={"FAKE_MARKER": str(marker)}),
         fakes,
-        env=fakes.environment(FAKE_MARKER=str(marker)),
     )
     assert result.returncode == 0, result.stderr
 
@@ -328,7 +332,7 @@ def test_ambient_install_options_cannot_redirect_the_targets(
 ) -> None:
     """Stray CI variables must not override the explicit repository paths."""
     ambient = dict.fromkeys(AMBIENT_INSTALL_VARIABLES, "/ambient/wrong")
-    result = _run_make(workdir, target, fakes, env=fakes.environment(**ambient))
+    result = _run_make(workdir, MakeCall(target, environment=ambient), fakes)
     assert result.returncode == 0, result.stderr
 
     delegated = [
@@ -349,9 +353,11 @@ def test_a_failed_z3_install_fails_the_make_target(
     """A delegated solver failure must stop the target and stay visible."""
     result = _run_make(
         workdir,
-        "install-verus",
+        MakeCall(
+            "install-verus",
+            environment={"FAKE_FAIL_ARGS": json.dumps(["z3", "install"])},
+        ),
         fakes,
-        env=fakes.environment(FAKE_FAIL_ARGS=json.dumps(["z3", "install"])),
     )
     assert result.returncode != 0, "a failed solver install must fail the target"
     assert "fake prover-tools failure" in result.stderr, (
