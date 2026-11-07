@@ -55,9 +55,11 @@ def declared_oversize(connection: ssl.SSLSocket, server: LoopbackServer) -> None
     server.wait(10.0)
 
 
-def stream_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
-    """Stream an unlengthened body until the client stops reading."""
-    server.requests.append(support.read_request(connection))
+def _stream_past_the_ceiling(
+    connection: ssl.SSLSocket,
+    server: LoopbackServer,
+) -> None:
+    """Send an unlengthened body until the client stops reading."""
     connection.sendall(_head("200 OK"))
     # The cap only stops a client that never stops reading; the client's own
     # ceiling is far below it, and a client that closes the socket ends the
@@ -66,6 +68,12 @@ def stream_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
         support.emit(connection, server, _OVERFLOW_CHUNK)
         if not server.wait(0.002):
             return
+
+
+def stream_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
+    """Stream an unlengthened body until the client stops reading."""
+    server.requests.append(support.read_request(connection))
+    _stream_past_the_ceiling(connection, server)
 
 
 def stall(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
@@ -130,6 +138,18 @@ def https_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     server.emitted += len(FIXED_BODY)
 
 
+def redirect_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
+    """Redirect `/start` to an unlengthened body that overruns the ceiling."""
+    request = support.read_request(connection)
+    server.requests.append(request)
+    if request.path == "/start":
+        connection.sendall(
+            _head("302 Found", f"Location: {server.url}/asset.bin\r\n"),
+        )
+        return
+    _stream_past_the_ceiling(connection, server)
+
+
 def insecure_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     """Redirect to a plain-HTTP URL the downloader must refuse."""
     server.requests.append(support.read_request(connection))
@@ -165,6 +185,7 @@ SCENARIOS: dict[str, support.Handler] = {
     "late_eof": late_eof,
     "truncated": truncated,
     "https_redirect": https_redirect,
+    "redirect_overflow": redirect_overflow,
     "insecure_redirect": insecure_redirect,
     "redirect_loop": redirect_loop,
     "redirect_without_location": redirect_without_location,
