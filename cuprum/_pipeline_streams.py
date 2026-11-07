@@ -10,6 +10,14 @@ The module intentionally consumes the canonical stage stream policy instead of
 recomputing it. That keeps spawning code responsible for process ownership,
 ``_pipeline_stage_streams`` responsible for stdio shape, and this module
 responsible for moving and collecting bytes once those streams exist.
+
+For the native backend this module is the hand-off coordinator: it pauses the
+reader, acquires the worker descriptor pair synchronously before the first
+await, drains the buffered prefix, and submits the worker. The two failure
+paths differ. A failed acquisition resumes the reader and falls back to the
+Python pump with the buffered prefix intact; a drain failure or cancellation
+closes the unactivated pair, resumes the reader, and re-raises the original
+error unchanged.
 """
 
 from __future__ import annotations
