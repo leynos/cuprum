@@ -195,34 +195,38 @@ class TestBuilderFailureOwnership:
             fail_after_starting_tasks,
         )
 
-        async def consume() -> tuple[BaseException, set[asyncio.Task[object]]]:
+        async def consume() -> tuple[
+            BaseException, int | None, set[asyncio.Task[object]]
+        ]:
             """Start a line stream whose task builder fails partway."""
             stream = command.lines(stdin=StdinInput(text="unread payload"))
             try:
                 with pytest.raises(_BuilderError) as caught:
                     await anext(stream)
+                # Read the exit status here, before ``aclose`` can reclaim
+                # anything: the claim is that the reclaim reaped the child
+                # before it re-raised, so the status must already be collected
+                # at the moment the failure reaches the caller.
+                returncode = spawned[0].returncode
             finally:
                 await stream.aclose()
-            return typ.cast("BaseException", caught.value), pending_tasks()
+            return typ.cast("BaseException", caught.value), returncode, pending_tasks()
 
         with scoped(ScopeConfig(allowlist=catalogue.allowlist)):
-            error, still_pending = asyncio.run(consume())
+            error, returncode, still_pending = asyncio.run(consume())
 
         (pid,) = pids
-        (process,) = spawned
         assert isinstance(error, _BuilderError), (
             f"the builder's failure must reach the caller, got {error!r}"
         )
         assert not still_pending, (
             f"a failed build must leave no task pending, got {still_pending!r}"
         )
-        # The reclaim reaps before it re-raises, so the exit status is already
-        # collected by the time the caller sees the failure. Waiting for the
-        # pid to disappear would pass even if the child were merely killed and
-        # left for the loop to collect later.
-        assert process.returncode is not None, (
+        # Waiting for the pid to disappear would pass even if the child were
+        # merely killed and left for the loop to collect later.
+        assert returncode is not None, (
             "the reclaim must reap the child before the failure reaches the "
-            f"caller, but returncode is {process.returncode!r}"
+            f"caller, but returncode is {returncode!r}"
         )
         wait_for_process_death(pid, seconds=5.0, context="a failed run builder")
 
