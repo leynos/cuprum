@@ -125,14 +125,24 @@ def truncated(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     support.emit(connection, server, b"t" * 20)
 
 
-def https_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
-    """Redirect `/start` to a complete body at `/asset.bin`."""
+def _redirect_to_asset(
+    connection: ssl.SSLSocket,
+    server: LoopbackServer,
+) -> bool:
+    """Answer `/start` with a redirect to `/asset.bin`; report whether it did."""
     request = support.read_request(connection)
     server.requests.append(request)
-    if request.path == "/start":
-        connection.sendall(
-            _head("302 Found", f"Location: {server.url}/asset.bin\r\n"),
-        )
+    if request.path != "/start":
+        return False
+    connection.sendall(
+        _head("302 Found", f"Location: {server.url}/asset.bin\r\n"),
+    )
+    return True
+
+
+def https_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
+    """Redirect `/start` to a complete body at `/asset.bin`."""
+    if _redirect_to_asset(connection, server):
         return
     connection.sendall(_body_response(FIXED_BODY))
     server.emitted += len(FIXED_BODY)
@@ -140,12 +150,7 @@ def https_redirect(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
 
 def redirect_overflow(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     """Redirect `/start` to an unlengthened body that overruns the ceiling."""
-    request = support.read_request(connection)
-    server.requests.append(request)
-    if request.path == "/start":
-        connection.sendall(
-            _head("302 Found", f"Location: {server.url}/asset.bin\r\n"),
-        )
+    if _redirect_to_asset(connection, server):
         return
     _stream_past_the_ceiling(connection, server)
 
