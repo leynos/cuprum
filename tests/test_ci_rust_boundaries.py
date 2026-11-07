@@ -165,6 +165,22 @@ def test_prover_tools_selects_its_required_python() -> None:
     assert runtime == "3.14", "the pinned prover-tools package requires Python 3.14"
 
 
+def test_boundary_kani_finds_the_installed_binaries() -> None:
+    """The local target must run the Kani the install target placed in `.cache`.
+
+    `cargo kani` resolves `cargo-kani` on `PATH`. CI appends the cache's `bin`
+    directory to `$GITHUB_PATH`, but a local `make boundary-kani` sees only the
+    target's own environment, so the target must export that directory itself.
+    """
+    makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        "boundary-kani: export PATH := "
+        "$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" in makefile
+    ), "make boundary-kani must resolve the Kani installed into .cache"
+
+
 def test_verus_cache_tracks_the_shared_installer_pin() -> None:
     """A new shared-installer revision must invalidate the cached Verus and Z3 trees.
 
