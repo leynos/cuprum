@@ -144,6 +144,42 @@ def test_a_streamed_overflow_stops_at_the_byte_ceiling(
         )
 
 
+def test_a_redirect_to_an_oversized_body_stops_at_the_byte_ceiling(
+    tmp_path: Path,
+    certificates: support.Certificates,
+    source: str,
+) -> None:
+    """A redirect target that overruns the ceiling leaves no file behind."""
+    with runner.run_download(
+        tmp_path / DESTINATION,
+        certificates,
+        source,
+        runner.Case(
+            scenario="redirect_overflow",
+            sha256="0" * 64,
+            max_bytes=MAX_BYTES,
+            path="/start",
+        ),
+    ) as run:
+        assert run.outcome == "error", run.message
+        assert f"streamed size exceeded the {MAX_BYTES}-byte limit" in run.message, (
+            "the redirected body must be stopped by the streamed ceiling"
+        )
+        assert [request.path for request in run.server.requests] == [
+            "/start",
+            "/asset.bin",
+        ], "the downloader must follow the redirect before the ceiling stops it"
+        assert run.server.emitted > MAX_BYTES, (
+            "the redirected server must exceed the ceiling, so the streamed limit "
+            "stops it"
+        )
+        assert not run.destination.exists(), "the destination must not be created"
+        assert not run.pending.exists(), "the pending file must be discarded"
+        assert not list(run.destination.parent.iterdir()), (
+            "no partial file may survive the abandoned redirect target"
+        )
+
+
 @pytest.mark.parametrize(
     "scenario",
     ["stall", "trickle_body", "trickle_headers", "trickle_chunks", "late_eof"],
