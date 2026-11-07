@@ -32,8 +32,59 @@ class _DuplicateSetupFailure:
         self.fault_error = fault_error
         self.acquired_fds: list[int] = []
         self.resume_calls = 0
+        self.close_reader = mock.Mock(
+            wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+        )
+        self.close_writer = mock.Mock(
+            wraps=_pipeline_stream_native_cleanup._close_rust_writer_fd
+        )
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+        )
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the seams for this case's failure stage."""
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            self.pause_reader,
+        )
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_drain_reader_buffer",
+            self.drain_reader,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_open_native_pump_worker_fds",
+            self.record_acquisition,
+        )
+        if self.duplicate_creation_fails:
+            # Fail the native duplication itself rather than ``os.dup``: the
+            # worker pair is opened through ``/proc/self/fd`` on Linux and
+            # through ``os.dup`` elsewhere, so patching ``os.dup`` would fail
+            # acquisition on one platform and the start-time duplication on
+            # the other.
+            monkeypatch.setattr(
+                _pipeline_stream_native_cleanup,
+                "_duplicate_native_pump_fds",
+                self.fail_native_duplication,
+            )
+            return
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup._BlockingModeGuard,
+            "engage",
+            self.engage_blocking_mode,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_close_rust_reader_fd",
+            self.close_reader,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_close_rust_writer_fd",
+            self.close_writer,
         )
 
     def record_acquisition(
@@ -93,6 +144,49 @@ class _DuplicateSetupFailure:
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(fd)
 
+    def assert_rollback(self, reader_fd: int, writer_fd: int) -> None:
+        """Assert the pause resumed and the acquired pair was released."""
+        assert self.resume_calls == 1, "rollback must resume the reader"
+        os.fstat(reader_fd)
+        os.fstat(writer_fd)
+        self.assert_acquired_pair_closed()
+
+    def assert_close_calls(self) -> None:
+        """Assert each acquired descriptor was closed exactly once."""
+        self.close_reader.assert_called_once_with(self.acquired_fds[0])
+        self.close_writer.assert_called_once_with(self.acquired_fds[1])
+
+
+def _exercise_handoff(failure: _DuplicateSetupFailure) -> None:
+    """Run the pump over a private pipe and assert its rollback."""
+    reader = typ.cast("asyncio.StreamReader", object())
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        if failure.duplicate_creation_fails:
+            with pytest.raises(failure.fault_error):
+                asyncio.run(
+                    _pipeline_streams._run_rust_pump(
+                        reader=reader,
+                        writer=None,
+                        handoff=handoff,
+                    )
+                )
+        else:
+            handled = asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=reader,
+                    writer=None,
+                    handoff=handoff,
+                )
+            )
+
+            assert handled is False, "blocking failure must select Python fallback"
+        failure.assert_rollback(reader_fd, writer_fd)
+
 
 def _assert_handoff_diagnostics(
     caplog: pytest.LogCaptureFixture,
@@ -144,87 +238,12 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         duplicate_creation_fails=duplicate_creation_fails,
         fault_error=fault_error,
     )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        failure.pause_reader,
-    )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_drain_reader_buffer",
-        failure.drain_reader,
-    )
-    monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
-        "_open_native_pump_worker_fds",
-        failure.record_acquisition,
-    )
-    if duplicate_creation_fails:
-        # Fail the native duplication itself rather than ``os.dup``: the
-        # worker pair is opened through ``/proc/self/fd`` on Linux and through
-        # ``os.dup`` elsewhere, so patching ``os.dup`` would fail acquisition
-        # on one platform and the start-time duplication on the other.
-        monkeypatch.setattr(
-            _pipeline_stream_native_cleanup,
-            "_duplicate_native_pump_fds",
-            failure.fail_native_duplication,
-        )
-    close_reader = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
-    )
-    close_writer = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_writer_fd
-    )
+    failure.install(monkeypatch)
+
+    _exercise_handoff(failure)
+
     if not duplicate_creation_fails:
-        monkeypatch.setattr(
-            _pipeline_stream_native_cleanup._BlockingModeGuard,
-            "engage",
-            failure.engage_blocking_mode,
-        )
-        monkeypatch.setattr(
-            _pipeline_stream_native_cleanup,
-            "_close_rust_reader_fd",
-            close_reader,
-        )
-        monkeypatch.setattr(
-            _pipeline_stream_native_cleanup,
-            "_close_rust_writer_fd",
-            close_writer,
-        )
-
-    reader = typ.cast("asyncio.StreamReader", object())
-    with owned_fds() as (reader_fd, writer_fd):
-        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            cleanup_grace_s=0.5,
-        )
-        if duplicate_creation_fails:
-            with pytest.raises(fault_error):
-                asyncio.run(
-                    _pipeline_streams._run_rust_pump(
-                        reader=reader,
-                        writer=None,
-                        handoff=handoff,
-                    )
-                )
-        else:
-            handled = asyncio.run(
-                _pipeline_streams._run_rust_pump(
-                    reader=reader,
-                    writer=None,
-                    handoff=handoff,
-                )
-            )
-
-            assert handled is False, "blocking failure must select Python fallback"
-        assert failure.resume_calls == 1, "rollback must resume the reader"
-        os.fstat(reader_fd)
-        os.fstat(writer_fd)
-        failure.assert_acquired_pair_closed()
-        if not duplicate_creation_fails:
-            close_reader.assert_called_once_with(failure.acquired_fds[0])
-            close_writer.assert_called_once_with(failure.acquired_fds[1])
+        failure.assert_close_calls()
     _assert_handoff_diagnostics(
         caplog,
         duplicate_creation_fails=duplicate_creation_fails,
