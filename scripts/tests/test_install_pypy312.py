@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from scripts import install_pypy312 as installer
+from scripts import pypy_download as downloader
 
 #: The default suite runs these tests only while this module is named in
 #: `PYTEST_TARGETS`; the coverage job's bare `pytest` is not a substitute,
@@ -197,7 +198,7 @@ class TestCheckedDownload:
             """Supply a corrupt release body without network access."""
             destination.write_bytes(b"corrupt body")
 
-        monkeypatch.setattr(installer, "_download", fetch)
+        monkeypatch.setattr(downloader, "_download", fetch)
         with pytest.raises(ValueError, match="checksum mismatch"):
             installer.checked_download(
                 "https://example.invalid/asset", archive, "0" * 64
@@ -223,8 +224,8 @@ class TestCheckedDownload:
             """Stand in for a cache entry the process cannot read."""
             raise PermissionError("unreadable")
 
-        monkeypatch.setattr(installer, "_download", fetch)
-        monkeypatch.setattr(installer, "_digest", unreadable)
+        monkeypatch.setattr(downloader, "_download", fetch)
+        monkeypatch.setattr(downloader, "_digest", unreadable)
 
         with pytest.raises(PermissionError):
             installer.checked_download(
@@ -248,7 +249,7 @@ class TestCheckedDownload:
             """Supply a fresh release body without network access."""
             destination.write_bytes(content)
 
-        monkeypatch.setattr(installer, "_download", fetch)
+        monkeypatch.setattr(downloader, "_download", fetch)
         installer.checked_download("https://example.invalid/asset", archive, digest)
         assert archive.read_bytes() == content, "the missing entry was not installed"
 
@@ -283,11 +284,11 @@ class TestCheckedDownload:
         connection = mock.Mock()
         connection.getresponse.return_value = response
         monkeypatch.setattr(
-            installer.http.client,
+            downloader.http.client,
             "HTTPSConnection",
             lambda *_args, **_kwargs: connection,
         )
         with pytest.raises(ValueError, match=message):
-            installer._download("https://example.invalid/asset", tmp_path / "binary")
+            downloader._download("https://example.invalid/asset", tmp_path / "binary")
         connection.close.assert_called()
         assert not (tmp_path / "binary").exists(), "rejected redirect created a binary"

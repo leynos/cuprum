@@ -290,3 +290,14 @@ def emit(connection: ssl.SSLSocket, server: LoopbackServer, data: bytes) -> None
     """Send body bytes and count them as emitted."""
     connection.sendall(data)
     server.emitted += len(data)
+
+
+def respond_with_body(
+    connection: ssl.SSLSocket,
+    server: LoopbackServer,
+    body: bytes,
+) -> None:
+    """Send one complete, correctly sized 200 response for `body`."""
+    head = f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n\r\n".encode("ascii")
+    connection.sendall(head + body)
+    server.emitted += len(body)
