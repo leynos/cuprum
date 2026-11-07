@@ -1,9 +1,11 @@
 """Acquisition and drain failures around the native pump hand-off.
 
 The hand-off acquires its worker descriptors before the buffered drain. These
-tests pin the two failure paths that ordering creates: acquisition can fail
-before anything is drained, and the drain can fail or be cancelled after the
-pair is already owned. Both must leave the hop safe for the Python fallback.
+tests pin the two failure paths that ordering creates. A failed acquisition
+resumes the reader and falls back to the Python pump with the buffered prefix
+intact. A drain that fails or is cancelled closes the unactivated pair,
+resumes the reader, and re-raises the original exception, so that hop settles
+without a fallback.
 """
 
 from __future__ import annotations

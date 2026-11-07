@@ -1,13 +1,17 @@
-"""Acquire, activate, and submit the native pump's descriptor hand-off.
+"""Supply the acquire, activate, and submit steps of the native pump hand-off.
 
-This module owns the ordering that makes a hand-off safe: open worker
-descriptors before the first await, drain asyncio's buffered prefix, activate
-blocking mode on descriptors Cuprum already owns, then submit the worker.
-Composing those steps here keeps acquisition failures, drain failures, and
-blocking-setup refusals in one place. Once native work is submitted, the
-executor future owns cleanup; `_pipeline_stream_native_completion` closes the
-callback's descriptors, restores blocking mode, and resumes the paused reader
-after native I/O settles.
+The hand-off's *ordering* — pause, acquire before the first await, drain,
+activate, submit — belongs to `_pipeline_streams._pump_over_raw_fds`. This
+module supplies the steps that ordering calls, and keeps each step's failure
+shape local so the coordinator can tell its two failure paths apart:
+`_acquire_rust_pump_worker_fds` returns `None` rather than raising, which lets
+the coordinator fall back to the Python pump, while
+`_activate_rust_pump_state` raises `_RustPumpBlockingModeError` for a decline.
+`_close_unactivated_rust_pump_fds` releases a pair that activation never took
+over. Once native work is submitted, the executor future owns cleanup;
+`_pipeline_stream_native_completion` closes the callback's descriptors,
+restores blocking mode, and resumes the paused reader after native I/O
+settles.
 """
 
 from __future__ import annotations
