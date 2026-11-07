@@ -179,6 +179,12 @@ class LoopbackServer:
     def close(self) -> None:
         """Stop accepting and wake any handler waiting on the stop event."""
         self._stop.set()
+        # `_serve` blocks in `accept()` with no timeout, and on Linux closing a
+        # listening socket from another thread does not wake that call.
+        # `shutdown()` does, so the accept thread returns instead of outliving
+        # the test that owns it.
+        with contextlib.suppress(OSError):
+            self._listener.shutdown(socket.SHUT_RDWR)
         with contextlib.suppress(OSError):
             self._listener.close()
         self._thread.join(timeout=_CONNECTION_TIMEOUT_SECONDS + 1.0)

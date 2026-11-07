@@ -280,6 +280,8 @@ def test_the_redirect_limit_is_enforced(
         assert len(run.server.requests) == 3, (
             "the downloader must stop after max_redirects + 1 requests"
         )
+        assert not run.destination.exists(), "the destination must not be created"
+        assert not run.pending.exists(), "the pending file must be discarded"
 
 
 def test_a_redirect_without_a_location_is_refused(
@@ -305,3 +307,5 @@ def test_a_redirect_without_a_location_is_refused(
         assert len(run.server.requests) == 1, (
             "a redirect without a target must not be retried"
         )
+        assert not run.destination.exists(), "the destination must not be created"
+        assert not run.pending.exists(), "the pending file must be discarded"

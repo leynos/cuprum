@@ -14,6 +14,12 @@ This module also owns the small HTTPS downloader used for the PyPy archive.
 Verifier binaries no longer use it: Kani and Z3 installs are delegated to the
 shared `rust-prover-tools` dependency, which applies byte ceilings and a
 transfer deadline before the digest check.
+
+The PyPy downloader applies the same two bounds itself: it refuses a declared
+length above `_MAX_BODY_BYTES`, stops once the streamed body passes that
+ceiling, and abandons a transfer that outlives `_TRANSFER_DEADLINE_SECONDS`.
+Without them a stalled or oversized response would fill the disk before the
+digest check could reject it.
 """
 
 from __future__ import annotations
@@ -23,10 +29,19 @@ import hashlib
 import http.client
 import os
 import platform
-import shutil
 import tarfile
+import time
+import typing as typ
 import urllib.parse
 from pathlib import Path
+
+# Large enough for the pinned PyPy archive with room to spare, small enough
+# that a hostile or broken response cannot exhaust the host disk.
+_MAX_BODY_BYTES = 512 * 1024 * 1024
+# One deadline covers every redirect hop plus the body, so a server that
+# trickles bytes cannot extend the transfer indefinitely.
+_TRANSFER_DEADLINE_SECONDS = 900.0
+_CHUNK_BYTES = 64 * 1024
 
 
 def checked_download(url: str, destination: Path, digest: str) -> None:
@@ -103,8 +118,9 @@ def _require_digest(pending: Path, destination: Path, digest: str) -> None:
 
 def _download(url: str, destination: Path) -> None:
     """Follow bounded HTTPS-only release redirects into a temporary file."""
+    deadline = time.monotonic() + _TRANSFER_DEADLINE_SECONDS
     for _ in range(6):
-        redirect = _download_once(url, destination)
+        redirect = _download_once(url, destination, deadline)
         if redirect is None:
             return
         url = redirect
@@ -141,18 +157,59 @@ def _fetch_body(
     connection: http.client.HTTPSConnection,
     url: str,
     destination: Path,
+    deadline: float,
 ) -> str | None:
     """Save the response body, or resolve one redirect hop instead."""
     with connection.getresponse() as response:
         redirect = _redirect_url(url, response)
         if redirect is not None:
             return redirect
+        _reject_oversize_declaration(response)
         with destination.open("wb") as output:
-            shutil.copyfileobj(response, output)
+            _copy_body(response, output, deadline)
         return None
 
 
-def _download_once(url: str, destination: Path) -> str | None:
+def _reject_oversize_declaration(response: http.client.HTTPResponse) -> None:
+    """Refuse a declared body length above the asset ceiling before reading."""
+    declared = response.getheader("Content-Length")
+    if declared is None:
+        return
+    try:
+        length = int(declared)
+    except ValueError:
+        msg = f"release download declared a non-numeric Content-Length: {declared}"
+        raise ValueError(msg) from None
+    if length > _MAX_BODY_BYTES:
+        msg = (
+            f"release download declared {length} bytes, above the "
+            f"{_MAX_BODY_BYTES}-byte limit"
+        )
+        raise ValueError(msg)
+
+
+def _copy_body(
+    response: http.client.HTTPResponse,
+    output: typ.BinaryIO,
+    deadline: float,
+) -> None:
+    """Copy chunks until EOF, refusing an overflow or an expired deadline."""
+    written = 0
+    while True:
+        if time.monotonic() > deadline:
+            msg = "release download exceeded the transfer deadline"
+            raise TimeoutError(msg)
+        chunk = response.read(_CHUNK_BYTES)
+        if not chunk:
+            return
+        written += len(chunk)
+        if written > _MAX_BODY_BYTES:
+            msg = f"release download exceeded the {_MAX_BODY_BYTES}-byte limit"
+            raise ValueError(msg)
+        output.write(chunk)
+
+
+def _download_once(url: str, destination: Path, deadline: float) -> str | None:
     """Close one HTTPS connection after saving its body or resolving a redirect."""
     connection, target = _connect(url)
     try:
@@ -161,7 +218,7 @@ def _download_once(url: str, destination: Path) -> str | None:
             target,
             headers={"User-Agent": "cuprum-boundary-verification"},
         )
-        return _fetch_body(connection, url, destination)
+        return _fetch_body(connection, url, destination, deadline)
     finally:
         connection.close()
 
