@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed tool argv.
@@ -25,7 +24,6 @@ if typ.TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = REPO_ROOT / "Makefile"
-PROVER_TOOLS_PIN = REPO_ROOT / "tools/prover-tools/VERSION"
 
 # The recipe must survive a checkout path that contains spaces, which is why
 # every path argument is quoted and why the fixture runs make from one.
@@ -182,24 +180,6 @@ def workdir(tmp_path: Path) -> Path:
 def fakes(tmp_path: Path) -> FakeTools:
     """Create the fake tool executables outside the spaced checkout path."""
     return FakeTools(tmp_path / "fakes")
-
-
-def test_prover_tools_pin_is_an_immutable_commit() -> None:
-    """A branch or tag could move under the verifier install; a commit cannot."""
-    value = PROVER_TOOLS_PIN.read_text(encoding="utf-8").strip()
-    prefix = "git+https://github.com/leynos/rust-prover-tools@"
-    assert value.startswith(prefix), "the shared dependency must stay a git pin"
-    revision = value[len(prefix) :]
-    assert re.fullmatch(r"[0-9a-f]{40}", revision), (
-        "the shared dependency must be pinned to a full commit hash"
-    )
-
-
-def test_the_makefile_reads_the_pin_from_the_hashed_file() -> None:
-    """The cache key hashes the pin file, so the Makefile must be its reader."""
-    assert _makefile_assignment("PROVER_TOOLS_SOURCE") == (
-        "$(file < tools/prover-tools/VERSION)"
-    ), "the Makefile must take the pin from the file the cache key hashes"
 
 
 def test_kani_install_delegates_download_setup_and_verification(

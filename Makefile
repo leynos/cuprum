@@ -890,8 +890,14 @@ help: ## Show available targets
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
 # The pin lives in its own file so the verifier cache key can hash exactly what
 # decides the downloaded binaries, rather than every unrelated Makefile edit.
-PROVER_TOOLS_SOURCE ?= $(file < tools/prover-tools/VERSION)
-PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
+# `$(file < ...)` resolves against make's working directory and yields an empty
+# string when the file is absent, so a run from another directory or under an
+# older make would silently drop the pin. Fail loudly instead: an empty source
+# makes `uv` resolve `prover-tools` from a package index, not the pinned commit.
+PROVER_TOOLS_SOURCE ?= $(strip $(file < tools/prover-tools/VERSION))
+PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 \
+	--from $(or $(PROVER_TOOLS_SOURCE),$(error PROVER_TOOLS_SOURCE is empty; \
+	run make from the repository root)) prover-tools
 # The shared CLI reads these ambient names as flag defaults. Every delegated
 # invocation passes its paths explicitly, so a stray CI or shell value must not
 # silently redirect an install away from the repository cache.
