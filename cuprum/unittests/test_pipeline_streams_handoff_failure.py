@@ -30,6 +30,68 @@ from cuprum.pump_observation import observe_pump
 from cuprum.unittests._rust_pump_test_helpers import owned_fds
 
 
+class _DeclineRecorder:
+    """Record the seams a declined hand-off touches and the events it emits."""
+
+    def __init__(self) -> None:
+        """Start with no resume, no drain, and no emitted event."""
+        self.resume_calls = 0
+        self.drain_calls = 0
+        self.events: list[PumpEvent] = []
+
+    def resume_reader(self) -> None:
+        """Record restoration of the paused asyncio reader."""
+        self.resume_calls += 1
+
+    async def record_drain(
+        self,
+        _reader: asyncio.StreamReader,
+        _writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Record a buffered drain that acquisition failure must skip."""
+        self.drain_calls += 1
+        await asyncio.sleep(0)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the doubles for a failed worker re-open."""
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            lambda _reader: _pipeline_stream_fds._ReaderPause(
+                resume=self.resume_reader
+            ),
+        )
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_drain_reader_buffer",
+            self.record_drain,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_open_native_pump_worker_fds",
+            lambda **_kwargs: None,
+        )
+
+    def run(self) -> bool:
+        """Run the hand-off against a private pipe and return its handled flag."""
+        reader = typ.cast("asyncio.StreamReader", object())
+        with owned_fds() as (reader_fd, writer_fd), observe_pump(self.events.append):
+            handle = asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=reader,
+                    writer=None,
+                    handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
+                        reader_fd=reader_fd,
+                        writer_fd=writer_fd,
+                        cleanup_grace_s=0.5,
+                    ),
+                )
+            )
+            os.fstat(reader_fd)
+            os.fstat(writer_fd)
+        return handle
+
+
 def test_worker_duplication_failure_declines_instead_of_raising(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -49,61 +111,30 @@ def test_worker_duplication_failure_declines_instead_of_raising(
     re-raise would satisfy neither.
     """
     caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
-    resume_calls = 0
-    events: list[PumpEvent] = []
+    recorder = _DeclineRecorder()
+    recorder.install(monkeypatch)
 
-    def resume_reader() -> None:
-        """Record restoration of the paused asyncio reader."""
-        nonlocal resume_calls
-        resume_calls += 1
-
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(resume=resume_reader),
-    )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_drain_reader_buffer",
-        lambda _reader, _writer: asyncio.sleep(0),
-    )
-    monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
-        "_open_native_pump_worker_fds",
-        lambda **_kwargs: None,
-    )
-
-    reader = typ.cast("asyncio.StreamReader", object())
-    with owned_fds() as (reader_fd, writer_fd), observe_pump(events.append):
-        handle = asyncio.run(
-            _pipeline_streams._run_rust_pump(
-                reader=reader,
-                writer=None,
-                handoff=_pipeline_stream_native_cleanup._RustPumpHandoff(
-                    reader_fd=reader_fd,
-                    writer_fd=writer_fd,
-                    cleanup_grace_s=0.5,
-                ),
-            )
-        )
-        os.fstat(reader_fd)
-        os.fstat(writer_fd)
+    handle = recorder.run()
 
     assert handle is False, (
         "a failed worker-descriptor re-open must decline the fast path so the "
         f"Python pump carries the hop, found handled={handle!r}"
     )
-    assert resume_calls == 1, "the decline must resume the paused reader"
-    assert [event.phase for event in events] == ["declined", "handoff"], (
+    assert recorder.resume_calls == 1, "the decline must resume the paused reader"
+    assert recorder.drain_calls == 0, (
+        "acquisition runs before the drain, so a failed acquisition must not "
+        "drain the buffer the Python fallback still needs"
+    )
+    assert [event.phase for event in recorder.events] == ["declined", "handoff"], (
         f"the decline must report both its reason and its bounded outcome, "
-        f"found {[event.phase for event in events]}"
+        f"found {[event.phase for event in recorder.events]}"
     )
-    assert events[0].reason == RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE, (
-        "the decline must name the descriptor duplication seam"
-    )
-    assert events[1].outcome == RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED, (
-        "the hand-off outcome must still name the failed duplication"
-    )
+    assert (
+        recorder.events[0].reason == RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE
+    ), "the decline must name the descriptor duplication seam"
+    assert (
+        recorder.events[1].outcome == RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED
+    ), "the hand-off outcome must still name the failed duplication"
 
 
 def test_fatal_handoff_failure_closes_the_writer_transport(

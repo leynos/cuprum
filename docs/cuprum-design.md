@@ -4340,18 +4340,32 @@ Python's built-in I/O operations.
 
 The Python pipeline retains ownership of the original reader and writer
 descriptors held by the asyncio transports. Before native I/O starts, it pauses
-the reader transport and lets callbacks queued before the pause settle. If the
-`StreamReader` has bytes in `_buffer`, the hand-off delivers them once to the
-downstream writer and clears the buffer only after delivery succeeds or
-downstream closure is known. The native worker then handles the remaining raw
-bytes. It receives worker-owned duplicates for both descriptors: Rust borrows
-the worker reader duplicate without closing it; it consumes the worker writer
-duplicate and closes it on every exit path. The Python hand-off owner closes
-the reader duplicate after the worker settles, and closes either duplicate
-itself when preparation or executor submission fails. On Windows the shim
-converts the worker duplicates to independently owned Win32 handles and closes
-the temporary CRT descriptors at the native boundary. No descriptor number is
-shared between asyncio and the worker.
+the reader transport and acquires the worker descriptor pair synchronously,
+before the hand-off first awaits. The hand-off carries descriptor numbers, so
+acquiring after the buffered drain would let a transport that closed during
+that await release its number for another pipeline to reuse, and the worker
+would attach to the wrong pipe. Acquiring first keeps the numbers naming the
+pipe the hand-off was authorized to borrow; a failed acquisition resumes the
+reader and falls back without draining, leaving the buffered prefix for the
+Python pump.
+
+Only then does the hand-off let callbacks queued before the pause settle and,
+if the `StreamReader` has bytes in `_buffer`, deliver them once to the
+downstream writer, clearing the buffer only after delivery succeeds or
+downstream closure is known. Blocking activation stays after the drain because
+non-Linux `os.dup` duplicates share the transport's status flags: switching
+early would make asyncio's own descriptor blocking while the drain still
+awaits. A drain failure or cancellation closes the unactivated pair exactly
+once and resumes the reader without restoring blocking mode, since none was
+engaged. The native worker then handles the remaining raw bytes. It receives
+worker-owned duplicates for both descriptors: Rust borrows the worker reader
+duplicate without closing it; it consumes the worker writer duplicate and
+closes it on every exit path. The Python hand-off owner closes the reader
+duplicate after the worker settles, and closes either duplicate itself when
+preparation or executor submission fails. On Windows the shim converts the
+worker duplicates to independently owned Win32 handles and closes the temporary
+CRT descriptors at the native boundary. No descriptor number is shared between
+asyncio and the worker.
 
 Blocking mode is applied only to worker-owned duplicates. After the native
 worker settles, Python closes the remaining reader duplicate, restores the
