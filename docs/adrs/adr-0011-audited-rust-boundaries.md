@@ -33,6 +33,16 @@ declines with `READER_PAUSE_FAILED` and the Python fall-back retains its
 buffered prefix. The H9 real-EOF regression covers this contract; it does not
 establish the cause of the historical native payload mismatch.
 
+The duplicate acquisition that follows the pause must run before the hand-off
+first awaits. The hand-off carries descriptor *numbers*, so acquiring them
+after the buffered drain would let a transport that closed during that await
+release its number for reuse by another pipeline, attaching the worker to the
+wrong pipe. Cuprum therefore acquires and owns the pair synchronously after the
+pause and only then drains. Blocking activation stays after the drain because
+non-Linux `os.dup` duplicates share the transport's status flags; a drain
+failure or cancellation closes the unactivated pair exactly once and resumes
+the reader. The descriptor-reuse regression covers this contract.
+
 ## Decision
 
 Split the Rust workspace by responsibility:

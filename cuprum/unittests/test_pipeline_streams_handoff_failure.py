@@ -50,6 +50,7 @@ def test_worker_duplication_failure_declines_instead_of_raising(
     """
     caplog.set_level(logging.DEBUG, logger="cuprum._pipeline_streams")
     resume_calls = 0
+    drain_calls = 0
     events: list[PumpEvent] = []
 
     def resume_reader() -> None:
@@ -57,16 +58,21 @@ def test_worker_duplication_failure_declines_instead_of_raising(
         nonlocal resume_calls
         resume_calls += 1
 
+    async def record_drain(
+        _reader: asyncio.StreamReader,
+        _writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Record a buffered drain that acquisition failure must skip."""
+        nonlocal drain_calls
+        drain_calls += 1
+        await asyncio.sleep(0)
+
     monkeypatch.setattr(
         _pipeline_streams,
         "_pause_reader_transport",
         lambda _reader: _pipeline_stream_fds._ReaderPause(resume=resume_reader),
     )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_drain_reader_buffer",
-        lambda _reader, _writer: asyncio.sleep(0),
-    )
+    monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", record_drain)
     monkeypatch.setattr(
         _pipeline_stream_native_cleanup,
         "_open_native_pump_worker_fds",
@@ -94,6 +100,10 @@ def test_worker_duplication_failure_declines_instead_of_raising(
         f"Python pump carries the hop, found handled={handle!r}"
     )
     assert resume_calls == 1, "the decline must resume the paused reader"
+    assert drain_calls == 0, (
+        "acquisition runs before the drain, so a failed acquisition must not "
+        "drain the buffer the Python fallback still needs"
+    )
     assert [event.phase for event in events] == ["declined", "handoff"], (
         f"the decline must report both its reason and its bounded outcome, "
         f"found {[event.phase for event in events]}"

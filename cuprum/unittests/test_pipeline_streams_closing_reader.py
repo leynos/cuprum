@@ -8,11 +8,26 @@ import typing as typ
 
 import pytest
 
+from cuprum import _pipeline_stream_native_cleanup, _pipeline_streams
 from cuprum._pipeline_stream_fds import _pause_reader_transport, _ReaderPause
-from cuprum.pump_events import RustPumpDeclineReason
+from cuprum._testing import set_rust_availability_for_testing
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import observe_pump
+from cuprum.unittests._pump_stream_dispatch_support import (
+    _FdTransport,
+    _nonblocking_pipe_pair,
+    _RecordingWriter,
+    clear_backend_caches,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+# The fixture is requested by name in ``usefixtures``, so the import is the
+# only thing that makes it visible to pytest.
+__all__ = ["clear_backend_caches"]
+
+_PREFIX = b"buffered prefix"
 
 
 @pytest.fixture
@@ -79,3 +94,86 @@ def test_closing_reader_declines_native_borrow(pipe_at_eof: typ.BinaryIO) -> Non
             transport.close()
 
     asyncio.run(exercise())
+
+
+class _ClosingFdTransport(_FdTransport):
+    """Transport double that reports itself as already closing."""
+
+    def is_closing(self) -> bool:
+        """Report the closing state that invalidates descriptor borrowing."""
+        return True
+
+
+@pytest.mark.usefixtures("clear_backend_caches")
+def test_closing_reader_dispatch_falls_back_without_acquiring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closing transport declines before acquisition and Python pumps the hop."""
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
+    set_rust_availability_for_testing(is_available=True)
+    events: list[PumpEvent] = []
+    acquisition_calls = 0
+    native_start_calls = 0
+
+    def record_acquisition(**_kwargs: int) -> None:
+        """Record an acquisition that must never run for a closing reader."""
+        nonlocal acquisition_calls
+        acquisition_calls += 1
+
+    def record_native_start(*_args: object, **_kwargs: object) -> None:
+        """Record an attempt to submit native work that must never run."""
+        nonlocal native_start_calls
+        native_start_calls += 1
+
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        record_acquisition,
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_start_rust_pump_with_cleanup",
+        record_native_start,
+    )
+
+    async def exercise() -> tuple[_FdTransport, bytes, bool, bool]:
+        """Drive dispatch with a reader past EOF whose transport is closing."""
+        reader = asyncio.StreamReader()
+        reader_transport = _ClosingFdTransport(read_fd)
+        reader.set_transport(typ.cast("asyncio.BaseTransport", reader_transport))
+        reader.feed_data(_PREFIX)
+        reader.feed_eof()
+        writer = _RecordingWriter(write_fd)
+        await _pipeline_streams._pump_stream_dispatch(
+            reader,
+            typ.cast("asyncio.StreamWriter", writer),
+        )
+        return reader_transport, bytes(writer.written), writer.eof, writer.closed
+
+    with _nonblocking_pipe_pair() as (
+        read_fd,
+        read_write_fd,
+        write_read_fd,
+        write_fd,
+    ):
+        del read_write_fd, write_read_fd
+        with observe_pump(events.append):
+            transport, delivered, eof, closed = asyncio.run(exercise())
+
+    assert [event.phase for event in events] == ["declined"], (
+        f"the closing reader must only report a decline, found {events!r}"
+    )
+    assert events[0].reason == RustPumpDeclineReason.READER_PAUSE_FAILED, (
+        "the decline must name the ignored pause on the closing transport"
+    )
+    assert acquisition_calls == 0, (
+        "a closing reader must decline before opening worker descriptors"
+    )
+    assert native_start_calls == 0, "no native worker may be submitted"
+    assert transport.pause_calls == 0, (
+        "asyncio would ignore a pause on a closing transport"
+    )
+    assert transport.resume_calls == 0, "nothing was paused, so nothing resumes"
+    assert delivered == _PREFIX, "the Python pump must deliver the prefix in order"
+    assert eof, "the Python pump must signal downstream EOF"
+    assert closed, "the Python pump must close the writer"

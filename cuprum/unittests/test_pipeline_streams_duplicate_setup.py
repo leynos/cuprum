@@ -31,8 +31,22 @@ class _DuplicateSetupFailure:
         self.duplicate_creation_fails = duplicate_creation_fails
         self.fault_error = fault_error
         self.duplicated_fds: list[int] = []
+        self.acquired_fds: list[int] = []
         self.resume_calls = 0
         self._original_dup = os.dup
+        self._original_open = (
+            _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+        )
+
+    def record_acquisition(
+        self,
+        **kwargs: int,
+    ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
+        """Record the worker pair acquired before the buffered drain."""
+        worker_fds = self._original_open(**kwargs)
+        if worker_fds is not None:
+            self.acquired_fds.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+        return worker_fds
 
     def pause_reader(
         self,
@@ -81,10 +95,18 @@ class _DuplicateSetupFailure:
             assert not self.duplicated_fds, (
                 "failed duplication creates no writer descriptor to clean up"
             )
-            return
         for duplicate_fd in self.duplicated_fds:
             with pytest.raises(OSError, match="Bad file descriptor"):
                 os.fstat(duplicate_fd)
+
+    def assert_acquired_pair_closed(self) -> None:
+        """Assert the descriptors acquired before the drain were released."""
+        assert len(self.acquired_fds) == 2, (
+            "acquisition must open both worker descriptors before the drain"
+        )
+        for fd in self.acquired_fds:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(fd)
 
 
 def _assert_handoff_diagnostics(
@@ -147,12 +169,33 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         "_drain_reader_buffer",
         failure.drain_reader,
     )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        failure.record_acquisition,
+    )
     monkeypatch.setattr(_pipeline_stream_native_cleanup.os, "dup", failure.duplicate)
+    close_reader = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+    )
+    close_writer = mock.Mock(
+        wraps=_pipeline_stream_native_cleanup._close_rust_writer_fd
+    )
     if not duplicate_creation_fails:
         monkeypatch.setattr(
             _pipeline_stream_native_cleanup._BlockingModeGuard,
             "engage",
             failure.engage_blocking_mode,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_close_rust_reader_fd",
+            close_reader,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_close_rust_writer_fd",
+            close_writer,
         )
 
     reader = typ.cast("asyncio.StreamReader", object())
@@ -185,6 +228,10 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         os.fstat(reader_fd)
         os.fstat(writer_fd)
         failure.assert_duplicate_cleanup()
+        failure.assert_acquired_pair_closed()
+        if not duplicate_creation_fails:
+            close_reader.assert_called_once_with(failure.acquired_fds[0])
+            close_writer.assert_called_once_with(failure.acquired_fds[1])
     _assert_handoff_diagnostics(
         caplog,
         duplicate_creation_fails=duplicate_creation_fails,

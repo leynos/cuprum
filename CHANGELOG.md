@@ -26,6 +26,15 @@
 
 ### Fixed
 
+- **Native pump hand-off cannot attach to a recycled pipe descriptor:** the
+  hand-off now acquires its worker descriptor pair synchronously, before it
+  first awaits, instead of opening the recorded descriptor numbers after the
+  buffered drain. A transport that closed during that await could release its
+  number for another pipeline to reuse, and the worker would then read the
+  wrong pipe. A failed acquisition resumes the reader and falls back to the
+  Python pump without draining; a drain failure or cancellation closes the
+  unactivated pair exactly once
+  ([#549](https://github.com/leynos/cuprum/issues/549)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine
