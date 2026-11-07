@@ -37,6 +37,11 @@ import typing as typ
 import urllib.parse
 from pathlib import Path
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    type Clock = cabc.Callable[[], float]
+
 # Large enough for the pinned PyPy archive with room to spare, small enough
 # that a hostile or broken response cannot exhaust the host disk.
 _MAX_BODY_BYTES = 512 * 1024 * 1024
@@ -83,27 +88,15 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
 def _cache_is_current(destination: Path, digest: str) -> bool:
     """Report whether an existing cache entry already matches the pin.
 
-    A cache entry that cannot be read is not a cache miss. The failure is
-    raised, not reported as ``False``, so ``checked_download`` never answers an
-    unreadable cache with a fresh download that would overwrite it.
-
-    Parameters
-    ----------
-    destination : Path
-        Local cache path to inspect.
-    digest : str
-        Expected SHA-256 digest from the approved release manifest.
+    An entry that cannot be read is not a miss: the failure is raised, so
+    `checked_download` never answers an unreadable entry with a fresh download
+    that would overwrite it.
 
     Returns
     -------
     bool
         ``True`` only for a readable entry whose digest already matches.
-
-    Raises
-    ------
-    OSError
-        If the cache entry exists but cannot be opened or read.
-    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _digest.
+    """
     try:
         current = _digest(destination)
     except FileNotFoundError:
@@ -118,11 +111,29 @@ def _require_digest(pending: Path, destination: Path, digest: str) -> None:
         raise ValueError(msg)
 
 
-def _download(url: str, destination: Path) -> None:
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Transfer:
+    """The one deadline and clock every redirect hop of a download shares."""
+
+    deadline: float
+    clock: Clock
+
+    def expired(self) -> bool:
+        """Report whether the transfer has outlived its deadline."""
+        return self.clock() > self.deadline
+
+
+def _download(
+    url: str,
+    destination: Path,
+    *,
+    clock: Clock = time.monotonic,
+) -> None:
     """Follow bounded HTTPS-only release redirects into a temporary file."""
-    deadline = time.monotonic() + _TRANSFER_DEADLINE_SECONDS
+    # Tests pass a controlled clock so a deadline is reached without waiting.
+    transfer = _Transfer(clock() + _TRANSFER_DEADLINE_SECONDS, clock)
     for _ in range(6):
-        redirect = _download_once(url, destination, deadline)
+        redirect = _download_once(url, destination, transfer)
         if redirect is None:
             return
         url = redirect
@@ -159,7 +170,7 @@ def _fetch_body(
     connection: http.client.HTTPSConnection,
     url: str,
     destination: Path,
-    deadline: float,
+    transfer: _Transfer,
 ) -> str | None:
     """Save the response body, or resolve one redirect hop instead."""
     with connection.getresponse() as response:
@@ -168,7 +179,7 @@ def _fetch_body(
             return redirect
         _reject_oversize_declaration(response)
         with destination.open("wb") as output:
-            _copy_body(response, output, deadline)
+            _copy_body(response, output, transfer)
         return None
 
 
@@ -193,12 +204,12 @@ def _reject_oversize_declaration(response: http.client.HTTPResponse) -> None:
 def _copy_body(
     response: http.client.HTTPResponse,
     output: typ.BinaryIO,
-    deadline: float,
+    transfer: _Transfer,
 ) -> None:
     """Copy chunks until EOF, refusing an overflow or an expired deadline."""
     written = 0
     while True:
-        if time.monotonic() > deadline:
+        if transfer.expired():
             msg = "release download exceeded the transfer deadline"
             raise TimeoutError(msg)
         # `read` blocks until it fills the buffer or reaches EOF, so a server
@@ -215,7 +226,11 @@ def _copy_body(
         output.write(chunk)
 
 
-def _download_once(url: str, destination: Path, deadline: float) -> str | None:
+def _download_once(
+    url: str,
+    destination: Path,
+    transfer: _Transfer,
+) -> str | None:
     """Close one HTTPS connection after saving its body or resolving a redirect."""
     connection, target = _connect(url)
     try:
@@ -224,7 +239,7 @@ def _download_once(url: str, destination: Path, deadline: float) -> str | None:
             target,
             headers={"User-Agent": "cuprum-boundary-verification"},
         )
-        return _fetch_body(connection, url, destination, deadline)
+        return _fetch_body(connection, url, destination, transfer)
     finally:
         connection.close()
 

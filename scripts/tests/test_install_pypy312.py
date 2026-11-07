@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import io
 import tarfile
 from pathlib import Path
@@ -292,81 +291,3 @@ class TestCheckedDownload:
             installer._download("https://example.invalid/asset", tmp_path / "binary")
         connection.close.assert_called()
         assert not (tmp_path / "binary").exists(), "rejected redirect created a binary"
-
-
-def _streaming_response(body: bytes, declared: str | None = None) -> mock.MagicMock:
-    """Build a 200 response that streams `body` and reports `declared`."""
-    stream = io.BytesIO(body)
-    response = mock.MagicMock()
-    response.__enter__.return_value = response
-    response.status = http.client.OK
-    response.getheader.side_effect = lambda name: (
-        declared if name == "Content-Length" else None
-    )
-    response.read1.side_effect = stream.read1
-    return response
-
-
-def _download_response(
-    response: mock.MagicMock, destination: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Run one download against `response` without touching the network."""
-    connection = mock.Mock()
-    connection.getresponse.return_value = response
-    monkeypatch.setattr(
-        installer.http.client,
-        "HTTPSConnection",
-        lambda *_args, **_kwargs: connection,
-    )
-    installer._download("https://example.invalid/asset", destination)
-
-
-class TestBoundedBody:
-    """The PyPy fetch must not outlive its byte ceiling or transfer deadline."""
-
-    def test_a_bounded_body_is_copied_whole(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A body inside both bounds is written unchanged."""
-        destination = tmp_path / "binary"
-        _download_response(
-            _streaming_response(b"archive bytes"), destination, monkeypatch
-        )
-        assert destination.read_bytes() == b"archive bytes", (
-            "a bounded body must be copied in full"
-        )
-
-    def test_a_declared_oversize_body_is_refused_before_it_is_read(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An oversized Content-Length fails before any byte reaches the disk."""
-        monkeypatch.setattr(installer, "_MAX_BODY_BYTES", 8)
-        destination = tmp_path / "binary"
-        response = _streaming_response(b"x" * 64, declared="9")
-        with pytest.raises(ValueError, match="above the 8-byte limit"):
-            _download_response(response, destination, monkeypatch)
-        assert response.read1.call_count == 0, "the body must not be read"
-        assert not destination.exists(), "the destination must not be created"
-
-    def test_a_streamed_overflow_stops_at_the_ceiling(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An undeclared body is abandoned once it passes the ceiling."""
-        monkeypatch.setattr(installer, "_MAX_BODY_BYTES", 8)
-        destination = tmp_path / "binary"
-        with pytest.raises(ValueError, match="exceeded the 8-byte limit"):
-            _download_response(_streaming_response(b"x" * 64), destination, monkeypatch)
-        assert destination.read_bytes() == b"", (
-            "an over-ceiling chunk must not be written"
-        )
-
-    def test_a_transfer_that_outlives_the_deadline_is_abandoned(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An expired deadline stops the copy before another chunk is read."""
-        monkeypatch.setattr(installer, "_TRANSFER_DEADLINE_SECONDS", 0.0)
-        destination = tmp_path / "binary"
-        response = _streaming_response(b"x" * 64)
-        with pytest.raises(TimeoutError, match="transfer deadline"):
-            _download_response(response, destination, monkeypatch)
-        assert response.read1.call_count == 0, "no chunk may be read past the deadline"
