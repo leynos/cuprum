@@ -2948,14 +2948,19 @@ guarantee covers every route that spawns a child: `run()`, `run_sync()`,
 `start()`, `lines()`, and each stage of a pipeline.
 
 A failure in the setup that follows the spawn — creating the stdin writer or
-starting a stream consumer — is reclaimed the same way on `run()` and
-`run_sync()`. `start()` and `lines()` reach their own outcome through separate
-unwind helpers: they reap the child, settle every task the failed setup had
-started, and drain and release the capture accumulators, but they do not close
-an output transport. A descendant that escaped the process group can therefore
-still hold the parent's descriptor open on those two routes until the transport
-is collected; that gap belongs to the running-command ownership work and is not
-covered by the startup reclaim.
+starting a stream consumer — is reclaimed the same way on `run()`,
+`run_sync()`, and `lines()`. The line iterator builds its tasks inside the same
+guard, so a builder that fails partway still has every task it had already
+started cancelled and settled, and the child is stopped, reaped, and its pipes
+and capture accumulators released. `start()` reaches its own outcome through a
+separate unwind helper: it reaps the child, settles every task the failed setup
+had started, and releases the capture accumulators, but it does not close an
+output transport. A descendant that escaped the process group can therefore
+still hold the parent's descriptor open on that route until the transport is
+collected; that gap belongs to the running-command ownership work and is not
+covered by the startup reclaim. `lines()` shares that gap for a failure that
+happens after its tasks are built — a raising `start` hook — because that path
+drains the consumers rather than closing the transports.
 
 When the run owns its process group (`OWN_GROUP`), the teardown signals that
 group rather than the child alone. The output discard is bounded: a descendant
@@ -3006,15 +3011,21 @@ The hook collects:
   labelled by `error_category`
 - `cuprum_timeouts_total`: Counter of subprocess timeout expiries
 - `cuprum_teardown_errors_total`: Counter of teardown failures, labelled by
-  the bounded `operation` naming the cleanup step that failed — `drain` for a
-  stream-consumer drain, or one of `terminate`, `task_settle`, `stdin_close`,
-  `output_discard`, `transport_close`, and `capture_cleanup` for a reclaim of a
-  child whose startup failed after its spawn. A `teardown_error` event naming
-  any other operation is counted as `unknown`, so a hand-built event cannot
-  shatter the series. Treat the label set as a compatibility surface: a release
-  may add an operation, so a collector, dashboard, or alert that enumerates
-  these values should tolerate an unfamiliar one rather than drop the sample or
-  fail the scrape
+  the bounded `operation` naming the cleanup step that failed, alongside the
+  `program` and `project` labels every metric carries. `drain` counts a
+  stream-consumer drain that could not finish on a run that was handed back to
+  its caller. The remaining values — `terminate`, `task_settle`, `stdin_close`,
+  `output_discard`, `transport_close`, and `capture_cleanup` — each count one
+  step of the reclaim that runs when a child's startup fails after its spawn,
+  and only the routes that implement that reclaim emit them. A `teardown_error`
+  event naming any other operation is counted as `unknown`, so a hand-built
+  event cannot shatter the series. If you previously summed this counter
+  expecting drain failures alone, filter on `operation="drain"`: a sum over
+  every operation also includes reclaim failures. Grouping by `operation` gives
+  the breakdown. Treat the label set as a compatibility surface: a release may
+  add an operation, so a collector, dashboard, or alert that enumerates these
+  values should tolerate an unfamiliar one rather than drop the sample or fail
+  the scrape
 - `cuprum_capture_eof_grace_expired_total`: Counter of capturing drains that
   reach the fixed EOF-grace limit with readers still pending
 - `cuprum_pipeline_fail_fast_total`: Counter incremented once per pipeline torn

@@ -168,10 +168,8 @@ def _build_run_task_ownership(
     consumers and starts its own stdin writer, so it calls neither builder.
 
     *recorded* receives each task the moment it exists, not after the whole set
-    is built: a failure while starting a later task must not lose an earlier
-    one, since the tuple this returns is never built. The streamed run and the
-    handle pass one, for their own reclaim routes; the line iterator's
-    post-spawn window settles a larger record, so it passes none.
+    is built: a failure starting a later task must not lose an earlier one,
+    since nothing is returned. Every caller passes one for its reclaim route.
 
     Returns
     -------

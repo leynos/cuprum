@@ -1593,10 +1593,15 @@ its own `recorded` list, so it calls neither builder.
 The same guarantee already existed for `SafeCmd.lines()` and `SafeCmd.start()`,
 whose post-spawn windows end in their own unwind helpers with their own records
 to settle — the line-stream run's queue telemetry and settlement latch, and the
-handle's attached task set. Those stay where they are: they abandon a different
-record, not a bare process. What the two single-command shapes gained here is
-the shared route, and `cuprum/unittests/test_direct_start_ownership.py` pins it
-with real children, including the streamed and owned-group cases.
+handle's attached task set. The handle's stays there: it abandons a different
+record, not a bare process. The line iterator keeps its own helper for a run
+whose tasks were all built. A builder that fails partway is a different shape:
+no run exists to drain, and the tasks it recorded as they started are the only
+handle the reclaim has, so that shape now arrives here as well.
+`cuprum/unittests/test_line_stream_ownership.py` pins it with a real child.
+What the two single-command shapes gained here is the shared route, and
+`cuprum/unittests/test_direct_start_ownership.py` pins it with real children,
+including the streamed and owned-group cases.
 
 Moving `_abandon_started_process` into `_subprocess_streams` was not an option
 for the usual reason: that module was already at 423 lines. Its own 400-line

@@ -3157,30 +3157,32 @@ not recognize folds to `unknown` rather than being dropped, so a new step that
 forgets to extend the set still appears in telemetry, just without its own
 label.
 
-The `SafeCmd.lines()` coordinator and the owned-handle start keep their own
-unwind helpers because each abandons a larger record — the line stream settles
-its queue telemetry and settlement latch, and the handle settles the task set
-it attached — rather than a bare process. The single-command routes are pinned
-by `test_direct_start_ownership.py` with real children: the failing `start`
-hook in both streamed and direct shapes with and without stdin, an injected
-consumer failure after the first consumer started, an injected stdin-writer
-failure, the POSIX `OWN_GROUP` case, and a successful start that must be
-delivered unchanged. `test_owned_group_start_failure.py` adds the case a
-single-pid teardown would also pass: a descendant left in the owned group must
-die too, which only a group signal reaches.
-`test_streamed_setup_capture_ownership.py` watches the hand-off at the seam,
-because a run that dropped the accumulators would still reap the child and
-leave no task pending. `test_startup_abandon.py` pins the reclaim's own
-obligations against a real child — the reaped process, the removal of a spill
-file the capture had already opened, and the release of an output pipe that a
-surviving descendant still holds. `test_startup_abandon_read_failure.py` covers
-a read that fails during the discard, which must be reported as
-`output_discard` rather than dropped in the gather's results.
-`test_startup_abandon_task_failure.py` separates a task that had already
-failed, which must be reported, from the cancellation the step itself
-requested, which must not. `test_startup_abandon_properties.py` states the
-orchestration contract over every pattern of step failure: each step gets its
-turn, each failure is reported and suppressed, and the caller's own error
+The `SafeCmd.lines()` coordinator keeps its own unwind helper for a run whose
+tasks were all built, because that abandons a larger record — the line stream
+settles its queue telemetry and settlement latch — rather than a bare process.
+When the builder itself fails partway there is no such record, so the line
+iterator calls `_abandon_started_process` with the tasks it recorded as they
+started. The owned-handle start keeps its own helper because it settles the
+task set it attached. The single-command routes are pinned by
+`test_direct_start_ownership.py` with real children: the failing `start` hook
+in both streamed and direct shapes with and without stdin, an injected consumer
+failure after the first consumer started, an injected stdin-writer failure, the
+POSIX `OWN_GROUP` case, and a successful start that must be delivered unchanged.
+`test_owned_group_start_failure.py` adds the case a single-pid teardown would
+also pass: a descendant left in the owned group must die too, which only a
+group signal reaches. `test_streamed_setup_capture_ownership.py` watches the
+hand-off at the seam, because a run that dropped the accumulators would still
+reap the child and leave no task pending. `test_startup_abandon.py` pins the
+reclaim's own obligations against a real child — the reaped process, the
+removal of a spill file the capture had already opened, and the release of an
+output pipe that a surviving descendant still holds.
+`test_startup_abandon_read_failure.py` covers a read that fails during the
+discard, which must be reported as `output_discard` rather than dropped in the
+gather's results. `test_startup_abandon_task_failure.py` separates a task that
+had already failed, which must be reported, from the cancellation the step
+itself requested, which must not. `test_startup_abandon_properties.py` states
+the orchestration contract over every pattern of step failure: each step gets
+its turn, each failure is reported and suppressed, and the caller's own error
 survives unchanged. `test_pipeline_process_lifecycle.py` pins the same
 guarantee for a pipeline stage.
 
