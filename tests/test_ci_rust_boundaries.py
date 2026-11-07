@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -158,8 +159,9 @@ def test_verus_cache_tracks_the_shared_installer_pin() -> None:
     """A new shared-installer revision must invalidate the cached Verus and Z3 trees.
 
     The retired `scripts/install_boundary_z3.py` used to name this key. The pin
-    now lives in the Makefile, so hashing that file keeps the archived solver
-    and verifier from outliving the revision that produced them.
+    now lives in `tools/prover-tools/VERSION`, so hashing that file keeps the
+    archived solver and verifier from outliving the revision that produced
+    them, while an unrelated Makefile edit still restores a warm cache.
     """
     restore = next(
         step
@@ -167,12 +169,17 @@ def test_verus_cache_tracks_the_shared_installer_pin() -> None:
         if step.get("name") == "Restore pinned verifier, solver, and compiler objects"
     )
     inputs = step_inputs(restore, "the verus restore must declare its inputs")
+    expected = ["tools/verus/*", "tools/prover-tools/VERSION"]
     key = str(inputs.get("key", ""))
-    assert "'Makefile'" in key, (
-        "the verifier cache key must hash the Makefile that pins the shared installer"
+    hashed = re.findall(r"'([^']*)'", key)
+    assert hashed == expected, (
+        "the verifier cache key must hash only the inputs that pick the binaries"
     )
-    assert "install_boundary_z3.py" not in key, (
-        "the retired local solver installer cannot key the cache any more"
+    prefix = "boundary-verus-${{ hashFiles(" + ", ".join(
+        f"'{path}'" for path in expected
+    )
+    assert str(inputs.get("restore-keys", "")).startswith(prefix), (
+        "the restore prefix must hash the same inputs as the key"
     )
 
 

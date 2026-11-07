@@ -376,9 +376,11 @@ solver, so `make install-verus` delegates both the Verus installer and
 Both downloads share one bounded transport: an oversized declared length is
 rejected before the destination opens, streamed bytes are counted against an
 asset ceiling, and redirects, header parsing, and the body are bounded by one
-monotonic deadline. Z3 lands at `.cache/boundary-z3/z3` for `VERUS_Z3_PATH`.
-The Makefile invokes the Verus binary directly for proofs rather than through
-the shared wrapper, whose version parser rejects the annotation
+monotonic deadline. The deadline does not cover host name resolution, which
+happens before the connection exists and is bounded only by the system
+resolver. Z3 lands at `.cache/boundary-z3/z3` for `VERUS_Z3_PATH`. The Makefile
+invokes the Verus binary directly for proofs rather than through the shared
+wrapper, whose version parser rejects the annotation
 `(overridden by environment variable RUSTUP_TOOLCHAIN)`.
 
 `make boundary-download-integration` exercises that shared transport against a

@@ -141,8 +141,8 @@ jobs:
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
             .cache/boundary-z3
             ~/.cache/sccache
-          key: boundary-verus-${{ hashFiles('tools/verus/*', 'Makefile') }}-${{ github.run_id }}
-          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'Makefile') }}-
+          key: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-${{ github.run_id }}
+          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-
       - name: Set up sccache
         id: sccache
         uses: ./.github/actions/setup-sccache

@@ -129,8 +129,15 @@ def run_download(
 ) -> DownloadRun:
     """Drive one scenario and return the result with the server's records."""
     server = support.LoopbackServer(certificates, scenarios.SCENARIOS[case.scenario])
-    request = _driver_request(destination, server, case, certificates)
-    result = run_driver(request, source)
+    try:
+        request = _driver_request(destination, server, case, certificates)
+        result = run_driver(request, source)
+    except BaseException:
+        # `DownloadRun` is the only thing that closes the server, and it is not
+        # built until both calls return. A failed setup must not leak the
+        # listener or its accept thread into the rest of the session.
+        server.close()
+        raise
     return DownloadRun(
         result=result,
         server=server,

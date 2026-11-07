@@ -25,6 +25,7 @@ if typ.TYPE_CHECKING:
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = REPO_ROOT / "Makefile"
+PROVER_TOOLS_PIN = REPO_ROOT / "tools/prover-tools/VERSION"
 
 # The recipe must survive a checkout path that contains spaces, which is why
 # every path argument is quoted and why the fixture runs make from one.
@@ -45,6 +46,10 @@ AMBIENT_INSTALL_VARIABLES = (
     "INPUT_Z3_INSTALL_DIR",
     "Z3_CACHE_DIR",
     "INPUT_Z3_CACHE_DIR",
+    "VERUS_INSTALL_DIR",
+    "INPUT_VERUS_INSTALL_DIR",
+    "VERUS_TARGET",
+    "INPUT_VERUS_TARGET",
     "INPUT_VERUS_BASE_URL",
     "INPUT_CHECKSUM_FILE",
     "INPUT_VERUS_CHECKSUM_FILE",
@@ -181,13 +186,20 @@ def fakes(tmp_path: Path) -> FakeTools:
 
 def test_prover_tools_pin_is_an_immutable_commit() -> None:
     """A branch or tag could move under the verifier install; a commit cannot."""
-    value = _makefile_assignment("PROVER_TOOLS_SOURCE")
+    value = PROVER_TOOLS_PIN.read_text(encoding="utf-8").strip()
     prefix = "git+https://github.com/leynos/rust-prover-tools@"
     assert value.startswith(prefix), "the shared dependency must stay a git pin"
     revision = value[len(prefix) :]
     assert re.fullmatch(r"[0-9a-f]{40}", revision), (
         "the shared dependency must be pinned to a full commit hash"
     )
+
+
+def test_the_makefile_reads_the_pin_from_the_hashed_file() -> None:
+    """The cache key hashes the pin file, so the Makefile must be its reader."""
+    assert _makefile_assignment("PROVER_TOOLS_SOURCE") == (
+        "$(file < tools/prover-tools/VERSION)"
+    ), "the Makefile must take the pin from the file the cache key hashes"
 
 
 def test_kani_install_delegates_download_setup_and_verification(
@@ -308,29 +320,46 @@ def test_verus_install_clears_the_z3_marker_first(
     assert not marker.exists(), "the retired marker must not survive the reinstall"
 
 
+def _ambient_guard_names() -> list[str]:
+    """Return the names `PROVER_TOOLS_AMBIENT_VARS` clears before delegation."""
+    lines = MAKEFILE.read_text(encoding="utf-8").splitlines()
+    index = next(
+        position
+        for position, line in enumerate(lines)
+        if line.startswith("PROVER_TOOLS_AMBIENT_VARS =")
+    )
+    value = lines[index].partition("=")[2]
+    while value.rstrip().endswith("\\"):
+        index += 1
+        value = f"{value.rstrip()[:-1]} {lines[index]}"
+    return value.split()
+
+
+def test_the_watched_environment_matches_the_makefile_guard() -> None:
+    """The fake must watch every name the Makefile claims to clear."""
+    assert set(_ambient_guard_names()) == set(AMBIENT_INSTALL_VARIABLES), (
+        "the ambient-name tuple must match PROVER_TOOLS_AMBIENT_VARS"
+    )
+
+
+@pytest.mark.parametrize("target", ["install-boundary-kani", "install-verus"])
 def test_ambient_install_options_cannot_redirect_the_targets(
-    workdir: Path, fakes: FakeTools
+    workdir: Path, fakes: FakeTools, target: str
 ) -> None:
     """Stray CI variables must not override the explicit repository paths."""
     ambient = dict.fromkeys(AMBIENT_INSTALL_VARIABLES, "/ambient/wrong")
-    result = _run_make(
-        workdir,
-        "install-boundary-kani",
-        fakes,
-        env=fakes.environment(**ambient),
-    )
+    result = _run_make(workdir, target, fakes, env=fakes.environment(**ambient))
     assert result.returncode == 0, result.stderr
 
-    records = fakes.records()
-    assert records, "the fake prover-tools was never invoked"
-    recorded_env = records[0]["env"]
-    assert recorded_env == {}, (
-        f"ambient installer options reached the shared CLI: {recorded_env}"
-    )
-    argv = _argv(records[0])
-    assert "--no-compile" in argv, "ambient INPUT_KANI_COMPILE defeated the pin"
-    assert str(workdir / ".cache/boundary-kani") in argv, (
-        "an ambient cache path redirected the install"
+    delegated = [
+        record for record in fakes.records() if record["tool"] == "prover-tools"
+    ]
+    assert delegated, "the fake prover-tools was never invoked"
+    leaked = [record["env"] for record in delegated if record["env"]]
+    assert not leaked, f"ambient installer options reached the shared CLI: {leaked}"
+    roots = [_argv(record) for record in delegated]
+    assert all(argv[argv.index("--repo-root") + 1] == str(workdir) for argv in roots), (
+        f"{target} must resolve every delegated call against the checkout"
     )
 
 
