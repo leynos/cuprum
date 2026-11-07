@@ -19,7 +19,7 @@ from cuprum.unittests._rust_pump_test_helpers import owned_fds
 
 
 class _DuplicateSetupFailure:
-    """Fault seam that fails either writer duplication or its blocking setup."""
+    """Fault seam that fails either native duplication or its blocking setup."""
 
     def __init__(
         self,
@@ -30,10 +30,8 @@ class _DuplicateSetupFailure:
         """Capture the failure stage and error type for one parametrized case."""
         self.duplicate_creation_fails = duplicate_creation_fails
         self.fault_error = fault_error
-        self.duplicated_fds: list[int] = []
         self.acquired_fds: list[int] = []
         self.resume_calls = 0
-        self._original_dup = os.dup
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
@@ -69,14 +67,11 @@ class _DuplicateSetupFailure:
         del reader, writer
         await asyncio.sleep(0)
 
-    def duplicate(self, fd: int) -> int:
-        """Create a duplicate or fail before a duplicate exists."""
-        if self.duplicate_creation_fails:
-            msg = "cannot duplicate writer descriptor"
-            raise self.fault_error(msg)
-        duplicate = self._original_dup(fd)
-        self.duplicated_fds.append(duplicate)
-        return duplicate
+    def fail_native_duplication(self, state: object) -> typ.NoReturn:
+        """Fail while duplicating the native worker descriptors at start."""
+        del state
+        msg = "cannot duplicate native pump descriptors"
+        raise self.fault_error(msg)
 
     def engage_blocking_mode(
         self,
@@ -88,16 +83,6 @@ class _DuplicateSetupFailure:
         del reader_fd, writer_fd
         msg = "cannot configure duplicated writer descriptor"
         raise self.fault_error(msg)
-
-    def assert_duplicate_cleanup(self) -> None:
-        """Assert rollback closed only a duplicate that was actually created."""
-        if self.duplicate_creation_fails:
-            assert not self.duplicated_fds, (
-                "failed duplication creates no writer descriptor to clean up"
-            )
-        for duplicate_fd in self.duplicated_fds:
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(duplicate_fd)
 
     def assert_acquired_pair_closed(self) -> None:
         """Assert the descriptors acquired before the drain were released."""
@@ -174,7 +159,16 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         "_open_native_pump_worker_fds",
         failure.record_acquisition,
     )
-    monkeypatch.setattr(_pipeline_stream_native_cleanup.os, "dup", failure.duplicate)
+    if duplicate_creation_fails:
+        # Fail the native duplication itself rather than ``os.dup``: the
+        # worker pair is opened through ``/proc/self/fd`` on Linux and through
+        # ``os.dup`` elsewhere, so patching ``os.dup`` would fail acquisition
+        # on one platform and the start-time duplication on the other.
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_duplicate_native_pump_fds",
+            failure.fail_native_duplication,
+        )
     close_reader = mock.Mock(
         wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
     )
@@ -227,7 +221,6 @@ def test_rust_pump_rolls_back_duplicate_setup_failures(
         assert failure.resume_calls == 1, "rollback must resume the reader"
         os.fstat(reader_fd)
         os.fstat(writer_fd)
-        failure.assert_duplicate_cleanup()
         failure.assert_acquired_pair_closed()
         if not duplicate_creation_fails:
             close_reader.assert_called_once_with(failure.acquired_fds[0])
