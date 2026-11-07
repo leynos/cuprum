@@ -5528,26 +5528,54 @@ and `CI` run 35004943782 succeeded with its
 `Extension-gated tests (Python/Rust boundary)` jobs. The boundary workflow's
 `extended` job is skipped on pull requests by design.
 
-The boundary installer and fault harnesses have narrow reuse policies.
-`scripts/install_boundary_kani.py` owns `checked_download` for the Kani and Z3
-installers only: HTTPS-only bounded redirects, digest validation, and no source
-builds. `scripts/boundary_fault_invocations.py` scopes its runner to the four
-verification commands and a disposable source copy; it is not a general process
-abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
-calls that runner rather than defining its own. The runner upholds the
-allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
-progress and ownership checks have separate private runners; their scope is the
-existing four mutations, with the same controls and failure diagnostics. Native
-`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
-a global `--frozen` before dispatching an external subcommand, and cargo-kani
-`0.67.0` rejects that flag itself. The Kani route therefore relies on the
-run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
-lockfile digest after every run so a build that rewrites it fails closed. The
-download helpers separate bounded redirect traversal, one connection's
-lifetime, and response classification. They remain private to the pinned binary
-installer. The compiler-contract checker uses a named predicate requiring both
-failure and an unsafe-forbid diagnostic, so unrelated compiler failures cannot
-pass the probe.
+The boundary installers and fault harnesses have narrow reuse policies. Kani
+and Z3 installation is delegated to the pinned `leynos/rust-prover-tools`
+revision. Its shared downloader accepts only HTTPS, follows a bounded number of
+redirects, rejects an oversized `Content-Length` before the destination opens,
+counts streamed bytes against a per-asset ceiling, and applies one monotonic
+deadline across redirects, header parsing, and the body. A deadline watchdog
+shuts the socket down, so a response that trickles bytes or headers cannot
+outlive the deadline. The verified archive is published atomically only after
+the SHA-256 check. Cuprum's `make install-boundary-kani` and
+`make install-verus` pass explicit repository, install, and cache paths, and
+the Kani target also names its version file and disables the shared CLI's
+compile, setup, and verification phases so `cargo kani setup` remains the
+single owner of native setup. Before each delegated call the Makefile clears
+every name listed in `PROVER_TOOLS_AMBIENT_VARS`, the fixed set of ambient
+options the shared CLI would otherwise read as flag defaults, so a stray CI
+value cannot redirect an installation away from the repository cache. To adopt
+a new shared revision, replace the commit hash in `tools/prover-tools/VERSION`,
+run both install targets cold and warm, and rely on the `hashFiles` inputs for
+that file in the verifier cache key to invalidate the archived tools.
+
+The bounded-download harness lives in four modules under `scripts/tests/`.
+`boundary_download_support.py` creates a throwaway certificate authority and
+serves one HTTPS connection on a loopback socket;
+`boundary_download_scenarios.py` names the responses that must be refused;
+`boundary_download_runner.py` owns the isolated `uv` process and the paths
+around it; and `boundary_download_driver.py` runs inside that process, where
+the pinned revision is importable. `test_boundary_download_integration.py`
+holds the assertions and is skipped unless `CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`,
+so the default suite never reaches the network.
+
+The retired `scripts/install_boundary_kani.py` and
+`scripts/install_boundary_z3.py` entry points are gone;
+`scripts/install_pypy312.py` keeps a private `checked_download` for the linter
+interpreter. `scripts/boundary_fault_invocations.py` scopes its runner to the
+four verification commands and a disposable source copy; it is not a general
+process abstraction. `scripts/check_boundary_faults.py` owns the fault
+catalogue and calls that runner rather than defining its own. The runner
+upholds the allowlisted-verifier, offline-Cargo and lockfile contract described
+below. Its progress and ownership checks have separate private runners; their
+scope is the existing four mutations, with the same controls and failure
+diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani` check
+cannot: Cargo consumes a global `--frozen` before dispatching an external
+subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
+therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
+the copied workspace's lockfile digest after every run so a build that rewrites
+it fails closed. The compiler-contract checker uses a named predicate requiring
+both failure and an unsafe-forbid diagnostic, so unrelated compiler failures
+cannot pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains

@@ -69,6 +69,10 @@ exclude = [
     "scripts/duplication_gate.py",
     "scripts/nose_detector.py",
     "scripts/nose_schema.py",
+    # The download driver runs only inside the isolated environment that
+    # installs the pinned `rust-prover-tools` revision, so its import is
+    # unresolvable in the project virtual environment.
+    "scripts/tests/boundary_download_driver.py",
     "scripts/tests/duplication_gate_test_support.py",
     "scripts/tests/nose_detector_test_support.py",
     "scripts/tests/test_atomic_write.py",

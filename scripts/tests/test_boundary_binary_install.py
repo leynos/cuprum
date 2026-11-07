@@ -1,339 +1,386 @@
-"""Binary tool installation must reject mismatches and never source-build.
+"""The Make install targets must delegate verifier binaries safely.
 
-The installer entry points are exercised end to end against synthetic release
-archives served through a stubbed download seam, so the tests cover what
-``main()`` installs — and how it fails — without network access.
+Kani and Z3 installation is owned by the shared `rust-prover-tools` dependency,
+so these tests run the real Make recipes with a fake `prover-tools` and a fake
+Cargo. That observes the exact command line, environment, and ordering without
+network access, and it keeps the retired local installers from creeping back.
 """
 
 from __future__ import annotations
 
-import hashlib
-import io
-import tarfile
+import dataclasses as dc
+import json
+import os
+import shlex
+import shutil
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed tool argv.
+import sys
 import typing as typ
-import zipfile
+from pathlib import Path
 
 import pytest
 
-from scripts import install_boundary_kani as installer
-from scripts import install_boundary_z3 as z3_installer
-
 if typ.TYPE_CHECKING:
-    from pathlib import Path
+    import collections.abc as cabc
 
-# The root environment variable that isolates both installers' pin file and
-# cache. Spelled literally so the tests exercise the documented contract
-# rather than the constant that implements it.
-ROOT_ENV = "CUPRUM_BOUNDARY_ROOT"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MAKEFILE = REPO_ROOT / "Makefile"
 
-KANI_FRONTEND_MEMBERS = {
-    "cargo-kani": b"cargo-kani frontend executable",
-    "kani": b"kani frontend executable",
-}
-KANI_BUNDLE_MEMBERS = {"kani": b"bundled kani driver"}
+# The recipe must survive a checkout path that contains spaces, which is why
+# every path argument is quoted and why the fixture runs make from one.
+SPACED_ROOT_NAME = "work tree with spaces"
+
+# Ambient names the shared CLI would otherwise treat as flag defaults.
+AMBIENT_INSTALL_VARIABLES = (
+    "INPUT_REPO_ROOT",
+    "INPUT_VERSION",
+    "INPUT_VERSION_FILE",
+    "INPUT_KANI_VERSION_FILE",
+    "INPUT_KANI_COMPILE",
+    "KANI_INSTALL_DIR",
+    "INPUT_KANI_INSTALL_DIR",
+    "KANI_CACHE_DIR",
+    "INPUT_KANI_CACHE_DIR",
+    "Z3_INSTALL_DIR",
+    "INPUT_Z3_INSTALL_DIR",
+    "Z3_CACHE_DIR",
+    "INPUT_Z3_CACHE_DIR",
+    "VERUS_INSTALL_DIR",
+    "INPUT_VERUS_INSTALL_DIR",
+    "VERUS_TARGET",
+    "INPUT_VERUS_TARGET",
+    "INPUT_VERUS_BASE_URL",
+    "INPUT_CHECKSUM_FILE",
+    "INPUT_VERUS_CHECKSUM_FILE",
+)
+
+_FAKE_TOOL = """\
+import json
+import os
+import sys
+from pathlib import Path
+
+record = {{"tool": {tool!r}, "argv": sys.argv[1:]}}
+marker = os.environ.get("FAKE_MARKER")
+if marker:
+    record["marker_exists"] = Path(marker).exists()
+watch = json.loads(os.environ.get("FAKE_WATCH", "[]"))
+record["env"] = {{name: os.environ[name] for name in watch if name in os.environ}}
+log = os.environ["FAKE_LOG"]
+with open(log, "a", encoding="utf-8") as stream:
+    stream.write(json.dumps(record) + "\\n")
+failure = os.environ.get("FAKE_FAIL_ARGS")
+if failure and sys.argv[1:3] == json.loads(failure):
+    print("fake prover-tools failure", file=sys.stderr)
+    raise SystemExit(1)
+"""
 
 
-def _gzip_tar(members: dict[str, bytes]) -> bytes:
-    """Build a gzip-compressed tar containing exactly the given members."""
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for name, content in members.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            archive.addfile(info, io.BytesIO(content))
-    return buffer.getvalue()
+@typ.final
+class FakeTools:
+    """Fake `prover-tools` and Cargo executables that record their calls."""
 
+    def __init__(self, directory: Path) -> None:
+        """Write both fakes below `directory` and prepare their log path."""
+        self.directory = directory
+        self.directory.mkdir(parents=True)
+        self.log = directory / "calls.jsonl"
+        self.prover_tools = self._write("fake_prover_tools.py", "prover-tools")
+        self.cargo = self._write("fake_cargo.py", "cargo")
 
-def _zip_archive(members: dict[str, bytes]) -> bytes:
-    """Build a zip containing exactly the given members."""
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        for name, content in members.items():
-            archive.writestr(name, content)
-    return buffer.getvalue()
+    def _write(self, name: str, tool: str) -> Path:
+        """Write one fake tool and return its path."""
+        path = self.directory / name
+        path.write_text(_FAKE_TOOL.format(tool=tool), encoding="utf-8")
+        return path
 
+    def command(self, script: Path) -> str:
+        """Return a shell-safe command that runs `script` with this interpreter."""
+        return shlex.join([sys.executable, str(script)])
 
-def _seed_kani_pin(root: Path, version: str = installer.VERSION) -> None:
-    """Write the Kani version pin the isolated root is installed from."""
-    pin = root / "tools/kani/VERSION"
-    pin.parent.mkdir(parents=True)
-    pin.write_text(f"{version}\n", encoding="utf-8")
+    def records(self) -> list[dict[str, object]]:
+        """Return every recorded call in execution order."""
+        if not self.log.exists():
+            return []
+        return [
+            json.loads(line)
+            for line in self.log.read_text(encoding="utf-8").splitlines()
+            if line
+        ]
 
-
-def _serve_assets(
-    monkeypatch: pytest.MonkeyPatch, assets: dict[str, bytes]
-) -> list[str]:
-    """Serve synthetic release bytes for `assets` and record every request.
-
-    Each asset is keyed by the release URL it stands in for. The pinned digest
-    constants are re-pointed at the synthetic bytes, so ``main()`` verifies and
-    caches them exactly as it would a real release. The stub then checks each
-    requested digest against the content it is asked to supply, and fails the
-    test if the installer ever requests a URL the fixture does not cover.
-
-    Returns
-    -------
-    list[str]
-        The URLs the installer requested, in request order.
-    """
-    digests: dict[str, str] = {}
-    for url, content in assets.items():
-        digests[url] = hashlib.sha256(content).hexdigest()
-    for url, attribute in (
-        (installer.FRONTEND_URL, "FRONTEND_DIGEST"),
-        (installer.BUNDLE_URL, "BUNDLE_DIGEST"),
-    ):
-        if url in digests:
-            monkeypatch.setattr(installer, attribute, digests[url])
-    if z3_installer.URL in digests:
-        monkeypatch.setattr(z3_installer, "DIGEST", digests[z3_installer.URL])
-
-    requested: list[str] = []
-
-    def checked_download(url: str, destination: Path, digest: str) -> None:
-        """Supply the synthetic release body without network access."""
-        requested.append(url)
-        content = assets.get(url)
-        assert content is not None, f"no synthetic asset for {url}"
-        assert hashlib.sha256(content).hexdigest() == digest, (
-            "the installer must verify the patched expected digest"
+    def environment(self, **overrides: str) -> dict[str, str]:
+        """Return a child environment that points the fakes at their log."""
+        env = os.environ.copy()
+        env.update(
+            FAKE_LOG=str(self.log),
+            FAKE_WATCH=json.dumps(list(AMBIENT_INSTALL_VARIABLES)),
         )
-        destination.write_bytes(content)
-
-    monkeypatch.setattr(installer, "checked_download", checked_download)
-    monkeypatch.setattr(z3_installer, "checked_download", checked_download)
-    return requested
+        env.update(overrides)
+        return env
 
 
-class TestBoundaryBinaryInstall:
-    """Installer entry points install only pinned, verified release content."""
+def _makefile_assignment(name: str) -> str:
+    """Return the literal value assigned to `name` in the Makefile."""
+    prefix = f"{name} ?="
+    prefix_plain = f"{name} ="
+    for line in MAKEFILE.read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip()
+        if line.startswith(prefix_plain):
+            return line[len(prefix_plain) :].strip()
+    msg = f"{name} is not assigned in the Makefile"
+    raise AssertionError(msg)
 
-    def test_cached_binary_must_match_digest(self, tmp_path: Path) -> None:
-        """A verified cache is reusable without performing a download."""
-        archive = tmp_path / "binary.tar.gz"
-        archive.write_bytes(b"verified archive")
-        digest = hashlib.sha256(b"verified archive").hexdigest()
-        installer.checked_download("https://example.invalid/asset", archive, digest)
-        assert archive.read_bytes() == b"verified archive", (
-            "verified cache was modified"
-        )
 
-    def test_mismatch_preserves_existing_cache(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Corrupt downloads cannot replace a cached artefact or leave a partial."""
-        archive = tmp_path / "binary.tar.gz"
-        archive.write_bytes(b"old cache")
+def _argv(record: dict[str, object]) -> list[str]:
+    """Return one recorded argv, failing the test if the fake logged another shape."""
+    argv = record["argv"]
+    assert isinstance(argv, list), f"the fake logged a non-list argv: {argv!r}"
+    return [str(argument) for argument in argv]
 
-        def fetch(_url: str, destination: Path) -> None:
-            """Supply a corrupt release body without network access."""
-            destination.write_bytes(b"corrupt body")
 
-        monkeypatch.setattr(installer, "_download", fetch)
-        with pytest.raises(ValueError, match="checksum mismatch"):
-            installer.checked_download(
-                "https://example.invalid/asset", archive, "0" * 64
-            )
-        assert archive.read_bytes() == b"old cache", (
-            "corrupt download replaced the cache"
-        )
-        assert not archive.with_suffix(".download").exists(), "partial download leaked"
+@dc.dataclass(frozen=True, slots=True)
+class MakeCall:
+    """One Make target with the assignments and environment it must receive."""
 
-    def test_an_unreadable_cache_is_refused_rather_than_replaced(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A cache entry that cannot be read must not be answered with a download."""
-        archive = tmp_path / "binary.tar.gz"
-        archive.write_bytes(b"cached archive")
-        downloads: list[str] = []
+    target: str
+    assignments: tuple[str, ...] = ()
+    environment: cabc.Mapping[str, str] = dc.field(default_factory=dict)
 
-        def fetch(url: str, _destination: Path) -> None:
-            """Record any attempted download so the test can reject it."""
-            downloads.append(url)
 
-        def unreadable(_path: Path) -> str:
-            """Stand in for a cache entry the process cannot read."""
-            raise PermissionError("unreadable")
-
-        monkeypatch.setattr(installer, "_download", fetch)
-        monkeypatch.setattr(installer, "_digest", unreadable)
-
-        with pytest.raises(PermissionError):
-            installer.checked_download(
-                "https://example.invalid/asset", archive, "0" * 64
-            )
-
-        assert not downloads, "an unreadable cache must not start a download"
-        assert archive.read_bytes() == b"cached archive", (
-            "an unreadable cache must be left in place"
-        )
-
-    def test_a_missing_cache_entry_is_a_miss_not_a_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """An absent cache entry downloads normally instead of raising."""
-        archive = tmp_path / "binary.tar.gz"
-        content = b"fresh archive"
-        digest = hashlib.sha256(content).hexdigest()
-
-        def fetch(url: str, destination: Path) -> None:
-            """Supply a fresh release body without network access."""
-            destination.write_bytes(content)
-
-        monkeypatch.setattr(installer, "_download", fetch)
-        installer.checked_download("https://example.invalid/asset", archive, digest)
-        assert archive.read_bytes() == content, "the missing entry was not installed"
-
-    def test_plain_http_is_rejected(self, tmp_path: Path) -> None:
-        """The installer cannot fetch a verifier over an unauthenticated scheme."""
-        with pytest.raises(ValueError, match="HTTPS"):
-            installer.checked_download(
-                "http://example.invalid/asset", tmp_path / "binary", "0" * 64
-            )
-
-    @pytest.mark.parametrize(
-        "redirect",
-        [
-            ("http://example.invalid/asset", "require HTTPS"),
-            (None, "no Location"),
-            ("/another-redirect", "redirect limit"),
-        ],
+def _run_make(
+    workdir: Path,
+    call: MakeCall,
+    fakes: FakeTools,
+) -> subprocess.CompletedProcess[str]:
+    """Run one Make target in `workdir` with the fake tools in place."""
+    command = [
+        shutil.which("make") or "make",
+        "-C",
+        str(workdir),
+        "-f",
+        str(MAKEFILE),
+        call.target,
+        f"PROVER_TOOLS={fakes.command(fakes.prover_tools)}",
+        f"CARGO={fakes.command(fakes.cargo)}",
+        *call.assignments,
+    ]
+    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+        command,
+        capture_output=True,
+        text=True,
+        env=fakes.environment(**dict(call.environment)),
+        timeout=120,
+        check=False,
     )
-    def test_release_redirects_fail_closed(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        redirect: tuple[str | None, str],
-    ) -> None:
-        """Insecure, malformed, and looping redirects cannot install a binary."""
-        from unittest import mock
 
-        location, message = redirect
 
-        response = mock.MagicMock()
-        response.__enter__.return_value = response
-        response.status = 302
-        response.getheader.return_value = location
-        connection = mock.Mock()
-        connection.getresponse.return_value = response
-        monkeypatch.setattr(
-            installer.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
-        )
-        with pytest.raises(ValueError, match=message):
-            installer._download("https://example.invalid/asset", tmp_path / "binary")
-        connection.close.assert_called()
-        assert not (tmp_path / "binary").exists(), "rejected redirect created a binary"
+@pytest.fixture
+def workdir(tmp_path: Path) -> Path:
+    """Create an isolated checkout path that contains spaces."""
+    path = tmp_path / SPACED_ROOT_NAME
+    path.mkdir()
+    return path
 
-    def test_main_installs_only_the_pinned_kani_frontend(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The installer extracts the two approved executables and nothing else."""
-        _seed_kani_pin(tmp_path)
-        frontend = _gzip_tar(KANI_FRONTEND_MEMBERS)
-        bundle = _gzip_tar(KANI_BUNDLE_MEMBERS)
-        assets = {installer.FRONTEND_URL: frontend, installer.BUNDLE_URL: bundle}
-        requested = _serve_assets(monkeypatch, assets)
-        monkeypatch.setenv(ROOT_ENV, str(tmp_path))
 
-        installer.main()
+@pytest.fixture
+def fakes(tmp_path: Path) -> FakeTools:
+    """Create the fake tool executables outside the spaced checkout path."""
+    return FakeTools(tmp_path / "fakes")
 
-        # Both pinned archives were fetched, in order, from their release URLs.
-        assert requested == [installer.FRONTEND_URL, installer.BUNDLE_URL], (
-            "the installer must fetch the pinned frontend and bundle, and nothing else"
-        )
-        cache = tmp_path / ".cache/boundary-kani"
-        assert (cache / installer.FRONTEND_NAME).read_bytes() == frontend, (
-            "the verified frontend archive must be cached unchanged"
-        )
-        assert (cache / installer.BUNDLE_NAME).read_bytes() == bundle, (
-            "the verified bundle archive must be cached unchanged"
-        )
-        bin_dir = cache / "bin"
-        assert sorted(path.name for path in bin_dir.iterdir()) == [
-            "cargo-kani",
-            "kani",
-        ], "only the two pinned Kani executables may be extracted"
-        for name, content in KANI_FRONTEND_MEMBERS.items():
-            assert (bin_dir / name).read_bytes() == content, (
-                f"the extracted {name} must be the archived member, byte for byte"
-            )
 
-    def test_main_installs_the_z3_solver_executable(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The solver lands in the isolated cache with its exact bytes and mode."""
-        content = b"z3 solver executable"
-        members = {
-            f"{z3_installer.NAME}/bin/z3": content,
-            f"{z3_installer.NAME}/LICENSE.txt": b"z3 license",
-        }
-        archive = _zip_archive(members)
-        requested = _serve_assets(monkeypatch, {z3_installer.URL: archive})
-        monkeypatch.setenv(ROOT_ENV, str(tmp_path))
+def test_kani_install_delegates_download_setup_and_verification(
+    workdir: Path, fakes: FakeTools
+) -> None:
+    """Kani installs through the shared CLI, then performs exactly one setup."""
+    kani_version = _makefile_assignment("KANI_VERSION")
+    pin = REPO_ROOT / "tools/kani/VERSION"
+    assert pin.read_text(encoding="utf-8").strip() == kani_version, (
+        "the setup bundle path must name the version the updater actually pins"
+    )
 
-        z3_installer.main()
+    result = _run_make(workdir, MakeCall("install-boundary-kani"), fakes)
+    assert result.returncode == 0, result.stderr
 
-        assert requested == [z3_installer.URL], (
-            "the installer must fetch only the pinned solver release"
-        )
-        cache = tmp_path / ".cache/boundary-z3"
-        assert (cache / f"{z3_installer.NAME}.zip").read_bytes() == archive, (
-            "the verified solver archive must be cached unchanged"
-        )
-        binary = cache / "z3"
-        assert binary.read_bytes() == content, (
-            "the solver binary must be the archived member, byte for byte"
-        )
-        assert binary.stat().st_mode & 0o777 == 0o755, "the solver must be executable"
+    records = fakes.records()
+    assert [record["tool"] for record in records] == ["prover-tools", "cargo"], (
+        "the download must precede setup, and setup must run exactly once"
+    )
+    cache = workdir / ".cache/boundary-kani"
+    expected_install = [
+        "kani",
+        "install",
+        "--repo-root",
+        str(workdir),
+        "--version-file",
+        "tools/kani/VERSION",
+        "--install-dir",
+        str(cache / "bin"),
+        "--cache-dir",
+        str(cache),
+        "--no-compile",
+        "--no-setup",
+        "--no-verify",
+    ]
+    assert records[0]["argv"] == expected_install, (
+        "the delegated Kani install lost its explicit paths or safety flags"
+    )
+    expected_setup = [
+        "kani",
+        "setup",
+        "--use-local-bundle",
+        str(cache / f"kani-{kani_version}-x86_64-unknown-linux-gnu.tar.gz"),
+    ]
+    assert records[1]["argv"] == expected_setup, (
+        "setup must use the verified bundle and the configured Cargo"
+    )
 
-    def test_main_rejects_a_stale_kani_version_pin(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A pin that disagrees with the packaged digests downloads nothing."""
-        _seed_kani_pin(tmp_path, version="0.0.0-not-pinned")
-        requested = _serve_assets(
-            monkeypatch,
-            {
-                installer.FRONTEND_URL: _gzip_tar(KANI_FRONTEND_MEMBERS),
-                installer.BUNDLE_URL: _gzip_tar(KANI_BUNDLE_MEMBERS),
-            },
-        )
-        monkeypatch.setenv(ROOT_ENV, str(tmp_path))
 
-        with pytest.raises(ValueError, match="update Kani archive names and digests"):
-            installer.main()
+def test_verus_install_delegates_verus_and_z3(
+    workdir: Path, fakes: FakeTools, tmp_path: Path
+) -> None:
+    """Verus and Z3 both install through the shared CLI with explicit paths."""
+    verus_dir = tmp_path / "verus install dir"
+    result = _run_make(
+        workdir,
+        MakeCall("install-verus", assignments=(f"VERUS_INSTALL_DIR={verus_dir}",)),
+        fakes,
+    )
+    assert result.returncode == 0, result.stderr
 
-        assert not requested, "a rejected version pin must not fetch any archive"
-        assert not (tmp_path / ".cache").exists(), (
-            "a rejected version pin must not create the installer cache"
-        )
+    records = fakes.records()
+    assert [record["tool"] for record in records] == ["prover-tools", "prover-tools"], (
+        "Verus installation must delegate both the verifier and the solver"
+    )
+    expected_verus = [
+        "verus",
+        "install",
+        "--repo-root",
+        str(workdir),
+        "--install-dir",
+        str(verus_dir),
+    ]
+    assert records[0]["argv"] == expected_verus, (
+        "a spaced install path must reach the verifier as one argument"
+    )
+    z3_dir = workdir / ".cache/boundary-z3"
+    expected_z3 = [
+        "z3",
+        "install",
+        "--repo-root",
+        str(workdir),
+        "--install-dir",
+        str(z3_dir),
+        "--cache-dir",
+        str(z3_dir),
+    ]
+    assert records[1]["argv"] == expected_z3, (
+        "the solver must install into the repository cache as a local file"
+    )
 
-    def test_main_rejects_a_truncated_kani_frontend(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A truncated archive fails loudly instead of installing part of a tool."""
-        _seed_kani_pin(tmp_path)
-        frontend = _gzip_tar(KANI_FRONTEND_MEMBERS)
-        _serve_assets(
-            monkeypatch,
-            {
-                # Truncating the compressed stream mid-archive stands in for a
-                # release body that verified yet cannot be unpacked.
-                installer.FRONTEND_URL: frontend[: len(frontend) // 2],
-                installer.BUNDLE_URL: _gzip_tar(KANI_BUNDLE_MEMBERS),
-            },
-        )
-        monkeypatch.setenv(ROOT_ENV, str(tmp_path))
 
-        # Which layer reports the truncation is an implementation detail of the
-        # standard library: the tar reader raises `ReadError` when it notices,
-        # and the gzip reader raises `EOFError` mid-stream before it does.
-        with pytest.raises((tarfile.ReadError, EOFError)):
-            installer.main()
+def test_verus_install_clears_the_z3_marker_first(
+    workdir: Path, fakes: FakeTools
+) -> None:
+    """A stale install marker must not hide the newly verified solver archive."""
+    marker = workdir / ".cache/boundary-z3/.z3-version"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("4.16.0\n", encoding="utf-8")
 
-        bin_dir = tmp_path / ".cache/boundary-kani/bin"
-        assert not any(bin_dir.iterdir()), (
-            "a truncated archive must not install a partial frontend"
-        )
+    result = _run_make(
+        workdir,
+        MakeCall("install-verus", environment={"FAKE_MARKER": str(marker)}),
+        fakes,
+    )
+    assert result.returncode == 0, result.stderr
+
+    records = fakes.records()
+    assert records[0]["marker_exists"] is True, (
+        "the verifier install must not disturb the existing solver cache"
+    )
+    assert records[1]["marker_exists"] is False, (
+        "the marker must be cleared before the delegated solver install"
+    )
+    assert not marker.exists(), "the retired marker must not survive the reinstall"
+
+
+def _ambient_guard_names() -> list[str]:
+    """Return the names `PROVER_TOOLS_AMBIENT_VARS` clears before delegation."""
+    lines = MAKEFILE.read_text(encoding="utf-8").splitlines()
+    index = next(
+        position
+        for position, line in enumerate(lines)
+        if line.startswith("PROVER_TOOLS_AMBIENT_VARS =")
+    )
+    value = lines[index].partition("=")[2]
+    while value.rstrip().endswith("\\"):
+        index += 1
+        value = f"{value.rstrip()[:-1]} {lines[index]}"
+    return value.split()
+
+
+def test_the_watched_environment_matches_the_makefile_guard() -> None:
+    """The fake must watch every name the Makefile claims to clear."""
+    assert set(_ambient_guard_names()) == set(AMBIENT_INSTALL_VARIABLES), (
+        "the ambient-name tuple must match PROVER_TOOLS_AMBIENT_VARS"
+    )
+
+
+@pytest.mark.parametrize("target", ["install-boundary-kani", "install-verus"])
+def test_ambient_install_options_cannot_redirect_the_targets(
+    workdir: Path, fakes: FakeTools, target: str
+) -> None:
+    """Stray CI variables must not override the explicit repository paths."""
+    ambient = dict.fromkeys(AMBIENT_INSTALL_VARIABLES, "/ambient/wrong")
+    result = _run_make(workdir, MakeCall(target, environment=ambient), fakes)
+    assert result.returncode == 0, result.stderr
+
+    delegated = [
+        record for record in fakes.records() if record["tool"] == "prover-tools"
+    ]
+    assert delegated, "the fake prover-tools was never invoked"
+    leaked = [record["env"] for record in delegated if record["env"]]
+    assert not leaked, f"ambient installer options reached the shared CLI: {leaked}"
+    roots = [_argv(record) for record in delegated]
+    assert all(argv[argv.index("--repo-root") + 1] == str(workdir) for argv in roots), (
+        f"{target} must resolve every delegated call against the checkout"
+    )
+
+
+def test_a_failed_z3_install_fails_the_make_target(
+    workdir: Path, fakes: FakeTools
+) -> None:
+    """A delegated solver failure must stop the target and stay visible."""
+    result = _run_make(
+        workdir,
+        MakeCall(
+            "install-verus",
+            environment={"FAKE_FAIL_ARGS": json.dumps(["z3", "install"])},
+        ),
+        fakes,
+    )
+    assert result.returncode != 0, "a failed solver install must fail the target"
+    assert "fake prover-tools failure" in result.stderr, (
+        "the delegated failure must reach the caller's log"
+    )
+    assert [_argv(record)[:2] for record in fakes.records()] == [
+        ["verus", "install"],
+        ["z3", "install"],
+    ], "the verifier must install before the solver it drives"
+
+
+def test_the_retired_local_installers_are_gone() -> None:
+    """A leftover entry point would reintroduce the unbounded disk write."""
+    assert not (REPO_ROOT / "scripts/install_boundary_kani.py").exists(), (
+        "the retired Kani installer must not return"
+    )
+    assert not (REPO_ROOT / "scripts/install_boundary_z3.py").exists(), (
+        "the retired Z3 installer must not return"
+    )
+    text = MAKEFILE.read_text(encoding="utf-8")
+    assert "install_boundary_kani" not in text, (
+        "the Makefile must not call the retired Kani installer"
+    )
+    assert "install_boundary_z3" not in text, (
+        "the Makefile must not call the retired Z3 installer"
+    )

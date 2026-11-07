@@ -888,24 +888,54 @@ help: ## Show available targets
 
 # Boundary verifiers use their own pinned binary toolchains; normal gates keep
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
-PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@98929b558253659a0a8ae03be7c49dafeef5f673
-PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 --from $(PROVER_TOOLS_SOURCE) prover-tools
+# The pin lives in its own file so the verifier cache key can hash exactly what
+# decides the downloaded binaries, rather than every unrelated Makefile edit.
+# `$(file < ...)` resolves against make's working directory and yields an empty
+# string when the file is absent, so a run from another directory or under an
+# older make would silently drop the pin. Fail loudly instead: an empty source
+# makes `uv` resolve `prover-tools` from a package index, not the pinned commit.
+PROVER_TOOLS_SOURCE ?= $(strip $(file < tools/prover-tools/VERSION))
+PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 \
+	--from $(or $(PROVER_TOOLS_SOURCE),$(error PROVER_TOOLS_SOURCE is empty; \
+	run make from the repository root)) prover-tools
+# The shared CLI reads these ambient names as flag defaults. Every delegated
+# invocation passes its paths explicitly, so a stray CI or shell value must not
+# silently redirect an install away from the repository cache.
+PROVER_TOOLS_AMBIENT_VARS = INPUT_REPO_ROOT INPUT_VERSION INPUT_VERSION_FILE \
+	INPUT_KANI_VERSION_FILE INPUT_KANI_COMPILE KANI_INSTALL_DIR \
+	INPUT_KANI_INSTALL_DIR KANI_CACHE_DIR INPUT_KANI_CACHE_DIR \
+	Z3_INSTALL_DIR INPUT_Z3_INSTALL_DIR Z3_CACHE_DIR INPUT_Z3_CACHE_DIR \
+	VERUS_INSTALL_DIR INPUT_VERUS_INSTALL_DIR VERUS_TARGET INPUT_VERUS_TARGET \
+	INPUT_VERUS_BASE_URL INPUT_CHECKSUM_FILE INPUT_VERUS_CHECKSUM_FILE
+PROVER_TOOLS_ENV = env $(foreach var,$(PROVER_TOOLS_AMBIENT_VARS),-u $(var))
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
 KANI_LIBRARY_PATH = $(HOME)/.kani/kani-$(KANI_VERSION)/toolchain/lib:$(HOME)/.kani/kani-$(KANI_VERSION)/lib
 
-.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test
+.PHONY: install-verus boundary-verus boundary-kani boundary-miri boundary-test \
+	boundary-download-integration
 install-verus: ## Install the checksum-verified prebuilt Verus release
-	$(PROVER_TOOLS) verus install --install-dir $(VERUS_INSTALL_DIR)
-	$(UV_RUN_ENV) uv run python scripts/install_boundary_z3.py
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) verus install \
+	  --repo-root "$(CURDIR)" \
+	  --install-dir "$(VERUS_INSTALL_DIR)"
+	rm -f "$(CURDIR)/.cache/boundary-z3/.z3-version"
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) z3 install \
+	  --repo-root "$(CURDIR)" \
+	  --install-dir "$(CURDIR)/.cache/boundary-z3" \
+	  --cache-dir "$(CURDIR)/.cache/boundary-z3"
 
 boundary-verus: ## Verify actual production length/accounting kernels
 	$(UV_RUN_ENV) uv run python scripts/render_boundary_proofs.py
 	VERUS_Z3_PATH=$(CURDIR)/.cache/boundary-z3/z3 RUSTUP_TOOLCHAIN=1.98.0 $(VERUS_INSTALL_DIR)/verus/verus rust/target/boundary-verification/progress.rs --crate-type=lib
 
+# `cargo kani` resolves `cargo-kani` on PATH. The install target places the
+# verified binaries under `.cache` rather than somewhere already on PATH, and
+# only its own setup line exports that directory. Prepend it here so the local
+# target verifies the same Kani the install target fetched.
+boundary-kani: export PATH := $(CURDIR)/.cache/boundary-kani/bin:$(PATH)
 boundary-kani: ## Check bounded native ownership and existing policy proofs
-	$(PROVER_TOOLS) kani check-version
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) kani check-version
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
 
@@ -917,10 +947,24 @@ boundary-test: ## Run isolated native integration and verification-tool contract
 	cd $(RUST_DIR) && $(CARGO) test --package cuprum-native-io --lib
 	$(UV_RUN_ENV) uv run pytest scripts/tests/test_boundary_*.py
 
+# The bounded-download contracts drive the pinned downloader against a
+# controlled loopback HTTPS server. They are opt-in because installing the
+# pinned revision needs the network and every scenario binds a socket, so the
+# default suite collects the module and skips it.
+boundary-download-integration: ## Exercise bounded downloads over controlled HTTPS
+	CUPRUM_RUN_DOWNLOAD_INTEGRATION=1 \
+	  CUPRUM_PROVER_TOOLS_SOURCE="$(PROVER_TOOLS_SOURCE)" \
+	  $(PYTEST) -v scripts/tests/test_boundary_download_integration.py
+
 .PHONY: install-boundary-kani
 install-boundary-kani: ## Install checksum-verified Kani binaries without a source build
-	$(UV_RUN_ENV) uv run python scripts/install_boundary_kani.py
-	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" $(CARGO) kani setup --use-local-bundle $(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) kani install \
+	  --repo-root "$(CURDIR)" \
+	  --version-file tools/kani/VERSION \
+	  --install-dir "$(CURDIR)/.cache/boundary-kani/bin" \
+	  --cache-dir "$(CURDIR)/.cache/boundary-kani" \
+	  --no-compile --no-setup --no-verify
+	PATH="$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" $(CARGO) kani setup --use-local-bundle "$(CURDIR)/.cache/boundary-kani/kani-$(KANI_VERSION)-x86_64-unknown-linux-gnu.tar.gz"
 
 .PHONY: boundary-contract
 boundary-contract: ## Confirm actual safe targets reject all forms of unsafe Rust

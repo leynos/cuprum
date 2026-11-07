@@ -10,6 +10,7 @@ on:
       - 'pyproject.toml'
       - 'scripts/*boundary*'
       - 'scripts/tests/test_boundary*'
+      - 'scripts/tests/boundary_download_*.py'
       - 'tools/**'
       - 'Makefile'
       - '.github/workflows/rust-boundaries.yml'
@@ -140,8 +141,8 @@ jobs:
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
             .cache/boundary-z3
             ~/.cache/sccache
-          key: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-${{ github.run_id }}
-          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'scripts/install_boundary_z3.py') }}-
+          key: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-${{ github.run_id }}
+          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-
       - name: Set up sccache
         id: sccache
         uses: ./.github/actions/setup-sccache
@@ -153,6 +154,8 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
       - name: Test proof correspondence and binary installation contracts
         run: uv run pytest scripts/tests/test_boundary_*.py
+      - name: Exercise bounded download contracts over controlled HTTPS
+        run: make boundary-download-integration
       - name: Verify production kernels and compiler prohibition
         run: |
           set -o pipefail
