@@ -17,9 +17,11 @@ transfer deadline before the digest check.
 
 The PyPy downloader applies the same two bounds itself: it refuses a declared
 length above `_MAX_BODY_BYTES`, stops once the streamed body passes that
-ceiling, and abandons a transfer that outlives `_TRANSFER_DEADLINE_SECONDS`.
-Without them a stalled or oversized response would fill the disk before the
-digest check could reject it.
+ceiling, and abandons a body that outlives `_TRANSFER_DEADLINE_SECONDS`. The
+deadline spans every redirect hop, but each header or body read is bounded only
+by the connection's own 60-second socket timeout. Without these bounds a
+stalled or oversized response would fill the disk before the digest check could
+reject it.
 """
 
 from __future__ import annotations
@@ -199,7 +201,11 @@ def _copy_body(
         if time.monotonic() > deadline:
             msg = "release download exceeded the transfer deadline"
             raise TimeoutError(msg)
-        chunk = response.read(_CHUNK_BYTES)
+        # `read` blocks until it fills the buffer or reaches EOF, so a server
+        # trickling one byte per socket timeout could hold a single call far
+        # past the deadline. `read1` returns after at most one socket read, so
+        # the check above runs again within the socket timeout.
+        chunk = response.read1(_CHUNK_BYTES)
         if not chunk:
             return
         written += len(chunk)

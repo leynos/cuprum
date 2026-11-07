@@ -139,15 +139,25 @@ def test_verus_archives_the_negative_compiler_evidence() -> None:
     )
 
 
+def _logical_assignment(makefile: str, name: str) -> str:
+    """Return the value of a Makefile assignment with continuations joined."""
+    lines = makefile.splitlines()
+    index = next(
+        position for position, line in enumerate(lines) if line.startswith(f"{name} =")
+    )
+    value = lines[index].partition("=")[2]
+    while value.rstrip().endswith("\\"):
+        index += 1
+        value = f"{value.rstrip()[:-1]} {lines[index].strip()}"
+    return value
+
+
 def test_prover_tools_selects_its_required_python() -> None:
     """The installer must override CI's Python 3.13 with its required Python 3.14."""
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
         encoding="utf-8"
     )
-    assignment = next(
-        line for line in makefile.splitlines() if line.startswith("PROVER_TOOLS =")
-    )
-    arguments = shlex.split(assignment.partition("=")[2])
+    arguments = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS"))
     assert "--python" in arguments, (
         "ambient UV_PYTHON can select an incompatible runtime"
     )
