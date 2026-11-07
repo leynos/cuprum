@@ -303,7 +303,7 @@ def _streaming_response(body: bytes, declared: str | None = None) -> mock.MagicM
     response.getheader.side_effect = lambda name: (
         declared if name == "Content-Length" else None
     )
-    response.read.side_effect = stream.read
+    response.read1.side_effect = stream.read1
     return response
 
 
@@ -345,7 +345,7 @@ class TestBoundedBody:
         response = _streaming_response(b"x" * 64, declared="9")
         with pytest.raises(ValueError, match="above the 8-byte limit"):
             _download_response(response, destination, monkeypatch)
-        assert response.read.call_count == 0, "the body must not be read"
+        assert response.read1.call_count == 0, "the body must not be read"
         assert not destination.exists(), "the destination must not be created"
 
     def test_a_streamed_overflow_stops_at_the_ceiling(
@@ -369,4 +369,4 @@ class TestBoundedBody:
         response = _streaming_response(b"x" * 64)
         with pytest.raises(TimeoutError, match="transfer deadline"):
             _download_response(response, destination, monkeypatch)
-        assert response.read.call_count == 0, "no chunk may be read past the deadline"
+        assert response.read1.call_count == 0, "no chunk may be read past the deadline"

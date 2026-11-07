@@ -5816,14 +5816,15 @@ deadline across redirects, header parsing, and the body. A deadline watchdog
 shuts the socket down, so a response that trickles bytes or headers cannot
 outlive the deadline. The verified archive is published atomically only after
 the SHA-256 check. Cuprum's `make install-boundary-kani` and
-`make install-verus` pass explicit repository, pin, install, and cache paths;
-they also disable the shared CLI's setup and verification phases so
-`cargo kani setup` remains the single owner of native setup. The Makefile
-removes ambient `INPUT_*`, `KANI_*`, and `Z3_*` variables before each delegated
-call, so a stray CI value cannot redirect an install away from the repository
-cache. To adopt a new shared revision, update `PROVER_TOOLS_SOURCE` to the new
-full commit hash, run both install targets cold and warm, and rely on the
-`Makefile` hash in the verifier cache key to invalidate the archived tools.
+`make install-verus` pass explicit repository, install, and cache paths, and
+the Kani target also names its version file and disables the shared CLI's
+compile, setup, and verification phases so `cargo kani setup` remains the
+single owner of native setup. The Makefile removes ambient `INPUT_*`, `KANI_*`,
+`Z3_*`, and `VERUS_*` variables before each delegated call, so a stray CI value
+cannot redirect an install away from the repository cache. To adopt a new
+shared revision, replace the commit hash in `tools/prover-tools/VERSION`, run
+both install targets cold and warm, and rely on the `hashFiles` inputs for that
+file in the verifier cache key to invalidate the archived tools.
 
 The bounded-download harness lives in four modules under `scripts/tests/`.
 `boundary_download_support.py` creates a throwaway certificate authority and
