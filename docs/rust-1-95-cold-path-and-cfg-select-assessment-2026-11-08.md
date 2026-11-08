@@ -255,14 +255,14 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    own patch and its own measurement; no patch carries two hints. Both legs
    must share the target triple, the profile, the enabled features,
    `RUSTFLAGS`, the `Cargo.lock` and `uv.lock` digests, and the runtime
-   environment. They must differ in exactly one respect: each loads the native
-   extension built from its own sources. Record `rustc -vV`, `cargo -V`, each
-   shared value, and each leg's expected extension path and content hash
-   together with the path and hash actually loaded. Verify each run against its
-   own build: an interleaved run can otherwise measure one installed extension
-   twice, or measure two different dependency sets. A run whose extension does
-   not match its own build disqualifies the comparison rather than being
-   attributed to the hint.
+   environment. They must differ in exactly one respect: each leg runs the
+   artefact built from its own sources. Record `rustc -vV`, `cargo -V`, each
+   shared value, and each leg's expected artefact path and content hash
+   together with the path and hash it actually used. Verify each run against
+   its own build: an interleaved run can otherwise exercise one installed
+   artefact twice, or measure two different dependency sets. A run whose
+   artefact does not match its own build disqualifies the comparison rather
+   than being attributed to the hint.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -275,9 +275,13 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    direct normal-UTF-8 benchmark added beside it. Early-consumer closure and
    interrupted/fatal error paths need controlled stimulus too, so those
    additions belong in benchmark-only in-crate scaffolding behind
-   `#[cfg(test)]` or a benchmark feature. Measuring the currently unintegrated
-   consume helper does not authorize integrating it, and the integration guard
-   in `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
+   `#[cfg(test)]` or a benchmark feature. The artefact checked in step 1 is the
+   Python extension module for a Python-driven benchmark and the benchmark test
+   executable for an in-crate harness, so it is a different file for those two
+   kinds of leg but must still come from the leg's own build. Measuring the
+   currently unintegrated consume helper does not authorize integrating it, and
+   the integration guard in
+   `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
    number of rounds, and keep raw samples, exclusions, and failures. Report a
    paired bootstrap interval for the median effect at 95% and repeat the whole
