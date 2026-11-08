@@ -462,6 +462,14 @@ reason = "Called structurally through _PipelineWaitReporter by _StageObservation
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
+full_name = [
+    "cuprum.adapters._pump_held_pairs._HeldPairCounter.took",
+    "cuprum.adapters._pump_held_pairs._CounterEntry.names",
+]
+reason = "took is called by PumpMetricsHook._apply_held_delta through its optional self._held attribute, and names is called by shared_held_counter on the entry returned by _COUNTERS.get(key). The reference graph resolves a method call through neither an optional attribute nor a dict lookup, so both read as unreferenced."
+
+[[tool.skylos.dead_code.entrypoints]]
+type = "method"
 full_name = ["cuprum._bounded_delivery._DeliveryWorker.close"]
 reason = "Passed to asyncio.to_thread by _close_delivery_worker for bounded off-loop shutdown."
 
