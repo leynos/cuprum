@@ -152,6 +152,7 @@
       'cuprum/adapters/_logging_formatter.py',
       'cuprum/adapters/_logging_projection.py',
       'cuprum/adapters/_metrics_operations.py',
+      'cuprum/adapters/_pump_held_pairs.py',
       'cuprum/adapters/_retention_metrics.py',
       'cuprum/adapters/_support.py',
       'cuprum/adapters/_tracing_attributes.py',
