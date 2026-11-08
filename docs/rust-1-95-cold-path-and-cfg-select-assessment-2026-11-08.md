@@ -92,7 +92,7 @@ measured with `rustc -vV`, except the wheel route, which is not pinned.
 | Route                                            | Compiler selection                     | Measured compiler                              |
 | ------------------------------------------------ | -------------------------------------- | ---------------------------------------------- |
 | Workspace pin and `make msrv-check`              | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
-| CI build, test, coverage, and boundary jobs      | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
+| CI routes using the pin                          | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
 | Loom models (`make loom`, `scripts/run_loom.py`) | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
 | Kani proofs (`make boundary-kani`)               | Kani `0.67.0` bundled toolchain        | `rustc 1.93.0-nightly (53732d5e0 2025-11-20)`  |
 | Whitaker lint (`make lint-whitaker`)             | dylint driver for `nightly-2026-05-28` | `rustc 1.98.0-nightly (57d06900f 2026-05-27)`  |
@@ -126,18 +126,22 @@ project compiler and does not compile the crates under assessment. Reading that
 install as project support for 1.95 would be a mistake. The CI lint job is not
 a 1.87 route either: its Rustdoc and Clippy leaf runs on the dev-fast nightly
 and its Whitaker leaf on the `nightly-2026-05-28` driver, both recorded in
-their own rows above. The project-toolchain routes in CI are the build, test,
-coverage, and boundary jobs.
+their own rows above. The CI routes that compile the crates on the project
+toolchain are `make msrv-check` in the lint job, the Rust suite in the coverage
+job, the Loom smoke job, and the native boundary matrix in
+`rust-boundaries.yml`. The extension-tests job builds the extension through
+`make develop`, which on Linux selects the dev-fast nightly, so it belongs to
+that row rather than to the 1.87 routes.
 
 ### Which routes block adoption
 
 Applying the 1.95 requirement to Table 1 leaves three independent blockers:
 
-| Route                                                      | Compiler               | Sources it compiles                                                                     |
-| ---------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| `make msrv-check` and the CI jobs on the project toolchain | `rustc 1.87.0`         | the whole workspace                                                                     |
-| Loom models                                                | `rustc 1.87.0`         | `cuprum-rust` and, through it, `cuprum-streams` and `cuprum-native-io` with `cfg(loom)` |
-| Kani proofs                                                | `rustc 1.93.0-nightly` | `cuprum-native-io` and `cuprum-streams` with `cfg(kani)`                                |
+| Route                                             | Compiler               | Sources it compiles                                                                     |
+| ------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `make msrv-check` and the CI routes using the pin | `rustc 1.87.0`         | the whole workspace, or the subset each job builds                                      |
+| Loom models                                       | `rustc 1.87.0`         | `cuprum-rust` and, through it, `cuprum-streams` and `cuprum-native-io` with `cfg(loom)` |
+| Kani proofs                                       | `rustc 1.93.0-nightly` | `cuprum-native-io` and `cuprum-streams` with `cfg(kani)`                                |
 
 _Table 2: Routes whose compiler cannot accept either 1.95 API._
 
@@ -284,15 +288,23 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
    number of rounds, and keep raw samples, exclusions, and failures. Report a
-   paired bootstrap interval for the median effect at 95% and repeat the whole
-   experiment as an independent confirmation run.
-5. **Decision rule.** Adopt a hint only if, in both the primary and the
+   paired bootstrap interval for the median effect at 95% and a dispersion
+   measure for each scenario, and repeat the whole experiment as an independent
+   confirmation run.
+5. **Decision rule.** Before measuring, state for each targeted scenario the
+   smallest effect that would count as practically useful, and record it
+   alongside the protocol. A statistically detectable improvement is not by
+   itself evidence of value. Adopt a hint only if, in both the primary and the
    confirmation run, its targeted scenario's 95% paired bootstrap interval lies
-   wholly on the improved side. A positive point estimate whose interval
-   includes zero is inconclusive, not an improvement. No scenario may regress
-   beyond the larger of the flat 30% floor and the three-sigma
-   median-absolute-deviation band from `benchmarks/ratchet_history.py` (window
-   size 7, `_MAD_TO_SIGMA = 1.4826`), computed on the samples collected here.
+   wholly above that predeclared threshold. An interval that includes zero, or
+   whose lower bound falls short of the threshold, is inconclusive rather than
+   an improvement. Every scenario, not only the targeted one, must be reported
+   with its interval and dispersion. Every regression must be reported and
+   explained; an unexplained regression blocks adoption however small it is. In
+   addition, no scenario may regress beyond the larger of the flat 30% floor
+   and the three-sigma median-absolute-deviation band from
+   `benchmarks/ratchet_history.py` (window size 7, `_MAD_TO_SIGMA = 1.4826`),
+   computed on the baseline samples collected for each scenario in that run.
    The CI ratchet's Rust-to-Python ratio, the 20% dispatcher gate, and the 30%
    limits are separate policies and are neither imported nor weakened.
 6. **Diagnostics.** Assembly and LLVM IR differences are permitted as
@@ -392,10 +404,13 @@ Two costs come with it, and both must be accepted explicitly:
 
 Because of that second cost, any future patch must observe the diagnostic
 before and after rather than assume it. The workspace manifest is
-`rust/Cargo.toml`, so the observation runs from the repository root as:
+`rust/Cargo.toml`, and rustup does not discover `rust/rust-toolchain.toml` from
+the repository root, so both observations must select the same compiler
+explicitly:
 
 ```sh
-cargo check --manifest-path rust/Cargo.toml \
+rustup target add wasm32-wasip1 --toolchain <toolchain>
+cargo +<toolchain> check --manifest-path rust/Cargo.toml \
   -p cuprum-native-io --target wasm32-wasip1
 ```
 
