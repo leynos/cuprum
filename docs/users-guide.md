@@ -3743,7 +3743,9 @@ _Table 8: Metrics emitted by `PumpMetricsHook`._
 the number of descriptor pairs currently held across pending buffered drains. A
 hand-off sets it one higher on acquisition and one lower on release, and the
 release lands on every settling path — submission, activation failure, drain
-failure, and cancellation.
+failure, and cancellation. Every hook that reports to the same collector shares
+one running total, so registering a hook per pipeline scope still reports that
+collector's total held pairs.
 
 Gauge support is optional. A collector receives this gauge by implementing
 `GaugeMetricsCollector` from `cuprum.adapters.gauge_metrics`; a collector

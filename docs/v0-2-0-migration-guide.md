@@ -1182,6 +1182,36 @@ The registration is context-local. Remove the registration by leaving its
 context manager or calling `detach()` on the returned handle. The existing
 `ExecEvent` observation API is unchanged.
 
+### Pump hand-off hold events and settlement outcomes
+
+The pump observation channel gains a `handoff_hold` phase and three settlement
+outcomes. No event is emitted unless an application registers an `observe_pump`
+hook.
+
+- `handoff_hold` reports the window in which a hop holds its acquired
+  descriptor pair: `PumpEvent.held_delta` is `1` after acquisition and before
+  the buffered drain, and `-1` when the hold ends. `held_delta` is appended
+  after every existing `PumpEvent` field, so a caller constructing the public
+  dataclass positionally keeps its existing argument order.
+- `drain_failed`, `blocking_setup_failed`, and `submission_abandoned` join
+  `RustPumpHandoffOutcome`. Each is counted in
+  `cuprum_rust_pump_handoff_total`, so an exhaustive outcome handler or
+  dashboard must add them.
+
+An optional gauge, `cuprum_rust_pump_held_pairs`, reports the pairs held across
+pending drains. It is set only for a collector that implements
+`GaugeMetricsCollector`, and every hook reporting to one collector shares its
+running total, so a dashboard reads one value per collector rather than one per
+hook. A collector written against the two-method `MetricsCollector` contract
+continues to work unchanged and is simply skipped for gauges. An exhaustive
+pump observer that matches on `PumpPhase` must add `handoff_hold`, and one that
+matches on `RustPumpHandoffOutcome` must add the three outcomes; an observer
+that ignores unknown values needs no change.
+
+See
+[Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)
+for the full event and metric list.
+
 ### Windows raw-handle hand-off outcome
 
 `RustPumpHandoffOutcome` gains `WINDOWS_RAW_HANDLE_REJECTED`, recorded as

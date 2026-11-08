@@ -2759,14 +2759,19 @@ alter the successful fallback or the caller's cancellation.
 
 `cuprum_rust_pump_held_pairs` is the channel's only gauge. The coordinator
 emits a `handoff_hold` event with `held_delta=1` after acquisition and before
-the buffered drain, and one with `held_delta=-1` once the pair has been closed
-or rolled back; `PumpMetricsHook` accumulates those deltas and publishes the
-running total under one lock, so a release cannot reach the collector before
-the acquisition it followed. Gauges are a separate, optional capability:
-`GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a runtime
-checkable protocol, and a collector that does not implement it keeps working
-for counters and histograms and is simply skipped for gauges. This keeps the
-existing two-method `MetricsCollector` contract intact.
+the buffered drain, and one with `held_delta=-1` when its own hold ends: after
+a successful activation, before the pair is submitted, with the descriptors
+still open and owned by the worker; on every failed path, after the pair has
+been closed or rolled back. `PumpMetricsHook` accumulates those deltas per
+collector under one lock — hooks reporting to the same collector share the
+count, so one hook's release cannot publish zero while another still holds a
+pair — and publishes the running total under that same lock, so a release
+cannot reach the collector before the acquisition it followed. Gauges are a
+separate, optional capability: `GaugeMetricsCollector` in
+`cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol, and a
+collector that does not implement it keeps working for counters and histograms
+and is simply skipped for gauges. This keeps the existing two-method
+`MetricsCollector` contract intact.
 
 #### Pump hook failure policy
 

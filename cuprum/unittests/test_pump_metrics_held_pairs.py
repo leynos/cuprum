@@ -2,8 +2,9 @@
 
 The gauge answers a question the counters cannot: how many descriptor pairs a
 hand-off is holding while its buffered drain is still pending. These tests pin
-the bounded accumulation, the optional-collector contract, and the balance
-across concurrent drains.
+the bounded accumulation, the optional-collector contract, the balance across
+concurrent drains, and the single running total every hook reporting to one
+collector shares.
 """
 
 from __future__ import annotations
@@ -12,6 +13,9 @@ import threading
 import typing as typ
 
 import pytest
+from hypothesis import settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
 from cuprum.adapters.gauge_metrics import GaugeMetricsCollector
 from cuprum.adapters.metrics_adapter import InMemoryMetrics
@@ -202,6 +206,180 @@ def test_an_older_publication_cannot_overwrite_a_newer_count() -> None:
     assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
         "the release must publish after the acquisition it followed, never before"
     )
+
+
+def test_hooks_sharing_a_collector_publish_one_running_total() -> None:
+    """A release through one hook must not hide another hook's hold."""
+    collector = RecordingCollector()
+    first = PumpMetricsHook(collector)
+    second = PumpMetricsHook(collector)
+
+    first(_hold(1))
+    second(_hold(1))
+    first(_hold(-1))
+    second(_hold(-1))
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0, 1.0, 0.0], (
+        "the gauge must count every pair held through either hook"
+    )
+
+
+def test_distinct_collectors_keep_separate_gauges() -> None:
+    """The count belongs to its collector, not to the process."""
+    left = RecordingCollector()
+    right = RecordingCollector()
+
+    PumpMetricsHook(left)(_hold(1))
+    PumpMetricsHook(right)(_hold(1))
+    PumpMetricsHook(left)(_hold(1))
+
+    assert left.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
+        "each collector must report only the pairs held through its own hooks"
+    )
+    assert right.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0], (
+        "a second collector must not inherit the first collector's count"
+    )
+
+
+def test_concurrent_hooks_on_one_collector_share_the_gauge() -> None:
+    """Two drains held through different hooks are reported as two pairs."""
+    collector = RecordingCollector()
+    hooks = [PumpMetricsHook(collector) for _ in range(2)]
+    both_held = threading.Barrier(len(hooks))
+
+    def hold_and_release(hook: PumpMetricsHook) -> None:
+        """Hold a pair until both hooks hold one, then release it."""
+        hook(_hold(1))
+        both_held.wait(timeout=5.0)
+        hook(_hold(-1))
+
+    workers = [
+        threading.Thread(target=hold_and_release, args=(hook,)) for hook in hooks
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5.0)
+
+    values = collector.gauge_values(RUST_PUMP_HELD_PAIRS)
+    assert max(values) == pytest.approx(2.0), (
+        f"both hooks' holds must reach the shared gauge, found {values}"
+    )
+    assert values[-1] == pytest.approx(0.0), (
+        f"the shared gauge must return to zero, found {values}"
+    )
+
+
+class _SlotsGaugeCollector:
+    """A gauge collector with no ``__weakref__`` slot, so it cannot be shared."""
+
+    __slots__ = ("gauges",)
+
+    def __init__(self) -> None:
+        """Start with no recorded gauge values."""
+        self.gauges: list[float] = []
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore counter increments."""
+        del name, value, labels
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore histogram observations."""
+        del name, value, labels
+
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record the reported value."""
+        del name, labels
+        self.gauges.append(value)
+
+
+def test_a_collector_without_weakref_support_still_counts() -> None:
+    """A collector that cannot be shared still reports its own hook's pairs."""
+    collector = _SlotsGaugeCollector()
+    hook = PumpMetricsHook(typ.cast("typ.Any", collector))
+
+    hook(_hold(1))
+    hook(_hold(-1))
+
+    assert collector.gauges == [1.0, 0.0], (
+        "a collector without weakref support must keep working for one hook"
+    )
+
+
+class HeldPairAccountingMachine(RuleBasedStateMachine):
+    """Interleave holds across hooks that report to one collector.
+
+    The gauge is one absolute value per collector, so every hook reporting to
+    it must move a single count. The model records how many pairs each hook
+    holds; after every rule the gauge must equal their total, and no published
+    value may be negative.
+    """
+
+    _HOOKS = 3
+
+    def __init__(self) -> None:
+        """Start with one collector, three hooks, and an empty model."""
+        super().__init__()
+        self.collector = RecordingCollector()
+        self.hooks = [PumpMetricsHook(self.collector) for _ in range(self._HOOKS)]
+        self.held = [0] * self._HOOKS
+
+    @rule(index=st.integers(min_value=0, max_value=_HOOKS - 1))
+    def acquire(self, index: int) -> None:
+        """Hold one pair through the hook at ``index``."""
+        self.hooks[index](_hold(1))
+        self.held[index] += 1
+
+    @rule(index=st.integers(min_value=0, max_value=_HOOKS - 1))
+    def release(self, index: int) -> None:
+        """Release one pair through the hook at ``index`` if it holds one."""
+        if self.held[index] == 0:
+            return
+        self.hooks[index](_hold(-1))
+        self.held[index] -= 1
+
+    @rule(
+        index=st.integers(min_value=0, max_value=_HOOKS - 1),
+        delta=st.sampled_from([0, 2, -2]),
+    )
+    def malformed_delta(self, index: int, delta: int) -> None:
+        """Offer a delta no coordinator emits; the gauge must ignore it."""
+        self.hooks[index](_hold(delta))
+
+    @invariant()
+    def gauge_matches_the_model(self) -> None:
+        """Assert the shared gauge equals the model's total after every rule."""
+        values = self.collector.gauge_values(RUST_PUMP_HELD_PAIRS)
+        expected = float(sum(self.held))
+        assert not values or values[-1] == pytest.approx(expected), (
+            f"the gauge must report {expected} held pairs, found {values}"
+        )
+        assert all(value >= 0.0 for value in values), (
+            f"the gauge must never report a negative count, found {values}"
+        )
+
+
+TestHeldPairAccountingMachine = HeldPairAccountingMachine.TestCase
+TestHeldPairAccountingMachine.settings = settings(
+    max_examples=40,
+    stateful_step_count=20,
+    deadline=None,
+)
 
 
 def test_the_reference_collector_reports_and_clears_gauges() -> None:

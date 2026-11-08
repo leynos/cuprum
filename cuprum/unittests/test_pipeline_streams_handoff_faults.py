@@ -48,13 +48,18 @@ class _GuardConstructionFailure:
     shares, and the injected fault lands only where the guard is built.
     """
 
-    def __init__(self, failure: BaseException) -> None:
+    def __init__(
+        self,
+        failure: BaseException,
+        *,
+        collector: RecordingCollector | None = None,
+    ) -> None:
         """Record the failure to inject and start with empty observations."""
         self.failure = failure
         self.resume_calls = 0
         self.acquired: list[int] = []
         self.close_calls: dict[int, int] = {}
-        self.collector = RecordingCollector()
+        self.collector = collector if collector is not None else RecordingCollector()
         self._original_close_reader = (
             _pipeline_stream_native_cleanup._close_rust_reader_fd
         )
@@ -167,7 +172,9 @@ def _assert_failed_activation_settled(harness: _GuardConstructionFailure) -> Non
     assert harness.resume_calls == 1, (
         "a failed guard construction must resume the reader once"
     )
-    assert harness.collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+    # Compared as a tail so the same collector can carry several hand-offs in a
+    # row: each one owes exactly this acquisition and release pair.
+    assert harness.collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-2:] == [1.0, 0.0], (
         "a failed guard construction must still release the held-pair gauge"
     )
 
@@ -228,12 +235,18 @@ class _FailedSettleSignalHarness:
     raises, so the harness raises on the ``-1`` transition alone.
     """
 
-    def __init__(self, *, decline_activation: bool) -> None:
+    def __init__(
+        self,
+        *,
+        decline_activation: bool,
+        collector: RecordingCollector | None = None,
+    ) -> None:
         """Choose which failed path precedes the interrupted release."""
         self.decline_activation = decline_activation
         self.resume_calls = 0
         self.acquired: list[int] = []
         self.events: list[PumpEvent] = []
+        self.collector = collector if collector is not None else RecordingCollector()
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
@@ -310,6 +323,7 @@ class _FailedSettleSignalHarness:
                 cleanup_grace_s=0.5,
             )
             with (
+                observe_pump(PumpMetricsHook(self.collector)),
                 observe_pump(self.raise_signal),
                 observe_pump(self.events.append),
                 pytest.raises(KeyboardInterrupt),
@@ -354,4 +368,44 @@ def test_a_release_signal_during_a_failure_still_counts_its_outcome(
     (outcome,) = [event.outcome for event in harness.events if event.phase == "handoff"]
     assert outcome is expected_outcome, (
         "the interrupted release must still count its outcome exactly once"
+    )
+
+
+def test_a_mixed_sequence_of_failed_handoffs_settles_one_shared_gauge() -> None:
+    """Hand-offs failing in different ways leave one shared gauge at zero.
+
+    Each act runs a real hand-off against the same collector through a fresh
+    hook: a guard-construction fault, a refusal that falls back to Python, and
+    a drain failure interrupted by a shutdown signal. Because every act must
+    pair its acquisition with a release and close what it acquired, the gauge
+    the acts share rises and falls once per act rather than drifting.
+    """
+    collector = RecordingCollector()
+
+    for failure, is_refusal in (
+        (RuntimeError("guard construction failed"), False),
+        (OSError("blocking mode refused"), True),
+    ):
+        with pytest.MonkeyPatch.context() as patch:
+            guard = _GuardConstructionFailure(failure, collector=collector)
+            guard.install(patch)
+            if is_refusal:
+                assert guard.run() is False, "a refusal must fall back to Python"
+            else:
+                with pytest.raises(type(failure)):
+                    guard.run()
+            _assert_failed_activation_settled(guard)
+
+    with pytest.MonkeyPatch.context() as patch:
+        interrupted = _FailedSettleSignalHarness(
+            decline_activation=False,
+            collector=collector,
+        )
+        interrupted.install(patch)
+        interrupted.run()
+        assert interrupted.resume_calls == 1, "the drain failure must resume the reader"
+        _assert_fds_closed(interrupted.acquired)
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0] * 3, (
+        "every failed hand-off must settle the one gauge it moved"
     )
