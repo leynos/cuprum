@@ -145,23 +145,16 @@ def _claim_entry(key: int, collector: object) -> _CounterEntry:
     return entry
 
 
-def _retires_with_its_hooks(
-    entry: _CounterEntry | None,
-    counter: _HeldPairCounter,
-) -> bool:
-    """Report whether ``entry`` is the retained entry holding ``counter``."""
-    if entry is None or entry.counter is not counter:
-        return False
-    return entry.reference is None
-
-
 def _retire_held_counter(key: int, counter: _HeldPairCounter) -> None:
     """Drop one hook's claim, retiring a retained entry with its last one."""
     with _COUNTERS_LOCK:
         entry = _COUNTERS.get(key)
-        # An entry with a weak reference retires with its collector instead,
-        # and the entry can already be gone while the interpreter shuts down.
-        if not _retires_with_its_hooks(entry, counter):
+        # The entry can already be gone while the interpreter shuts down, and
+        # another registration can have replaced it with a fresh counter.
+        if entry is None or entry.counter is not counter:
+            return
+        # An entry with a weak reference retires with its collector instead.
+        if entry.reference is not None:
             return
         entry.hooks -= 1
         if entry.hooks <= 0 and counter.pairs == 0:
