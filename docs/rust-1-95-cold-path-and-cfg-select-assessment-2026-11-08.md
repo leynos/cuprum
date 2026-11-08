@@ -224,10 +224,14 @@ patch cannot be mechanical:
 - **Allocation telemetry is a contract.** The `buffer_allocation_failed`
   category, the power-of-two bucket, and the event fields are observable. A
   hint must not alter the event, the category, or the bucket.
-- **The Python boundary preserves raw OS codes.** Exception class, message
-  text, `errno` on Unix, `winerror` on Windows, and validation order are all
-  pinned by tests. A hint inside the conversion helpers must leave them
-  untouched.
+- **The Python boundary preserves raw OS codes where it produces them.** On
+  Unix, exception class, message text, `errno`, and validation order are pinned
+  by tests. On Windows the stream exports reject raw handles before any
+  synchronous I/O, so their tests pin a fixed rejection rather than a
+  `winerror`; the five-argument conversion is there for an `io::Error` that
+  does carry a native code, and the Rust test pins only that a wrapped failure
+  still reports the code it holds. A hint inside the conversion helpers must
+  leave both behaviours untouched.
 - **The Windows arms are not the Unix arms.** Windows reads propagate
   `Interrupted` to the caller, while Windows writes retry it silently without a
   counter. Windows also wraps count-conversion failures with
@@ -249,10 +253,14 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
    sizes (1 KiB, 1 MiB, 100 MiB), stage depths, and line-callback modes for the
-   end-to-end pump scenarios; use `benchmarks/test_stream_microbenchmarks.py`
-   for the pump-latency, consume-throughput, and invalid-UTF-8 microbenchmarks.
-   Early-consumer closure and interrupted/fatal error paths need controlled
-   stimulus, so they belong in benchmark-only in-crate scaffolding behind
+   end-to-end pump scenarios. In `benchmarks/test_stream_microbenchmarks.py`,
+   `pump-latency` and `consume-throughput` both drive a command through
+   `run_sync`, so they measure the integrated path rather than the native
+   consume helper, and the only benchmark calling `rust_consume_stream`
+   directly feeds it invalid UTF-8. A consume-path hint therefore needs a
+   direct normal-UTF-8 benchmark added beside it. Early-consumer closure and
+   interrupted/fatal error paths need controlled stimulus too, so those
+   additions belong in benchmark-only in-crate scaffolding behind
    `#[cfg(test)]` or a benchmark feature. Measuring the currently unintegrated
    consume helper does not authorize integrating it, and the integration guard
    in `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
@@ -277,14 +285,17 @@ outcome, not a failure to deliver.
 
 ### Why no benchmark was run
 
-The gate in Table 2 blocks adoption whatever a measurement showed, so a
-measurement could not change the disposition. Running one would also require
-building both legs with a toolchain the repository does not otherwise support,
-rebuilding the native extension, and holding the release backend's output
-stable long enough for a paired comparison — work that is only meaningful once
-an MSRV decision exists. No candidate has frequency evidence in the first
-place; A1, A3, and A9 are unreachable by construction, and A13's conversion
-half is.
+The gate in Table 2 blocks adoption whatever an ordinary measurement showed, so
+an ordinary result could not change the disposition. An exceptional one could
+motivate a separate MSRV proposal — the issue allows that, and the
+modern-stable route supplies a compiler above 1.95 that both legs can share —
+but no candidate has frequency evidence in the first place: A1, A3, and A9 are
+unreachable by construction, A13's conversion half is, and the rest are failure
+arms with no measured rate. A credible experiment would still need controlled
+stimulus for the early-consumer-closure and interrupted paths, release-profile
+builds of both legs on one compiler, and a rebuilt native extension. Deferring
+until an MSRV decision, a measured frequency, or a specific performance
+question justifies that cost is the disposition this assessment records.
 
 ## Workstream B: `cfg_select!` candidates
 
@@ -382,10 +393,14 @@ therefore a separate commit, in a separate proposal, after the gate opens.
 
 ## Limitations and remaining gaps
 
-- **Windows runtime is unverified.** `make lint-windows` type-checks the
-  Windows `cfg` branches by cross-compilation; it does not execute them.
-  Anything in Table 4 needs Windows execution through the Windows extension
-  jobs, not only a compile.
+- **Windows runtime is unverified here.** `make lint-windows` type-checks the
+  Windows `cfg` branches by cross-compilation; it does not execute them. A
+  Table 4 change needs Windows execution of each affected implementation, split
+  by layer: the native boundary matrix job in `rust-boundaries.yml` runs the
+  `cuprum-streams` and `cuprum-native-io` tests on `windows-2022`, and the
+  Windows extension jobs cover the Python boundary but reject raw handles
+  before reaching the native pump or consume, so they exercise that rejection
+  rather than the stream functions behind it.
 - **The unsupported-target diagnostic was not observed.** It is described from
   the macro's documented semantics and the current source, and must be measured
   when a patch exists.
@@ -409,7 +424,8 @@ therefore a separate commit, in a separate proposal, after the gate opens.
 Workstream A resumes when a reviewed MSRV change permits Rust 1.95 or newer
 across **every** compiler in Table 1 — including Loom and Kani — and a
 measurement is commissioned. Adding the API under a newer compiler alone does
-not resume it.
+not resume it. A measurement may be commissioned earlier to inform such a
+proposal, but it cannot adopt the API.
 
 Workstream B resumes under the same gate, at which point the truth table in
 Table 4 must be re-derived against that revision rather than reused: the sites,
