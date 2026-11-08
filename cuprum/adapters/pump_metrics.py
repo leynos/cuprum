@@ -35,7 +35,7 @@ import typing as typ
 
 from cuprum.adapters._pump_held_pairs import (
     _HeldPairCounter,
-    shared_held_counter,
+    register_held_counter,
 )
 from cuprum.adapters.gauge_metrics import GaugeMetricsCollector
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
@@ -195,7 +195,7 @@ class PumpMetricsHook:
             else None
         )
         self._held: _HeldPairCounter | None = (
-            shared_held_counter(collector) if self._gauge is not None else None
+            register_held_counter(self, collector) if self._gauge is not None else None
         )
 
     def __call__(self, event: PumpEvent) -> None:
@@ -237,8 +237,10 @@ class PumpMetricsHook:
 
         An event that reaches several hooks sharing this collector moves the
         count once. The gauge is a level, so counting the same hold twice
-        would report a pair that no drain is holding; the counter remembers
-        which event it applied most recently under the same lock.
+        would report a pair that no drain is holding; the counter claims each
+        event for the thread delivering it, because one emission hands its
+        event to every hook inline on the emitting thread and a second thread's
+        event in between must not make the remaining deliveries count again.
 
         Publication happens under the same lock as the count. Publishing after
         releasing it would let two threads publish out of order: a release that
@@ -252,9 +254,8 @@ class PumpMetricsHook:
         if delta not in _HELD_DELTAS:
             return
         with self._held.lock:
-            if self._held.took(event):
+            if not self._held.admit(event):
                 return
-            self._held.last_event = event
             self._held.pairs += delta
             self._gauge.set_gauge(
                 RUST_PUMP_HELD_PAIRS,

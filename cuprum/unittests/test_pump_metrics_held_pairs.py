@@ -27,7 +27,10 @@ from cuprum.adapters.pump_metrics import (
 )
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _emit_pump_event, observe_pump
-from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
+from cuprum.unittests._rust_pump_test_helpers import (
+    RecordingCollector,
+    SlottedGaugeCollector,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -272,47 +275,9 @@ def test_concurrent_hooks_on_one_collector_share_the_gauge() -> None:
     )
 
 
-class _SlotsGaugeCollector:
-    """A gauge collector with no ``__weakref__`` slot."""
-
-    __slots__ = ("gauges",)
-
-    def __init__(self) -> None:
-        """Start with no recorded gauge values."""
-        self.gauges: list[float] = []
-
-    def inc_counter(
-        self,
-        name: str,
-        value: float,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Ignore counter increments."""
-        del name, value, labels
-
-    def observe_histogram(
-        self,
-        name: str,
-        value: float,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Ignore histogram observations."""
-        del name, value, labels
-
-    def set_gauge(
-        self,
-        name: str,
-        value: float,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Record the reported value."""
-        del name, labels
-        self.gauges.append(value)
-
-
 def test_a_collector_without_weakref_support_shares_one_total() -> None:
     """A slotted collector still gives every hook the same running total."""
-    collector = _SlotsGaugeCollector()
+    collector = SlottedGaugeCollector()
     first = PumpMetricsHook(typ.cast("typ.Any", collector))
     second = PumpMetricsHook(typ.cast("typ.Any", collector))
 

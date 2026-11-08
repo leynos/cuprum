@@ -82,6 +82,44 @@ class RecordingCollector:
         return [value for gauge, value, _labels in self.gauges if gauge == name]
 
 
+class SlottedGaugeCollector:
+    """A gauge collector with no ``__weakref__`` slot."""
+
+    __slots__ = ("gauges",)
+
+    def __init__(self) -> None:
+        """Start with no recorded gauge values."""
+        self.gauges: list[float] = []
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore counter increments."""
+        del name, value, labels
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore histogram observations."""
+        del name, value, labels
+
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record the reported value."""
+        del name, labels
+        self.gauges.append(value)
+
+
 @dc.dataclass(slots=True)
 class ControllableMonotonicClock:
     """A monotonic clock double advanced explicitly by a timing test."""
