@@ -18,6 +18,7 @@ import io
 import os
 import platform
 import tarfile
+import time
 import typing as typ
 
 import pytest
@@ -36,6 +37,9 @@ RUN_ENV = "CUPRUM_RUN_DOWNLOAD_INTEGRATION"
 
 #: The ceiling the loopback overflow case applies to the streamed body.
 MAX_BYTES = 64 * 1024
+
+#: How far past the deadline a stopped transfer may take to finish.
+STOP_GRACE_SECONDS = 5.0
 
 #: The pinned PyPy archive is published for Linux x86-64 only.
 LINUX_X86_64 = platform.system() == "Linux" and platform.machine() == "x86_64"
@@ -153,7 +157,9 @@ class TestControlledHttpsTransfer(_HttpsCase):
         )
 
     @NO_DOWNLOAD_INTEGRATION
-    @pytest.mark.parametrize("scenario", ["trickle_headers", "late_eof"])
+    @pytest.mark.parametrize(
+        "scenario", ["trickle_headers", "close_delimited_stall", "late_eof"]
+    )
     def test_a_stalled_response_is_stopped_by_the_deadline(
         self,
         scenario: str,
@@ -161,9 +167,11 @@ class TestControlledHttpsTransfer(_HttpsCase):
         certificates: support.Certificates,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A transfer that outlives the deadline leaves no partial archive."""
-        monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", 1.0)
+        """A transfer that outlives the deadline stops near it and leaves nothing."""
+        deadline = 1.0
+        monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", deadline)
         destination = tmp_path / "archive.tar.gz"
+        started = time.monotonic()
         with (
             _serving(scenario, certificates) as server,
             pytest.raises(TimeoutError, match="transfer deadline"),
@@ -171,6 +179,11 @@ class TestControlledHttpsTransfer(_HttpsCase):
             downloader.checked_download(
                 f"{server.url}/asset.bin", destination, "0" * 64
             )
+        elapsed = time.monotonic() - started
+        assert elapsed < deadline + STOP_GRACE_SECONDS, (
+            "the deadline must stop the transfer near its deadline, "
+            "not wait for the server to close"
+        )
         assert not destination.exists(), "the destination must not be created"
         assert not destination.with_suffix(".download").exists(), (
             "the pending file must be discarded"

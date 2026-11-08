@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.client
 import io
+import socket
 import typing as typ
 from unittest import mock
 
@@ -243,6 +244,25 @@ class TestBoundedBody:
         assert body.read1.call_count == 0, (
             "the deadline set before the redirect must still stop the body"
         )
+
+
+class TestDeadlineWatchdog:
+    """The watchdog must stop the socket a close-delimited response owns."""
+
+    def test_the_socket_is_captured_before_the_response_takes_it(self) -> None:
+        """The socket is armed before `getresponse` can clear the reference."""
+        sock = mock.Mock()
+        connection = mock.Mock()
+        connection.sock = sock
+        watchdog = downloader._DeadlineWatchdog(
+            connection, downloader._Transfer(0.0, _fixed_clock)
+        )
+        # A close-delimited response leaves the socket with the response and
+        # clears the connection's reference, as `getresponse` does.
+        connection.sock = None
+        with watchdog:
+            pass
+        sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
 
 
 class TestPendingFile:
