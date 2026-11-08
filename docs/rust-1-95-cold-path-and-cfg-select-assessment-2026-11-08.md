@@ -1,7 +1,7 @@
 # Rust 1.95 cold-path and `cfg_select!` assessment
 
-This document records the assessment requested by issue #508[^3]: whether
-`std::hint::cold_path()`[^1] and `cfg_select!`[^2] should be adopted in
+This document records the assessment requested by issue #508[^1]: whether
+`std::hint::cold_path()`[^2] and `cfg_select!`[^3] should be adopted in
 Cuprum's native stream boundary and adapters. Both workstreams are **deferred**
 at the same gate: the repository's declared source-compatibility floor is Rust
 1.87.0, both APIs stabilized in Rust 1.95.0, and three verification routes pin
@@ -60,14 +60,14 @@ which is not the repository's to make silently.
 documentation is explicit that it is a hint: "the exact effect to codegen is
 not guaranteed", the compiler "may choose to optimize paths that are not cold
 at the expense of paths that are cold", and using it "can actually _decrease_
-performance if the branch is called more than expected"[^1]. Benchmarking is
+performance if the branch is called more than expected"[^2]. Benchmarking is
 advised by the API's own documentation, not merely by this issue.
 
 `cfg_select!` is stable since 1.95.0. It evaluates a series of `cfg` predicates
 at compile time, selects the **first** true one, and emits only that arm. A
 trailing `_` supplies a fallback; if no predicate is true and no `_` is
 present, a `compile_error!` is emitted. It is usable in item position and in
-expression position, with or without braces on the right-hand side[^2].
+expression position, with or without braces on the right-hand side[^3].
 
 ### Why a newer compiler is not permission
 
@@ -178,13 +178,17 @@ all.
 
 _Table 3: Candidate cold-path sites, recorded as hypotheses only._
 
-Several rows are impossible by construction on the supported platforms: A1, A3,
-A9, and A13 cannot fire because the kernel returns a non-negative count that
-fits the destination type. A6 needs arithmetic that `checked_progress` has
-already bounded. "Impossible" is a reason to doubt a performance benefit, not a
-reason to annotate: unreachable code that the optimizer can already prove
-unreachable gains nothing from a hint, and code it cannot prove unreachable is
-exactly where an incorrect hint costs performance.
+Several rows cannot fire on the supported platforms. A1, A3, and A9 fail only
+on a count conversion, and the kernel returns a non-negative count that fits
+the destination type. A6 needs arithmetic that `checked_progress` has already
+bounded. A13 has two failure modes and only one of them is type-impossible:
+`u64::try_from` on the kernel's non-negative count cannot fail, but
+`total.checked_add(chunk)` can overflow in principle, bounded by the volume a
+single pump transfers rather than by the types. "Cannot fire in practice" is a
+reason to doubt a performance benefit, not a reason to annotate: unreachable
+code that the optimizer can already prove unreachable gains nothing from a
+hint, and code it cannot prove unreachable is exactly where an incorrect hint
+costs performance.
 
 ### Deliberate control flow that must not be annotated
 
@@ -197,8 +201,11 @@ cold would mislead the optimizer and would misrepresent the stream policy:
   `WriteOutcome::NonFatalShortWrite`, and `WriteEvent::Closed` deliberately
   continue the required reader drain instead of failing.
 - **End of file.** `Ok(0)` terminates the pump and the consume loop normally.
-- **Splice `EINVAL`.** `is_splice_unsupported` selects the read/write fallback;
-  that is platform selection, not failure.
+- **The first splice call's `EINVAL`.** `try_splice_pump` treats `EINVAL` from
+  the first `splice_once` call as evidence that these descriptors cannot splice
+  and selects the read/write fallback. After a splice has succeeded, `EINVAL`
+  can no longer mean "unsupported", so a later one is fatal like any other
+  error. Only that first probe is platform selection rather than failure.
 - **Machine transitions.** `pump_machine::advance`'s EOF and drained
   transitions are the loop's ordinary states.
 - **Tracing spans and events.** They observe the paths above; they do not steer
@@ -252,13 +259,15 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    number of rounds, and keep raw samples, exclusions, and failures. Report a
    paired bootstrap interval for the median effect at 95% and repeat the whole
    experiment as an independent confirmation run.
-5. **Decision rule.** Adopt a hint only if its targeted scenario improves in
-   both the primary and the confirmation run, and no scenario regresses beyond
-   the larger of the flat 30% floor and the three-sigma median-absolute-
-   deviation band from `benchmarks/ratchet_history.py` (window size 7,
-   `_MAD_TO_SIGMA = 1.4826`), computed on the samples collected here. The CI
-   ratchet's Rust-to-Python ratio, the 20% dispatcher gate, and the 30% limits
-   are separate policies and are neither imported nor weakened.
+5. **Decision rule.** Adopt a hint only if, in both the primary and the
+   confirmation run, its targeted scenario's 95% paired bootstrap interval lies
+   wholly on the improved side. A positive point estimate whose interval
+   includes zero is inconclusive, not an improvement. No scenario may regress
+   beyond the larger of the flat 30% floor and the three-sigma
+   median-absolute-deviation band from `benchmarks/ratchet_history.py` (window
+   size 7, `_MAD_TO_SIGMA = 1.4826`), computed on the samples collected here.
+   The CI ratchet's Rust-to-Python ratio, the 20% dispatcher gate, and the 30%
+   limits are separate policies and are neither imported nor weakened.
 6. **Diagnostics.** Assembly and LLVM IR differences are permitted as
    explanation. They are never evidence of an end-to-end improvement.
 
@@ -273,7 +282,8 @@ building both legs with a toolchain the repository does not otherwise support,
 rebuilding the native extension, and holding the release backend's output
 stable long enough for a paired comparison — work that is only meaningful once
 an MSRV decision exists. No candidate has frequency evidence in the first
-place; A1, A3, A9, and A13 are unreachable by construction.
+place; A1, A3, and A9 are unreachable by construction, and A13's conversion
+half is.
 
 ## Workstream B: `cfg_select!` candidates
 
@@ -409,11 +419,11 @@ dispatcher or its separate wall-time gate.
 
 ## References
 
-[^1]: <https://doc.rust-lang.org/std/hint/fn.cold_path.html>
+[^1]: <https://github.com/leynos/cuprum/issues/508>
 
-[^2]: <https://doc.rust-lang.org/std/macro.cfg_select.html>
+[^2]: <https://doc.rust-lang.org/std/hint/fn.cold_path.html>
 
-[^3]: <https://github.com/leynos/cuprum/issues/508>
+[^3]: <https://doc.rust-lang.org/std/macro.cfg_select.html>
 
 [^4]: <https://github.com/leynos/cuprum/pull/432>
 
