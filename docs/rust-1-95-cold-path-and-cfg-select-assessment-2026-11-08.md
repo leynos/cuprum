@@ -228,10 +228,11 @@ patch cannot be mechanical:
   text, `errno` on Unix, `winerror` on Windows, and validation order are all
   pinned by tests. A hint inside the conversion helpers must leave them
   untouched.
-- **The Windows arms are not the Unix arms.** Windows treats `Interrupted` as a
-  silent retry with no counter, and wraps count-conversion failures with
-  `io::Error::other`. Unifying the two arms to make a hint tidy would change
-  behaviour.
+- **The Windows arms are not the Unix arms.** Windows reads propagate
+  `Interrupted` to the caller, while Windows writes retry it silently without a
+  counter. Windows also wraps count-conversion failures with
+  `io::Error::other`, where the Unix arms report `LengthOverflow`. Unifying the
+  arms to make a hint tidy would change behaviour.
 
 ### Predeclared benchmark protocol
 
