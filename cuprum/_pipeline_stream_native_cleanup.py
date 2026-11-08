@@ -56,7 +56,10 @@ from cuprum._pipeline_stream_native_completion import (
     _restore_rust_pump_state,
 )
 from cuprum.pump_events import RustPumpHandoffOutcome
-from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_observation import (
+    _emit_rust_pump_handoff_outcome,
+    _emit_rust_pump_hold,
+)
 from cuprum.pump_span_events import (
     NATIVE_PUMP_BUFFER_SIZE,
     PUMP_HOP_BUFFER_SIZE_ATTRIBUTE,
@@ -118,6 +121,25 @@ def _rollback_rust_pump_start(
             outcome=PumpHopOutcome.FAILED,
             total_bytes=None,
         )
+
+
+def _release_activated_rust_pump_hold(state: _RustPumpState) -> None:
+    """Release the coordinator's hold on an activated but unsubmitted pair.
+
+    The release is the last thing the coordinator does before the completion
+    callback takes ownership, so a shutdown signal raised by a hold observer
+    here would otherwise leave the pair open, the pipes blocking, and the
+    reader paused forever. Rolling the state back first keeps the signal
+    travelling without stranding what it interrupted.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    except BaseException:
+        _rollback_rust_pump_start(
+            state,
+            RustPumpHandoffOutcome.SUBMISSION_ABANDONED,
+        )
+        raise
 
 
 def _open_rust_pump_hop_spans() -> _PumpHopSpans:

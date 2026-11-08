@@ -128,6 +128,82 @@ def test_concurrent_drains_accumulate_under_one_hook() -> None:
     )
 
 
+class _GatedGaugeCollector(RecordingCollector):
+    """Hold the first publication so a competing release can overtake it."""
+
+    def __init__(self) -> None:
+        """Start with no recorded gauges and a closed publication gate."""
+        super().__init__()
+        self.publishing = threading.Event()
+        self.second_publication = threading.Event()
+        self.publication_gate = threading.Event()
+        self._is_first_publication = True
+        self._first_publication_lock = threading.Lock()
+
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Block inside the first publication, before it records its value."""
+        with self._first_publication_lock:
+            is_first = self._is_first_publication
+            self._is_first_publication = False
+        if not is_first:
+            self.second_publication.set()
+            super().set_gauge(name, value, labels)
+            return
+        self.publishing.set()
+        assert self.publication_gate.wait(timeout=5.0), (
+            "the test must open the publication gate"
+        )
+        super().set_gauge(name, value, labels)
+
+
+def test_an_older_publication_cannot_overwrite_a_newer_count() -> None:
+    """A slow acquisition must not publish a stale count after its release."""
+    collector = _GatedGaugeCollector()
+    hook = PumpMetricsHook(collector)
+    release_started = threading.Event()
+
+    def acquire() -> None:
+        """Take the hold whose publication the test will interleave with."""
+        hook(_hold(1))
+
+    def release() -> None:
+        """Release the hold while the acquisition is still publishing."""
+        release_started.set()
+        hook(_hold(-1))
+
+    acquirer = threading.Thread(target=acquire)
+    releaser = threading.Thread(target=release)
+    acquirer.start()
+    assert collector.publishing.wait(timeout=5.0), (
+        "the acquisition must reach the collector before the release starts"
+    )
+    releaser.start()
+    try:
+        assert release_started.wait(timeout=5.0), (
+            "the release thread must start before the gate opens"
+        )
+        assert not collector.second_publication.wait(timeout=0.2), (
+            "the release must wait for the acquisition it follows to publish first"
+        )
+    finally:
+        # Always release the blocked publication so a failed expectation
+        # cannot leave the collector's first caller waiting.
+        collector.publication_gate.set()
+    acquirer.join(timeout=5.0)
+    releaser.join(timeout=5.0)
+
+    assert not acquirer.is_alive(), "the acquisition must finish"
+    assert not releaser.is_alive(), "the release must finish"
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+        "the release must publish after the acquisition it followed, never before"
+    )
+
+
 def test_the_reference_collector_reports_and_clears_gauges() -> None:
     """``InMemoryMetrics`` provides the optional capability."""
     metrics = InMemoryMetrics()

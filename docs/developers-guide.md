@@ -2626,17 +2626,20 @@ restore. The one exception is an observer that raises a shutdown signal while
 the `drain_failed` outcome is emitted: `_emit_pump_event` lets `BaseException`
 travel, so that signal wins, with the drain error kept as its `__context__`.
 The pair has already been released before the outcome is emitted, so the signal
-cannot strand it. Once the drain completes, the acquired pair is switched to
-blocking mode and handed to the worker, which receives a further duplicate
-reader and duplicate writer descriptor and handles the remaining raw bytes.
-Rust borrows the reader duplicate and consumes the writer duplicate. After the
-worker settles, Python closes the remaining reader duplicate; it closes the
-writer duplicate itself only when preparation or executor submission fails. If
-any preparation step cannot be completed safely, dispatch falls back to the
-Python pump. That fall-back has one exception, and it is test-only:
-`_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
-overrules the closing-reader decline — and only that one — when the dispatch
-test seam has installed its own descriptor supply
+cannot strand it. `_emit_pump_event` delivers an event to every registered hook
+before it re-raises such a signal, so an observer registered after the one that
+raised still sees the release; without that rule the held-pair gauge would
+stand at one with no hold behind it. Once the drain completes, the acquired
+pair is switched to blocking mode and handed to the worker, which receives a
+further duplicate reader and duplicate writer descriptor and handles the
+remaining raw bytes. Rust borrows the reader duplicate and consumes the writer
+duplicate. After the worker settles, Python closes the remaining reader
+duplicate; it closes the writer duplicate itself only when preparation or
+executor submission fails. If any preparation step cannot be completed safely,
+dispatch falls back to the Python pump. That fall-back has one exception, and
+it is test-only: `_permit_test_owned_descriptor_handoff` in
+`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
+that one — when the dispatch test seam has installed its own descriptor supply
 (`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
 hand-off derives its worker descriptor from the transport and keeps the
 decline. The permitted verdict carries no resume hook, because nothing was
@@ -2741,7 +2744,7 @@ Table 1: metrics emitted by `PumpMetricsHook`
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
 six in Table 1 above. The `outcome` label is also closed: it is exactly
-`submitted`, `blocking_setup_failed`, `drain_failed`,
+`submitted`, `blocking_setup_failed`, `drain_failed`, `submission_abandoned`,
 `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`,
 `native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, or
@@ -2757,8 +2760,9 @@ alter the successful fallback or the caller's cancellation.
 `cuprum_rust_pump_held_pairs` is the channel's only gauge. The coordinator
 emits a `handoff_hold` event with `held_delta=1` after acquisition and before
 the buffered drain, and one with `held_delta=-1` once the pair has been closed
-or handed on; `PumpMetricsHook` accumulates those deltas under a lock and calls
-`set_gauge` with the running total. Gauges are a separate, optional capability:
+or rolled back; `PumpMetricsHook` accumulates those deltas and publishes the
+running total under one lock, so a release cannot reach the collector before
+the acquisition it followed. Gauges are a separate, optional capability:
 `GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a runtime
 checkable protocol, and a collector that does not implement it keeps working
 for counters and histograms and is simply skipped for gauges. This keeps the
@@ -2782,13 +2786,16 @@ neither interrupt emission nor skip later hooks.
 
 Anything that is not an `Exception` — `SystemExit`, `KeyboardInterrupt`,
 `asyncio.CancelledError` — propagates unchanged, whether raised from the hook
-call or from disposal. Emission sites include cancellation unwinding, where
-absorbing a shutdown signal would swallow the cancellation the caller asked
-for. Propagation is safe at every hand-off site because each has already closed
-or handed off the descriptors it owns before emitting: a failure site closes
-the writer first, the rollback emits after restoring state, and the `submitted`
-emission happens once the completion callback owns cleanup — so a propagating
-signal cannot strand a descriptor.
+call or from disposal, but only after every registered hook has received the
+event. A signal raised by the first hook must not deny a later observation to
+the hook behind it, and the hold gauge depends on that: the release it matches
+would otherwise be skipped and the gauge would stay at one. Propagation is safe
+at every hand-off site because each has already closed, rolled back, or handed
+off the descriptors it owns before emitting: a failure site closes the writer
+first, the rollback emits after restoring state, the hold release rolls an
+activated pair back if a signal interrupts it, and the `submitted` emission
+happens once the completion callback owns cleanup — so a propagating signal
+cannot strand a descriptor.
 
 This deliberately differs from `sh.observe` hooks, whose exceptions fail the
 observed command: a pump observer must not be able to turn a hop that would

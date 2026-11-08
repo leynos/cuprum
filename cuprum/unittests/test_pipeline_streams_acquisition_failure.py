@@ -397,6 +397,254 @@ def test_submission_releases_the_hold_before_native_work_starts(
     )
 
 
+class _HoldSignalHarness:
+    """Drive a shutdown signal raised by a hold observer through the hand-off."""
+
+    def __init__(self, *, delta: int) -> None:
+        """Capture the hold transition whose observer raises the signal."""
+        self.delta = delta
+        self.resume_calls = 0
+        self.submissions = 0
+        self.restores = 0
+        self.acquired: list[int] = []
+        self.events: list[PumpEvent] = []
+        self.collector = RecordingCollector()
+        self._original_open = (
+            _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+        )
+        self._original_restore = (
+            _pipeline_stream_native_cleanup._restore_rust_pump_state
+        )
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the pause, drain, submission, and rollback seams."""
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            self.pause_reader,
+        )
+        monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", self.drain)
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_run_rust_pump_with_blocking_fds",
+            self.record_submission,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_open_native_pump_worker_fds",
+            self.record_open,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_restore_rust_pump_state",
+            self.record_restore,
+        )
+
+    def pause_reader(
+        self,
+        reader: asyncio.StreamReader,
+    ) -> _pipeline_stream_fds._ReaderPause:
+        """Return a pause whose resume records restoration of the reader."""
+        del reader
+        return _pipeline_stream_fds._ReaderPause(resume=self.resume)
+
+    def resume(self) -> None:
+        """Record restoration of the paused reader."""
+        self.resume_calls += 1
+
+    async def drain(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter | None,
+    ) -> None:
+        """Complete the buffered drain so the hand-off reaches activation."""
+        del reader, writer
+        await asyncio.sleep(0)
+
+    async def record_submission(
+        self,
+        *,
+        state: _pipeline_stream_native_cleanup._RustPumpState,
+    ) -> None:
+        """Record a submission that a shutdown signal must prevent."""
+        del state
+        self.submissions += 1
+
+    def record_open(
+        self,
+        **kwargs: int,
+    ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
+        """Record the worker pair the acquisition actually opened."""
+        worker_fds = self._original_open(**kwargs)
+        if worker_fds is not None:
+            self.acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+        return worker_fds
+
+    def record_restore(
+        self,
+        state: _pipeline_stream_native_cleanup._RustPumpState,
+    ) -> None:
+        """Record the blocking-mode restoration a rollback performs."""
+        self.restores += 1
+        self._original_restore(state)
+
+    def raise_signal(self, event: PumpEvent) -> None:
+        """Raise the shutdown signal on the configured hold transition."""
+        if event.phase == "handoff_hold" and event.held_delta == self.delta:
+            raise KeyboardInterrupt
+
+    def run(self) -> None:
+        """Run the hand-off and assert the signal left nothing stranded."""
+        with owned_fds() as (reader_fd, writer_fd):
+            handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+                cleanup_grace_s=0.5,
+            )
+            with (
+                observe_pump(self.raise_signal),
+                observe_pump(PumpMetricsHook(self.collector)),
+                observe_pump(self.events.append),
+                pytest.raises(KeyboardInterrupt),
+            ):
+                asyncio.run(
+                    _pipeline_streams._run_rust_pump(
+                        reader=typ.cast("asyncio.StreamReader", object()),
+                        writer=None,
+                        handoff=handoff,
+                    )
+                )
+            os.fstat(reader_fd)
+            os.fstat(writer_fd)
+
+        assert self.resume_calls == 1, "the signal must resume the paused reader once"
+        assert self.submissions == 0, "the signal must prevent the submission"
+        assert len(self.acquired) == 2, "acquisition must open both worker descriptors"
+        for fd in self.acquired:
+            with pytest.raises(OSError, match="Bad file descriptor"):
+                os.fstat(fd)
+        assert self.collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+            "the release must still reach the metrics hook registered after the "
+            "observer that raised"
+        )
+
+
+def test_a_shutdown_signal_at_acquisition_releases_the_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A signal raised on the hold release closes the unactivated pair."""
+    harness = _HoldSignalHarness(delta=1)
+    harness.install(monkeypatch)
+
+    harness.run()
+
+    assert harness.restores == 0, "no blocking mode was engaged to restore"
+    assert [event.outcome for event in harness.events if event.phase == "handoff"] == [
+        RustPumpHandoffOutcome.DRAIN_FAILED
+    ], "the interrupted drain window must settle with its own bounded outcome"
+
+
+def test_a_shutdown_signal_at_release_rolls_back_the_activated_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A signal raised after activation restores the pair before it travels."""
+    harness = _HoldSignalHarness(delta=-1)
+    harness.install(monkeypatch)
+
+    harness.run()
+
+    assert harness.restores == 1, (
+        "the activated pair must have its blocking mode restored before the "
+        "signal travels"
+    )
+    assert [event.outcome for event in harness.events if event.phase == "handoff"] == [
+        RustPumpHandoffOutcome.SUBMISSION_ABANDONED
+    ], "an abandoned submission must settle with its own bounded outcome"
+
+
+def test_an_unexpected_activation_failure_resumes_and_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An activation error outside the decline contract still cleans up."""
+    collector = RecordingCollector()
+    resume_calls = 0
+    acquired: list[int] = []
+    original_open = _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+
+    def record_open(
+        **kwargs: int,
+    ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
+        """Record the worker pair the acquisition actually opened."""
+        worker_fds = original_open(**kwargs)
+        if worker_fds is not None:
+            acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+        return worker_fds
+
+    def resume() -> None:
+        """Record restoration of the paused reader."""
+        nonlocal resume_calls
+        resume_calls += 1
+
+    def fail_activation(
+        worker_fds: _pipeline_stream_fds._NativePumpWorkerFds,
+        reader_pause: _pipeline_stream_fds._ReaderPause,
+        handoff: _pipeline_stream_native_cleanup._RustPumpHandoff,
+    ) -> typ.NoReturn:
+        """Close the pair the way activation does, then fail unexpectedly."""
+        del reader_pause, handoff
+        _pipeline_stream_native_cleanup._close_unactivated_rust_pump_fds(worker_fds)
+        msg = "activation failed unexpectedly"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_pause_reader_transport",
+        lambda _reader: _pipeline_stream_fds._ReaderPause(resume=resume),
+    )
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_drain_reader_buffer",
+        mock.AsyncMock(),
+    )
+    monkeypatch.setattr(
+        _pipeline_stream_native_cleanup,
+        "_open_native_pump_worker_fds",
+        record_open,
+    )
+    monkeypatch.setattr(
+        _pipeline_streams,
+        "_activate_rust_pump_state",
+        fail_activation,
+    )
+
+    with owned_fds() as (reader_fd, writer_fd):
+        handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
+            reader_fd=reader_fd,
+            writer_fd=writer_fd,
+            cleanup_grace_s=0.5,
+        )
+        with (
+            observe_pump(PumpMetricsHook(collector)),
+            pytest.raises(RuntimeError, match="activation failed unexpectedly"),
+        ):
+            asyncio.run(
+                _pipeline_streams._run_rust_pump(
+                    reader=typ.cast("asyncio.StreamReader", object()),
+                    writer=None,
+                    handoff=handoff,
+                )
+            )
+
+    assert resume_calls == 1, "an unexpected activation failure must resume the reader"
+    assert len(acquired) == 2, "acquisition must open both worker descriptors"
+    for fd in acquired:
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(fd)
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+        "an unexpected activation failure must still release the hold"
+    )
+
+
 def test_acquisition_failure_keeps_public_pipeline_output_intact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

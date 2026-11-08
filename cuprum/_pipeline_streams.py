@@ -51,6 +51,7 @@ from cuprum._pipeline_stream_native_cleanup import (
     _acquire_rust_pump_worker_fds,
     _activate_rust_pump_state,
     _close_unactivated_rust_pump_fds,
+    _release_activated_rust_pump_hold,
     _run_rust_pump_with_blocking_fds,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
@@ -256,20 +257,21 @@ async def _pump_over_raw_fds(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
         raise
     try:
-        # These duplicates outlive the caller-facing task. They carry the
-        # blocking-mode state that only the completion callback may restore
-        # after native I/O has stopped.
+        # These duplicates outlive the caller-facing task: only the completion
+        # callback may restore their blocking mode, after native I/O stops.
         state = _activate_rust_pump_state(worker_fds, reader_pause, handoff)
-    except _RustPumpBlockingModeError:
+    except BaseException as error:
+        # Activation closed the pair; only the reader and the hold remain.
         _resume_reader_transport(reader_pause.resume)
         _emit_rust_pump_hold(-1)
+        if not isinstance(error, _RustPumpBlockingModeError):
+            raise
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return False
 
-    # Activation transferred ownership to the completion callback, so the
-    # coordinator holds nothing from here on.
-    _emit_rust_pump_hold(-1)
+    # Activation owns the pair now; the release rolls it back if interrupted.
+    _release_activated_rust_pump_hold(state)
     await _run_rust_pump_with_blocking_fds(state=state)
     return True
 

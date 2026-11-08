@@ -150,7 +150,12 @@ def _emit_pump_event(event: PumpEvent) -> None:
     Anything that is not an :class:`Exception` — ``SystemExit``,
     ``KeyboardInterrupt``, ``asyncio.CancelledError`` — propagates untouched, on
     the same reasoning as :func:`cuprum._pipeline_streams._await_rust_pump`: a
-    shutdown signal arriving here must still travel.
+    shutdown signal arriving here must still travel. It travels *after* every
+    registered hook has seen the event, because a signal raised by one hook
+    must not deny another the observation it was registered for. Accounting
+    hooks in particular rely on that: the held-pair gauge would be left standing
+    at one if a shutdown signal raised ahead of it skipped the release it
+    matches.
 
     With no hooks registered this returns before touching the event, so a caller
     that has not opted in pays nothing and behaves exactly as before.
@@ -158,8 +163,16 @@ def _emit_pump_event(event: PumpEvent) -> None:
     hooks = _pump_hooks.get()
     if not hooks:
         return
+    shutdown: BaseException | None = None
     for hook in hooks:
-        _invoke_pump_hook(hook, event)
+        # A shutdown signal is held until every hook has seen the event.
+        try:
+            _invoke_pump_hook(hook, event)
+        except BaseException as signal:  # ruff: ignore[blind-except] - re-raise last.
+            if shutdown is None:
+                shutdown = signal
+    if shutdown is not None:
+        raise shutdown
 
 
 def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
@@ -182,9 +195,10 @@ def _emit_rust_pump_hold(delta: int) -> None:
     and cancellation — so a consumer that accumulates the deltas reports the
     pairs held across pending drains and returns to zero when none are.
 
-    Hook failures follow :func:`_emit_pump_event`. The coordinator emits each
-    release only after the descriptors are closed, so a propagating shutdown
-    signal cannot strand the pair.
+    Hook failures follow :func:`_emit_pump_event`, including its rule that every
+    hook sees the event before a shutdown signal travels. The coordinator
+    releases the last hold only once the pair is closed or its activated state
+    can be rolled back, so a propagating signal cannot strand it.
     """
     _emit_pump_event(PumpEvent(phase="handoff_hold", held_delta=delta))
 

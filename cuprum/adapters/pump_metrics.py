@@ -219,6 +219,12 @@ class PumpMetricsHook:
         The count is kept per hook under a lock because hold events for
         concurrent drains can arrive from different threads. A collector that
         does not offer gauges is left alone rather than required to add one.
+
+        Publication happens under the same lock as the count. Publishing after
+        releasing it would let two threads publish out of order: a release that
+        computed ``0`` could reach the collector first, and the acquisition it
+        followed would then overwrite that with a stale ``1`` that no later
+        event corrects.
         """
         if delta not in _HELD_DELTAS:
             return
@@ -226,8 +232,7 @@ class PumpMetricsHook:
             return
         with self._held_lock:
             self._held_pairs += delta
-            held = self._held_pairs
-        self._collector.set_gauge(RUST_PUMP_HELD_PAIRS, float(held), {})
+            self._collector.set_gauge(RUST_PUMP_HELD_PAIRS, float(self._held_pairs), {})
 
 
 def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:

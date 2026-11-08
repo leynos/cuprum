@@ -63,12 +63,19 @@ class RustPumpHandoffOutcome(enum.StrEnum):
     shutdown signal while this outcome is emitted takes precedence over that
     re-raise, because a shutdown signal must still travel; the drain error
     remains reachable as the raised signal's ``__context__``.
+
+    ``SUBMISSION_ABANDONED`` covers the same observer problem one step later:
+    the drain finished and blocking activation ran, but a hold observer raised
+    a shutdown signal before the pair was submitted. The activated pair is
+    rolled back and the signal propagates, so the hop settles without a
+    submission and without leaving an open, blocking pair behind.
     """
 
     SUBMITTED = "submitted"
     DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
     DRAIN_FAILED = "drain_failed"
+    SUBMISSION_ABANDONED = "submission_abandoned"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"
     READER_PREPARATION_FAILED = "reader_preparation_failed"
