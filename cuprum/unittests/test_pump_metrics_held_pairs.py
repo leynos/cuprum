@@ -9,6 +9,7 @@ collector shares.
 
 from __future__ import annotations
 
+import contextvars
 import threading
 import typing as typ
 
@@ -25,6 +26,7 @@ from cuprum.adapters.pump_metrics import (
     PumpMetricsHook,
 )
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
+from cuprum.pump_observation import _emit_pump_event, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
 
 if typ.TYPE_CHECKING:
@@ -271,7 +273,7 @@ def test_concurrent_hooks_on_one_collector_share_the_gauge() -> None:
 
 
 class _SlotsGaugeCollector:
-    """A gauge collector with no ``__weakref__`` slot, so it cannot be shared."""
+    """A gauge collector with no ``__weakref__`` slot."""
 
     __slots__ = ("gauges",)
 
@@ -308,16 +310,69 @@ class _SlotsGaugeCollector:
         self.gauges.append(value)
 
 
-def test_a_collector_without_weakref_support_still_counts() -> None:
-    """A collector that cannot be shared still reports its own hook's pairs."""
+def test_a_collector_without_weakref_support_shares_one_total() -> None:
+    """A slotted collector still gives every hook the same running total."""
     collector = _SlotsGaugeCollector()
-    hook = PumpMetricsHook(typ.cast("typ.Any", collector))
+    first = PumpMetricsHook(typ.cast("typ.Any", collector))
+    second = PumpMetricsHook(typ.cast("typ.Any", collector))
 
-    hook(_hold(1))
-    hook(_hold(-1))
+    first(_hold(1))
+    second(_hold(1))
+    first(_hold(-1))
+    second(_hold(-1))
 
-    assert collector.gauges == [1.0, 0.0], (
-        "a collector without weakref support must keep working for one hook"
+    assert collector.gauges == [1.0, 2.0, 1.0, 0.0], (
+        "a collector without weakref support must still share its held count"
+    )
+
+
+def test_nested_registrations_count_one_hold_once() -> None:
+    """One event delivered to both nested hooks moves the gauge once."""
+    collector = RecordingCollector()
+
+    with (
+        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        _emit_pump_event(_hold(1))
+        _emit_pump_event(_hold(-1))
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
+        "a nested registration must not count one held pair twice"
+    )
+
+
+def test_separate_contexts_report_their_own_holds() -> None:
+    """Two registrations in private contexts hold two pairs at once."""
+    collector = RecordingCollector()
+    both_held = threading.Barrier(2)
+
+    def hold_and_release(context: contextvars.Context) -> None:
+        """Register in ``context``, then hold a pair until its peer does."""
+
+        def work() -> None:
+            with observe_pump(PumpMetricsHook(collector)):
+                _emit_pump_event(_hold(1))
+                both_held.wait(timeout=5.0)
+                _emit_pump_event(_hold(-1))
+
+        context.run(work)
+
+    workers = [
+        threading.Thread(target=hold_and_release, args=(contextvars.Context(),))
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5.0)
+
+    values = collector.gauge_values(RUST_PUMP_HELD_PAIRS)
+    assert max(values) == pytest.approx(2.0), (
+        f"each context must contribute its held pair, found {values}"
+    )
+    assert values[-1] == pytest.approx(0.0), (
+        f"both contexts' releases must settle the gauge, found {values}"
     )
 
 

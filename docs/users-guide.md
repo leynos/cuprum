@@ -3745,7 +3745,10 @@ hand-off sets it one higher on acquisition and one lower on release, and the
 release lands on every settling path — submission, activation failure, drain
 failure, and cancellation. Every hook that reports to the same collector shares
 one running total, so registering a hook per pipeline scope still reports that
-collector's total held pairs.
+collector's total held pairs. The same total is shared by a collector that
+cannot be weakly referenced. If one event reaches more than one of those hooks
+— nested `observe_pump` registrations both receive every event — it moves the
+total once, so the gauge counts held pairs rather than hook deliveries.
 
 Gauge support is optional. A collector receives this gauge by implementing
 `GaugeMetricsCollector` from `cuprum.adapters.gauge_metrics`; a collector

@@ -97,16 +97,57 @@ class _HeldPairCounter:
         """Start with no held pairs under a lock that serializes publication."""
         self.lock = threading.Lock()
         self.pairs = 0
+        # One event can reach several hooks that share this collector: a
+        # nested ``observe_pump`` registration delivers every event to each
+        # hook in both contexts, and two hooks registered at one level behave
+        # the same way. The gauge is a level, so such an event must move the
+        # shared total once. Keeping the event object reserves its identity
+        # for the comparison; the reference ends when the next event replaces
+        # it, so no history is retained.
+        self.last_event: object | None = None
+
+    def took(self, event: object) -> bool:
+        """Report whether ``event`` is the one this counter applied last.
+
+        Callers hold :attr:`lock` so the check and the update are one step.
+        """
+        return self.last_event is event
+
+
+class _CounterEntry:
+    """One collector's shared counter, and how its identity stays reserved."""
+
+    __slots__ = ("collector", "counter", "reference")
+
+    def __init__(
+        self,
+        counter: _HeldPairCounter,
+        *,
+        reference: weakref.ReferenceType[object] | None,
+        collector: object | None,
+    ) -> None:
+        """Record the counter and the reference that keeps its key honest."""
+        self.counter = counter
+        self.reference = reference
+        # Only a collector that cannot be weakly referenced is held here. It
+        # must outlive the entry so that its ``id`` cannot name another object
+        # while this counter is still registered against it.
+        self.collector = collector
+
+    def names(self, collector: object) -> bool:
+        """Report whether this entry is still the one for ``collector``."""
+        if self.reference is None:
+            return self.collector is collector
+        return self.reference() is collector
 
 
 # The count belongs to the collector, not to a hook: the metric name is
 # unlabelled, so every hook publishing to one collector must publish the same
 # running total. Keys are object identities because a collector need not be
-# hashable, and the weak reference drops an entry once its collector is gone.
-_COUNTERS: dict[
-    int,
-    tuple[weakref.ReferenceType[object], _HeldPairCounter],
-] = {}
+# hashable; an entry is retired by its weak reference, or by the strong
+# reference a collector without weak-reference support needs to keep its
+# identity unique. Either way there is at most one entry per collector.
+_COUNTERS: dict[int, _CounterEntry] = {}
 # Reentrant because a weakref callback can drop the last reference to another
 # collector while this lock is already held on the collecting thread.
 _COUNTERS_LOCK = threading.RLock()
@@ -116,7 +157,7 @@ def _forget_counter(key: int, reference: weakref.ReferenceType[object]) -> None:
     """Drop a retired collector's counter unless its identity was reused."""
     with _COUNTERS_LOCK:
         entry = _COUNTERS.get(key)
-        if entry is not None and entry[0] is reference:
+        if entry is not None and entry.reference is reference:
             del _COUNTERS[key]
 
 
@@ -126,9 +167,10 @@ def _shared_held_counter(collector: object) -> _HeldPairCounter:
     A release from one hook must not publish zero while another hook still
     holds a pair, so hooks with the same collector move one counter rather
     than one each. The gauge is unlabelled and collector-wide, which makes the
-    collector the natural scope. A collector that cannot be weakly referenced
-    still counts correctly for its hook; it just cannot share the count with a
-    second hook.
+    collector the natural scope. A collector without weak-reference support
+    shares its count too: the entry then keeps that collector alive so the
+    identity used as its key cannot be reused, and the entry lasts as long as
+    the collector, not as long as each hook.
 
     Returns
     -------
@@ -138,8 +180,8 @@ def _shared_held_counter(collector: object) -> _HeldPairCounter:
     key = id(collector)
     with _COUNTERS_LOCK:
         entry = _COUNTERS.get(key)
-        if entry is not None and entry[0]() is collector:
-            return entry[1]
+        if entry is not None and entry.names(collector):
+            return entry.counter
         counter = _HeldPairCounter()
         try:
             reference = weakref.ref(
@@ -147,8 +189,9 @@ def _shared_held_counter(collector: object) -> _HeldPairCounter:
                 lambda ref, key=key: _forget_counter(key, ref),
             )
         except TypeError:
+            _COUNTERS[key] = _CounterEntry(counter, reference=None, collector=collector)
             return counter
-        _COUNTERS[key] = (reference, counter)
+        _COUNTERS[key] = _CounterEntry(counter, reference=reference, collector=None)
         return counter
 
 
@@ -221,8 +264,9 @@ class PumpMetricsHook:
       across pending drains, reported only when the collector implements
       :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`. Hooks that
       report to the same collector share one running total, so one hook's
-      release cannot hide another's hold. Gauges are optional so an existing
-      two-method collector keeps working.
+      release cannot hide another's hold, and an event delivered to more than
+      one of those hooks moves that total once. Gauges are optional so an
+      existing two-method collector keeps working.
 
     All labels are closed and bounded; descriptor values, exception details,
     and other event data are never labels. Unknown phases are ignored so a
@@ -267,7 +311,7 @@ class PumpMetricsHook:
         """
         phase: PumpPhase = event.phase
         if phase == "handoff_hold":
-            self._apply_held_delta(event.held_delta)
+            self._apply_held_delta(event)
             return
         if phase == "handoff" and not isinstance(
             event.outcome,
@@ -285,7 +329,7 @@ class PumpMetricsHook:
             {},
         )
 
-    def _apply_held_delta(self, delta: int) -> None:
+    def _apply_held_delta(self, event: PumpEvent) -> None:
         """Move the held-pair gauge by one balanced acquisition or release.
 
         The count is kept per collector under a lock because hold events for
@@ -293,6 +337,11 @@ class PumpMetricsHook:
         another hook reporting to the same collector moves the same count. A
         collector that does not offer gauges is left alone rather than
         required to add one.
+
+        An event that reaches several hooks sharing this collector moves the
+        count once. The gauge is a level, so counting the same hold twice
+        would report a pair that no drain is holding; the counter remembers
+        which event it applied most recently under the same lock.
 
         Publication happens under the same lock as the count. Publishing after
         releasing it would let two threads publish out of order: a release that
@@ -302,9 +351,13 @@ class PumpMetricsHook:
         """
         if self._gauge is None or self._held is None:
             return
+        delta = event.held_delta
         if delta not in _HELD_DELTAS:
             return
         with self._held.lock:
+            if self._held.took(event):
+                return
+            self._held.last_event = event
             self._held.pairs += delta
             self._gauge.set_gauge(
                 RUST_PUMP_HELD_PAIRS,

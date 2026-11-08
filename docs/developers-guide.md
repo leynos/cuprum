@@ -2759,19 +2759,27 @@ alter the successful fallback or the caller's cancellation.
 
 `cuprum_rust_pump_held_pairs` is the channel's only gauge. The coordinator
 emits a `handoff_hold` event with `held_delta=1` after acquisition and before
-the buffered drain, and one with `held_delta=-1` when its own hold ends: after
-a successful activation, before the pair is submitted, with the descriptors
-still open and owned by the worker; on every failed path, after the pair has
-been closed or rolled back. `PumpMetricsHook` accumulates those deltas per
-collector under one lock — hooks reporting to the same collector share the
-count, so one hook's release cannot publish zero while another still holds a
-pair — and publishes the running total under that same lock, so a release
-cannot reach the collector before the acquisition it followed. Gauges are a
-separate, optional capability: `GaugeMetricsCollector` in
-`cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol, and a
-collector that does not implement it keeps working for counters and histograms
-and is simply skipped for gauges. This keeps the existing two-method
-`MetricsCollector` contract intact.
+the buffered drain, and one with `held_delta=-1` when its own hold ends. After
+a successful activation that release lands before submission, while the
+coordinator still owns the activated pair: submitting hands the state to the
+completion callback immediately afterwards. A shutdown signal raised by a
+release observer therefore rolls the pair back — closing it, restoring its
+blocking modes, and publishing `submission_abandoned` — before the signal
+travels. On every failed path the release follows the pair's closure or
+rollback. `PumpMetricsHook` accumulates those deltas per collector under one
+lock, and hooks reporting to the same collector share the count, so one hook's
+release cannot publish zero while another still holds a pair. That sharing also
+covers a collector without weak-reference support: the hook registry then holds
+the collector, so the identity used as its key stays unique. One event
+delivered to more than one of those hooks — a nested `observe_pump`
+registration delivers every event to both contexts — moves the shared total
+once, so the gauge counts held pairs rather than hook deliveries. The running
+total is published under the same lock, so a release cannot reach the collector
+before the acquisition it followed. Gauges are a separate, optional capability:
+`GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a
+runtime-checkable protocol, and a collector that does not implement it keeps
+working for counters and histograms and is simply skipped for gauges. This
+keeps the existing two-method `MetricsCollector` contract intact.
 
 #### Pump hook failure policy
 

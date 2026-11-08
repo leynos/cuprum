@@ -1193,20 +1193,27 @@ hook.
   the buffered drain, and `-1` when the hold ends. `held_delta` is appended
   after every existing `PumpEvent` field, so a caller constructing the public
   dataclass positionally keeps its existing argument order.
-- `drain_failed`, `blocking_setup_failed`, and `submission_abandoned` join
+- `drain_failed` and `submission_abandoned` join
   `RustPumpHandoffOutcome`. Each is counted in
   `cuprum_rust_pump_handoff_total`, so an exhaustive outcome handler or
-  dashboard must add them.
+  dashboard must add them. `blocking_setup_failed` already exists in this
+  release's base and keeps its meaning: the hop fell back to the Python pump
+  because blocking mode was unavailable.
 
 An optional gauge, `cuprum_rust_pump_held_pairs`, reports the pairs held across
 pending drains. It is set only for a collector that implements
 `GaugeMetricsCollector`, and every hook reporting to one collector shares its
 running total, so a dashboard reads one value per collector rather than one per
-hook. A collector written against the two-method `MetricsCollector` contract
-continues to work unchanged and is simply skipped for gauges. An exhaustive
-pump observer that matches on `PumpPhase` must add `handoff_hold`, and one that
-matches on `RustPumpHandoffOutcome` must add the three outcomes; an observer
-that ignores unknown values needs no change.
+hook. That holds for a collector without weak-reference support as well: the
+hook registry retains it so that its identity stays unique. An event delivered
+to more than one hook for one collector, as a nested `observe_pump`
+registration does, moves the shared total once, so the gauge counts held pairs
+rather than hook deliveries. A collector written against the two-method
+`MetricsCollector` contract continues to work unchanged and is simply skipped
+for gauges. An exhaustive pump observer that matches on `PumpPhase` must add
+`handoff_hold`, and one that matches on `RustPumpHandoffOutcome` must add
+`drain_failed` and `submission_abandoned`; an observer that ignores unknown
+values needs no change.
 
 See
 [Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)
