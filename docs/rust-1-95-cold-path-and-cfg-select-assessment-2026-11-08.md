@@ -253,14 +253,16 @@ methodology without importing the phase-6 dispatcher wall-time gate.
 1. **Baseline and variants.** The baseline is the same post-migration revision
    as the variant, built by the same compiler for both legs. Each hint is its
    own patch and its own measurement; no patch carries two hints. Both legs
-   must also share the target triple, the profile, the enabled features,
+   must share the target triple, the profile, the enabled features,
    `RUSTFLAGS`, the `Cargo.lock` and `uv.lock` digests, and the runtime
-   environment, including the native extension they load. Record `rustc -vV`,
-   `cargo -V`, each of those values, and the path and content hash of the
-   extension each leg actually loaded, then verify from that record that the
-   legs match: an interleaved run can otherwise measure the one installed
-   extension twice, or measure two different dependency sets. A mismatch
-   disqualifies the comparison rather than being attributed to the hint.
+   environment. They must differ in exactly one respect: each loads the native
+   extension built from its own sources. Record `rustc -vV`, `cargo -V`, each
+   shared value, and each leg's expected extension path and content hash
+   together with the path and hash actually loaded. Verify each run against its
+   own build: an interleaved run can otherwise measure one installed extension
+   twice, or measure two different dependency sets. A run whose extension does
+   not match its own build disqualifies the comparison rather than being
+   attributed to the hint.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -385,10 +387,16 @@ Two costs come with it, and both must be accepted explicitly:
   this workspace, but it is a contract change, not a pure refactor.
 
 Because of that second cost, any future patch must observe the diagnostic
-before and after — for example with
-`cargo check -p cuprum-native-io --target wasm32-wasip1` — rather than assume
-it. That check was **not** run here, because no source changed and an
-unverified claim about a diagnostic is worth less than a recorded gap.
+before and after rather than assume it. The workspace manifest is
+`rust/Cargo.toml`, so the observation runs from the repository root as:
+
+```sh
+cargo check --manifest-path rust/Cargo.toml \
+  -p cuprum-native-io --target wasm32-wasip1
+```
+
+That check was **not** run here, because no source changed and an unverified
+claim about a diagnostic is worth less than a recorded gap.
 
 Deliberate compile errors that must keep working are the `compile_fail`
 doctests on `cuprum-native-io`'s capability types, the `compile_fail` cases on
