@@ -34,7 +34,6 @@ from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._pipeline_native_pump_types import (
     _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
-    _RustPumpBlockingModeError,
     _RustPumpHandoff,
 )
 from cuprum._pipeline_pipe_tasks import (
@@ -49,18 +48,15 @@ from cuprum._pipeline_stream_fds import (
 )
 from cuprum._pipeline_stream_native_cleanup import (
     _acquire_rust_pump_worker_fds,
-    _activate_rust_pump_state,
-    _close_unactivated_rust_pump_fds,
+    _activate_rust_pump_state_or_release,
+    _drain_before_rust_pump_submission,
     _release_activated_rust_pump_hold,
     _run_rust_pump_with_blocking_fds,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum._streams_pump import _current_read_size
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
-from cuprum.pump_observation import (
-    _emit_rust_pump_handoff_outcome,
-    _emit_rust_pump_hold,
-)
+from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -236,36 +232,16 @@ async def _pump_over_raw_fds(
         _log_rust_pump_declined(RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
         return False
-    try:
-        # Publish the hold before the first await so an operator can see the
-        # pair while the drain is pending. Every path below releases it once,
-        # after the descriptors are closed or handed on.
-        _emit_rust_pump_hold(1)
-        await _drain_reader_buffer(reader, writer)
-    except BaseException:
-        # Blocking activation never ran, so there is no mode to restore; only
-        # the acquired pair must be released. The hop does not fall back from
-        # here: the drain error propagates, and the reader resumes so asyncio
-        # can settle the transport it still owns.
-        _close_unactivated_rust_pump_fds(worker_fds)
-        _resume_reader_transport(reader_pause.resume)
-        _emit_rust_pump_hold(-1)
-        # The hop owns no descriptors past this point, so the outcome is the
-        # only signal an operator has that the drain window closed without a
-        # submission. Emitting after the release keeps a propagating shutdown
-        # signal from stranding the pair.
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
-        raise
-    try:
-        # These duplicates outlive the caller-facing task: only the completion
-        # callback may restore their blocking mode, after native I/O stops.
-        state = _activate_rust_pump_state(worker_fds, reader_pause, handoff)
-    except BaseException as error:
-        # Activation closed the pair; only the reader and the hold remain.
-        _resume_reader_transport(reader_pause.resume)
-        _emit_rust_pump_hold(-1)
-        if not isinstance(error, _RustPumpBlockingModeError):
-            raise
+        # The pair is held across the drain, and released on every failing path.
+    await _drain_before_rust_pump_submission(
+        worker_fds,
+        reader_pause,
+        lambda: _drain_reader_buffer(reader, writer),
+    )
+    # These duplicates outlive the caller-facing task: only the completion
+    # callback may restore their blocking mode, after native I/O stops.
+    state = _activate_rust_pump_state_or_release(worker_fds, reader_pause, handoff)
+    if state is None:
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return False

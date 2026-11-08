@@ -397,6 +397,13 @@ def test_submission_releases_the_hold_before_native_work_starts(
     )
 
 
+def _assert_fds_closed(fds: list[int]) -> None:
+    """Assert every descriptor in ``fds`` has been closed."""
+    for fd in fds:
+        with pytest.raises(OSError, match="Bad file descriptor"):
+            os.fstat(fd)
+
+
 class _HoldSignalHarness:
     """Drive a shutdown signal raised by a hold observer through the hand-off."""
 
@@ -520,9 +527,7 @@ class _HoldSignalHarness:
         assert self.resume_calls == 1, "the signal must resume the paused reader once"
         assert self.submissions == 0, "the signal must prevent the submission"
         assert len(self.acquired) == 2, "acquisition must open both worker descriptors"
-        for fd in self.acquired:
-            with pytest.raises(OSError, match="Bad file descriptor"):
-                os.fstat(fd)
+        _assert_fds_closed(self.acquired)
         assert self.collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
             "the release must still reach the metrics hook registered after the "
             "observer that raised"
@@ -562,30 +567,52 @@ def test_a_shutdown_signal_at_release_rolls_back_the_activated_pair(
     ], "an abandoned submission must settle with its own bounded outcome"
 
 
-def test_an_unexpected_activation_failure_resumes_and_releases(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An activation error outside the decline contract still cleans up."""
-    collector = RecordingCollector()
-    resume_calls = 0
-    acquired: list[int] = []
-    original_open = _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+class _UnexpectedActivationFailure:
+    """Fail activation outside the decline contract, as a fault would."""
+
+    def __init__(self) -> None:
+        """Start with no recorded resume and no acquired descriptors."""
+        self.resume_calls = 0
+        self.acquired: list[int] = []
+        self._original_open = (
+            _pipeline_stream_native_cleanup._open_native_pump_worker_fds
+        )
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the pause, drain, acquisition, and activation seams."""
+        monkeypatch.setattr(
+            _pipeline_streams,
+            "_pause_reader_transport",
+            lambda _reader: _pipeline_stream_fds._ReaderPause(resume=self.resume),
+        )
+        monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", mock.AsyncMock())
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_open_native_pump_worker_fds",
+            self.record_open,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_activate_rust_pump_state",
+            self.fail_activation,
+        )
+
+    def resume(self) -> None:
+        """Record restoration of the paused reader."""
+        self.resume_calls += 1
 
     def record_open(
+        self,
         **kwargs: int,
     ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
         """Record the worker pair the acquisition actually opened."""
-        worker_fds = original_open(**kwargs)
+        worker_fds = self._original_open(**kwargs)
         if worker_fds is not None:
-            acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+            self.acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
         return worker_fds
 
-    def resume() -> None:
-        """Record restoration of the paused reader."""
-        nonlocal resume_calls
-        resume_calls += 1
-
     def fail_activation(
+        self,
         worker_fds: _pipeline_stream_fds._NativePumpWorkerFds,
         reader_pause: _pipeline_stream_fds._ReaderPause,
         handoff: _pipeline_stream_native_cleanup._RustPumpHandoff,
@@ -596,26 +623,14 @@ def test_an_unexpected_activation_failure_resumes_and_releases(
         msg = "activation failed unexpectedly"
         raise RuntimeError(msg)
 
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_pause_reader_transport",
-        lambda _reader: _pipeline_stream_fds._ReaderPause(resume=resume),
-    )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_drain_reader_buffer",
-        mock.AsyncMock(),
-    )
-    monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
-        "_open_native_pump_worker_fds",
-        record_open,
-    )
-    monkeypatch.setattr(
-        _pipeline_streams,
-        "_activate_rust_pump_state",
-        fail_activation,
-    )
+
+def test_an_unexpected_activation_failure_resumes_and_releases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An activation error outside the decline contract still cleans up."""
+    failure = _UnexpectedActivationFailure()
+    failure.install(monkeypatch)
+    collector = RecordingCollector()
 
     with owned_fds() as (reader_fd, writer_fd):
         handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
@@ -635,11 +650,11 @@ def test_an_unexpected_activation_failure_resumes_and_releases(
                 )
             )
 
-    assert resume_calls == 1, "an unexpected activation failure must resume the reader"
-    assert len(acquired) == 2, "acquisition must open both worker descriptors"
-    for fd in acquired:
-        with pytest.raises(OSError, match="Bad file descriptor"):
-            os.fstat(fd)
+    assert failure.resume_calls == 1, (
+        "an unexpected activation failure must resume the reader"
+    )
+    assert len(failure.acquired) == 2, "acquisition must open both worker descriptors"
+    _assert_fds_closed(failure.acquired)
     assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
         "an unexpected activation failure must still release the hold"
     )

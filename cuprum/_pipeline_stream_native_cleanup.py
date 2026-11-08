@@ -1,17 +1,14 @@
-"""Supply the acquire, activate, and submit steps of the native pump hand-off.
+"""Supply the acquire, drain, activate, and submit steps of the hand-off.
 
-The hand-off's *ordering* — pause, acquire before the first await, drain,
-activate, submit — belongs to `_pipeline_streams._pump_over_raw_fds`. This
-module supplies the steps that ordering calls, and keeps each step's failure
-shape local so the coordinator can tell its two failure paths apart:
-`_acquire_rust_pump_worker_fds` returns `None` rather than raising, which lets
-the coordinator fall back to the Python pump, while
+The ordering — pause, acquire before the first await, drain, activate, submit —
+belongs to `_pipeline_streams._pump_over_raw_fds`; this module supplies the
+steps it calls and keeps each failure shape local. `_acquire_rust_pump_worker_fds`
+returns `None` rather than raising, which allows the Python fallback, while
 `_activate_rust_pump_state` raises `_RustPumpBlockingModeError` for a decline.
-`_close_unactivated_rust_pump_fds` releases a pair that activation never took
-over. Once native work is submitted, the executor future owns cleanup;
+`_close_unactivated_rust_pump_fds` releases a pair activation never took over.
+Once work is submitted, the executor future owns cleanup;
 `_pipeline_stream_native_completion` closes the callback's descriptors,
-restores blocking mode, and resumes the paused reader after native I/O
-settles.
+restores blocking mode, and resumes the paused reader after native I/O ends.
 """
 
 from __future__ import annotations
@@ -47,6 +44,7 @@ from cuprum._pipeline_stream_fds import (
     _NativePumpWorkerFds,
     _open_native_pump_worker_fds,
     _ReaderPause,
+    _resume_reader_transport,
 )
 from cuprum._pipeline_stream_native_completion import (
     _await_native_pump_cleanup,
@@ -231,6 +229,57 @@ def _close_unactivated_rust_pump_fds(worker_fds: _NativePumpWorkerFds) -> None:
         _close_native_pump_worker_fd(worker_fds.writer_fd)
 
 
+async def _drain_before_rust_pump_submission(
+    worker_fds: _NativePumpWorkerFds,
+    reader_pause: _ReaderPause,
+    drain: cabc.Callable[[], cabc.Awaitable[None]],
+) -> None:
+    """Drain the buffered prefix while holding the acquired pair.
+
+    A failed or cancelled drain never falls back to the Python pump: the pair
+    closes, the reader resumes for asyncio to settle its transport, and the
+    error travels. ``drain`` is injected because the buffered drain lives with
+    the coordinator owning this ordering, which keeps that step's test seam.
+    """
+    try:
+        # Publication can itself raise the shutdown signal this guard handles.
+        _emit_rust_pump_hold(1)
+        await drain()
+    except BaseException:
+        _close_unactivated_rust_pump_fds(worker_fds)
+        _resume_reader_transport(reader_pause.resume)
+        _emit_rust_pump_hold(-1)
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
+        raise
+
+
+def _activate_rust_pump_state_or_release(
+    worker_fds: _NativePumpWorkerFds,
+    reader_pause: _ReaderPause,
+    handoff: _RustPumpHandoff,
+) -> _RustPumpState | None:
+    """Activate the pair, or release it and return ``None`` on a decline.
+
+    Activation closes the pair when it refuses, so only the reader and the hold
+    remain. A refusal is the one error answered with the Python pump; anything
+    else is re-raised after the same release, because a shutdown signal must
+    not be reported as a routing decision.
+
+    Returns
+    -------
+    _RustPumpState or None
+        The completion-owned state, or ``None`` when the hop must fall back.
+    """
+    try:
+        return _activate_rust_pump_state(worker_fds, reader_pause, handoff)
+    except BaseException as error:
+        _resume_reader_transport(reader_pause.resume)
+        _emit_rust_pump_hold(-1)
+        if not isinstance(error, _RustPumpBlockingModeError):
+            raise
+        return None
+
+
 def _activate_rust_pump_state(
     worker_fds: _NativePumpWorkerFds,
     reader_pause: _ReaderPause,
@@ -248,8 +297,7 @@ def _activate_rust_pump_state(
     Returns
     -------
     _RustPumpState
-        Completion-owned state carrying the engaged blocking-mode guard and the
-        reader callbacks that the executor future invokes after native I/O.
+        Completion-owned state carrying the blocking-mode guard and callbacks.
     """
     blocking_mode_guard = _engage_rust_pump_blocking_mode(
         worker_fds.reader_fd,
