@@ -268,7 +268,15 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    its own build: an interleaved run can otherwise exercise one installed
    artefact twice, or measure two different dependency sets. A run whose
    artefact does not match its own build disqualifies the comparison rather
-   than being attributed to the hint.
+   than being attributed to the hint. Artefact identity proves which build ran,
+   not which backend it took: `get_stream_backend()` resolves once per process
+   from `CUPRUM_STREAM_BACKEND`, and an `auto` resolution selects the Python
+   pump on Windows and whenever the extension probes unavailable. Each targeted
+   run must therefore record the resolved backend from the
+   `cuprum.stream_backend_resolved` event, or assert it in the harness, and a
+   run recorded as Python is rejected rather than attributed to the hint. The
+   Rust label on a scenario and the presence of the extension are not
+   substitutes for that observation.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
