@@ -112,6 +112,13 @@ def late_eof(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     server.wait(10.0)
 
 
+def close_delimited_stall(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
+    """Send a close-delimited head and then hold the connection open."""
+    server.requests.append(support.read_request(connection))
+    connection.sendall(_head("200 OK", "Connection: close\r\n"))
+    server.wait(10.0)
+
+
 def truncated(connection: ssl.SSLSocket, server: LoopbackServer) -> None:
     """Close the connection short of the declared Content-Length."""
     server.requests.append(support.read_request(connection))
@@ -181,6 +188,7 @@ SCENARIOS: dict[str, support.Handler] = {
     "trickle_headers": trickle_headers,
     "trickle_chunks": trickle_chunks,
     "late_eof": late_eof,
+    "close_delimited_stall": close_delimited_stall,
     "truncated": truncated,
     "https_redirect": https_redirect,
     "redirect_overflow": redirect_overflow,

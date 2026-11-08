@@ -4,9 +4,10 @@ The downloader refuses a declared length above `_MAX_BODY_BYTES`, stops once
 the streamed body passes that ceiling, and abandons a transfer that outlives
 `_TRANSFER_DEADLINE_SECONDS`. One deadline covers every redirect hop, the
 header parse, and every body read: a watchdog shuts the connection's socket
-down when the deadline passes, so a server that trickles bytes cannot hold the
-transfer open. Without these bounds a stalled or oversized response would fill
-the host disk before the digest check could reject it.
+down when the deadline passes, so a server that trickles bytes, or stalls a
+close-delimited body, cannot hold the transfer open. Without these bounds a
+stalled or oversized response would fill the host disk before the digest check
+could reject it.
 """
 
 from __future__ import annotations
@@ -126,6 +127,11 @@ class _DeadlineWatchdog:
     header bytes, because each individual read still finishes inside the
     socket timeout. Shutting the socket down makes the blocked read fail, so
     the deadline covers the header parse as well as the body.
+
+    The socket is captured when the watchdog is armed, because
+    `HTTPConnection.getresponse` hands a close-delimited response its socket
+    and clears `connection.sock`. Reading it at the deadline would find
+    nothing and leave a stalled body blocked until the socket timeout.
     """
 
     def __init__(
@@ -133,8 +139,8 @@ class _DeadlineWatchdog:
         connection: http.client.HTTPSConnection,
         transfer: _Transfer,
     ) -> None:
-        """Arm a watchdog for `connection` under `transfer`'s deadline."""
-        self._connection = connection
+        """Arm a watchdog for `connection`'s current socket."""
+        self._sock = connection.sock
         self._transfer = transfer
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._watch, daemon=True)
@@ -150,13 +156,12 @@ class _DeadlineWatchdog:
         self._thread.join()
 
     def _watch(self) -> None:
-        """Wait for the deadline, then shut the socket down."""
+        """Wait for the deadline, then shut the captured socket down."""
         if self._stop.wait(self._transfer.remaining()):
             return
-        sock = self._connection.sock
-        if sock is not None:
+        if self._sock is not None:
             with contextlib.suppress(OSError):
-                sock.shutdown(socket.SHUT_RDWR)
+                self._sock.shutdown(socket.SHUT_RDWR)
 
 
 def _download(
