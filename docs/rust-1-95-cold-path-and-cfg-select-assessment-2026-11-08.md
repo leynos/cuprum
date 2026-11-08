@@ -387,9 +387,11 @@ therefore a separate commit, in a separate proposal, after the gate opens.
   unmeasured rather than assumed to be either side of 1.95.
 - **Only Linux and Windows were considered.** Other Unix systems use the Unix
   arms; no runtime evidence exists for them in this assessment.
-- **`make msrv-check` was not run for this document**, because no Rust source
-  changed. The compiled-crate claims in Table 1 and Table 2 come from reading
-  the recipes and scripts and from the measured toolchains, not from a rebuild.
+- **The per-route claims come from measurement, not from rebuilding each
+  route.** `make msrv-check` passed for this documentation-only change, but no
+  Loom, Kani, Verus, or Miri run was performed, because no Rust source changed.
+  Table 1 and Table 2 come from measured toolchains and from reading the
+  recipes and scripts.
 
 ## Resume triggers
 
