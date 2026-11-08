@@ -2,13 +2,9 @@
 
 The ordering — pause, acquire before the first await, drain, activate, submit —
 belongs to `_pipeline_streams._pump_over_raw_fds`; this module supplies the
-steps it calls and keeps each failure shape local. `_acquire_rust_pump_worker_fds`
-returns `None` rather than raising, which allows the Python fallback, while
-`_activate_rust_pump_state` raises `_RustPumpBlockingModeError` for a decline.
+steps and keeps each failure shape local: acquisition returns `None` to allow
+the Python fallback, activation declines with `_RustPumpBlockingModeError`, and
 `_close_unactivated_rust_pump_fds` releases a pair activation never took over.
-Once work is submitted, the executor future owns cleanup;
-`_pipeline_stream_native_completion` closes the callback's descriptors,
-restores blocking mode, and resumes the paused reader after native I/O ends.
 """
 
 from __future__ import annotations
@@ -124,11 +120,10 @@ def _rollback_rust_pump_start(
 def _release_activated_rust_pump_hold(state: _RustPumpState) -> None:
     """Release the coordinator's hold on an activated but unsubmitted pair.
 
-    The release is the last thing the coordinator does before the completion
-    callback takes ownership, so a shutdown signal raised by a hold observer
-    here would otherwise leave the pair open, the pipes blocking, and the
-    reader paused forever. Rolling the state back first keeps the signal
-    travelling without stranding what it interrupted.
+    The coordinator releases the hold before the completion callback takes
+    ownership, so a shutdown signal from a hold observer here would otherwise
+    strand the pair open, the pipes blocking, and the reader paused. Rolling
+    back first keeps the signal travelling without stranding them.
     """
     try:
         _emit_rust_pump_hold(-1)
@@ -236,10 +231,9 @@ async def _drain_before_rust_pump_submission(
 ) -> None:
     """Drain the buffered prefix while holding the acquired pair.
 
-    A failed or cancelled drain never falls back to the Python pump: the pair
-    closes, the reader resumes for asyncio to settle its transport, and the
-    error travels. ``drain`` is injected because the buffered drain lives with
-    the coordinator owning this ordering, which keeps that step's test seam.
+    A failed or cancelled drain never falls back: the pair closes, the reader
+    resumes, and the error travels. ``drain`` is injected to keep its test seam
+    with the coordinator owning the ordering.
     """
     try:
         # Publication can itself raise the shutdown signal this guard handles.
@@ -287,12 +281,10 @@ def _activate_rust_pump_state(
 ) -> _RustPumpState:
     """Engage blocking mode on acquired descriptors and build completion state.
 
-    Blocking activation stays after the buffered drain because on non-Linux
-    platforms ``os.dup`` shares the transport's status flags: switching early
-    would make asyncio's own descriptor blocking while the drain still awaits.
-    ``_engage_rust_pump_blocking_mode`` closes both descriptors exactly once
-    when it refuses, so a failed activation leaves nothing for the caller to
-    release.
+    Blocking activation stays after the buffered drain because ``os.dup``
+    shares the transport's status flags on non-Linux platforms, so an early
+    switch would block asyncio's own descriptor during the drain.
+    ``_engage_rust_pump_blocking_mode`` closes both descriptors exactly once.
 
     Returns
     -------
@@ -303,14 +295,21 @@ def _activate_rust_pump_state(
         worker_fds.reader_fd,
         worker_fds.writer_fd,
     )
-    return _RustPumpState(
-        reader_fd=worker_fds.reader_fd,
-        writer_fd=worker_fds.writer_fd,
-        blocking_mode_guard=blocking_mode_guard,
-        resume_reader=reader_pause.resume,
-        release_reader=reader_pause.release,
-        cleanup_grace_s=handoff.cleanup_grace_s,
-    )
+    try:
+        return _RustPumpState(
+            reader_fd=worker_fds.reader_fd,
+            writer_fd=worker_fds.writer_fd,
+            blocking_mode_guard=blocking_mode_guard,
+            resume_reader=reader_pause.resume,
+            release_reader=reader_pause.release,
+            cleanup_grace_s=handoff.cleanup_grace_s,
+        )
+    except BaseException:
+        # No completion callback exists yet, so the guard's modes and the pair
+        # are released here before the caller sees the construction failure.
+        blocking_mode_guard.restore()
+        _close_unactivated_rust_pump_fds(worker_fds)
+        raise
 
 
 def _start_rust_pump_with_cleanup(

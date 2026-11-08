@@ -149,3 +149,49 @@ def test_failed_engage_leaks_no_blocking_state(
             "a failed engage must leak no blocking state on the writer; now "
             f"{os.get_blocking(writer_fd)}, expected {writer_initial}"
         )
+
+
+@_UNIX_ONLY
+@pytest.mark.parametrize("fault_target", ["reader", "writer"])
+def test_a_shutdown_signal_partway_through_the_switch_restores_the_pair(
+    fault_target: str,
+) -> None:
+    """A shutdown signal raised mid-switch restores the whole pair.
+
+    ``os.set_blocking`` has no atomic two-descriptor form, so a signal can land
+    between the calls. Without the ``BaseException`` rollback the descriptor
+    already switched stays blocking, and no guard exists to undo it.
+    """
+    with _pipe_fds() as (reader_fd, writer_fd):
+        os.set_blocking(reader_fd, False)
+        os.set_blocking(writer_fd, False)
+        target_fd = reader_fd if fault_target == "reader" else writer_fd
+        real_set_blocking = os.set_blocking
+        signalled = False
+
+        def signalling_set_blocking(fd: int, blocking: bool) -> None:
+            """Raise a shutdown signal once, on the target's blocking switch."""
+            nonlocal signalled
+            if fd != target_fd:
+                real_set_blocking(fd, blocking)
+                return
+            if not blocking or signalled:
+                real_set_blocking(fd, blocking)
+                return
+            signalled = True
+            msg = "shutdown during the switch"
+            raise KeyboardInterrupt(msg)
+
+        with (
+            mock.patch.object(os, "set_blocking", signalling_set_blocking),
+            pytest.raises(KeyboardInterrupt, match="shutdown during the switch"),
+        ):
+            _BlockingModeGuard.engage(reader_fd=reader_fd, writer_fd=writer_fd)
+
+        assert signalled, "the fault must fire on the blocking switch"
+        assert os.get_blocking(reader_fd) is False, (
+            "a shutdown signal must restore the reader's prior mode"
+        )
+        assert os.get_blocking(writer_fd) is False, (
+            "a shutdown signal must restore the writer's prior mode"
+        )

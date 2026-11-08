@@ -568,18 +568,23 @@ def test_a_shutdown_signal_at_release_rolls_back_the_activated_pair(
 
 
 class _UnexpectedActivationFailure:
-    """Fail activation outside the decline contract, as a fault would."""
+    """Fail state construction after blocking activation, as a fault would."""
 
     def __init__(self) -> None:
-        """Start with no recorded resume and no acquired descriptors."""
+        """Start with no recorded resume, close, or blocking observation."""
         self.resume_calls = 0
         self.acquired: list[int] = []
+        self.close_calls: dict[int, int] = {}
+        self.blocking_at_close: dict[int, bool] = {}
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
+        self._original_close = (
+            _pipeline_stream_native_cleanup._close_native_pump_worker_fd
+        )
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Install the pause, drain, acquisition, and activation seams."""
+        """Install the pause, drain, acquisition, close, and state seams."""
         monkeypatch.setattr(
             _pipeline_streams,
             "_pause_reader_transport",
@@ -593,8 +598,13 @@ class _UnexpectedActivationFailure:
         )
         monkeypatch.setattr(
             _pipeline_stream_native_cleanup,
-            "_activate_rust_pump_state",
-            self.fail_activation,
+            "_close_native_pump_worker_fd",
+            self.record_close,
+        )
+        monkeypatch.setattr(
+            _pipeline_stream_native_cleanup,
+            "_RustPumpState",
+            self.fail_construction,
         )
 
     def resume(self) -> None:
@@ -605,29 +615,31 @@ class _UnexpectedActivationFailure:
         self,
         **kwargs: int,
     ) -> _pipeline_stream_fds._NativePumpWorkerFds | None:
-        """Record the worker pair the acquisition actually opened."""
+        """Record the pair, starting it non-blocking as asyncio leaves it."""
         worker_fds = self._original_open(**kwargs)
         if worker_fds is not None:
-            self.acquired.extend([worker_fds.reader_fd, worker_fds.writer_fd])
+            for worker_fd in (worker_fds.reader_fd, worker_fds.writer_fd):
+                os.set_blocking(worker_fd, False)
+                self.acquired.append(worker_fd)
         return worker_fds
 
-    def fail_activation(
-        self,
-        worker_fds: _pipeline_stream_fds._NativePumpWorkerFds,
-        reader_pause: _pipeline_stream_fds._ReaderPause,
-        handoff: _pipeline_stream_native_cleanup._RustPumpHandoff,
-    ) -> typ.NoReturn:
-        """Close the pair the way activation does, then fail unexpectedly."""
-        del reader_pause, handoff
-        _pipeline_stream_native_cleanup._close_unactivated_rust_pump_fds(worker_fds)
+    def record_close(self, worker_fd: int) -> None:
+        """Observe the mode a close sees, then close the descriptor once."""
+        self.blocking_at_close[worker_fd] = os.get_blocking(worker_fd)
+        self.close_calls[worker_fd] = self.close_calls.get(worker_fd, 0) + 1
+        self._original_close(worker_fd)
+
+    def fail_construction(self, *args: object, **kwargs: object) -> typ.NoReturn:
+        """Raise where the state object is built, after blocking activation."""
+        del args, kwargs
         msg = "activation failed unexpectedly"
         raise RuntimeError(msg)
 
 
-def test_an_unexpected_activation_failure_resumes_and_releases(
+def test_a_state_construction_failure_rolls_back_the_activated_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An activation error outside the decline contract still cleans up."""
+    """A failure after blocking activation restores and closes the pair once."""
     failure = _UnexpectedActivationFailure()
     failure.install(monkeypatch)
     collector = RecordingCollector()
@@ -651,12 +663,18 @@ def test_an_unexpected_activation_failure_resumes_and_releases(
             )
 
     assert failure.resume_calls == 1, (
-        "an unexpected activation failure must resume the reader"
+        "a state construction failure must resume the reader"
     )
     assert len(failure.acquired) == 2, "acquisition must open both worker descriptors"
     _assert_fds_closed(failure.acquired)
+    assert failure.close_calls == dict.fromkeys(failure.acquired, 1), (
+        "each owned descriptor must close exactly once"
+    )
+    assert failure.blocking_at_close == dict.fromkeys(failure.acquired, False), (
+        "the rollback must restore the modes blocking activation changed"
+    )
     assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 0.0], (
-        "an unexpected activation failure must still release the hold"
+        "a state construction failure must still release the hold"
     )
 
 

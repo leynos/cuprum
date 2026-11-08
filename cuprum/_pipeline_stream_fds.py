@@ -199,19 +199,21 @@ def _pause_reader_transport(
 
 def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, bool]:
     """Switch pipe FDs to blocking mode and return their prior state."""
-    reader_changed = False
+    reader_was_blocking = os.get_blocking(reader_fd)
+    writer_was_blocking = os.get_blocking(writer_fd)
+    prior_modes = (
+        (reader_fd, reader_was_blocking),
+        (writer_fd, writer_was_blocking),
+    )
     try:
-        reader_was_blocking = os.get_blocking(reader_fd)
-        writer_was_blocking = os.get_blocking(writer_fd)
-        if not reader_was_blocking:
-            os.set_blocking(reader_fd, True)
-            reader_changed = True
-        if not writer_was_blocking:
-            os.set_blocking(writer_fd, True)
-    except (OSError, ValueError):
-        if reader_changed:
+        for fd, was_blocking in prior_modes:
+            if not was_blocking:
+                os.set_blocking(fd, True)
+    except BaseException:
+        # A signal or refusal can land between the switches; undo either change.
+        for fd, was_blocking in prior_modes:
             with contextlib.suppress(OSError, ValueError):
-                os.set_blocking(reader_fd, reader_was_blocking)
+                os.set_blocking(fd, was_blocking)
         raise
     return reader_was_blocking, writer_was_blocking
 
