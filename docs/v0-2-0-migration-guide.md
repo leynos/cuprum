@@ -1184,7 +1184,7 @@ context manager or calling `detach()` on the returned handle. The existing
 
 ### Pump hand-off hold events and settlement outcomes
 
-The pump observation channel gains a `handoff_hold` phase and three settlement
+The pump observation channel gains a `handoff_hold` phase and two settlement
 outcomes. No event is emitted unless an application registers an `observe_pump`
 hook.
 
@@ -1205,15 +1205,17 @@ pending drains. It is set only for a collector that implements
 `GaugeMetricsCollector`, and every hook reporting to one collector shares its
 running total, so a dashboard reads one value per collector rather than one per
 hook. That holds for a collector without weak-reference support as well: the
-hook registry retains it so that its identity stays unique. An event delivered
-to more than one hook for one collector, as a nested `observe_pump`
-registration does, moves the shared total once, so the gauge counts held pairs
-rather than hook deliveries. A collector written against the two-method
-`MetricsCollector` contract continues to work unchanged and is simply skipped
-for gauges. An exhaustive pump observer that matches on `PumpPhase` must add
-`handoff_hold`, and one that matches on `RustPumpHandoffOutcome` must add
-`drain_failed` and `submission_abandoned`; an observer that ignores unknown
-values needs no change.
+registry keeps its reference to that collector only while a hook reporting to
+it is alive, and retires the entry once the last such hook is gone with nothing
+held, so the identity used as its key stays unique without retaining the
+collector for the life of the process. An event delivered to more than one hook
+for one collector, as a nested `observe_pump` registration does, moves the
+shared total once, so the gauge counts held pairs rather than hook deliveries.
+A collector written against the two-method `MetricsCollector` contract
+continues to work unchanged and is simply skipped for gauges. An exhaustive
+pump observer that matches on `PumpPhase` must add `handoff_hold`, and one that
+matches on `RustPumpHandoffOutcome` must add `drain_failed` and
+`submission_abandoned`; an observer that ignores unknown values needs no change.
 
 See
 [Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)
