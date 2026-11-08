@@ -92,7 +92,7 @@ measured with `rustc -vV`, except the wheel route, which is not pinned.
 | Route                                            | Compiler selection                     | Measured compiler                              |
 | ------------------------------------------------ | -------------------------------------- | ---------------------------------------------- |
 | Workspace pin and `make msrv-check`              | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
-| CI Rust check, lint, and test jobs; coverage     | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
+| CI build, test, coverage, and boundary jobs      | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
 | Loom models (`make loom`, `scripts/run_loom.py`) | Rust `1.87.0`                          | `rustc 1.87.0 (17067e9ac 2025-05-09)`          |
 | Kani proofs (`make boundary-kani`)               | Kani `0.67.0` bundled toolchain        | `rustc 1.93.0-nightly (53732d5e0 2025-11-20)`  |
 | Whitaker lint (`make lint-whitaker`)             | dylint driver for `nightly-2026-05-28` | `rustc 1.98.0-nightly (57d06900f 2026-05-27)`  |
@@ -123,17 +123,21 @@ paths above were extracted; it was never committed.
 **Continuous Integration.** `ci.yml` installs Rust `1.95.0`, but only for the
 Nixie and Merman bootstrap that validates documentation diagrams. It is not a
 project compiler and does not compile the crates under assessment. Reading that
-install as project support for 1.95 would be a mistake.
+install as project support for 1.95 would be a mistake. The CI lint job is not
+a 1.87 route either: its Rustdoc and Clippy leaf runs on the dev-fast nightly
+and its Whitaker leaf on the `nightly-2026-05-28` driver, both recorded in
+their own rows above. The project-toolchain routes in CI are the build, test,
+coverage, and boundary jobs.
 
 ### Which routes block adoption
 
 Applying the 1.95 requirement to Table 1 leaves three independent blockers:
 
-| Route                                   | Compiler               | Sources it compiles                                                                     |
-| --------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| `make msrv-check` and every CI Rust job | `rustc 1.87.0`         | the whole workspace                                                                     |
-| Loom models                             | `rustc 1.87.0`         | `cuprum-rust` and, through it, `cuprum-streams` and `cuprum-native-io` with `cfg(loom)` |
-| Kani proofs                             | `rustc 1.93.0-nightly` | `cuprum-native-io` and `cuprum-streams` with `cfg(kani)`                                |
+| Route                                                      | Compiler               | Sources it compiles                                                                     |
+| ---------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `make msrv-check` and the CI jobs on the project toolchain | `rustc 1.87.0`         | the whole workspace                                                                     |
+| Loom models                                                | `rustc 1.87.0`         | `cuprum-rust` and, through it, `cuprum-streams` and `cuprum-native-io` with `cfg(loom)` |
+| Kani proofs                                                | `rustc 1.93.0-nightly` | `cuprum-native-io` and `cuprum-streams` with `cfg(kani)`                                |
 
 _Table 2: Routes whose compiler cannot accept either 1.95 API._
 
@@ -195,8 +199,10 @@ costs performance.
 The following are expected control flow, not exceptional failure. Marking them
 cold would mislead the optimizer and would misrepresent the stream policy:
 
-- **`EINTR` retries.** The Unix read, write, and splice loops retry on
-  interruption and count the retry. A signal during a transfer is normal.
+- **`EINTR` retries.** The Unix read and write loops retry on interruption and
+  count the retry. The splice loop retries too, but it only logs at trace
+  level, so its retries have no counter that could be read as frequency
+  evidence. A signal during a transfer is normal either way.
 - **Broken pipe and connection reset.** `PumpError::is_nonfatal_write`,
   `WriteOutcome::NonFatalShortWrite`, and `WriteEvent::Closed` deliberately
   continue the required reader drain instead of failing.
@@ -248,7 +254,10 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    as the variant, built by the same compiler for both legs. Each hint is its
    own patch and its own measurement; no patch carries two hints. Record
    `rustc -vV`, `cargo -V`, the target triple, the profile, the enabled
-   features, `RUSTFLAGS`, and a digest of `Cargo.lock` for both legs.
+   features, `RUSTFLAGS`, and a digest of `Cargo.lock` for both legs. Record
+   the same for `uv.lock`, and the path and content hash of the native
+   extension each leg actually loaded: an interleaved run can otherwise measure
+   the one installed extension twice, or measure two different dependency sets.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -382,6 +391,27 @@ Deliberate compile errors that must keep working are the `compile_fail`
 doctests on `cuprum-native-io`'s capability types, the `compile_fail` cases on
 `with_owned_writer`, and the `E0603` doctests that pin `pump_machine`'s private
 transition boundary.
+
+### Validation for a configuration patch
+
+A future `cfg_select!` patch changes shared source, so it needs the full set,
+not only the platform it was written for:
+
+- `make msrv-check` at the new floor, because the affected files promise it.
+- `make lint`, whose Rustdoc, Clippy, and Whitaker leaves all compile the
+  rearranged items and whose spelling leaf checks the new prose, and
+  `make check-fmt` for the changed files.
+- `make lint-windows` for the cross-target configuration, plus Windows
+  execution of each affected implementation: the `rust-boundaries.yml` native
+  matrix with its doctests for the stream functions, and the Windows extension
+  test for the Python boundary.
+- `make loom`, `make boundary-kani`, `make boundary-miri`, and
+  `make boundary-verus` where the patch reaches a modelled, proved, or rendered
+  item. A rearrangement can change which `cfg` arms those tools compile.
+- The unsupported-target `cargo check` above, run before and after, so the
+  diagnostic change is observed rather than assumed.
+- `make test` for the Rust suite and doctests, including the `compile_fail`
+  cases named above.
 
 ### Separation from Workstream A
 
