@@ -213,6 +213,57 @@ class TestBoundedBody:
             "the bytes read before the deadline must be kept"
         )
 
+    def test_a_header_parse_stopped_by_the_deadline_is_a_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A status line the watchdog truncates reports the deadline."""
+        clock = _manual_clock()
+        connection = mock.Mock()
+
+        def getresponse() -> mock.MagicMock:
+            """Fail the header parse once the deadline has passed."""
+            clock.return_value = 10_000.0
+            raise http.client.BadStatusLine("HTTP/1")
+
+        connection.getresponse.side_effect = getresponse
+        monkeypatch.setattr(
+            downloader.http.client,
+            "HTTPSConnection",
+            lambda *_args, **_kwargs: connection,
+        )
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            downloader._download(
+                "https://example.invalid/asset", tmp_path / "binary", clock=clock
+            )
+
+    def test_a_body_parse_stopped_by_the_deadline_is_a_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A chunk frame the watchdog truncates reports the deadline."""
+        clock = _manual_clock()
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = http.client.OK
+        response.getheader.return_value = None
+
+        def read1(_size: int) -> bytes:
+            """Fail the chunk parse once the deadline has passed."""
+            clock.return_value = 10_000.0
+            raise http.client.IncompleteRead(b"partial")
+
+        response.read1.side_effect = read1
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            _download_response(response, tmp_path / "binary", monkeypatch, clock=clock)
+
+    def test_a_body_parse_failure_before_the_deadline_is_propagated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A parser failure inside the deadline stays the server's error."""
+        response = _streaming_response(b"x")
+        response.read1.side_effect = http.client.IncompleteRead(b"partial")
+        with pytest.raises(http.client.IncompleteRead):
+            _download_response(response, tmp_path / "binary", monkeypatch)
+
     def test_the_deadline_spans_every_redirect_hop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
