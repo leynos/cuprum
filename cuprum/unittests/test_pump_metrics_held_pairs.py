@@ -351,6 +351,7 @@ def test_separate_contexts_report_their_own_holds() -> None:
         """Register in ``context``, then hold a pair until its peer does."""
 
         def work() -> None:
+            """Emit a hold and its release inside ``context``."""
             with observe_pump(PumpMetricsHook(collector)):
                 _emit_pump_event(_hold(1))
                 both_held.wait(timeout=5.0)
