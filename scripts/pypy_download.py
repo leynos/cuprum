@@ -231,7 +231,11 @@ def _fetch_body(
             return None
     except TimeoutError:
         raise
-    except OSError as error:
+    except (OSError, http.client.HTTPException) as error:
+        # Both a shut-down socket and a parser that meets a truncated status
+        # line or chunk frame fail the transfer. Past the deadline the watchdog
+        # caused it, so report the deadline the caller waits for; before the
+        # deadline the failure is the server's and must surface unchanged.
         if transfer.expired():
             msg = "release download exceeded the transfer deadline"
             raise TimeoutError(msg) from error
