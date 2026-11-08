@@ -576,6 +576,7 @@ class _UnexpectedActivationFailure:
         self.acquired: list[int] = []
         self.close_calls: dict[int, int] = {}
         self.blocking_at_close: dict[int, bool] = {}
+        self.construction_failure = RuntimeError("activation failed unexpectedly")
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
@@ -632,8 +633,7 @@ class _UnexpectedActivationFailure:
     def fail_construction(self, *args: object, **kwargs: object) -> typ.NoReturn:
         """Raise where the state object is built, after blocking activation."""
         del args, kwargs
-        msg = "activation failed unexpectedly"
-        raise RuntimeError(msg)
+        raise self.construction_failure
 
 
 def test_a_state_construction_failure_rolls_back_the_activated_pair(
@@ -652,7 +652,7 @@ def test_a_state_construction_failure_rolls_back_the_activated_pair(
         )
         with (
             observe_pump(PumpMetricsHook(collector)),
-            pytest.raises(RuntimeError, match="activation failed unexpectedly"),
+            pytest.raises(RuntimeError) as raised,
         ):
             asyncio.run(
                 _pipeline_streams._run_rust_pump(
@@ -662,6 +662,9 @@ def test_a_state_construction_failure_rolls_back_the_activated_pair(
                 )
             )
 
+    assert raised.value is failure.construction_failure, (
+        "the construction failure must reach the caller unchanged"
+    )
     assert failure.resume_calls == 1, (
         "a state construction failure must resume the reader"
     )

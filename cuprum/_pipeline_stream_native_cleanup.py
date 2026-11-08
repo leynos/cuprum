@@ -284,7 +284,7 @@ def _activate_rust_pump_state(
     Blocking activation stays after the buffered drain because ``os.dup``
     shares the transport's status flags on non-Linux platforms, so an early
     switch would block asyncio's own descriptor during the drain.
-    ``_engage_rust_pump_blocking_mode`` closes both descriptors exactly once.
+    ``_engage_rust_pump_blocking_mode`` closes both descriptors when it fails.
 
     Returns
     -------

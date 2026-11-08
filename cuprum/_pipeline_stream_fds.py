@@ -29,12 +29,10 @@ RUST_PUMP_TEARDOWN_FAILED_ACTION = "rust_pump_teardown_failed"
 def _fd_from_transport(transport: object | None) -> int | None:
     """Extract a raw FD via ``transport.get_extra_info('pipe').fileno()``.
 
-    Every attribute here is duck-typed, so each is checked for callability
-    before use: a transport double, or an unusual implementation carrying a
-    non-callable ``get_extra_info``, would otherwise raise ``TypeError`` from
-    outside the ``try`` below. Nothing upstream catches that —
-    ``_extract_stream_fd`` calls straight through — so it would surface as a
-    crash where the contract is to decline the fast path and return ``None``.
+    Every attribute here is duck-typed and checked for callability first: a
+    non-callable ``get_extra_info`` would otherwise raise ``TypeError`` from
+    outside the ``try`` below and surface as a crash where the contract is to
+    decline the fast path and return ``None``.
 
     Returns
     -------
@@ -177,12 +175,10 @@ def _pause_reader_transport(
     def _release() -> None:
         """Close the paused reader once its loop can no longer resume it.
 
-        Resuming is not enough here. A transport that is merely resumed still
-        owns its descriptor until the pipe reaches EOF, and it holds its
-        subprocess transport open until then, so an abandoned hop that outlives
-        its loop would release nothing. Closing is what the loop itself would
-        have done at EOF, and it must happen while the loop can still run the
-        callbacks that release the descriptor.
+        Resuming is not enough: a resumed transport still owns its descriptor
+        until EOF, so an abandoned hop outliving its loop would release
+        nothing. Closing is what the loop would have done at EOF, while it can
+        still run the callbacks that release the descriptor.
         """
         if not callable(close_reading):
             return
@@ -201,10 +197,7 @@ def _set_stream_fds_blocking(*, reader_fd: int, writer_fd: int) -> tuple[bool, b
     """Switch pipe FDs to blocking mode and return their prior state."""
     reader_was_blocking = os.get_blocking(reader_fd)
     writer_was_blocking = os.get_blocking(writer_fd)
-    prior_modes = (
-        (reader_fd, reader_was_blocking),
-        (writer_fd, writer_was_blocking),
-    )
+    prior_modes = ((reader_fd, reader_was_blocking), (writer_fd, writer_was_blocking))
     try:
         for fd, was_blocking in prior_modes:
             if not was_blocking:
@@ -248,12 +241,22 @@ class _BlockingModeGuard:
             reader_fd=reader_fd,
             writer_fd=writer_fd,
         )
-        return cls(
-            reader_fd=reader_fd,
-            writer_fd=writer_fd,
-            reader_was_blocking=reader_was_blocking,
-            writer_was_blocking=writer_was_blocking,
-        )
+        try:
+            return cls(
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+                reader_was_blocking=reader_was_blocking,
+                writer_was_blocking=writer_was_blocking,
+            )
+        except BaseException:
+            # No guard exists yet; a shared flag would leave the transport blocking.
+            _restore_stream_fd_blocking(
+                reader_fd=reader_fd,
+                writer_fd=writer_fd,
+                reader_was_blocking=reader_was_blocking,
+                writer_was_blocking=writer_was_blocking,
+            )
+            raise
 
     def restore(self) -> None:
         """Restore the modes captured by :meth:`engage`."""
