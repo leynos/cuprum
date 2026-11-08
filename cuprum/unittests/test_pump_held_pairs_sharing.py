@@ -33,7 +33,7 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     ``_emit_pump_event`` hands one event to every hook inline on the emitting
     thread, so the second hook's delivery of that event can arrive after
     another thread has already delivered a different event. It must still be
-    recognised as the same emission and leave the total alone.
+    recognized as the same emission and leave the total alone.
     """
     collector = RecordingCollector()
     hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
