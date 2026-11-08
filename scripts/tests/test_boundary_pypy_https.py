@@ -12,6 +12,7 @@ The unit cases that drive a fake response through the same bounds live in
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import io
 import os
@@ -45,8 +46,32 @@ NO_DOWNLOAD_INTEGRATION = pytest.mark.skipif(
 )
 
 
-class TestControlledHttpsTransfer:
-    """`checked_download` must fail closed over a real TLS connection."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Overflow:
+    """One way to serve a body that passes the byte ceiling.
+
+    Attributes
+    ----------
+    scenario:
+        The scenario module's handler name.
+    path:
+        The request path the download starts from.
+    requests:
+        The request paths the refusal must follow, in order.
+    """
+
+    scenario: str
+    path: str
+    requests: tuple[str, ...]
+
+
+class _HttpsCase:
+    """Fixtures shared by the loopback cases.
+
+    One certificate authority serves a whole class, and every test trusts it
+    through `SSL_CERT_FILE` for the connections it opens, so each case states
+    only the behaviour it checks.
+    """
 
     @pytest.fixture(scope="class")
     def certificates(
@@ -55,21 +80,24 @@ class TestControlledHttpsTransfer:
         """Create one test CA and server certificate for the class."""
         return support.create_certificates(tmp_path_factory.mktemp("certificates"))
 
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def trust_test_ca(
         self,
         certificates: support.Certificates,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Trust the test CA only for the connection this test opens."""
+        """Trust the test CA for the connections each test opens."""
         monkeypatch.setenv("SSL_CERT_FILE", str(certificates.ca))
+
+
+class TestControlledHttpsTransfer(_HttpsCase):
+    """`checked_download` must fail closed over a real TLS connection."""
 
     @NO_DOWNLOAD_INTEGRATION
     def test_a_verified_body_is_published_over_https(
         self,
         tmp_path: Path,
         certificates: support.Certificates,
-        trust_test_ca: None,
     ) -> None:
         """A verified body crosses a real TLS connection and is published."""
         destination = tmp_path / "archive.tar.gz"
@@ -87,122 +115,70 @@ class TestControlledHttpsTransfer:
         )
 
     @NO_DOWNLOAD_INTEGRATION
-    def test_an_oversized_body_leaves_no_partial_archive(
+    @pytest.mark.parametrize(
+        "case",
+        [
+            _Overflow("stream_overflow", "/asset.bin", ("/asset.bin",)),
+            _Overflow("redirect_overflow", "/start", ("/start", "/asset.bin")),
+        ],
+        ids=["direct", "redirected"],
+    )
+    def test_an_over_ceiling_body_leaves_no_partial_archive(
         self,
+        case: _Overflow,
         tmp_path: Path,
         certificates: support.Certificates,
-        trust_test_ca: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A body past the ceiling leaves neither a pending nor a final file."""
         monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", MAX_BYTES)
         destination = tmp_path / "archive.tar.gz"
-        pending = destination.with_suffix(".download")
         with (
-            _serving("stream_overflow", certificates) as server,
+            _serving(case.scenario, certificates) as server,
             pytest.raises(ValueError, match=f"exceeded the {MAX_BYTES}-byte limit"),
         ):
             downloader.checked_download(
-                f"{server.url}/asset.bin", destination, "0" * 64
+                f"{server.url}{case.path}", destination, "0" * 64
             )
         emitted = server.emitted
         assert emitted > MAX_BYTES, (
             "the server must exceed the ceiling, so the streamed limit stops it"
         )
-        assert not destination.exists(), "the destination must not be created"
-        assert not pending.exists(), "the pending file must be discarded"
-
-    @NO_DOWNLOAD_INTEGRATION
-    def test_a_redirected_overflow_leaves_no_partial_archive(
-        self,
-        tmp_path: Path,
-        certificates: support.Certificates,
-        trust_test_ca: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A redirected body past the ceiling leaves neither pending nor final."""
-        monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", MAX_BYTES)
-        destination = tmp_path / "archive.tar.gz"
-        pending = destination.with_suffix(".download")
-        with (
-            _serving("redirect_overflow", certificates) as server,
-            pytest.raises(ValueError, match=f"exceeded the {MAX_BYTES}-byte limit"),
-        ):
-            downloader.checked_download(f"{server.url}/start", destination, "0" * 64)
-        emitted = server.emitted
-        assert emitted > MAX_BYTES, (
-            "the redirected server must exceed the ceiling before the limit stops it"
+        assert [request.path for request in server.requests] == list(case.requests), (
+            "the refusal must follow exactly the expected request path"
         )
-        assert [request.path for request in server.requests] == [
-            "/start",
-            "/asset.bin",
-        ], "the redirect hop must be followed before the ceiling is applied"
         assert not destination.exists(), "the destination must not be created"
-        assert not pending.exists(), "the pending file must be discarded"
+        assert not destination.with_suffix(".download").exists(), (
+            "the pending file must be discarded"
+        )
 
     @NO_DOWNLOAD_INTEGRATION
-    def test_a_trickled_header_is_stopped_by_the_deadline(
+    @pytest.mark.parametrize("scenario", ["trickle_headers", "late_eof"])
+    def test_a_stalled_response_is_stopped_by_the_deadline(
         self,
+        scenario: str,
         tmp_path: Path,
         certificates: support.Certificates,
-        trust_test_ca: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A server that trickles header bytes cannot outlive the deadline."""
+        """A transfer that outlives the deadline leaves no partial archive."""
         monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", 1.0)
         destination = tmp_path / "archive.tar.gz"
-        pending = destination.with_suffix(".download")
         with (
-            _serving("trickle_headers", certificates) as server,
+            _serving(scenario, certificates) as server,
             pytest.raises(TimeoutError, match="transfer deadline"),
         ):
             downloader.checked_download(
                 f"{server.url}/asset.bin", destination, "0" * 64
             )
         assert not destination.exists(), "the destination must not be created"
-        assert not pending.exists(), "the pending file must be discarded"
-
-    @NO_DOWNLOAD_INTEGRATION
-    def test_a_late_eof_is_stopped_by_the_deadline(
-        self,
-        tmp_path: Path,
-        certificates: support.Certificates,
-        trust_test_ca: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A body that ends after the deadline is refused, not published."""
-        monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", 1.0)
-        destination = tmp_path / "archive.tar.gz"
-        pending = destination.with_suffix(".download")
-        with (
-            _serving("late_eof", certificates) as server,
-            pytest.raises(TimeoutError, match="transfer deadline"),
-        ):
-            downloader.checked_download(
-                f"{server.url}/asset.bin", destination, "0" * 64
-            )
-        assert not destination.exists(), "the destination must not be created"
-        assert not pending.exists(), "the pending file must be discarded"
+        assert not destination.with_suffix(".download").exists(), (
+            "the pending file must be discarded"
+        )
 
 
-class TestControlledHttpsInstall:
+class TestControlledHttpsInstall(_HttpsCase):
     """`install` must publish only a verified interpreter over real TLS."""
-
-    @pytest.fixture(scope="class")
-    def certificates(
-        self, tmp_path_factory: pytest.TempPathFactory
-    ) -> support.Certificates:
-        """Create one test CA and server certificate for the class."""
-        return support.create_certificates(tmp_path_factory.mktemp("certificates"))
-
-    @pytest.fixture
-    def trust_test_ca(
-        self,
-        certificates: support.Certificates,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Trust the test CA only for the connection this test opens."""
-        monkeypatch.setenv("SSL_CERT_FILE", str(certificates.ca))
 
     @NO_DOWNLOAD_INTEGRATION
     @pytest.mark.skipif(
@@ -212,7 +188,6 @@ class TestControlledHttpsInstall:
         self,
         tmp_path: Path,
         certificates: support.Certificates,
-        trust_test_ca: None,
     ) -> None:
         """A verified archive downloaded over TLS supplies the interpreter."""
         archive = _archive(
@@ -240,7 +215,6 @@ class TestControlledHttpsInstall:
         self,
         tmp_path: Path,
         certificates: support.Certificates,
-        trust_test_ca: None,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A refused download through `install` leaves no archive or root."""
