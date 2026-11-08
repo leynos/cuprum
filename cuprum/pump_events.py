@@ -191,10 +191,12 @@ class PumpEvent:
     phase: PumpPhase
     reason: RustPumpDeclineReason | None = None
     outcome: RustPumpHandoffOutcome | None = None
-    held_delta: int = 0
     duration_s: float | None = None
     elapsed_s: float | None = None
     exec_id: ExecId | None = None
+    # Appended last so adding it cannot shift the positional fields callers
+    # already passed to this public dataclass.
+    held_delta: int = 0
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]

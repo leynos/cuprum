@@ -53,6 +53,8 @@ from cuprum.pump_events import RustPumpHandoffOutcome
 from cuprum.pump_observation import (
     _emit_rust_pump_handoff_outcome,
     _emit_rust_pump_hold,
+    _release_declined_hold,
+    _settle_hold_outcome,
 )
 from cuprum.pump_span_events import (
     NATIVE_PUMP_BUFFER_SIZE,
@@ -120,10 +122,9 @@ def _rollback_rust_pump_start(
 def _release_activated_rust_pump_hold(state: _RustPumpState) -> None:
     """Release the coordinator's hold on an activated but unsubmitted pair.
 
-    The coordinator releases the hold before the completion callback takes
-    ownership, so a shutdown signal from a hold observer here would otherwise
-    strand the pair open, the pipes blocking, and the reader paused. Rolling
-    back first keeps the signal travelling without stranding them.
+    The hold precedes the completion callback's ownership, so a shutdown signal
+    from a hold observer would otherwise strand the open pair, its blocking
+    modes, and the paused reader; rolling back first keeps the signal going.
     """
     try:
         _emit_rust_pump_hold(-1)
@@ -242,8 +243,7 @@ async def _drain_before_rust_pump_submission(
     except BaseException:
         _close_unactivated_rust_pump_fds(worker_fds)
         _resume_reader_transport(reader_pause.resume)
-        _emit_rust_pump_hold(-1)
-        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
+        _settle_hold_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
         raise
 
 
@@ -268,9 +268,10 @@ def _activate_rust_pump_state_or_release(
         return _activate_rust_pump_state(worker_fds, reader_pause, handoff)
     except BaseException as error:
         _resume_reader_transport(reader_pause.resume)
-        _emit_rust_pump_hold(-1)
         if not isinstance(error, _RustPumpBlockingModeError):
+            _emit_rust_pump_hold(-1)
             raise
+        _release_declined_hold()
         return None
 
 

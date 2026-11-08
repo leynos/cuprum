@@ -203,6 +203,34 @@ def _emit_rust_pump_hold(delta: int) -> None:
     _emit_pump_event(PumpEvent(phase="handoff_hold", held_delta=delta))
 
 
+def _settle_hold_outcome(outcome: RustPumpHandoffOutcome) -> None:
+    """Release the hold, publishing ``outcome`` whichever way release goes.
+
+    A shutdown signal raised by a hold observer would otherwise skip the
+    outcome, leaving the hand-off counter without the settle the hop just
+    performed. Publishing from a ``finally`` keeps the outcome counted and
+    still lets the signal travel afterwards.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    finally:
+        _emit_rust_pump_handoff_outcome(outcome)
+
+
+def _release_declined_hold() -> None:
+    """Release the hold, counting the decline if release is interrupted.
+
+    The caller publishes ``BLOCKING_SETUP_FAILED`` itself when release returns,
+    so a decline keeps its existing event order; only a release interrupted by
+    a shutdown signal publishes the decline here, before that signal travels.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    except BaseException:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
+        raise
+
+
 def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:
     """Log and emit the Windows raw-handle capability rejection."""
     outcome = RustPumpHandoffOutcome.WINDOWS_RAW_HANDLE_REJECTED

@@ -5928,7 +5928,10 @@ rejection emits `executor_submission_rejected` before it is re-raised.
 Blocking-mode failure emits `blocking_setup_failed`. A drain failure or
 cancellation emits `drain_failed` once the acquired pair has been released. The
 outcome events are counted by `cuprum_rust_pump_handoff_total` as described
-above.
+above. `_settle_hold_outcome` and `_release_declined_hold` in
+`cuprum/pump_observation.py` publish those two outcomes around the hold
+release, so a shutdown signal raised by a hold observer still leaves the
+failure counted.
 
 Two setup failures still re-raise, and the distinction between them and the
 declines is what the two duplication stages exist to draw.
