@@ -272,8 +272,8 @@ and does not make compiler outputs interchangeable between Rust versions or
 backends. No speedup is claimed. The wheel route's mutable `stable` selection
 remains a separately reviewable follow-up.
 
-This route accepts Rust 1.95 and newer, but that acceptance is not permission
-to use 1.95-only APIs in shared sources. The
+This route pins Rust 1.99.1, which is newer than 1.95, but that pin is not
+permission to use 1.95-only APIs in shared sources. The
 [Rust 1.95 cold-path and `cfg_select!` assessment](rust-1-95-cold-path-and-cfg-select-assessment-2026-11-08.md)
 records both opportunities as deferred, because the declared 1.87.0 floor and
 the Loom and Kani pins still compile the same files.

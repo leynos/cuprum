@@ -252,12 +252,15 @@ methodology without importing the phase-6 dispatcher wall-time gate.
 
 1. **Baseline and variants.** The baseline is the same post-migration revision
    as the variant, built by the same compiler for both legs. Each hint is its
-   own patch and its own measurement; no patch carries two hints. Record
-   `rustc -vV`, `cargo -V`, the target triple, the profile, the enabled
-   features, `RUSTFLAGS`, and a digest of `Cargo.lock` for both legs. Record
-   the same for `uv.lock`, and the path and content hash of the native
-   extension each leg actually loaded: an interleaved run can otherwise measure
-   the one installed extension twice, or measure two different dependency sets.
+   own patch and its own measurement; no patch carries two hints. Both legs
+   must also share the target triple, the profile, the enabled features,
+   `RUSTFLAGS`, the `Cargo.lock` and `uv.lock` digests, and the runtime
+   environment, including the native extension they load. Record `rustc -vV`,
+   `cargo -V`, each of those values, and the path and content hash of the
+   extension each leg actually loaded, then verify from that record that the
+   legs match: an interleaved run can otherwise measure the one installed
+   extension twice, or measure two different dependency sets. A mismatch
+   disqualifies the comparison rather than being attributed to the hint.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
