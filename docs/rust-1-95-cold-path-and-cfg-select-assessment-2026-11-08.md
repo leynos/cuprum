@@ -276,15 +276,16 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    `run_sync`, so they measure the integrated path rather than the native
    consume helper, and the only benchmark calling `rust_consume_stream`
    directly feeds it invalid UTF-8. A consume-path hint therefore needs a
-   direct normal-UTF-8 benchmark added beside it. Early-consumer closure and
-   interrupted/fatal error paths need controlled stimulus too, so those
-   additions belong in benchmark-only in-crate scaffolding behind
-   `#[cfg(test)]` or a benchmark feature. The artefact checked in step 1 is the
-   Python extension module for a Python-driven benchmark and the benchmark test
-   executable for an in-crate harness, so it is a different file for those two
-   kinds of leg but must still come from the leg's own build. Measuring the
-   currently unintegrated consume helper does not authorize integrating it, and
-   the integration guard in
+   direct normal-UTF-8 benchmark added beside it. Early-consumer closure,
+   interrupted/fatal error, partial-progress write, and zero-write paths need
+   controlled stimulus too, and a fatal-error stimulus exercises neither of the
+   last two, so those additions belong in benchmark-only in-crate scaffolding
+   behind `#[cfg(test)]` or a benchmark feature. The artefact checked in step 1
+   is the Python extension module for a Python-driven benchmark and the
+   benchmark test executable for an in-crate harness, so it is a different file
+   for those two kinds of leg but must still come from the leg's own build.
+   Measuring the currently unintegrated consume helper does not authorize
+   integrating it, and the integration guard in
    `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
    number of rounds, and keep raw samples, exclusions, and failures. Report a
