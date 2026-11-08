@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.client
 import io
 import socket
+import threading
 import typing as typ
 from unittest import mock
 
@@ -251,7 +252,9 @@ class TestDeadlineWatchdog:
 
     def test_the_socket_is_captured_before_the_response_takes_it(self) -> None:
         """The socket is armed before `getresponse` can clear the reference."""
+        stopped = threading.Event()
         sock = mock.Mock()
+        sock.shutdown.side_effect = lambda _how: stopped.set()
         connection = mock.Mock()
         connection.sock = sock
         watchdog = downloader._DeadlineWatchdog(
@@ -261,7 +264,9 @@ class TestDeadlineWatchdog:
         # clears the connection's reference, as `getresponse` does.
         connection.sock = None
         with watchdog:
-            pass
+            # Exiting immediately would signal `_stop` before the watchdog
+            # thread runs, which legitimately skips the shutdown.
+            assert stopped.wait(5.0), "the watchdog must shut the socket down"
         sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
 
 
