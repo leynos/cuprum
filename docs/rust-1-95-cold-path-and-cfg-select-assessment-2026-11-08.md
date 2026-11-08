@@ -128,10 +128,12 @@ a 1.87 route either: its Rustdoc and Clippy leaf runs on the dev-fast nightly
 and its Whitaker leaf on the `nightly-2026-05-28` driver, both recorded in
 their own rows above. The CI routes that compile the crates on the project
 toolchain are `make msrv-check` in the lint job, the Rust suite in the coverage
-job, the Loom smoke job, and the native boundary matrix in
-`rust-boundaries.yml`. The extension-tests job builds the extension through
-`make develop`, which on Linux selects the dev-fast nightly, so it belongs to
-that row rather than to the 1.87 routes.
+job, the Loom smoke job, the native boundary matrix in `rust-boundaries.yml`,
+and `extension-tests-windows`. That Windows job installs `1.87.0` as its
+default toolchain and builds the extension through `make develop`, which takes
+the dev-fast route only on Linux, so its extension build compiles on the pin.
+Its Linux counterpart builds through the same target but selects the dev-fast
+nightly, so that job belongs to that row rather than to the 1.87 routes.
 
 ### Which routes block adoption
 
