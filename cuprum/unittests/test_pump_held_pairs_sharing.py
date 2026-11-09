@@ -77,6 +77,46 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     )
 
 
+def test_an_interleaved_release_does_not_move_one_hold_twice() -> None:
+    """One release event moves the shared total once despite another thread's.
+
+    The outer release reaches the first hook, then waits between the hooks
+    while another thread completes a release of its own. The outer event is
+    still in flight, so its remaining delivery must leave the total alone even
+    though the interleaved release has already moved it.
+    """
+    collector = RecordingCollector()
+    hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
+    gate = PausingHook()
+
+    with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
+        context = contextvars.copy_context()
+        _emit_rust_pump_hold(1)
+        _emit_rust_pump_hold(1)
+        gate.arm()
+
+        def release_elsewhere() -> None:
+            """Complete a release while the outer release waits between hooks."""
+            assert gate.wait_paused(5.0), "the outer release must pause"
+            context.run(_emit_rust_pump_hold, -1)
+            gate.release()
+
+        worker = threading.Thread(target=release_elsewhere)
+        worker.start()
+        try:
+            _emit_rust_pump_hold(-1)
+        finally:
+            # Never leave the gated delivery blocked behind a failed assertion.
+            gate.release()
+            worker.join(timeout=5.0)
+        assert not worker.is_alive(), "the interleaved release must finish"
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0, 1.0, 0.0], (
+        "the second delivery of one release must not count while the first "
+        "delivery of that event is still outstanding"
+    )
+
+
 def test_a_hook_that_emits_while_called_does_not_count_the_outer_hold_again() -> None:
     """A nested emission counts once and keeps the outer event's claim alive.
 

@@ -192,6 +192,21 @@ class PausingHook:
         self.paused.clear()
         self.resume.set()
 
+    def is_open(self) -> bool:
+        """Whether a release is still unclaimed, so an armed delivery cannot block."""
+        return self.resume.is_set()
+
+    def reset(self) -> None:
+        """Close the handshake so a later replay starts with the gate shut.
+
+        Cleaning up a failed replay releases the gate, which leaves the resume
+        event set. Without this reset a delivery armed by the next replay would
+        find that event already set and run straight through the gate, so the
+        planned interleaving would not happen.
+        """
+        self.paused.clear()
+        self.resume.clear()
+
     def __call__(self, event: PumpEvent) -> None:
         """Hold the armed delivery until the test releases it."""
         del event

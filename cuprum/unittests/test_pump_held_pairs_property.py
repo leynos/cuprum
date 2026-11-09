@@ -210,6 +210,8 @@ class _Schedule:
             self._replay.gate.release()
             for turnstile in self._turnstiles.values():
                 turnstile.stop()
+            # Release leaves the gate open, so shut it before the next replay.
+            self._replay.gate.reset()
 
     def _advance(self, index: int) -> int:
         """Run the emission at ``index``, interleaving inside it when it pauses.
@@ -223,6 +225,11 @@ class _Schedule:
         emission = emissions[order[index]]
         worker, _nests, pauses = emission
         turnstile = self._turnstiles[worker]
+        if pauses:
+            assert not self._replay.gate.is_open(), (
+                "a paused delivery must start behind a shut gate, or the "
+                "planned interleaving is not exercised"
+            )
         turnstile.start(self._replay.step(emission, pauses=pauses))
         if not pauses:
             turnstile.settle()
