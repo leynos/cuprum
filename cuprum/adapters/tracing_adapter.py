@@ -95,13 +95,7 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(slots=True)
 class _ActiveSpan:
-    """One open span and the lock that serializes its callbacks.
-
-    ``once_events`` remembers the event names already recorded at most once,
-    so a decision repeated on the per-line path cannot grow the span with the
-    line count. It belongs to the span rather than to the hook because the
-    bound is per execution, and it is discarded with the span.
-    """
+    """One open span, its callback lock, and the event names recorded once."""
 
     span: Span
     lock: threading.Lock = dc.field(default_factory=threading.Lock)
@@ -237,8 +231,7 @@ class TracingHook(
         if exec_id is None:
             return
 
-        # Tracer setup is independent of the span bookkeeping; do it before
-        # taking the lock so unrelated handlers are not blocked on it.
+        # Build before the lock, so unrelated handlers are not blocked on it.
         attributes = self._build_attributes(
             event, original_project_tag=original_project_tag
         )

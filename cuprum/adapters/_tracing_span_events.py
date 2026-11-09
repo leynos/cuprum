@@ -67,8 +67,10 @@ def record_span_event_once(
 
     Use this for a decision taken on the per-line path, where every repetition
     would otherwise grow the span with the line count. The counters that need
-    every occurrence live in the metrics projection instead. The lifetime and
-    locking rules are those of :func:`record_span_event`.
+    every occurrence live in the metrics projection instead. The bound belongs
+    to the span rather than to the hook because it is per execution, and the
+    remembered names are discarded with the span. The lifetime and locking
+    rules are those of :func:`record_span_event`.
     """
     _append_span_event(hook, exec_id, _SpanEvent(name, attributes, once=True))
 
