@@ -6,8 +6,22 @@ import typing as typ
 
 import pytest
 
-from cuprum import _streams_rs
+from cuprum import _rust_backend, _streams_rs
 from tests.helpers.consume_boundary_oracle import _capture_python, check_payload
+
+
+@pytest.fixture(name="native_extension")
+def fixture_native_extension() -> None:
+    """Skip when the compiled extension the oracle compares against is absent.
+
+    The comparison calls ``cuprum._rust_backend_native`` directly, so these
+    cases cannot run without it. Gating them individually rather than with a
+    module-level ``skipif`` keeps ``test_python_capture_remains_independent_of_rust``
+    running everywhere: that case exercises the Python reference alone, so it
+    is real coverage in an extension-free lane rather than a skip.
+    """
+    if not _rust_backend.is_available():
+        pytest.skip("Rust extension is not installed")
 
 
 def _patterned_large_payload(length: int, tail: bytes) -> bytes:
@@ -18,6 +32,32 @@ def _patterned_large_payload(length: int, tail: bytes) -> bytes:
         :prefix_length
     ]
     return prefix + tail
+
+
+@pytest.mark.parametrize(("available", "skips"), [(False, True), (True, False)])
+def test_the_guard_skips_exactly_when_the_extension_is_unusable(
+    *,
+    available: bool,
+    skips: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Absence must produce a skip, and presence must not.
+
+    A guard whose skip path is never exercised cannot be told apart from one
+    that raises instead: the extension-free coverage lane reported
+    ``ModuleNotFoundError`` for the native cases while every sibling module
+    skipped, because nothing here asserted that absence means a skip.
+    """
+    monkeypatch.setattr(_rust_backend, "is_available", lambda: available)
+
+    if not skips:
+        assert request.getfixturevalue("native_extension") is None, (
+            "a usable extension must not skip the native cases"
+        )
+        return
+    with pytest.raises(pytest.skip.Exception):
+        request.getfixturevalue("native_extension")
 
 
 def test_python_capture_remains_independent_of_rust(
@@ -36,6 +76,7 @@ def test_python_capture_remains_independent_of_rust(
     )
 
 
+@pytest.mark.usefixtures("native_extension")
 @pytest.mark.parametrize(
     ("payload", "buffer_size"),
     [
@@ -62,6 +103,7 @@ def test_native_wrapper_and_direct_defaults_match_python(
     assert metadata.native_module_path, "the child should report its extension"
 
 
+@pytest.mark.usefixtures("native_extension")
 @pytest.mark.parametrize(
     "buffer_size",
     [1, 2, 3, 4, 65_535, 65_536, 65_537],
@@ -85,6 +127,7 @@ def test_four_byte_scalar_straddles_each_named_read_boundary(
     assert metadata.native_module_path, "the child should report its extension"
 
 
+@pytest.mark.usefixtures("native_extension")
 @pytest.mark.parametrize(
     ("length", "buffer_size", "tail"),
     [
@@ -113,6 +156,7 @@ def test_named_large_payload_lengths_match_python(
     assert metadata.native_module_path, "the child should report its extension"
 
 
+@pytest.mark.usefixtures("native_extension")
 def test_incomplete_mebibyte_capture_drains_a_concurrent_producer() -> None:
     """Direct native consume drains a real producer pipe through EOF."""
     payload = _patterned_large_payload(1_048_577, b"\xe2\x98")
