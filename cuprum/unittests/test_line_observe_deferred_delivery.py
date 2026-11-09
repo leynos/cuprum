@@ -14,6 +14,7 @@ The retention bound itself, and the hook-speed matrix, live in
 from __future__ import annotations
 
 import asyncio
+import logging
 import typing as typ
 
 import pytest
@@ -69,13 +70,33 @@ class _DeferredCallback:
             await self.release.wait()
 
 
+def _capacity_wait_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Return the retention logger's capacity-wait records."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "cuprum._retention_telemetry"
+        and record.getMessage().startswith("observe_task_capacity_wait")
+    ]
+
+
 @pytest.mark.parametrize("capture", _CAPTURE_MODES)
 def test_deferred_async_on_line_runs_and_holds_completion(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     capture: bool,
 ) -> None:
     """A line deferred by saturation must still await its async ``on_line``."""
+    # The callback could also start late for an unrelated reason; the wait
+    # record is what shows the line itself was deferred by admission.
+    caplog.set_level(logging.INFO, logger="cuprum._retention_telemetry")
+
     asyncio.run(_async_on_line_case(monkeypatch, capture))
+
+    assert _capacity_wait_messages(caplog), (
+        "the callback must not start before the line reader was suspended for "
+        "observer capacity"
+    )
 
 
 async def _async_on_line_case(
