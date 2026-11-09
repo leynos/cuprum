@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     type Clock = cabc.Callable[[], float]
+    type Waiter = cabc.Callable[[float], bool]
 
 # Large enough for the pinned PyPy archive with room to spare, small enough
 # that a hostile or broken response cannot exhaust the host disk.
@@ -138,11 +139,19 @@ class _DeadlineWatchdog:
         self,
         connection: http.client.HTTPSConnection,
         transfer: _Transfer,
+        *,
+        wait: Waiter | None = None,
     ) -> None:
-        """Arm a watchdog for `connection`'s current socket."""
+        """Arm a watchdog for `connection`'s current socket.
+
+        The remaining time comes from the transfer's own clock, so the wait and
+        every deadline check share one time source. Tests inject `wait` to
+        advance that clock instead of blocking for the remaining real seconds.
+        """
         self._sock = connection.sock
         self._transfer = transfer
         self._stop = threading.Event()
+        self._wait = self._stop.wait if wait is None else wait
         self._thread = threading.Thread(target=self._watch, daemon=True)
 
     def __enter__(self) -> _DeadlineWatchdog:
@@ -157,7 +166,7 @@ class _DeadlineWatchdog:
 
     def _watch(self) -> None:
         """Wait for the deadline, then shut the captured socket down."""
-        if self._stop.wait(self._transfer.remaining()):
+        if self._wait(self._transfer.remaining()):
             return
         if self._sock is not None:
             with contextlib.suppress(OSError):

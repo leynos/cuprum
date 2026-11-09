@@ -9,10 +9,9 @@ in `test_boundary_pypy_https.py`, which needs a socket and the `openssl` binary.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import io
-import socket
-import threading
 import typing as typ
 from unittest import mock
 
@@ -21,61 +20,22 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from scripts import pypy_download as downloader
+from scripts.tests.boundary_pypy_transfer_support import (
+    download_response,
+    download_with_clock,
+    fake_response,
+    fixed_clock,
+    manual_clock,
+    patch_connections,
+    redirect_response,
+    streaming_response,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
 #: The deadline every unit case allows, so the clock is the only variable.
 _DEADLINE = 1.0
-
-
-def _response(declared: str | None, chunks: cabc.Iterable[bytes]) -> mock.MagicMock:
-    """Build a 200 response whose `read1` yields `chunks` and then EOF."""
-    response = mock.MagicMock()
-    response.__enter__.return_value = response
-    response.status = http.client.OK
-    response.getheader.side_effect = lambda name: (
-        declared if name == "Content-Length" else None
-    )
-    response.read1.side_effect = [*chunks, b""]
-    return response
-
-
-def _streaming_response(body: bytes, declared: str | None = None) -> mock.MagicMock:
-    """Build a 200 response that streams `body` and reports `declared`."""
-    return _response(declared, [body])
-
-
-def _download_response(
-    response: mock.MagicMock,
-    destination: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    clock: cabc.Callable[[], float] | None = None,
-) -> None:
-    """Run one download against `response` without touching the network."""
-    connection = mock.Mock()
-    connection.getresponse.return_value = response
-    monkeypatch.setattr(
-        downloader.http.client,
-        "HTTPSConnection",
-        lambda *_args, **_kwargs: connection,
-    )
-    if clock is None:
-        downloader._download("https://example.invalid/asset", destination)
-    else:
-        downloader._download("https://example.invalid/asset", destination, clock=clock)
-
-
-def _fixed_clock() -> float:
-    """Return a clock that never advances, so only bytes can stop a copy."""
-    return 0.0
-
-
-def _manual_clock() -> mock.Mock:
-    """Return a callable clock the test moves by setting `return_value`."""
-    return mock.Mock(return_value=0.0)
 
 
 class TestBoundedBody:
@@ -86,8 +46,8 @@ class TestBoundedBody:
     ) -> None:
         """A body inside both bounds is written unchanged."""
         destination = tmp_path / "binary"
-        _download_response(
-            _streaming_response(b"archive bytes"), destination, monkeypatch
+        download_response(
+            streaming_response(b"archive bytes"), destination, monkeypatch
         )
         assert destination.read_bytes() == b"archive bytes", (
             "a bounded body must be copied in full"
@@ -99,9 +59,9 @@ class TestBoundedBody:
         """An oversized Content-Length fails before any byte reaches the disk."""
         monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", 8)
         destination = tmp_path / "binary"
-        response = _streaming_response(b"x" * 64, declared="9")
+        response = streaming_response(b"x" * 64, declared="9")
         with pytest.raises(ValueError, match="above the 8-byte limit"):
-            _download_response(response, destination, monkeypatch)
+            download_response(response, destination, monkeypatch)
         assert response.read1.call_count == 0, "the body must not be read"
         assert not destination.exists(), "the destination must not be created"
 
@@ -112,7 +72,7 @@ class TestBoundedBody:
         monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", 8)
         destination = tmp_path / "binary"
         with pytest.raises(ValueError, match="exceeded the 8-byte limit"):
-            _download_response(_streaming_response(b"x" * 64), destination, monkeypatch)
+            download_response(streaming_response(b"x" * 64), destination, monkeypatch)
         assert destination.read_bytes() == b"", (
             "an over-ceiling chunk must not be written"
         )
@@ -123,9 +83,9 @@ class TestBoundedBody:
         """Chunks each below the ceiling are refused once their total passes it."""
         monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", 10)
         destination = tmp_path / "binary"
-        response = _response(None, [b"abcd", b"abcd", b"abcd"])
+        response = fake_response(None, [b"abcd", b"abcd", b"abcd"])
         with pytest.raises(ValueError, match="exceeded the 10-byte limit"):
-            _download_response(response, destination, monkeypatch)
+            download_response(response, destination, monkeypatch)
         assert destination.read_bytes() == b"abcdabcd", (
             "only the chunks accepted before the ceiling may be written"
         )
@@ -137,7 +97,7 @@ class TestBoundedBody:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A clock that passes the deadline after one chunk stops the next read."""
-        clock = _manual_clock()
+        clock = manual_clock()
         destination = tmp_path / "binary"
         response = mock.MagicMock()
         response.__enter__.return_value = response
@@ -151,7 +111,7 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            _download_response(response, destination, monkeypatch, clock=clock)
+            download_response(response, destination, monkeypatch, clock=clock)
         assert response.read1.call_count == 1, "no chunk may be read past the deadline"
         assert destination.read_bytes() == b"first", (
             "the chunk accepted before the deadline must be kept"
@@ -163,9 +123,9 @@ class TestBoundedBody:
         """An expired deadline stops the copy before another chunk is read."""
         monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", 0.0)
         destination = tmp_path / "binary"
-        response = _streaming_response(b"x" * 64)
+        response = streaming_response(b"x" * 64)
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            _download_response(response, destination, monkeypatch)
+            download_response(response, destination, monkeypatch)
         assert response.read1.call_count == 0, "no chunk may be read past the deadline"
 
     def test_an_expired_transfer_is_refused_before_the_headers_are_read(
@@ -191,7 +151,7 @@ class TestBoundedBody:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A body that ends after the deadline is not accepted as complete."""
-        clock = _manual_clock()
+        clock = manual_clock()
         destination = tmp_path / "binary"
         response = mock.MagicMock()
         response.__enter__.return_value = response
@@ -208,7 +168,7 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            _download_response(response, destination, monkeypatch, clock=clock)
+            download_response(response, destination, monkeypatch, clock=clock)
         assert destination.read_bytes() == b"tail", (
             "the bytes read before the deadline must be kept"
         )
@@ -217,7 +177,7 @@ class TestBoundedBody:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A status line the watchdog truncates reports the deadline."""
-        clock = _manual_clock()
+        clock = manual_clock()
         connection = mock.Mock()
 
         def getresponse() -> mock.MagicMock:
@@ -240,7 +200,7 @@ class TestBoundedBody:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A chunk frame the watchdog truncates reports the deadline."""
-        clock = _manual_clock()
+        clock = manual_clock()
         response = mock.MagicMock()
         response.__enter__.return_value = response
         response.status = http.client.OK
@@ -253,72 +213,76 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            _download_response(response, tmp_path / "binary", monkeypatch, clock=clock)
+            download_response(response, tmp_path / "binary", monkeypatch, clock=clock)
 
     def test_a_body_parse_failure_before_the_deadline_is_propagated(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A parser failure inside the deadline stays the server's error."""
-        response = _streaming_response(b"x")
+        response = streaming_response(b"x")
         response.read1.side_effect = http.client.IncompleteRead(b"partial")
         with pytest.raises(http.client.IncompleteRead):
-            _download_response(response, tmp_path / "binary", monkeypatch)
+            download_response(response, tmp_path / "binary", monkeypatch)
 
     def test_the_deadline_spans_every_redirect_hop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A redirect hop does not restart the deadline for the body."""
-        clock = _manual_clock()
-        redirect = mock.MagicMock()
-        redirect.__enter__.return_value = redirect
-        redirect.status = 302
-        redirect.getheader.return_value = "https://example.invalid/asset"
-        body = _response(None, [b"payload"])
+        """Two hops inside the deadline still fail once their total exceeds it."""
+        clock = manual_clock()
+        redirect = redirect_response("https://example.invalid/asset")
 
-        def getresponse() -> mock.MagicMock:
-            """Answer the first hop, then move the clock past the deadline."""
-            clock.return_value = 10_000.0
-            return redirect
+        def redirect_header(name: str) -> str | None:
+            """Answer the header, ending the first hop at 600 s elapsed."""
+            clock.return_value = 600.0
+            return "https://example.invalid/asset" if name == "Location" else None
 
-        connection = mock.Mock()
-        connection.getresponse.side_effect = getresponse
-        monkeypatch.setattr(
-            downloader.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
-        )
+        redirect.getheader.side_effect = redirect_header
+        body = fake_response(None, [b"payload"])
+        reads = iter([b"payload", b""])
+
+        def read1(_size: int) -> bytes:
+            """Serve the body, then reach EOF only past the shared deadline."""
+            chunk = next(reads)
+            clock.return_value = 800.0 if chunk else 1_000.0
+            return chunk
+
+        body.read1.side_effect = read1
+        first, second = mock.Mock(), mock.Mock()
+        first.getresponse.return_value = redirect
+        second.getresponse.return_value = body
+        patch_connections(monkeypatch, [first, second])
+        download_with_clock(monkeypatch, clock)
+        archive = tmp_path / "binary"
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            downloader._download(
-                "https://example.invalid/start",
-                tmp_path / "binary",
-                clock=clock,
+            downloader.checked_download(
+                "https://example.invalid/start", archive, "0" * 64
             )
-        assert body.read1.call_count == 0, (
-            "the deadline set before the redirect must still stop the body"
+        assert body.read1.call_count == 2, "the final hop must serve its body"
+        assert not archive.exists(), "a timed-out transfer must publish nothing"
+        assert not archive.with_suffix(".download").exists(), (
+            "a timed-out transfer must leave no pending file"
         )
 
-
-class TestDeadlineWatchdog:
-    """The watchdog must stop the socket a close-delimited response owns."""
-
-    def test_the_socket_is_captured_before_the_response_takes_it(self) -> None:
-        """The socket is armed before `getresponse` can clear the reference."""
-        stopped = threading.Event()
-        sock = mock.Mock()
-        sock.shutdown.side_effect = lambda _how: stopped.set()
-        connection = mock.Mock()
-        connection.sock = sock
-        watchdog = downloader._DeadlineWatchdog(
-            connection, downloader._Transfer(0.0, _fixed_clock)
+    def test_a_redirected_download_inside_the_deadline_publishes_the_body(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redirect followed by a body inside the deadline publishes the asset."""
+        first, second = mock.Mock(), mock.Mock()
+        first.getresponse.return_value = redirect_response(
+            "https://example.invalid/asset"
         )
-        # A close-delimited response leaves the socket with the response and
-        # clears the connection's reference, as `getresponse` does.
-        connection.sock = None
-        with watchdog:
-            # Exiting immediately would signal `_stop` before the watchdog
-            # thread runs, which legitimately skips the shutdown.
-            assert stopped.wait(5.0), "the watchdog must shut the socket down"
-        sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+        second.getresponse.return_value = streaming_response(b"payload")
+        patch_connections(monkeypatch, [first, second])
+        download_with_clock(monkeypatch, manual_clock())
+        archive = tmp_path / "binary"
+        downloader.checked_download(
+            "https://example.invalid/start",
+            archive,
+            hashlib.sha256(b"payload").hexdigest(),
+        )
+        assert archive.read_bytes() == b"payload", (
+            "a redirected download must publish the verified body"
+        )
 
 
 class TestPendingFile:
@@ -370,9 +334,9 @@ def test_copy_body_keeps_accepted_bytes_and_refuses_overflow(
     output = io.BytesIO()
     if len(body) <= limit:
         downloader._copy_body(
-            _response(None, chunks),
+            fake_response(None, chunks),
             output,
-            downloader._Transfer(_DEADLINE, _fixed_clock),
+            downloader._Transfer(_DEADLINE, fixed_clock),
         )
         assert output.getvalue() == body, (
             "a body inside the ceiling must be copied unchanged"
@@ -380,9 +344,9 @@ def test_copy_body_keeps_accepted_bytes_and_refuses_overflow(
         return
     with pytest.raises(ValueError, match=f"exceeded the {limit}-byte limit"):
         downloader._copy_body(
-            _response(None, chunks),
+            fake_response(None, chunks),
             output,
-            downloader._Transfer(_DEADLINE, _fixed_clock),
+            downloader._Transfer(_DEADLINE, fixed_clock),
         )
     written = output.getvalue()
     assert len(written) <= limit, "no write may take the output past the ceiling"

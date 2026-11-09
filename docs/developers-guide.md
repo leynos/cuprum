@@ -5841,17 +5841,20 @@ so the default suite never reaches the network.
 `test_boundary_pypy_https.py`, which drives the PyPy downloader and the
 `install` entry point over the same loopback server.
 `test_boundary_pypy_transfer.py` holds the unit and property cases that need no
-socket. The PyPy downloader keeps one deadline across the redirects, the header
-parse, and the body, and a watchdog shuts the socket down when that deadline
-passes, so a server that trickles header or body bytes, or stalls a
-close-delimited body, cannot hold the transfer open. The watchdog captures the
-socket before the header parse, because `getresponse` hands a close-delimited
-response that socket and clears the connection's reference. The target needs the
-`openssl` binary to mint the throwaway certificate authority, `uv` with a
-Python 3.14 interpreter for the isolated driver, network access to install the
-pinned `rust-prover-tools` revision, and a loopback socket for each scenario.
-The PyPy cases need only `openssl` and the loopback socket; they trust the test
-certificate authority through `SSL_CERT_FILE` for the duration of one test.
+socket, `test_boundary_pypy_watchdog.py` holds the deadline-watchdog cases, and
+both take their fake responses and clocks from
+`boundary_pypy_transfer_support.py`. The PyPy downloader keeps one deadline
+across the redirects, the header parse, and the body, and a watchdog shuts the
+socket down when that deadline passes, so a server that trickles header or body
+bytes, or stalls a close-delimited body, cannot hold the transfer open. The
+watchdog captures the socket before the header parse, because `getresponse`
+hands a close-delimited response that socket and clears the connection's
+reference. The target needs the `openssl` binary to mint the throwaway
+certificate authority, `uv` with a Python 3.14 interpreter for the isolated
+driver, network access to install the pinned `rust-prover-tools` revision, and
+a loopback socket for each scenario. The PyPy cases need only `openssl` and the
+loopback socket; they trust the test certificate authority through
+`SSL_CERT_FILE` for the duration of one test.
 
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone.
