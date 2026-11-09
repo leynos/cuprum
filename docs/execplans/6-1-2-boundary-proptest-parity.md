@@ -318,6 +318,40 @@ ownership and error contracts, stop and report the exact incompatibility.
   `test-extension` (parity `running 30 tests`, `30 passed`). Two earlier
   `make test` attempts were terminated by the environment during the Rust
   compile phase and contributed no result.
+- [x] (2026-11-09) Rebased onto the advanced base and revalidated.
+  `origin/main` moved to `fc16682556aa6ade3fc33b51d8f673ceaea01437` while the
+  branch was in review, which left the PR `CONFLICTING` and therefore with no
+  CI run at all, since GitHub schedules none for a conflicting PR. The rebase
+  absorbed three upstream commits. `732fbdddf` (#507) replaced the handwritten
+  pipe constructors with `std::io::pipe` and raised the MSRV from 1.85.0 to
+  1.87.0, dropping the Windows-only `pipe` re-export the cross-platform
+  constructor now owns; `a885d5324` added `tests/helpers/makefile_pins.py` so
+  contracts read nightly pins from the Makefile; `fc1668255` reaps a spawned
+  child whose startup fails. Three conflicts were resolved by keeping
+  upstream's structure and re-applying this branch's addition: the
+  `windows_crt` re-export beside upstream's re-export block, both ADR addenda
+  in date order, and upstream's rewritten boundary table with this branch's two
+  CRT rows restored. The raised floor forced two repairs — the parity contract
+  test now reads `DEV_FAST_TOOLCHAIN` through `makefile_pins` instead of
+  hard-coding `nightly-2026-08-23`, and `Payload::len` became `const fn` because
+  `Vec::len` is const-stable from 1.87, which is what `make lint-windows`
+  denied.
+- [x] (2026-11-09) The first hosted run at the rebased head passed
+  `lint-test`, `Modern stable Rust validation`, the Loom smoke test, native
+  contracts on all three platforms, all five wheel builds, and the Linux
+  extension lane, so the earlier route defect is fixed in the hosted
+  environment, not merely locally. One job failed:
+  `Extension-gated tests (Windows Python/Rust boundary)` reported
+  `test_binary_mode_setup_failure_closes_the_duplicate` failing with
+  `Regex pattern did not match` against `[WinError 6] The handle is invalid`.
+  The assertion matched POSIX wording ("Bad file descriptor") in a Windows-only
+  test, so it could never pass where it ran. It now uses the shared
+  `_rust_stream_test_support.INVALID_FD_MESSAGE_RE` and `INVALID_FD_ERRNOS`,
+  which that module already documents for exactly this platform split. The four
+  affected targets were re-run at `6643a7f98`: `check-fmt` 0, `typecheck` 0,
+  `lint-windows` 0, and `test` 0 (65m32s, zero `FAILED`, Nextest 189 passed and
+  30 skipped, doctests clean, diff hash
+  `8380f7763ee10ce6306bb26ece405334cce00a7eb1aea6c1e779b6e179848c0a`).
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
