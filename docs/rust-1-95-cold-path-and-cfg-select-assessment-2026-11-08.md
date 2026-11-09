@@ -284,12 +284,16 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    not which backend it took: `get_stream_backend()` resolves once per process
    from `CUPRUM_STREAM_BACKEND`, and an `auto` resolution selects the Python
    pump on Windows and whenever the extension probes unavailable. Each targeted
-   run must therefore record the resolved backend from the
-   `cuprum.stream_backend_resolved` event, or assert it in the harness, and a
-   run recorded as Python is rejected rather than attributed to the hint. A
-   Rust resolution is necessary but not sufficient: `_pump_stream_dispatch`
-   still runs the Python pump when `_try_rust_pump` declines, which it does on
-   an unsupported platform, when a raw descriptor is unavailable, or when
+   run that resolves a backend through that selection must therefore record it
+   from the `cuprum.stream_backend_resolved` event, or assert it in the
+   harness, and a run whose selected backend is Python is rejected rather than
+   attributed to the hint. A run that never resolves a backend is not rejected
+   for the absence of that record: the requirement applies to runs that use
+   backend selection, not to a direct `rust_consume_stream` call or to in-crate
+   scaffolding, which reach the native helper without consulting it. A Rust
+   resolution is necessary but not sufficient: `_pump_stream_dispatch` still
+   runs the Python pump when `_try_rust_pump` declines, which it does on an
+   unsupported platform, when a raw descriptor is unavailable, or when
    extraction fails, and Unix hand-off failures take the same route. For a pump
    run driven through that dispatcher, each targeted hop must therefore
    evidence its own native pump invocation — a harness assertion or an event
@@ -297,12 +301,9 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    and a hop that fell back after resolving Rust is rejected on the same terms.
    One native event in a multi-hop run does not discharge the requirement for
    its other hops. A run that never enters the dispatcher is not covered by
-   that check and must not be rejected for it: a direct `rust_consume_stream`
-   call reaches the helper without `get_stream_backend()`, and in-crate
-   scaffolding can bypass the Python selection entirely. Those runs instead
-   evidence that the targeted entry point executed. The Rust label on a
-   scenario and the presence of the extension are not substitutes for either
-   observation.
+   that check and must not be rejected for it; those runs instead evidence that
+   the targeted entry point executed. The Rust label on a scenario and the
+   presence of the extension are not substitutes for either observation.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -327,12 +328,15 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    `stream_pump` span with `operation = "pump_stream_readwrite"`, so the
    harness must capture that span rather than filter on `pump_stream_readwrite`
    as if it were the span name. A targeted run of an `io_utils` hint on a
-   fallback-pump scenario must therefore assert that the fallback loop ran,
-   from that span or an equivalent harness assertion, and a run that took the
-   splice path is rejected rather than reported as a null result. The fallback
-   span is not a requirement for every `io_utils` candidate: A2's read-error
-   arm is also reached by `consume_stream_files`, which calls `read_stream`
-   inside the `consume_stream` span, and by `splice::drain_reader`, which calls
+   fallback-pump scenario must therefore assert that the fallback loop ran for
+   each targeted hop, from that span or an equivalent harness assertion, and
+   count that evidence against the run's hop count: one captured span proves
+   only that one hop entered the read/write loop, so a multi-hop run in which
+   another targeted hop took the splice path is rejected rather than reported
+   as a null result. The fallback span is not a requirement for every
+   `io_utils` candidate: A2's read-error arm is also reached by
+   `consume_stream_files`, which calls `read_stream` inside the
+   `consume_stream` span, and by `splice::drain_reader`, which calls
    `read_raw_fd` directly after a broken pipe and opens no span of its own.
    Those runs are accepted when the harness verifies the consume or drain path
    they claim, and the span expected is the one the claimed entry point opens.
