@@ -13,6 +13,8 @@ from __future__ import annotations
 import threading
 import weakref
 
+from cuprum.pump_observation import _in_flight_pump_events
+
 
 class _HeldPairCounter:
     """The held-pair count for one collector, shared by its reporting hooks."""
@@ -21,33 +23,48 @@ class _HeldPairCounter:
         """Start with no held pairs under a lock that serializes publication."""
         self.lock = threading.Lock()
         self.pairs = 0
-        # One emission delivers its event to every hook in the current context,
-        # inline on the thread that emitted it. A nested ``observe_pump``
+        # Events this thread has already moved the count for. One emission
+        # delivers its event to every hook in the current context, inline on
+        # the thread that emitted it, and a nested ``observe_pump``
         # registration puts several of those deliveries on the same counter, so
-        # one event must move the shared total once. The memory is per thread
-        # because a second thread's event can arrive between this thread's
-        # deliveries: a single shared "last event" would then admit the
-        # outstanding delivery of the first event a second time. Thread-local
-        # storage also retires the reference with its thread, so the memory is
-        # bounded by the threads that report rather than by the events seen.
-        self._applied = threading.local()
+        # one event must move the shared total once.
+        #
+        # A claim lasts exactly as long as the emission it was made for: an
+        # event remains claimed only while its delivery loop is still running
+        # on this thread. That covers a hook which emits an event of its own
+        # while it is being called — the nested event counts separately, while
+        # the outer event's remaining deliveries are still recognized — and it
+        # keeps the claim bounded by the nesting depth rather than growing with
+        # every event seen. The claims are per thread because another thread's
+        # event must not disturb them, and the storage retires with its thread.
+        self._claimed = threading.local()
 
     def admit(self, event: object) -> bool:
         """Claim ``event`` for this thread and say whether it moves the count.
 
         Callers hold :attr:`lock`, so the claim and the update it authorizes
-        are one step. A thread never receives the same event object twice
-        except as a repeated delivery of one emission, which is exactly the
-        repeat this refuses.
+        are one step. Within one thread, a delivery that repeats an event whose
+        emission is still in flight is the only repeat this refuses: re-entering
+        the emitter nests a new event, and that event counts on its own.
 
         Returns
         -------
         bool
             Whether this delivery should move the count.
         """
-        if getattr(self._applied, "event", None) is event:
+        in_flight = _in_flight_pump_events()
+        claimed: list[object] | None = getattr(self._claimed, "events", None)
+        if claimed is None:
+            claimed = self._claimed.events = []
+        # Drop the claims whose emission this thread has finished delivering.
+        # A claim can only ever be queried while its event is in flight, so
+        # discarding the rest loses nothing and keeps this list bounded.
+        claimed[:] = [
+            seen for seen in claimed if any(seen is live for live in in_flight)
+        ]
+        if any(seen is event for seen in claimed):
             return False
-        self._applied.event = event
+        claimed.append(event)
         return True
 
 

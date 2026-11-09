@@ -28,9 +28,12 @@ from cuprum import (
     _pipeline_streams,
 )
 from cuprum.pump_events import RustPumpDeclineReason
+from cuprum.pump_observation import _emit_rust_pump_hold
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.pump_events import PumpEvent
 
 
 class RecordingCollector:
@@ -118,6 +121,35 @@ class SlottedGaugeCollector:
         """Record the reported value."""
         del name, labels
         self.gauges.append(value)
+
+
+class NestedHoldEmitter:
+    """Emit a matching hold from inside a delivery when asked to.
+
+    Pump hooks run inline on the emitting thread, so a hook that emits nests a
+    second emission inside the delivery of the first. :attr:`nest` decides
+    whether the next emission delivered through this hook does that, which lets
+    a test place a nested emission between two metrics hooks; the thread-local
+    guard keeps the nested emission from nesting again.
+    """
+
+    def __init__(self) -> None:
+        """Start without nesting."""
+        self.nest = False
+        self._nesting = threading.local()
+
+    def __call__(self, event: PumpEvent) -> None:
+        """Emit a hold of the same direction, once, without recursion."""
+        delta = event.held_delta
+        if not self.nest or delta is None:
+            return
+        if getattr(self._nesting, "active", False):
+            return
+        self._nesting.active = True
+        try:
+            _emit_rust_pump_hold(delta)
+        finally:
+            self._nesting.active = False
 
 
 @dc.dataclass(slots=True)

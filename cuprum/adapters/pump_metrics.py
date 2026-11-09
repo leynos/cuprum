@@ -238,9 +238,10 @@ class PumpMetricsHook:
         An event that reaches several hooks sharing this collector moves the
         count once. The gauge is a level, so counting the same hold twice
         would report a pair that no drain is holding; the counter claims each
-        event for the thread delivering it, because one emission hands its
-        event to every hook inline on the emitting thread and a second thread's
-        event in between must not make the remaining deliveries count again.
+        event for the thread delivering it while that event is in flight, so a
+        second thread's event in between cannot make the remaining deliveries
+        count again, and a hook that emits a nested event while it is being
+        called leaves the outer event's claim intact.
 
         Publication happens under the same lock as the count. Publishing after
         releasing it would let two threads publish out of order: a release that

@@ -3,19 +3,21 @@
 ``cuprum_rust_pump_held_pairs`` counts held pairs, not hook deliveries. The
 deterministic tests in ``test_pump_held_pairs_sharing`` pin one interleaving
 each; this property generalizes them: whatever order concurrent emitters run
-in, and whichever hooks of a shared collector each emission reaches, the gauge
-must end at the number of emissions and return to zero once each is released.
+in, and whichever of the two metrics hooks a nested emission reaches before
+the outer one finishes, the gauge must end at the number of emissions and
+return to zero once each is released.
 
 Real threads race nondeterministically, which would make a schedule-dependent
-test flaky in one direction and unconvincing in the other. The deliveries
-therefore still run on real threads — the counter's memory is thread-local, so
-it has to — but a generated schedule decides exactly when each worker runs the
-next step. Every generated interleaving is replayed deterministically, so a
-failure names a real defect rather than a lost race.
+test flaky in one direction and unconvincing in the other. The emissions
+therefore still run on real threads — the counter's claims are per thread, so
+they have to — but a generated schedule decides exactly when each worker
+starts its next emission. Every generated interleaving is replayed
+deterministically, so a failure names a real defect rather than a lost race.
 """
 
 from __future__ import annotations
 
+import contextvars
 import threading
 import typing as typ
 
@@ -27,8 +29,11 @@ from cuprum.adapters.pump_metrics import (
     RUST_PUMP_HELD_PAIRS,
     PumpMetricsHook,
 )
-from cuprum.pump_events import PumpEvent
-from cuprum.unittests._rust_pump_test_helpers import RecordingCollector
+from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
+from cuprum.unittests._rust_pump_test_helpers import (
+    NestedHoldEmitter,
+    RecordingCollector,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -36,16 +41,16 @@ if typ.TYPE_CHECKING:
     from hypothesis.strategies import DrawFn
 
     type _Step = cabc.Callable[[], None]
-    type _Plan = tuple[list[tuple[int, frozenset[int]]], list[tuple[int, int]]]
+    # One emission names the worker that delivers it and whether the hook
+    # between the two metrics hooks emits a nested hold inside it.
+    type _Emission = tuple[int, bool]
+    type _Plan = tuple[list[_Emission], list[int]]
 
-# One emission names the worker that delivers it and the hooks it reaches. An
-# emission always reaches at least one hook and is delivered inline on the
-# thread that emitted it, so a schedule may not split one emission across
-# threads: that would describe two emissions sharing one event object, which
-# the emitter never produces.
+# At most three workers and four emissions keep every replayed schedule short
+# while still interleaving two workers and nesting inside a delivery.
 _EMISSION = st.tuples(
     st.integers(min_value=0, max_value=2),
-    st.frozensets(st.integers(min_value=0, max_value=1), min_size=1),
+    st.booleans(),
 )
 
 _HANG_S = 10.0
@@ -102,25 +107,25 @@ class _Turnstile:
 
 @st.composite
 def _schedules(draw: DrawFn) -> _Plan:
-    """Draw emissions and one legal interleaving of their deliveries.
+    """Draw emissions and one legal interleaving of them.
 
-    The order is a merge of each worker's own delivery stream, not an
-    arbitrary permutation: a worker delivers its emissions in program order,
-    so it can never start one emission before finishing the previous one.
-    Another worker's deliveries may interleave anywhere between them, which is
-    what the counter's per-thread memory has to tolerate.
+    The order is a merge of each worker's own emission stream, not an
+    arbitrary permutation: a worker emits in program order, so it can never
+    start its next emission before the previous one has been delivered. Another
+    worker's emission may interleave anywhere between them, which is what the
+    counter's per-thread claims have to tolerate.
 
     Returns
     -------
     _Plan
-        The emissions and the order in which their deliveries run.
+        The emissions and the order in which the workers run them.
     """
     emissions = draw(st.lists(_EMISSION, min_size=1, max_size=4))
-    streams: dict[int, list[tuple[int, int]]] = {}
-    for index, (worker, reached) in enumerate(emissions):
-        streams.setdefault(worker, []).extend((index, hook) for hook in sorted(reached))
+    streams: dict[int, list[int]] = {}
+    for index, (worker, _nests) in enumerate(emissions):
+        streams.setdefault(worker, []).append(index)
 
-    order: list[tuple[int, int]] = []
+    order: list[int] = []
     remaining = {worker: len(stream) for worker, stream in streams.items()}
     while any(remaining.values()):
         worker = draw(
@@ -133,19 +138,23 @@ def _schedules(draw: DrawFn) -> _Plan:
 
 def _deliver(
     plan: _Plan,
-    events: cabc.Sequence[PumpEvent],
-    hooks: cabc.Sequence[PumpMetricsHook],
+    delta: int,
+    context: contextvars.Context,
+    nested: NestedHoldEmitter,
 ) -> None:
-    """Replay ``plan`` on one worker thread per emitter and join them."""
+    """Replay ``plan`` as real emissions on one worker thread per emitter."""
     emissions, order = plan
-    workers = sorted({worker for worker, _reached in emissions})
+    workers = sorted({worker for worker, _nests in emissions})
     turnstiles = {worker: _Turnstile() for worker in workers}
     for turnstile in turnstiles.values():
         turnstile.thread.start()
     try:
-        for index, hook in order:
-            turnstiles[emissions[index][0]].run(
-                lambda event=events[index], hook=hook: hooks[hook](event)
+        for index in order:
+            worker, nests = emissions[index]
+            # Read by the worker during the emission it is about to deliver.
+            nested.nest = nests
+            turnstiles[worker].run(
+                lambda delta=delta: context.run(_emit_rust_pump_hold, delta)
             )
     finally:
         for turnstile in turnstiles.values():
@@ -157,23 +166,29 @@ def _deliver(
 def test_a_generated_schedule_moves_the_gauge_once_per_emission(plan: _Plan) -> None:
     """A replayed interleaving leaves exactly one count per emission.
 
-    Each emission is a distinct event object delivered on its own thread, so
-    the gauge must end at the number of emissions however the deliveries are
-    ordered, and it must return to zero once every hold is released the same
-    way.
+    Every emission is its own event, so the gauge must end at the number of
+    emissions — including the nested ones a hook adds inside a delivery — and
+    it must return to zero once each hold is released the same way.
     """
     emissions, _order = plan
+    nested_count = sum(1 for _worker, nests in emissions if nests)
+    total = len(emissions) + nested_count
     collector = RecordingCollector()
-    hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
-    holds = [PumpEvent(phase="handoff_hold", held_delta=1) for _ in emissions]
-    releases = [PumpEvent(phase="handoff_hold", held_delta=-1) for _ in emissions]
+    nested = NestedHoldEmitter()
 
-    _deliver(plan, holds, hooks)
-    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(
-        float(len(emissions))
-    ), "each emission must move the shared gauge exactly once"
+    with (
+        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(nested),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        context = contextvars.copy_context()
 
-    _deliver(plan, releases, hooks)
-    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(0.0), (
-        "releasing every hold must return the gauge to zero"
-    )
+        _deliver(plan, 1, context, nested)
+        assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(
+            float(total)
+        ), "each emission must move the shared gauge exactly once"
+
+        _deliver(plan, -1, context, nested)
+        assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(0.0), (
+            "releasing every hold must return the gauge to zero"
+        )

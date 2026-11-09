@@ -3,14 +3,21 @@
 ``cuprum_rust_pump_held_pairs`` is one level per collector, so every hook
 reporting to a collector must find the same counter, and one emission must move
 it once however many of those hooks it reaches. The gauge's behavioural tests
-cannot see two properties these tests pin: a second thread's event arriving
+cannot see the properties these tests pin: a second thread's emission arriving
 between one emission's deliveries does not make the remaining deliveries count
-again, and the registry stops holding a collector once the hooks that report to
-it are gone.
+again, a hook that emits while it is being called does not double-count the
+event that called it, and the registry stops holding a collector once the hooks
+that report to it are gone.
+
+The interleaving and nesting tests deliver through ``_emit_pump_event`` rather
+than by calling a hook by hand, because the counter's claim is checked against
+the emitter's record of which events are in flight: only a real emission can
+exercise that.
 """
 
 from __future__ import annotations
 
+import contextvars
 import gc
 import threading
 import typing as typ
@@ -21,44 +28,104 @@ from cuprum.adapters.pump_metrics import (
     PumpMetricsHook,
 )
 from cuprum.pump_events import PumpEvent
+from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
+    NestedHoldEmitter,
     RecordingCollector,
     SlottedGaugeCollector,
 )
 
 
+class _PauseBetweenHooks:
+    """Stop one emission mid-delivery so another thread can emit.
+
+    Registered between two metrics hooks, this hook holds the main thread's
+    delivery of a hold until a worker has completed an emission of its own,
+    which is the interleaving the counter has to survive. It pauses only the
+    thread that created it, and only once, so the releases that follow pass
+    straight through.
+    """
+
+    def __init__(self) -> None:
+        """Remember the emitting thread and start with no pause taken."""
+        self._emitting = threading.get_ident()
+        self.paused = threading.Event()
+        self.resume = threading.Event()
+
+    def __call__(self, event: PumpEvent) -> None:
+        """Hold the delivery on the emitting thread until the test resumes it."""
+        del event
+        if threading.get_ident() != self._emitting or self.paused.is_set():
+            return
+        self.paused.set()
+        assert self.resume.wait(timeout=5.0), "the test must resume the delivery"
+
+
 def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     """One emission moves the shared total once despite another thread's event.
 
-    ``_emit_pump_event`` hands one event to every hook inline on the emitting
-    thread, so the second hook's delivery of that event can arrive after
-    another thread has already delivered a different event. It must still be
-    recognized as the same emission and leave the total alone.
+    The second hook's delivery of the outer event arrives after another thread
+    has completed an emission of its own. The outer event is still in flight,
+    so it must be recognized as the same emission and leave the total alone.
     """
     collector = RecordingCollector()
     hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
-    held = PumpEvent(phase="handoff_hold", held_delta=1)
-    interleaved = PumpEvent(phase="handoff_hold", held_delta=1)
+    gate = _PauseBetweenHooks()
 
-    def deliver_interleaved() -> None:
-        """Deliver a different event to both hooks on another thread."""
-        for hook in hooks:
-            hook(interleaved)
+    with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
+        context = contextvars.copy_context()
 
-    hooks[0](held)
-    worker = threading.Thread(target=deliver_interleaved)
-    worker.start()
-    worker.join(timeout=5.0)
-    assert not worker.is_alive(), "the interleaved delivery must finish"
-    hooks[1](held)
+        def emit_elsewhere() -> None:
+            """Complete an emission while the main thread's delivery waits."""
+            assert gate.paused.wait(timeout=5.0), "the main delivery must pause"
+            context.run(_emit_rust_pump_hold, 1)
+            gate.resume.set()
 
-    for hook in hooks:
-        hook(PumpEvent(phase="handoff_hold", held_delta=-1))
+        worker = threading.Thread(target=emit_elsewhere)
+        worker.start()
+        try:
+            _emit_rust_pump_hold(1)
+        finally:
+            # Never leave the gated delivery blocked behind a failed assertion.
+            gate.resume.set()
+            worker.join(timeout=5.0)
+        assert not worker.is_alive(), "the interleaved emission must finish"
+
+        _emit_rust_pump_hold(-1)
+        _emit_rust_pump_hold(-1)
 
     assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0, 1.0, 0.0], (
         "the second delivery of one event must not count while the first "
         "event's hold is still outstanding"
     )
+
+
+def test_a_hook_that_emits_while_called_does_not_count_the_outer_hold_again() -> None:
+    """A nested emission counts once and keeps the outer event's claim alive.
+
+    The middle hook emits a second hold while the first emission is still
+    being delivered, so the second metrics hook receives the outer event after
+    the nested event has already moved the gauge. Both are separate holds, and
+    each must move the shared total exactly once.
+    """
+    collector = RecordingCollector()
+    nested = NestedHoldEmitter()
+    nested.nest = True
+
+    with (
+        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(nested),
+        observe_pump(PumpMetricsHook(collector)),
+    ):
+        _emit_rust_pump_hold(1)
+        assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
+            "the outer and the nested hold must each count once"
+        )
+
+        _emit_rust_pump_hold(-1)
+        assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0, 1.0, 0.0], (
+            "the nested and the outer release must each count once"
+        )
 
 
 def test_a_retired_hook_leaves_the_surviving_hook_its_shared_total() -> None:

@@ -3748,7 +3748,9 @@ one running total, so registering a hook per pipeline scope still reports that
 collector's total held pairs. The same total is shared by a collector that
 cannot be weakly referenced. If one event reaches more than one of those hooks
 — nested `observe_pump` registrations both receive every event — it moves the
-total once, so the gauge counts held pairs rather than hook deliveries.
+total once, so the gauge counts held pairs rather than hook deliveries. A hook
+that emits an event of its own while it is being called reports a separate
+hold, and that hold moves the total once as well.
 
 Gauge support is optional. A collector receives this gauge by implementing
 `GaugeMetricsCollector` from `cuprum.adapters.gauge_metrics`; a collector
