@@ -2625,21 +2625,27 @@ propagates unchanged; blocking mode was never engaged, so there is nothing to
 restore. Two observers can instead raise a shutdown signal on this path: a hold
 observer, while the release of the hold is delivered, and an outcome observer,
 while the `drain_failed` outcome is emitted. `_emit_pump_event` lets
-`BaseException` travel, so either signal wins over the drain error, which is
-kept as its `__context__`. The release is delivered to every registered hook
-before such a signal travels, and the outcome is emitted from a `finally`
-around that release, so both the release and the outcome survive whichever
-observer raised, and the pair has already been released before the outcome is
-emitted. An observer registered after the one that raised still sees the
-release; without that rule the held-pair gauge would stand at one with no hold
-behind it. Once the drain completes, the acquired pair is switched to blocking
-mode and handed to the worker, which receives a further duplicate reader and
-duplicate writer descriptor and handles the remaining raw bytes. Rust borrows
-the reader duplicate and consumes the writer duplicate. After the worker
-settles, Python closes the remaining reader duplicate; it closes the writer
-duplicate itself only when preparation or executor submission fails. If any
-preparation step cannot be completed safely, dispatch falls back to the Python
-pump. That fall-back has one exception, and it is test-only:
+`BaseException` travel, so a signal wins over the drain error, which is kept in
+its `__context__` chain. A signal raised on the release carries the drain error
+as its immediate `__context__`; if the outcome observer then raises a distinct
+signal, that signal propagates with the release signal as its immediate
+`__context__`, leaving the drain error one link further down. The release is
+delivered to every registered hook before such a signal travels, and the
+outcome is emitted from a `finally` around that release, so both the release
+and the outcome survive whichever observer raised, and the pair has already
+been released before the outcome is emitted. An observer registered after the
+one that raised still sees the release; without that rule the held-pair gauge
+would stand at one with no hold behind it. Once the drain completes, the
+acquired pair is switched to blocking mode and handed to the worker, which
+receives a further duplicate reader and duplicate writer descriptor and handles
+the remaining raw bytes. Rust borrows the reader duplicate and consumes the
+writer duplicate. After the worker settles, Python closes the remaining reader
+duplicate; it closes the writer duplicate itself only when preparation or
+executor submission fails. Dispatch falls back to the Python pump only when a
+step *declines*: descriptor acquisition from the paused transport, or blocking
+activation. Loading the native module, duplicating descriptors Cuprum already
+owns, and rejecting executor submission are re-raised after their outcome and
+rollback. That fall-back has one exception, and it is test-only:
 `_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
 overrules the closing-reader decline — and only that one — when the dispatch
 test seam has installed its own descriptor supply
@@ -5939,14 +5945,15 @@ paused reader transport at expiry so it cannot outlive the loop that can no
 longer resume it. This prevents cancellation cleanup from racing with native
 I/O on a descriptor that is still in use.
 
-Executor-side failures are handled in two ways, and the split is deliberate.
-Creating the worker duplicates and submitting the executor work happen *before*
-anything is transferred, so a failure there selects the Python fallback: the
-hop is carried by `_pump_stream` exactly as it is when blocking mode is
-unavailable. Both are recorded at `DEBUG` on the `cuprum._pipeline_streams`
-logger. Shim-side failures while preparing the reader or transferring the
-platform writer are likewise recorded at `DEBUG`, but on the
-`cuprum._streams_rs` logger. These records use
+Executor-side failures split on whether a fall-back could route around them.
+Descriptor acquisition or blocking-mode activation is a decline, and
+`_pump_stream` carries the hop exactly as it does when blocking mode is
+unavailable. If creation of the later worker duplicates or executor submission
+fails, the error is re-raised after rollback, because neither is a condition a
+fall-back could route around. Both failures are recorded at `DEBUG` on the
+`cuprum._pipeline_streams` logger. Shim-side failures while preparing the
+reader or transferring the platform writer are likewise recorded at `DEBUG`,
+but on the `cuprum._streams_rs` logger. These records use
 `cuprum_action="rust_pump_handoff_failed"`, a fixed hand-off phase, the
 exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,

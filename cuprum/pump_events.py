@@ -62,7 +62,7 @@ class RustPumpHandoffOutcome(enum.StrEnum):
     so the hop settles without a submission. A pump observer that raises a
     shutdown signal while this outcome is emitted takes precedence over that
     re-raise, because a shutdown signal must still travel; the drain error
-    remains reachable as the raised signal's ``__context__``.
+    remains reachable through the raised signal's exception context chain.
 
     ``SUBMISSION_ABANDONED`` covers the same observer problem one step later:
     the drain finished and blocking activation ran, but a hold observer raised

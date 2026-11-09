@@ -3581,13 +3581,16 @@ teardown problem worth investigating.
 ### A pump hand-off failed before submission
 
 When Cuprum cannot prepare the worker-owned descriptors, it rolls the hand-off
-back and the hop falls back to the Python pump. Each failed step records a
-bounded `DEBUG` diagnostic with `cuprum_action="rust_pump_handoff_failed"`,
-`cuprum_outcome="failed"`, a `cuprum_phase` naming the step,
-`cuprum_error_type` holding the exception class, and `cuprum_errno` when one is
-available. The `duplicate_writer` and `executor_submission` phases log on
-`cuprum._pipeline_streams`; the `reader_preparation` and
-`platform_writer_transfer` phases log on `cuprum._streams_rs`.
+back. Descriptor acquisition or blocking-mode activation declines, and the hop
+falls back to the Python pump; failure to create the later worker duplicates,
+or a rejected executor submission, is re-raised instead. The recording steps
+emit a bounded `DEBUG` diagnostic with
+`cuprum_action="rust_pump_handoff_failed"`, `cuprum_outcome="failed"`, a
+`cuprum_phase` naming the step, `cuprum_error_type` holding the exception
+class, and `cuprum_errno` when one is available. The `duplicate_writer` and
+`executor_submission` phases log on `cuprum._pipeline_streams`; the
+`reader_preparation` and `platform_writer_transfer` phases log on
+`cuprum._streams_rs`.
 
 A writer that could not be duplicated records the `duplicate_writer` phase,
 declines with `duplicate_fds_unavailable`, and counts the
@@ -3604,16 +3607,19 @@ submission.
 One exception outranks that re-raise. If a pump observer raises a shutdown
 signal, such as `KeyboardInterrupt`, while the hold is being released or while
 the `drain_failed` outcome is being emitted, the signal propagates and the
-drain error stays reachable as its `__context__`. A signal raised on the
-release does not lose the outcome: it is still counted before the signal
-travels. Shutdown signals must travel, and the pair has already been released
-by then, so nothing is stranded. A shutdown signal raised on the hold release
-that follows a successful drain and activation is handled the same way: the
-activated pair is rolled back — blocking mode restored, both descriptors
-closed, the reader resumed — the hop counts the `submission_abandoned` outcome,
-and the signal then travels. Every registered pump observer sees the event
-before any such signal propagates, so a metrics hook registered behind the
-observer that raised still records the release.
+drain error stays reachable in its `__context__` chain. A signal raised on the
+release carries the drain error as its immediate `__context__`; if the outcome
+observer then raises a distinct signal, that signal propagates with the release
+signal as its immediate `__context__`, leaving the drain error one link further
+down. A signal raised on the release does not lose the outcome: it is still
+counted before the signal travels. Shutdown signals must travel, and the pair
+has already been released by then, so nothing is stranded. A shutdown signal
+raised on the hold release that follows a successful drain and activation is
+handled the same way: the activated pair is rolled back — blocking mode
+restored, both descriptors closed, the reader resumed — the hop counts the
+`submission_abandoned` outcome, and the signal then travels. Every registered
+pump observer sees the event before any such signal propagates, so a metrics
+hook registered behind the observer that raised still records the release.
 
 Two setup failures still reach the caller. A rejected executor submission
 reports `executor_submission_rejected` and re-raises after rollback, because
