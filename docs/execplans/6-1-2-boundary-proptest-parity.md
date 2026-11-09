@@ -352,6 +352,27 @@ ownership and error contracts, stop and report the exact incompatibility.
   `lint-windows` 0, and `test` 0 (65m32s, zero `FAILED`, Nextest 189 passed and
   30 skipped, doctests clean, diff hash
   `8380f7763ee10ce6306bb26ece405334cce00a7eb1aea6c1e779b6e179848c0a`).
+- [x] (2026-11-09) The second hosted run left exactly one failure, and it was a
+  defect in this branch's own test wiring rather than in the code under test.
+  The coverage lane runs a bare `pytest` in a separate `.venv-coverage` that
+  never builds the compiled extension, so it reported 27 `ModuleNotFoundError`
+  failures from `tests/helpers/test_consume_boundary_oracle.py` while the rest
+  of the suite skipped 280 extension-gated cases. That module was added to
+  `EXTENSION_TEST_TARGETS` on this branch but never given a skip guard, because
+  `make test` does not collect `tests/helpers/` at all: local `make test` could
+  not see the module, and the guarded extension lane always had the extension,
+  so neither local route could expose it. The four native-calling tests now
+  carry `@pytest.mark.usefixtures("native_extension")`, a fixture that skips on
+  `_rust_backend.is_available()`. A module-level `skipif` would have been
+  shorter but would also have skipped
+  `test_python_capture_remains_independent_of_rust`, which exercises the Python
+  reference alone and is real coverage in an extension-free lane. The fixture's
+  skip path is itself tested in both directions, since an unexercised guard
+  cannot be distinguished from one that raises — which is the shape of the
+  defect being repaired. Verified with the extension hidden and present: 30
+  pass with it, 3 pass plus 27 skips without it, and
+  `CUPRUM_REQUIRE_RUST_EXTENSION=1` still aborts the session instead of letting
+  the skips pass silently.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -359,6 +380,16 @@ ownership and error contracts, stop and report the exact incompatibility.
   reopen it if it exposes an in-scope gap.
 
 ## Surprises & discoveries
+
+- **A test module can be invisible to every local gate and still be wrong.**
+  `tests/helpers/test_consume_boundary_oracle.py` is collected by
+  `EXTENSION_TEST_TARGETS` and by the coverage lane, but by neither `make test`
+  (whose `PYTEST_TARGETS` never names `tests/helpers/`) nor any guarded local
+  run without the extension. The two local routes that do touch it always had
+  the extension present, so the missing skip guard was unreachable locally and
+  reachable in CI. The lesson is that "green locally" for a module in that
+  position proves nothing about its behaviour without the extension; the
+  decisive check is to hide the `.so` and run the module directly.
 
 A green Linux extension job did not prove the parity target's route was safe.
 `extension-tests` installs the dev-fast prerequisites before it calls
