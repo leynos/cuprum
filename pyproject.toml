@@ -926,13 +926,6 @@ members = [
 ]
 reason = "Two frozen dataclasses whose post-init validates and coerces the same two scope fields. Their bodies are now one-line delegations to `_normalize_scope_fields`. What the detector still matches is the delegation itself plus the shared docstring line; the class name each passes is the only difference, and it is what keeps each type's timeout diagnostic naming its own type."
 
-[[tool.duplication_gate.allow]]
-members = [
-    "cuprum/adapters/_tracing_native_pump_cleanup.py",
-    "cuprum/adapters/_tracing_line_stream.py",
-]
-reason = "Two tracing mixins that cast `self` to `TracingHook` and look up the active span before recording. The lookup is the already-shared helper; what remains is the per-channel guard that decides whether this event is worth recording at all, which differs between the two."
-
 # --- Parallel structures landed with `main` ------------------------------
 #
 # The families below were already present in `main` when this branch was
