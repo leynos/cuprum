@@ -324,11 +324,18 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    candidates at all. The read/write loop is the only path that opens the
    `stream_pump` span with `operation = "pump_stream_readwrite"`, so the
    harness must capture that span rather than filter on `pump_stream_readwrite`
-   as if it were the span name. A targeted run of an `io_utils` hint must
-   therefore assert that the fallback loop ran, from that span or an equivalent
-   harness assertion, and a run that took the splice path is rejected rather
-   than reported as a null result. Measuring the currently unintegrated consume
-   helper does not authorize integrating it, and the integration guard in
+   as if it were the span name. A targeted run of an `io_utils` hint on a
+   fallback-pump scenario must therefore assert that the fallback loop ran,
+   from that span or an equivalent harness assertion, and a run that took the
+   splice path is rejected rather than reported as a null result. The fallback
+   span is not a requirement for every `io_utils` candidate: A2's read-error
+   arm is also reached by `consume_stream_files`, which calls `read_stream`
+   inside the `consume_stream` span, and by `splice::drain_reader`, which calls
+   `read_raw_fd` directly after a broken pipe and opens no span of its own.
+   Those runs are accepted when the harness verifies the consume or drain path
+   they claim, and the span expected is the one the claimed entry point opens.
+   Measuring the currently unintegrated consume helper does not authorize
+   integrating it, and the integration guard in
    `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
    number of rounds, and keep raw samples, exclusions, and failures. Report a
@@ -485,7 +492,10 @@ not only the platform it was written for:
 - The unsupported-target `cargo check` above, run before and after, so the
   diagnostic change is observed rather than assumed.
 - `make test` for the Rust suite and doctests, including the `compile_fail`
-  cases named above.
+  cases named above. After the pure-Python gates, run `make develop` and
+  `make test-extension` on Linux as well: without a built extension,
+  `make test` can skip the boundary tests, and the Windows extension job does
+  not exercise the Unix bindings a rearrangement can change.
 
 ### Separation from Workstream A
 
