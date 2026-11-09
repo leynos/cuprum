@@ -15,7 +15,11 @@ import asyncio
 import pytest
 
 from cuprum._observability import _wait_for_exec_hook_tasks
-from cuprum._observe_task_retention import _await_hook_capacity
+from cuprum._observe_task_retention import (
+    _OBSERVE_TASK_CEILING,
+    _await_hook_capacity,
+)
+from cuprum._pipeline_types import _EventDetails
 from cuprum._retention_telemetry import (
     _RETENTION_CAPACITY_WAIT,
     _RETENTION_DEPTH,
@@ -27,7 +31,11 @@ from cuprum._retention_telemetry import (
 from cuprum.events import new_exec_id
 from cuprum.unittests._rust_pump_test_helpers import ControllableMonotonicClock
 from cuprum.unittests.test_line_event_emission_support import _make_observation
-from cuprum.unittests.test_observe_task_retention import _hold
+from cuprum.unittests.test_observe_task_retention import (
+    _hold,
+    _HookFailureError,
+)
+from cuprum.unittests.test_observe_task_retention_callbacks import _ExplodingHook
 
 #: Every phase label these tests use is a closed event or stream name, so the
 #: sample's phase is a bounded label rather than free text.
@@ -51,6 +59,82 @@ class _RecordingSink:
     def kinds(self) -> list[str]:
         """Return the kinds of the recorded samples, in publication order."""
         return [sample.kind for sample in self.samples]
+
+
+class _SinkError(RuntimeError):
+    """Failure raised by a retention projection that cannot be exported."""
+
+    def __init__(self) -> None:
+        """Build the failure with its fixed message."""
+        super().__init__("projection failed")
+
+
+class _RaisingSink:
+    """Observe hook whose retention projection always fails."""
+
+    def __call__(self, event: object) -> None:
+        """Accept an execution event and project nothing about it."""
+
+    def report_retention(self, sample: _RetentionSample) -> None:
+        """Fail, as a broken exporter would.
+
+        Raises
+        ------
+        _SinkError
+            Always, so a caller can observe how the emission handles it.
+        """
+        raise _SinkError
+
+
+async def _immediate() -> None:
+    """Complete without doing any work."""
+
+
+async def _settle_to_ceiling(pending_tasks: list[asyncio.Task[None]]) -> None:
+    """Fill the shared retention list to the ceiling with settled tasks.
+
+    Retention only runs at the ceiling, so a projection can only fail during
+    retention once the list is full.
+    """
+    tasks = [asyncio.create_task(_immediate()) for _ in range(_OBSERVE_TASK_CEILING)]
+    pending_tasks.extend(tasks)
+    await asyncio.gather(*tasks)
+
+
+def test_raising_sink_does_not_mask_a_hook_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The hook's own error must outrank a failure in the retention sink."""
+
+    async def case() -> None:
+        """Emit a failing hook's event with the list at the ceiling."""
+        observation = _make_observation((_ExplodingHook(), _RaisingSink()))
+        await _settle_to_ceiling(observation.pending_tasks)
+
+        with pytest.raises(_HookFailureError):
+            observation.emit("stdout", _EventDetails(pid=1, line="a line"))
+
+        await _wait_for_exec_hook_tasks(observation.pending_tasks)
+
+    asyncio.run(case())
+
+    assert "observe_task_retention_failed" in caplog.text, (
+        "the swallowed sink failure must be logged rather than hidden"
+    )
+
+
+def test_raising_sink_fails_the_emission_it_serves() -> None:
+    """With no earlier error, a failing projection must surface to the caller."""
+
+    async def case() -> None:
+        """Emit with the list at the ceiling and a failing sink installed."""
+        observation = _make_observation((_RaisingSink(),))
+        await _settle_to_ceiling(observation.pending_tasks)
+
+        with pytest.raises(_SinkError):
+            observation.emit("stdout", _EventDetails(pid=1, line="a line"))
+
+    asyncio.run(case())
 
 
 def test_stage_observation_discovers_a_retention_sink() -> None:

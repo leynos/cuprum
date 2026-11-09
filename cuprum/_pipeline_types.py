@@ -16,6 +16,7 @@ depends on the observation types defined here.
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import time
 import types
 import typing as typ
@@ -41,6 +42,8 @@ from cuprum.events import (
     TimeoutMode,
     new_exec_id,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _ExecutionInvariantError(RuntimeError):
@@ -355,9 +358,23 @@ class _StageObservation:
         try:
             scheduled_tasks = _emit_exec_event(self.hooks.observe_hooks, event)
         except _ExecEventEmissionError as exc:
-            self._retain_hook_tasks(exc.scheduled_tasks, phase=event.phase)
+            self._retain_beneath_hook_failure(exc.scheduled_tasks, phase=event.phase)
             raise exc.error from exc
         self._retain_hook_tasks(scheduled_tasks, phase=event.phase)
+
+    def _retain_beneath_hook_failure(
+        self, tasks: list[asyncio.Task[None]], phase: str | None
+    ) -> None:
+        """Retain the hook's tasks without masking the hook's own failure.
+
+        A raising retention sink is logged rather than replacing the error the
+        caller is about to raise; on the success path it still propagates.
+        """
+        try:
+            self._retain_hook_tasks(tasks, phase=phase)
+        except Exception:
+            # The hook's error outranks the sink's, so report rather than raise.
+            _LOGGER.exception("observe_task_retention_failed phase=%s", phase)
 
     def _retain_hook_tasks(
         self,
