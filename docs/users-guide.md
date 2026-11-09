@@ -3315,9 +3315,14 @@ and the phase. A prune is recorded as `cuprum.observe_task_retention` only when
 it actually dropped settled tasks, carrying `kind`, `depth`, `pruned`, and
 `pruned_failures`.
 
-Depth and saturation samples are not recorded as span events, although the
-metrics adapter does project them. Pruning runs on the per-line path, so one
-event per sample would make a verbose child's span grow with its line count.
+Both events run on the per-line path: a run held at the ceiling takes one wait
+per deferred line, and may prune once for each. Each kind is therefore recorded
+at most once per execution span, which keeps a verbose child's span from
+growing with its line count. Nothing is lost, because the metrics adapter
+counts every wait — with its outcome — and every prune.
+
+Depth and saturation samples are not recorded as span events at all, although
+the metrics adapter does project them; they repeat on the same per-line path.
 
 #### Correlating events with spans
 

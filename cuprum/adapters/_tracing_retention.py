@@ -13,6 +13,13 @@ on the per-line path, so tracing every sample would grow the span with the
 line count — the failure class the retention bound removes. Those samples stay
 in the log records and the metrics projection, which are bounded by
 construction.
+
+The two qualifying kinds run on that same per-line path: a run held at the
+ceiling records a capacity wait for every line it defers, and a prune for each
+of those lines that settled a task. Each is therefore projected at most once
+per execution span, which bounds the span by a constant. The repetition is not
+lost: the metrics projection counts every wait, with its outcome, and every
+prune, so an operator can still tell how often a run paused.
 """
 
 from __future__ import annotations
@@ -23,7 +30,7 @@ from cuprum._retention_telemetry import (
     _RETENTION_CAPACITY_WAIT,
     _RETENTION_PRUNE,
 )
-from cuprum.adapters._tracing_span_events import record_span_event
+from cuprum.adapters._tracing_span_events import record_span_event_once
 
 if typ.TYPE_CHECKING:
     from cuprum._retention_telemetry import _RetentionSample
@@ -36,17 +43,17 @@ _CAPACITY_WAIT_OPERATION = "observe_task_capacity_wait"
 
 
 class _RetentionTracingMixin:
-    """Add retention samples to the execution span they correlate with."""
+    """Add one capacity-wait and one prune event to the execution span."""
 
     def report_retention(self, sample: _RetentionSample) -> None:
-        """Record one retention sample that explains a backpressure episode."""
+        """Record the first sample of each kind, and nothing later."""
         if sample.kind == _RETENTION_CAPACITY_WAIT:
             name, attributes = _capacity_wait_event(sample)
         elif sample.kind == _RETENTION_PRUNE and sample.pruned > 0:
             name, attributes = _prune_event(sample)
         else:
             return
-        record_span_event(
+        record_span_event_once(
             typ.cast("TracingHook", self),
             sample.exec_id,
             name,

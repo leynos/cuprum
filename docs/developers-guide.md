@@ -1868,15 +1868,19 @@ closed `phase` and `outcome` values; `_RetentionTracingMixin` in
 `cuprum.observe_task_capacity_wait` span event carrying `operation`, `outcome`,
 `wait_seconds`, `depth`, and the phase, for the async wait boundary, plus a
 `cuprum.observe_task_retention` event for a prune only when it actually dropped
-settled tasks. Depth and saturation samples are not traced: they arrive on the
-per-line path, so projecting every one would grow the span with the line count,
-which is the failure class the bound removes. The per-run `exec_id` is
-deliberately never a metric label: it correlates the log record and the span
-and would otherwise multiply every series by the number of runs. Both mixins
-are bases of the existing `MetricsHook` and `TracingHook`. Only the tracing
-mixin records through the shared `record_span_event` helper, so the active-span
-and closed-span rules live in one place; the metrics mixin labels its collector
-calls directly.
+settled tasks. Depth and saturation samples are not traced at all: they arrive
+on the per-line path, so projecting every one would grow the span with the line
+count, which is the failure class the bound removes. The two traced kinds share
+that path, so each is recorded at most once per execution span — the
+`_SpanEvent.once` flag that `record_span_event` remembers on the span itself —
+which keeps the span bounded by a constant. The metrics mixin still counts
+every wait and every prune, so the repetition stays observable. The per-run
+`exec_id` is deliberately never a metric label: it correlates the log record
+and the span and would otherwise multiply every series by the number of runs.
+Both mixins are bases of the existing `MetricsHook` and `TracingHook`. Only the
+tracing mixin records through the shared `record_span_event` helper, so the
+active-span and closed-span rules live in one place; the metrics mixin labels
+its collector calls directly.
 
 Tests for the bound are split by level.
 `cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity, and

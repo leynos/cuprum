@@ -5,7 +5,9 @@ execution it correlates with. This module pins which samples qualify: the
 capacity-wait async boundary and a prune that actually dropped settled tasks.
 Depth and saturation samples run on the per-line path, so tracing them would
 grow the span with the line count; the tests below witness that they record
-nothing beside samples that do, on the same span.
+nothing beside samples that do, on the same span. The qualifying kinds run on
+that path too, so each is recorded at most once per execution span, and the
+last tests witness that bound rather than only the filter.
 """
 
 from __future__ import annotations
@@ -204,4 +206,61 @@ def test_sample_after_the_span_closed_records_nothing(
     for name in (RETENTION_EVENT, CAPACITY_WAIT_EVENT):
         assert _projected(span, name) == [], (
             "a closed span must not receive retention events"
+        )
+
+
+def _capacity_wait_sample(
+    exec_id: ExecId,
+    *,
+    outcome: str = "resumed",
+) -> _RetentionSample:
+    """Build a capacity-wait sample for the held line reader."""
+    return _RetentionSample(
+        exec_id=exec_id,
+        kind=_RETENTION_CAPACITY_WAIT,
+        phase="stdout",
+        depth=256,
+        wait_seconds=0.1,
+        outcome=outcome,
+    )
+
+
+def test_repeated_waits_and_prunes_record_one_event_each(
+    tracing_hook: Traced,
+) -> None:
+    """A run held at the ceiling must not grow its span with lines deferred."""
+    exec_id = new_exec_id()
+    _open_span(tracing_hook, exec_id)
+    for _ in range(20):
+        tracing_hook.hook.report_retention(_prune_sample(exec_id, pruned=2))
+        tracing_hook.hook.report_retention(_capacity_wait_sample(exec_id))
+
+    span = tracing_hook.tracer.spans[0]
+    assert len(_projected(span, RETENTION_EVENT)) == 1, (
+        "repeated prunes must record one retention event, not one per line"
+    )
+    assert len(_projected(span, CAPACITY_WAIT_EVENT)) == 1, (
+        "repeated capacity waits must record one wait event, not one per line"
+    )
+    assert len(span.events) == 2, "the span must hold a constant number of events"
+
+
+def test_the_once_bound_holds_per_execution_span(tracing_hook: Traced) -> None:
+    """A second execution span must still receive its own first events."""
+    for _ in range(2):
+        exec_id = new_exec_id()
+        _open_span(tracing_hook, exec_id)
+        tracing_hook.hook.report_retention(_prune_sample(exec_id, pruned=1))
+        tracing_hook.hook.report_retention(
+            _capacity_wait_sample(exec_id, outcome="cancelled")
+        )
+
+    spans = tracing_hook.tracer.spans
+    assert len(spans) == 2, "each execution must open its own span"
+    for span in spans:
+        assert len(_projected(span, RETENTION_EVENT)) == 1, (
+            "the bound must not leak between executions"
+        )
+        assert len(_projected(span, CAPACITY_WAIT_EVENT)) == 1, (
+            "a later execution must still record its own wait"
         )

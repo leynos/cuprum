@@ -95,11 +95,18 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(slots=True)
 class _ActiveSpan:
-    """One open span and the lock that serializes its callbacks."""
+    """One open span and the lock that serializes its callbacks.
+
+    ``once_events`` remembers the event names already recorded at most once,
+    so a decision repeated on the per-line path cannot grow the span with the
+    line count. It belongs to the span rather than to the hook because the
+    bound is per execution, and it is discarded with the span.
+    """
 
     span: Span
     lock: threading.Lock = dc.field(default_factory=threading.Lock)
     is_closed: bool = False
+    once_events: set[str] = dc.field(default_factory=set)
 
 
 class TracingHook(

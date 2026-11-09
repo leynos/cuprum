@@ -37,9 +37,12 @@
   with capture enabled, the child's retained output can still grow parent
   memory with the number of lines it writes. Retention logs
   `observe_task_capacity_wait` at `INFO` and its decisions at `DEBUG`, each
-  with a fixed `cuprum_*` field set. A hook that never settles now holds
-  completion indefinitely, because the final drain runs outside the configured
-  `timeout=` ([#544](https://github.com/leynos/cuprum/issues/544)).
+  with a fixed `cuprum_*` field set. `TracingHook` records the capacity wait
+  and each effective prune as a span event at most once per execution, so
+  tracing cannot grow a span with the line count either. A hook that never
+  settles now holds completion indefinitely, because the final drain runs
+  outside the configured `timeout=`
+  ([#544](https://github.com/leynos/cuprum/issues/544)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine
