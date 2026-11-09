@@ -19,6 +19,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
+from cuprum._line_hook_chaining import _chain_line_hooks
 from cuprum._line_stream.line_queue import (
     _LineStreamRun,
     _observed_line_hook,
@@ -49,29 +50,6 @@ __all__ = [
     "_abandon_unstarted_run",
     "_start_line_stream_run",
     "_with_line_sink_hooks",
-]
-
-
-from cuprum._line_hook_chaining import _chain_line_hooks
-
-"""Start, build, and on failure unwind one ``SafeCmd.lines()`` run.
-Part of the ``cuprum._line_stream`` package. This module owns the pieces that
-exist before the run is handed back to its caller: spawning the child, the stdin
-writer, the stream consumers, the chained line hooks that feed both the caller's
-callback and the queue, and the teardown of a run that failed before it could be
-returned.
-:func:`_start_line_stream_run` is here rather than in the coordinator because
-its whole job is to *reach* the hand-back boundary. Everything that boundary
-needs is built here, and :func:`_abandon_unstarted_run` reclaims exactly what a
-failure in that window had managed to start.
-"""
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from cuprum._capture_types import CaptureSink
-    from cuprum._line_stream.line_queue import _LineQueueItem
-    from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum.lines import LineEvent, _LineHookFn
-__all__ = [
 ]
 
 
