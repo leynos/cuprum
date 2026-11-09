@@ -1,10 +1,11 @@
 """Tracing projection contract for observe-hook retention samples.
 
-``TracingHook.report_retention`` records a bounded attribute mapping onto the
-span of the execution the sample correlates with. This module pins that
-projection: the event names, the attributes each sample kind carries, the
-distinct event used for the capacity-wait async boundary, and the paths that
-must record nothing at all.
+``TracingHook.report_retention`` attaches a retention sample to the span of the
+execution it correlates with. This module pins which samples qualify: the
+capacity-wait async boundary and a prune that actually dropped settled tasks.
+Depth and saturation samples run on the per-line path, so tracing them would
+grow the span with the line count; the tests below witness that they record
+nothing beside samples that do, on the same span.
 """
 
 from __future__ import annotations
@@ -59,46 +60,55 @@ def _projected(span: InMemorySpan, name: str) -> list[dict[str, object]]:
     return [attributes for event, attributes in span.events if event == name]
 
 
-def _span_with_sample(traced: Traced, sample: _RetentionSample) -> InMemorySpan:
-    """Open the sample's execution span and report the sample onto it."""
-    _open_span(traced, sample.exec_id)
-    traced.hook.report_retention(sample)
-    return traced.tracer.spans[0]
+def _prune_sample(
+    exec_id: ExecId,
+    *,
+    pruned: int,
+    pruned_failures: int = 0,
+    phase: str | None = "stderr",
+) -> _RetentionSample:
+    """Build a prune sample that dropped ``pruned`` settled tasks."""
+    return _RetentionSample(
+        exec_id=exec_id,
+        kind=_RETENTION_PRUNE,
+        phase=phase,
+        depth=5,
+        pruned=pruned,
+        pruned_failures=pruned_failures,
+    )
 
 
-def test_depth_sample_projects_onto_the_correlated_span(
+def test_only_backpressure_explaining_samples_reach_the_span(
     tracing_hook: Traced,
 ) -> None:
-    """A depth sample must land on its own execution's span."""
-    span = _span_with_sample(
-        tracing_hook,
+    """Per-line samples must record nothing; dropping prunes and waits must."""
+    exec_id = new_exec_id()
+    _open_span(tracing_hook, exec_id)
+    for sample in (
         _RetentionSample(
-            exec_id=new_exec_id(),
-            kind=_RETENTION_DEPTH,
+            exec_id=exec_id, kind=_RETENTION_DEPTH, phase="stdout", depth=12
+        ),
+        _RetentionSample(
+            exec_id=exec_id, kind=_RETENTION_SATURATION, phase="stdout", depth=256
+        ),
+        _prune_sample(exec_id, pruned=0),
+    ):
+        tracing_hook.hook.report_retention(sample)
+    tracing_hook.hook.report_retention(
+        _prune_sample(exec_id, pruned=4, pruned_failures=2)
+    )
+    tracing_hook.hook.report_retention(
+        _RetentionSample(
+            exec_id=exec_id,
+            kind=_RETENTION_CAPACITY_WAIT,
             phase="stdout",
-            depth=12,
-        ),
+            depth=256,
+            wait_seconds=0.5,
+            outcome="resumed",
+        )
     )
 
-    assert _projected(span, RETENTION_EVENT) == [
-        {"kind": "depth", "depth": 12, "phase": "stdout"}
-    ], "the depth sample must project its bounded attributes"
-
-
-def test_prune_sample_projects_the_dropped_counts(tracing_hook: Traced) -> None:
-    """A prune sample must carry both the total dropped and the failures."""
-    span = _span_with_sample(
-        tracing_hook,
-        _RetentionSample(
-            exec_id=new_exec_id(),
-            kind=_RETENTION_PRUNE,
-            phase="stderr",
-            depth=5,
-            pruned=4,
-            pruned_failures=2,
-        ),
-    )
-
+    span = tracing_hook.tracer.spans[0]
     assert _projected(span, RETENTION_EVENT) == [
         {
             "kind": "prune",
@@ -107,45 +117,7 @@ def test_prune_sample_projects_the_dropped_counts(tracing_hook: Traced) -> None:
             "pruned": 4,
             "pruned_failures": 2,
         }
-    ], "the prune sample must project the counts it dropped"
-
-
-def test_saturation_sample_omits_the_prune_counts(tracing_hook: Traced) -> None:
-    """A saturation sample must not carry attributes that do not apply."""
-    span = _span_with_sample(
-        tracing_hook,
-        _RetentionSample(
-            exec_id=new_exec_id(),
-            kind=_RETENTION_SATURATION,
-            phase="stdout",
-            depth=256,
-        ),
-    )
-
-    assert _projected(span, RETENTION_EVENT) == [
-        {"kind": "saturation", "depth": 256, "phase": "stdout"}
-    ], "a refusal has no prune counts to report"
-
-
-def test_capacity_wait_projects_its_own_operation_and_outcome(
-    tracing_hook: Traced,
-) -> None:
-    """The wait boundary must be traced with a fixed operation and outcome."""
-    span = _span_with_sample(
-        tracing_hook,
-        _RetentionSample(
-            exec_id=new_exec_id(),
-            kind=_RETENTION_CAPACITY_WAIT,
-            phase="stdout",
-            depth=256,
-            wait_seconds=0.5,
-            outcome="resumed",
-        ),
-    )
-
-    assert _projected(span, RETENTION_EVENT) == [], (
-        "the wait must not be projected as a generic retention sample"
-    )
+    ], "only the prune that dropped settled tasks may project onto the span"
     assert _projected(span, CAPACITY_WAIT_EVENT) == [
         {
             "operation": "observe_task_capacity_wait",
@@ -157,22 +129,55 @@ def test_capacity_wait_projects_its_own_operation_and_outcome(
     ], "the wait must project its operation, outcome, and duration"
 
 
+def test_phaseless_samples_omit_the_phase_and_unknown_outcome(
+    tracing_hook: Traced,
+) -> None:
+    """A hand-built sample has no phase, and an unrecorded outcome is named."""
+    exec_id = new_exec_id()
+    _open_span(tracing_hook, exec_id)
+    tracing_hook.hook.report_retention(_prune_sample(exec_id, pruned=1, phase=None))
+    tracing_hook.hook.report_retention(
+        _RetentionSample(
+            exec_id=exec_id,
+            kind=_RETENTION_CAPACITY_WAIT,
+            depth=1,
+            wait_seconds=0.25,
+        )
+    )
+
+    span = tracing_hook.tracer.spans[0]
+    assert _projected(span, RETENTION_EVENT) == [
+        {"kind": "prune", "depth": 5, "pruned": 1, "pruned_failures": 0}
+    ], "a phaseless prune must not invent a phase attribute"
+    assert _projected(span, CAPACITY_WAIT_EVENT) == [
+        {
+            "operation": "observe_task_capacity_wait",
+            "outcome": "unknown",
+            "wait_seconds": 0.25,
+            "depth": 1,
+        }
+    ], "a wait with no recorded outcome must be labelled unknown"
+
+
 def test_sample_for_an_unknown_execution_records_nothing(
     tracing_hook: Traced,
 ) -> None:
     """A sample with no open span must be dropped rather than invented."""
     _open_span(tracing_hook, new_exec_id())
+    stranger = new_exec_id()
 
+    tracing_hook.hook.report_retention(_prune_sample(stranger, pruned=1))
     tracing_hook.hook.report_retention(
         _RetentionSample(
-            exec_id=new_exec_id(),
-            kind=_RETENTION_DEPTH,
-            phase="stdout",
-            depth=1,
+            exec_id=stranger,
+            kind=_RETENTION_CAPACITY_WAIT,
+            wait_seconds=0.1,
+            outcome="resumed",
         )
     )
 
-    assert tracing_hook.tracer.spans[0].events == [], (
+    span = tracing_hook.tracer.spans[0]
+    assert span.events == [], (
         "an uncorrelated sample must not be attached to another execution's span"
     )
 
@@ -185,15 +190,18 @@ def test_sample_after_the_span_closed_records_nothing(
     _open_span(tracing_hook, exec_id)
     _close_span(tracing_hook, exec_id)
 
+    tracing_hook.hook.report_retention(_prune_sample(exec_id, pruned=1))
     tracing_hook.hook.report_retention(
         _RetentionSample(
             exec_id=exec_id,
-            kind=_RETENTION_DEPTH,
-            phase="stdout",
-            depth=1,
+            kind=_RETENTION_CAPACITY_WAIT,
+            wait_seconds=0.1,
+            outcome="cancelled",
         )
     )
 
-    assert _projected(tracing_hook.tracer.spans[0], RETENTION_EVENT) == [], (
-        "a closed span must not receive retention events"
-    )
+    span = tracing_hook.tracer.spans[0]
+    for name in (RETENTION_EVENT, CAPACITY_WAIT_EVENT):
+        assert _projected(span, name) == [], (
+            "a closed span must not receive retention events"
+        )

@@ -2128,9 +2128,13 @@ implemented with the following decisions:
   count; the one settled failure finalization still needs may add one more
   entry to the raw list. Retention is observable through the same hooks: one
   that implements the one-method retention sink port receives each bounded
-  sample, so the metrics and tracing adapters project depth, saturation,
-  pruning, and capacity-wait duration without a second registration API, and a
-  run nothing observes pays nothing.
+  sample, so the metrics and tracing adapters project retention without a
+  second registration API, and a run nothing observes pays nothing. The
+  metrics adapter projects every sample kind: depth, saturation, pruning, and
+  capacity-wait duration. The tracing adapter records only what explains a
+  backpressure episode — the capacity wait, and a prune that actually dropped
+  settled tasks — because depth and saturation samples arrive on the per-line
+  path, and tracing each one would grow the span with the line count.
 
 ### 8.1.4 Timeouts
 

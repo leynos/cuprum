@@ -3293,6 +3293,21 @@ On a `stdio_error` event, `error_category` reaches the tracing backend as its
 plain value, such as `producer`, and tells a producer failure apart from a pipe
 fault, as it does on the metrics counter.
 
+#### Observe-hook retention span events
+
+`TracingHook` also records what explains a run that paused its child. A line
+that waits for observer capacity is recorded as a
+`cuprum.observe_task_capacity_wait` event on the waiting execution's span,
+carrying the fixed `operation` value `observe_task_capacity_wait`, the wait's
+`outcome` (`resumed`, `cancelled`, or `interrupted`), `wait_seconds`, `depth`,
+and the phase. A prune is recorded as `cuprum.observe_task_retention` only when
+it actually dropped settled tasks, carrying `kind`, `depth`, `pruned`, and
+`pruned_failures`.
+
+Depth and saturation samples are not recorded as span events, although the
+metrics adapter does project them. Pruning runs on the per-line path, so one
+event per sample would make a verbose child's span grow with its line count.
+
 #### Correlating events with spans
 
 The hook matches every event to its span by `ExecEvent.exec_id`, a stable token

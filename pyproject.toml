@@ -598,7 +598,7 @@ reason = "Called only from StdioTarget.__post_init__, which the dataclass machin
 type = "function"
 full_name = [
     "cuprum.adapters._tracing_retention._capacity_wait_event",
-    "cuprum.adapters._tracing_retention._retention_event",
+    "cuprum.adapters._tracing_retention._prune_event",
 ]
 reason = "Called only by _RetentionTracingMixin.report_retention, which _RetentionTelemetry._publish reaches structurally through the _RetentionMetricsSink protocol: the recorder holds each sink as that protocol type, so the reference graph never enters the implementation and the helpers it calls read as unreferenced. Both projections are exercised by test_tracing_retention."
 

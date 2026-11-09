@@ -1861,10 +1861,14 @@ histograms plus `cuprum_observe_hook_saturations_total`,
 `cuprum_observe_hook_pruned_total`, and
 `cuprum_observe_hook_pruned_failures_total` counters, labelled only by the
 closed `phase` and `outcome` values; `_RetentionTracingMixin` in
-`cuprum/adapters/_tracing_retention.py` records `cuprum.observe_task_retention`
-span events, and a distinct `cuprum.observe_task_capacity_wait` event carrying
-`operation`, `outcome`, `wait_seconds`, and `depth`, for the async wait
-boundary. The per-run `exec_id` is deliberately never a metric label: it
+`cuprum/adapters/_tracing_retention.py` records a
+`cuprum.observe_task_capacity_wait` span event carrying `operation`, `outcome`,
+`wait_seconds`, `depth`, and the phase, for the async wait boundary, plus a
+`cuprum.observe_task_retention` event for a prune only when it actually dropped
+settled tasks. Depth and saturation samples are not traced: they arrive on the
+per-line path, so projecting every one would grow the span with the line count,
+which is the failure class the bound removes. The per-run `exec_id` is
+deliberately never a metric label: it
 correlates the log record and the span and would otherwise multiply every
 series by the number of runs. Both mixins are bases of the existing
 `MetricsHook` and `TracingHook`, and both use the shared `record_span_event`

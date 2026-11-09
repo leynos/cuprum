@@ -126,7 +126,7 @@ _RUNTIME_FUNCTION_ENTRY_POINTS: typ.Final = frozenset({
     # through the ``_RetentionMetricsSink`` protocol; the graph never enters
     # that implementation, so the helpers read as unreferenced.
     "cuprum.adapters._tracing_retention._capacity_wait_event",
-    "cuprum.adapters._tracing_retention._retention_event",
+    "cuprum.adapters._tracing_retention._prune_event",
     "cuprum.capture_policy._is_positive_int",
     "cuprum.control_observation._discard_hook_result",
     "cuprum.control_observation._emit_control_event",
