@@ -46,6 +46,9 @@ _SETTLE_TIMEOUT_SECONDS = 5.0
 #: shorter flood keeps the run time bounded without weakening the bound.
 _DEFERRED_LINE_COUNT = 5_000
 
+#: How long to wait for the reader to report that it entered backpressure.
+_BACKPRESSURE_TIMEOUT_SECONDS = 10.0
+
 
 class _DeferredCallback:
     """Hold the first line delivered after the observer gate opens.
@@ -80,6 +83,33 @@ def _capacity_wait_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
     ]
 
 
+async def _await_backpressure_record(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    budget_seconds: float = _BACKPRESSURE_TIMEOUT_SECONDS,
+) -> None:
+    """Return once a line has logged that it entered observer backpressure.
+
+    The record is written before the waiting line suspends, so a caller that
+    sees it knows the reader is held for capacity at that moment.
+
+    Raises
+    ------
+    AssertionError
+        If no capacity wait is recorded within ``budget_seconds``.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget_seconds
+    while not _capacity_wait_messages(caplog):
+        if loop.time() >= deadline:
+            message = (
+                "no line entered observer backpressure; the callback cannot be "
+                "shown to run only after a deferred line was released"
+            )
+            raise AssertionError(message)
+        await asyncio.sleep(0.01)
+
+
 @pytest.mark.parametrize("capture", _CAPTURE_MODES)
 def test_deferred_async_on_line_runs_and_holds_completion(
     monkeypatch: pytest.MonkeyPatch,
@@ -87,20 +117,14 @@ def test_deferred_async_on_line_runs_and_holds_completion(
     capture: bool,
 ) -> None:
     """A line deferred by saturation must still await its async ``on_line``."""
-    # The callback could also start late for an unrelated reason; the wait
-    # record is what shows the line itself was deferred by admission.
     caplog.set_level(logging.INFO, logger="cuprum._retention_telemetry")
 
-    asyncio.run(_async_on_line_case(monkeypatch, capture))
-
-    assert _capacity_wait_messages(caplog), (
-        "the callback must not start before the line reader was suspended for "
-        "observer capacity"
-    )
+    asyncio.run(_async_on_line_case(monkeypatch, caplog, capture))
 
 
 async def _async_on_line_case(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     capture: bool,
 ) -> None:
     """Saturate the observers, then hold the deferred line's async callback."""
@@ -123,6 +147,11 @@ async def _async_on_line_case(
     ):
         run_task = asyncio.create_task(cmd.run(output=options))
         await asyncio.wait_for(probe.saturated.wait(), timeout=10.0)
+        # Prove the line was deferred before the gate releases anything: the
+        # record is written before the reader suspends, so with the gate still
+        # shut it can only come from the line this case is about. Opening the
+        # gate first would let a later line's wait satisfy the same record.
+        await _await_backpressure_record(caplog)
         callback.is_armed = True
         hook.gate.set()
         await asyncio.wait_for(callback.started.wait(), timeout=10.0)
