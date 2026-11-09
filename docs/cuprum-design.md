@@ -2129,8 +2129,8 @@ implemented with the following decisions:
   entry to the raw list. Retention is observable through the same hooks: one
   that implements the one-method retention sink port receives each bounded
   sample, so the metrics and tracing adapters project retention without a
-  second registration API, and a run nothing observes pays nothing. The
-  metrics adapter projects every sample kind: depth, saturation, pruning, and
+  second registration API, and a run nothing observes pays nothing. The metrics
+  adapter projects every sample kind: depth, saturation, pruning, and
   capacity-wait duration. The tracing adapter records only what explains a
   backpressure episode — the capacity wait, and a prune that actually dropped
   settled tasks — because depth and saturation samples arrive on the per-line

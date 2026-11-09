@@ -1840,13 +1840,16 @@ observation keeps its arguments. The counters are per stage, but `depth` and
 `max_depth` read the list every stage shares, so they describe the run. Every
 record carries the same fixed `cuprum_*` field set — the execution's
 correlation token, the closed phase name, the ceiling, and the counters — and
-nothing else: no argv, decoded line, or error message, so log volume and label
-cardinality stay bounded. Entering backpressure logs once at `INFO`;
-admissions, prunes, and each wait's exit log at `DEBUG`.
-`_RetentionTelemetry._fields` prefixes the per-record values it is handed, so a
-per-prune delta lands as `cuprum_prune_delta` and cannot overwrite the running
-`cuprum_pruned` total. Callers that supply no recorder (the retention helpers
-default `telemetry=None`) still get the behaviour, only without the logs.
+nothing else: no argv, decoded line, or error message. That bounds each
+record's contents and the values it can be labelled with, not how many records
+are written: a run held at the ceiling still writes one admission record per
+line it admits, so lower the level when a child floods output. Entering
+backpressure logs once at `INFO`; admissions, prunes, and each wait's exit log
+at `DEBUG`. `_RetentionTelemetry._fields` prefixes the per-record values it is
+handed, so a per-prune delta lands as `cuprum_prune_delta` and cannot overwrite
+the running `cuprum_pruned` total. Callers that supply no recorder (the
+retention helpers default `telemetry=None`) still get the behaviour, only
+without the logs.
 
 The same samples feed the bundled adapters through a sink port.
 `_RetentionMetricsSink` in `cuprum/_retention_telemetry.py` is a runtime-
@@ -1868,11 +1871,12 @@ closed `phase` and `outcome` values; `_RetentionTracingMixin` in
 settled tasks. Depth and saturation samples are not traced: they arrive on the
 per-line path, so projecting every one would grow the span with the line count,
 which is the failure class the bound removes. The per-run `exec_id` is
-deliberately never a metric label: it
-correlates the log record and the span and would otherwise multiply every
-series by the number of runs. Both mixins are bases of the existing
-`MetricsHook` and `TracingHook`, and both use the shared `record_span_event`
-helper so the active-span and closed-span rules live in one place.
+deliberately never a metric label: it correlates the log record and the span
+and would otherwise multiply every series by the number of runs. Both mixins
+are bases of the existing `MetricsHook` and `TracingHook`. Only the tracing
+mixin records through the shared `record_span_event` helper, so the active-span
+and closed-span rules live in one place; the metrics mixin labels its collector
+calls directly.
 
 Tests for the bound are split by level.
 `cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity, and

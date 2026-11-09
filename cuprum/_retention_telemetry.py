@@ -9,8 +9,11 @@ samples; the rules the counters describe live in
 :mod:`cuprum._observe_task_retention`.
 
 Every field is a number, a closed phase name, or the execution's correlation
-token. No command text, decoded line, or error message is recorded, so log
-volume and label cardinality stay bounded no matter what a child prints.
+token. No command text, decoded line, or error message is recorded, so each
+record's size and the label cardinality stay bounded no matter what a child
+prints. The number of records still follows the decisions taken — one per
+admission, prune, or capacity wait — so a run held at the ceiling writes one
+admission record per line it admits.
 """
 
 from __future__ import annotations
@@ -91,8 +94,8 @@ class _RetentionTelemetry:
     admission decisions that stage made, while ``depth`` and ``max_depth`` read
     the shared retention list and therefore describe the run. Every field is a
     number, a closed phase name, or the execution's correlation token: no
-    command text, decoded line, or error message is recorded, so the log
-    volume and label cardinality stay bounded.
+    command text, decoded line, or error message is recorded, so each record's
+    size and the label cardinality stay bounded.
 
     Attributes
     ----------
