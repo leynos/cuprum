@@ -291,16 +291,18 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    still runs the Python pump when `_try_rust_pump` declines, which it does on
    an unsupported platform, when a raw descriptor is unavailable, or when
    extraction fails, and Unix hand-off failures take the same route. For a pump
-   run driven through that dispatcher, each targeted run must therefore
-   evidence the native pump invocation itself — a harness assertion or an event
-   emitted from inside the native call — and a run that fell back after
-   resolving Rust is rejected on the same terms. A run that never enters the
-   dispatcher is not covered by that check and must not be rejected for it: a
-   direct `rust_consume_stream` call reaches the helper without
-   `get_stream_backend()`, and in-crate scaffolding can bypass the Python
-   selection entirely. Those runs instead evidence that the targeted entry
-   point executed. The Rust label on a scenario and the presence of the
-   extension are not substitutes for either observation.
+   run driven through that dispatcher, each targeted hop must therefore
+   evidence its own native pump invocation — a harness assertion or an event
+   emitted from inside the native call, counted against the run's hop count —
+   and a hop that fell back after resolving Rust is rejected on the same terms.
+   One native event in a multi-hop run does not discharge the requirement for
+   its other hops. A run that never enters the dispatcher is not covered by
+   that check and must not be rejected for it: a direct `rust_consume_stream`
+   call reaches the helper without `get_stream_backend()`, and in-crate
+   scaffolding can bypass the Python selection entirely. Those runs instead
+   evidence that the targeted entry point executed. The Rust label on a
+   scenario and the presence of the extension are not substitutes for either
+   observation.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
