@@ -195,9 +195,9 @@ ownership and error contracts, stop and report the exact incompatibility.
   to the Linux gates — a wrapping `u32` cast, an `if let`/`else` clippy shape,
   an indexing slice in a test, and a missing-backtick module doc — plus a
   `let`-chain that the pinned MSRV rejects (the MSRV is 1.87.0 after issue
-  #507, and let-chains stabilize only in 1.88). All are repaired; `make lint-windows`,
-  `make check-fmt`, and the focused Python and behavioural suites now pass.
-  The branch then rebased onto the advanced `origin/main` at
+  #507, and let-chains stabilize only in 1.88). All are repaired;
+  `make lint-windows`, `make check-fmt`, and the focused Python and behavioural
+  suites now pass. The branch then rebased onto the advanced `origin/main` at
   `e170f908f2a7b4187cc321296a9029e621169b07` (ten upstream commits, including
   `59c168753`, which made native UTF-8 consumption linear in malformed input).
   Two conflicts arose, both in files where the two sides edited disjoint
