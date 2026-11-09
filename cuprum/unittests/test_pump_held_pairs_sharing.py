@@ -102,6 +102,24 @@ def test_the_registry_retires_a_slotted_collector_with_its_last_hook() -> None:
     )
 
 
+def test_two_slotted_collectors_keep_separate_gauges() -> None:
+    """Collectors the registry cannot weakly reference stay isolated.
+
+    Entries are keyed by object identity, so two live collectors of the same
+    type must still find one entry each rather than sharing the first one.
+    """
+    left = SlottedGaugeCollector()
+    right = SlottedGaugeCollector()
+    left_hook = PumpMetricsHook(typ.cast("typ.Any", left))
+    right_hook = PumpMetricsHook(typ.cast("typ.Any", right))
+
+    left_hook(PumpEvent(phase="handoff_hold", held_delta=1))
+    right_hook(PumpEvent(phase="handoff_hold", held_delta=1))
+
+    assert left.gauges == [1.0], "the left collector must count only its own hold"
+    assert right.gauges == [1.0], "the right collector must count only its own hold"
+
+
 def test_an_outstanding_hold_keeps_a_slotted_collectors_entry() -> None:
     """A hold outlives its reporting hook, so the count must stay reachable."""
     collector = SlottedGaugeCollector()

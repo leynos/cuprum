@@ -5952,7 +5952,9 @@ outcome events are counted by `cuprum_rust_pump_handoff_total` as described
 above. `_settle_hold_outcome` and `_release_declined_hold` in
 `cuprum/pump_observation.py` publish those two outcomes around the hold
 release, so a shutdown signal raised by a hold observer still leaves the
-failure counted.
+failure counted. The outcome is published from a `finally` around that release,
+so a shutdown signal raised by an outcome observer travels only once the pair
+has been released and the failure counted.
 
 Two setup failures still re-raise, and the distinction between them and the
 declines is what the two duplication stages exist to draw.
