@@ -167,38 +167,47 @@ Candidates were treated as hypotheses. Nothing below is claimed to be cold; the
 inventory records what the code does today and why a branch is a candidate at
 all.
 
-| ID  | Site                                        | Branch                                               | Current handling                                                                   |
-| --- | ------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| A1  | `io_utils::read_raw_fd_with` (`unix`)       | `usize::try_from` on a non-negative `ssize_t` fails  | `LengthOverflow` plus an `error` event                                             |
-| A2  | `io_utils::read_raw_fd_with`                | non-`EINTR` read error                               | `error` event, then `PumpError::Io`                                                |
-| A3  | `io_utils::write_all_unix_with`             | `usize::try_from` on a positive `ssize_t` fails      | `LengthOverflow` plus an `error` event                                             |
-| A4  | `io_utils::write_all_unix_with`             | write returns zero                                   | `WriteZero` `io::Error`                                                            |
-| A5  | `io_utils::write_all_unix_with`             | non-`EINTR`, non-non-fatal write error               | `map_short_write_error` → `error` event, then `Err`                                |
-| A6  | `io_utils::record_write_progress`           | length, range, or progress arithmetic fails          | `LengthOverflow` or `BufferRangeExceeded`                                          |
-| A7  | `io_utils::write_all_windows`               | write returns zero                                   | `WriteZero` `io::Error`                                                            |
-| A8  | `io_utils::write_all_windows`               | non-`EINTR` write error                              | `map_short_write_error`                                                            |
-| A9  | `io_utils::read_stream`/`write_all_windows` | `usize::try_from` on a `u32` count fails             | `io::Error::other`                                                                 |
-| A10 | `lib::consume_with_reader`                  | `u64::try_from(read_len)` fails; buffer slice fails  | `LengthOverflow`, `BufferRangeExceeded`                                            |
-| A11 | `buffer::allocate_buffer`                   | `try_reserve_exact` fails                            | `error` event with category and power-of-two bucket, then `BufferAllocationFailed` |
-| A12 | `splice::splice_once_with`                  | conversion fails; non-`EINTR` splice error           | `LengthOverflow`; `PumpError::Io`                                                  |
-| A13 | `splice::accumulate_splices`                | `u64::try_from` or `checked_add` fails               | `LengthOverflow`                                                                   |
-| A14 | `cuprum_native_io::syscall_result`          | negative result; count conversion; capacity exceeded | `last_os_error`, `io::Error::other`, `InvalidData`                                 |
-| A15 | `cuprum_rust::convert_platform_fd`          | descriptor out of range or negative                  | `InvalidDescriptor` → `ValueError`                                                 |
-| A16 | `cuprum_rust::errors` conversions           | building the `OSError`                               | `PyOSError` with errno or winerror preserved                                       |
+| ID  | Site                                        | Branch                                                                      | Current handling                                                                   |
+| --- | ------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| A1  | `io_utils::read_raw_fd_with` (`unix`)       | `usize::try_from` on a non-negative `ssize_t` fails                         | `LengthOverflow` plus an `error` event                                             |
+| A2  | `io_utils::read_raw_fd_with`                | non-`EINTR` read error                                                      | `error` event, then `PumpError::Io`                                                |
+| A3  | `io_utils::write_all_unix_with`             | `usize::try_from` on a positive `ssize_t` fails                             | `LengthOverflow` plus an `error` event                                             |
+| A4  | `io_utils::write_all_unix_with`             | write returns zero                                                          | `WriteZero` `io::Error`                                                            |
+| A5  | `io_utils::write_all_unix_with`             | non-`EINTR`, non-non-fatal write error                                      | `map_short_write_error` → `error` event, then `Err`                                |
+| A6  | `io_utils::record_write_progress`           | length, range, or progress arithmetic fails                                 | `LengthOverflow` or `BufferRangeExceeded`                                          |
+| A7  | `io_utils::write_all_windows`               | write returns zero                                                          | `WriteZero` `io::Error`                                                            |
+| A8  | `io_utils::write_all_windows`               | non-`EINTR` write error                                                     | `map_short_write_error`                                                            |
+| A9  | `io_utils::read_stream`/`write_all_windows` | `usize::try_from` on a `u32` count fails                                    | `io::Error::other`                                                                 |
+| A10 | `lib::consume_with_reader`                  | `u64::try_from(read_len)` fails; buffer slice fails                         | `LengthOverflow`, `BufferRangeExceeded`                                            |
+| A11 | `buffer::allocate_buffer`                   | `try_reserve_exact` fails                                                   | `error` event with category and power-of-two bucket, then `BufferAllocationFailed` |
+| A12 | `splice::splice_once_with`                  | conversion fails; non-`EINTR` splice error                                  | `LengthOverflow`; `PumpError::Io`                                                  |
+| A13 | `splice::accumulate_splices`                | `u64::try_from` or `checked_add` fails                                      | `LengthOverflow`                                                                   |
+| A14 | `cuprum_native_io::syscall_result`          | negative result the caller calls fatal; count conversion; capacity exceeded | `last_os_error`, `io::Error::other`, `InvalidData`                                 |
+| A15 | `cuprum_rust::convert_platform_fd`          | descriptor out of range or negative                                         | `InvalidDescriptor` → `ValueError`                                                 |
+| A16 | `cuprum_rust::errors` conversions           | building the `OSError`                                                      | `PyOSError` with errno or winerror preserved                                       |
 
 _Table 3: Candidate cold-path sites, recorded as hypotheses only._
 
 Several rows cannot fire on the supported platforms. A1, A3, and A9 fail only
 on a count conversion, and the kernel returns a non-negative count that fits
-the destination type. A6 needs arithmetic that `checked_progress` has already
-bounded. A13 has two failure modes and only one of them is type-impossible:
-`u64::try_from` on the kernel's non-negative count cannot fail, but
-`total.checked_add(chunk)` can overflow in principle, bounded by the volume a
-single pump transfers rather than by the types. "Cannot fire in practice" is a
-reason to doubt a performance benefit, not a reason to annotate: unreachable
-code that the optimizer can already prove unreachable gains nothing from a
-hint, and code it cannot prove unreachable is exactly where an incorrect hint
-costs performance.
+the destination type. A6 is three checks in one branch: the two `usize` to
+`u64` conversions cannot fail, the range check cannot fail for a count the
+kernel returned for that buffer, and only the `total_written` overflow is
+reachable in principle, after `u64::MAX` bytes in one pump. `checked_progress`
+is where that overflow is detected, not an earlier guard, and the tests reach
+all three by supplying counts a real write cannot return. A14 is the same shape
+of caution from the other direction: `syscall_result` treats every negative
+return as an error, so it also sees the `EINTR` retries and the broken-pipe or
+connection-reset results that the pump deliberately absorbs. A cold
+classification there belongs only on the arms a caller classifies as fatal,
+which is a property of the caller, not of `syscall_result`. A13 has two failure
+modes and only one of them is type-impossible: `u64::try_from` on the kernel's
+non-negative count cannot fail, but `total.checked_add(chunk)` can overflow in
+principle, bounded by the volume a single pump transfers rather than by the
+types. "Cannot fire in practice" is a reason to doubt a performance benefit,
+not a reason to annotate: unreachable code that the optimizer can already prove
+unreachable gains nothing from a hint, and code it cannot prove unreachable is
+exactly where an incorrect hint costs performance.
 
 ### Deliberate control flow that must not be annotated
 
@@ -274,9 +283,16 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    pump on Windows and whenever the extension probes unavailable. Each targeted
    run must therefore record the resolved backend from the
    `cuprum.stream_backend_resolved` event, or assert it in the harness, and a
-   run recorded as Python is rejected rather than attributed to the hint. The
+   run recorded as Python is rejected rather than attributed to the hint. A
+   Rust resolution is necessary but not sufficient: `_pump_stream_dispatch`
+   still runs the Python pump when `_try_rust_pump` declines, which it does on
+   an unsupported platform, when a raw descriptor is unavailable, or when
+   extraction fails, and Unix hand-off failures take the same route. Each
+   targeted run must therefore evidence the native pump invocation itself — a
+   harness assertion or an event emitted from inside the native call — and a
+   run that fell back after resolving Rust is rejected on the same terms. The
    Rust label on a scenario and the presence of the extension are not
-   substitutes for that observation.
+   substitutes for either observation.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -293,9 +309,16 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    behind `#[cfg(test)]` or a benchmark feature. The artefact checked in step 1
    is the Python extension module for a Python-driven benchmark and the
    benchmark test executable for an in-crate harness, so it is a different file
-   for those two kinds of leg but must still come from the leg's own build.
-   Measuring the currently unintegrated consume helper does not authorize
-   integrating it, and the integration guard in
+   for those two kinds of leg but must still come from the leg's own build. On
+   Linux the pump then has a second fork: `pump_stream_files` tries
+   `try_splice_pump` first and returns its result whenever splice is available,
+   so a successful splice run never executes the `io_utils` read or write
+   candidates at all. The read/write loop is the only path that emits the
+   `pump_stream_readwrite` span. A targeted run of an `io_utils` hint must
+   therefore assert that the fallback loop ran, from that span or a harness
+   assertion, and a run that took the splice path is rejected rather than
+   reported as a null result. Measuring the currently unintegrated consume
+   helper does not authorize integrating it, and the integration guard in
    `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
    number of rounds, and keep raw samples, exclusions, and failures. Report a
