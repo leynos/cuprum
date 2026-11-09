@@ -192,22 +192,25 @@ Several rows cannot fire on the supported platforms. A1, A3, and A9 fail only
 on a count conversion, and the kernel returns a non-negative count that fits
 the destination type. A6 is three checks in one branch: the two `usize` to
 `u64` conversions cannot fail, the range check cannot fail for a count the
-kernel returned for that buffer, and only the `total_written` overflow is
-reachable in principle, after `u64::MAX` bytes in one pump. `checked_progress`
-is where that overflow is detected, not an earlier guard, and the tests reach
-all three by supplying counts a real write cannot return. A14 is the same shape
-of caution from the other direction: `syscall_result` treats every negative
-return as an error, so it also sees the `EINTR` retries and the broken-pipe or
-connection-reset results that the pump deliberately absorbs. A cold
-classification there belongs only on the arms a caller classifies as fatal,
-which is a property of the caller, not of `syscall_result`. A13 has two failure
-modes and only one of them is type-impossible: `u64::try_from` on the kernel's
-non-negative count cannot fail, but `total.checked_add(chunk)` can overflow in
-principle, bounded by the volume a single pump transfers rather than by the
-types. "Cannot fire in practice" is a reason to doubt a performance benefit,
-not a reason to annotate: unreachable code that the optimizer can already prove
-unreachable gains nothing from a hint, and code it cannot prove unreachable is
-exactly where an incorrect hint costs performance.
+kernel returned for that buffer, and the `total_written` it accumulates is
+reset for each chunk and cannot exceed that chunk's length, so its overflow
+would need a single chunk longer than `u64::MAX`, which the buffer size
+excludes. `checked_progress` is where that overflow is detected, not an earlier
+guard, and the tests reach all three by supplying counts a real write cannot
+return. The pump-wide total is a different counter on `PumpState`, and it
+saturates instead of failing. A14 is the same shape of caution from the other
+direction: `syscall_result` treats every negative return as an error, so it
+also sees the `EINTR` retries and the broken-pipe or connection-reset results
+that the pump deliberately absorbs. A cold classification there belongs only on
+the arms a caller classifies as fatal, which is a property of the caller, not of
+`syscall_result`. A13 has two failure modes and only one of them is
+type-impossible: `u64::try_from` on the kernel's non-negative count cannot
+fail, but `total.checked_add(chunk)` can overflow in principle, bounded by the
+volume a single pump transfers rather than by the types. "Cannot fire in
+practice" is a reason to doubt a performance benefit, not a reason to annotate:
+unreachable code that the optimizer can already prove unreachable gains nothing
+from a hint, and code it cannot prove unreachable is exactly where an incorrect
+hint costs performance.
 
 ### Deliberate control flow that must not be annotated
 
@@ -287,12 +290,17 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    Rust resolution is necessary but not sufficient: `_pump_stream_dispatch`
    still runs the Python pump when `_try_rust_pump` declines, which it does on
    an unsupported platform, when a raw descriptor is unavailable, or when
-   extraction fails, and Unix hand-off failures take the same route. Each
-   targeted run must therefore evidence the native pump invocation itself — a
-   harness assertion or an event emitted from inside the native call — and a
-   run that fell back after resolving Rust is rejected on the same terms. The
-   Rust label on a scenario and the presence of the extension are not
-   substitutes for either observation.
+   extraction fails, and Unix hand-off failures take the same route. For a pump
+   run driven through that dispatcher, each targeted run must therefore
+   evidence the native pump invocation itself — a harness assertion or an event
+   emitted from inside the native call — and a run that fell back after
+   resolving Rust is rejected on the same terms. A run that never enters the
+   dispatcher is not covered by that check and must not be rejected for it: a
+   direct `rust_consume_stream` call reaches the helper without
+   `get_stream_backend()`, and in-crate scaffolding can bypass the Python
+   selection entirely. Those runs instead evidence that the targeted entry
+   point executed. The Rust label on a scenario and the presence of the
+   extension are not substitutes for either observation.
 2. **Backend.** Build with the release profile and the released LLVM backend.
    Dev-fast Cranelift results are not release evidence and are excluded.
 3. **Workloads.** Use `benchmarks/pipeline_throughput.py` across its payload
@@ -313,11 +321,13 @@ methodology without importing the phase-6 dispatcher wall-time gate.
    Linux the pump then has a second fork: `pump_stream_files` tries
    `try_splice_pump` first and returns its result whenever splice is available,
    so a successful splice run never executes the `io_utils` read or write
-   candidates at all. The read/write loop is the only path that emits the
-   `pump_stream_readwrite` span. A targeted run of an `io_utils` hint must
-   therefore assert that the fallback loop ran, from that span or a harness
-   assertion, and a run that took the splice path is rejected rather than
-   reported as a null result. Measuring the currently unintegrated consume
+   candidates at all. The read/write loop is the only path that opens the
+   `stream_pump` span with `operation = "pump_stream_readwrite"`, so the
+   harness must capture that span rather than filter on `pump_stream_readwrite`
+   as if it were the span name. A targeted run of an `io_utils` hint must
+   therefore assert that the fallback loop ran, from that span or an equivalent
+   harness assertion, and a run that took the splice path is rejected rather
+   than reported as a null result. Measuring the currently unintegrated consume
    helper does not authorize integrating it, and the integration guard in
    `cuprum/unittests/test_rust_consume_integration_guard.py` stays untouched.
 4. **Runs.** Randomize the order of paired runs, state the warmup count and the
