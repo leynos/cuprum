@@ -3602,12 +3602,14 @@ so the counter is the only record that the drain window closed without a
 submission.
 
 One exception outranks that re-raise. If a pump observer raises a shutdown
-signal, such as `KeyboardInterrupt`, while the `drain_failed` outcome is being
-emitted, the signal propagates and the drain error stays reachable as its
-`__context__`. Shutdown signals must travel, and the pair has already been
-released by then, so nothing is stranded. A shutdown signal raised on the hold
-release that follows a successful drain and activation is handled the same way:
-the activated pair is rolled back — blocking mode restored, both descriptors
+signal, such as `KeyboardInterrupt`, while the hold is being released or while
+the `drain_failed` outcome is being emitted, the signal propagates and the
+drain error stays reachable as its `__context__`. A signal raised on the
+release does not lose the outcome: it is still counted before the signal
+travels. Shutdown signals must travel, and the pair has already been released
+by then, so nothing is stranded. A shutdown signal raised on the hold release
+that follows a successful drain and activation is handled the same way: the
+activated pair is rolled back — blocking mode restored, both descriptors
 closed, the reader resumed — the hop counts the `submission_abandoned` outcome,
 and the signal then travels. Every registered pump observer sees the event
 before any such signal propagates, so a metrics hook registered behind the

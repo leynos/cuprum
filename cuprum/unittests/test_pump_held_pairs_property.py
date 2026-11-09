@@ -3,9 +3,10 @@
 ``cuprum_rust_pump_held_pairs`` counts held pairs, not hook deliveries. The
 deterministic tests in ``test_pump_held_pairs_sharing`` pin one interleaving
 each; this property generalizes them: whatever order concurrent emitters run
-in, and whichever of the two metrics hooks a nested emission reaches before
-the outer one finishes, the gauge must end at the number of emissions and
-return to zero once each is released.
+in, whichever of the two metrics hooks a nested emission reaches before the
+outer one finishes, and wherever one delivery is interrupted between its hooks
+by another thread's complete emission, the gauge must end at the number of
+emissions and return to zero once each is released.
 
 Real threads race nondeterministically, which would make a schedule-dependent
 test flaky in one direction and unconvincing in the other. The emissions
@@ -32,6 +33,7 @@ from cuprum.adapters.pump_metrics import (
 from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
     NestedHoldEmitter,
+    PausingHook,
     RecordingCollector,
 )
 
@@ -41,15 +43,18 @@ if typ.TYPE_CHECKING:
     from hypothesis.strategies import DrawFn
 
     type _Step = cabc.Callable[[], None]
-    # One emission names the worker that delivers it and whether the hook
-    # between the two metrics hooks emits a nested hold inside it.
-    type _Emission = tuple[int, bool]
+    # One emission names the worker that delivers it, whether the hook inside
+    # the delivery emits a nested hold, and whether the delivery pauses after
+    # its first hook so another worker can complete an emission in between.
+    type _Emission = tuple[int, bool, bool]
     type _Plan = tuple[list[_Emission], list[int]]
 
 # At most three workers and four emissions keep every replayed schedule short
-# while still interleaving two workers and nesting inside a delivery.
+# while still interleaving two workers, nesting inside a delivery, and
+# interrupting one delivery between its hooks.
 _EMISSION = st.tuples(
     st.integers(min_value=0, max_value=2),
+    st.booleans(),
     st.booleans(),
 )
 
@@ -73,15 +78,23 @@ class _Turnstile:
         self._failure: BaseException | None = None
         self.thread = threading.Thread(target=self._serve)
 
-    def run(self, step: _Step) -> None:
-        """Run ``step`` on the worker and wait for it to finish or fail."""
+    def start(self, step: _Step) -> None:
+        """Hand ``step`` to the worker without waiting for it to finish."""
         self._step = step
         self._go.set()
+
+    def settle(self) -> None:
+        """Wait for the handed step, re-raising any failure it recorded."""
         assert self._done.wait(timeout=_HANG_S), "the worker must finish its step"
         self._done.clear()
         failure, self._failure = self._failure, None
         if failure is not None:
             raise failure
+
+    def run(self, step: _Step) -> None:
+        """Run ``step`` on the worker and wait for it to finish or fail."""
+        self.start(step)
+        self.settle()
 
     def stop(self) -> None:
         """Ask the worker to exit and wait for it."""
@@ -100,7 +113,7 @@ class _Turnstile:
                 return
             try:
                 step()
-            except BaseException as exc:  # ruff: ignore[blind-except] - re-raised by ``run``
+            except BaseException as exc:  # ruff: ignore[blind-except] - re-raised by ``settle``
                 self._failure = exc
             self._done.set()
 
@@ -122,7 +135,7 @@ def _schedules(draw: DrawFn) -> _Plan:
     """
     emissions = draw(st.lists(_EMISSION, min_size=1, max_size=4))
     streams: dict[int, list[int]] = {}
-    for index, (worker, _nests) in enumerate(emissions):
+    for index, (worker, _nests, _pauses) in enumerate(emissions):
         streams.setdefault(worker, []).append(index)
 
     order: list[int] = []
@@ -136,27 +149,122 @@ def _schedules(draw: DrawFn) -> _Plan:
     return emissions, order
 
 
+def _emission_step(
+    context: contextvars.Context,
+    delta: int,
+    gate: PausingHook | None,
+    nested: NestedHoldEmitter,
+    *,
+    nests: bool,
+) -> _Step:
+    """Build the worker step, arming its hooks on the emitting thread.
+
+    Arming happens here rather than in the driving thread so one worker's
+    nesting decision and pause cannot leak into a delivery that is paused on
+    another thread. Each step enters its own copy of the captured context: one
+    context object cannot be entered twice at once, and a paused delivery keeps
+    its copy entered while another worker completes an emission.
+    """
+
+    def emit() -> None:
+        nested.arm(nest=nests)
+        if gate is not None:
+            gate.arm()
+        context.copy().run(_emit_rust_pump_hold, delta)
+
+    return emit
+
+
+def _run_others(
+    plan: _Plan,
+    index: int,
+    turnstiles: dict[int, _Turnstile],
+    delta: int,
+    context: contextvars.Context,
+    nested: NestedHoldEmitter,
+    paused_worker: int,
+) -> int:
+    """Complete other workers' emissions while one delivery waits mid-flight.
+
+    Only an emission another worker may run is taken: the paused worker's own
+    stream stays in order, and a second pausing emission is left for the outer
+    replay loop, because one gate can only hold one delivery at a time.
+
+    Returns
+    -------
+    int
+        The index of the next emission the replay loop must run.
+    """
+    emissions, order = plan
+    while index < len(order):
+        worker, nests, pauses = emissions[order[index]]
+        if worker == paused_worker or pauses:
+            return index
+        turnstiles[worker].run(
+            _emission_step(context, delta, gate=None, nested=nested, nests=nests)
+        )
+        index += 1
+    return index
+
+
+def _advance(
+    plan: _Plan,
+    index: int,
+    turnstiles: dict[int, _Turnstile],
+    delta: int,
+    context: contextvars.Context,
+    nested: NestedHoldEmitter,
+    gate: PausingHook,
+) -> int:
+    """Run the emission at ``index``, interleaving inside it when it pauses.
+
+    Returns
+    -------
+    int
+        The index of the next emission the replay loop must run.
+    """
+    emissions, order = plan
+    worker, nests, pauses = emissions[order[index]]
+    turnstiles[worker].start(
+        _emission_step(
+            context,
+            delta,
+            gate if pauses else None,
+            nested,
+            nests=nests,
+        )
+    )
+    if not pauses:
+        turnstiles[worker].settle()
+        return index + 1
+
+    assert gate.wait_paused(_HANG_S), "the paused delivery must reach the gate"
+    index = _run_others(plan, index + 1, turnstiles, delta, context, nested, worker)
+    gate.release()
+    turnstiles[worker].settle()
+    return index
+
+
 def _deliver(
     plan: _Plan,
     delta: int,
     context: contextvars.Context,
     nested: NestedHoldEmitter,
+    gate: PausingHook,
 ) -> None:
     """Replay ``plan`` as real emissions on one worker thread per emitter."""
     emissions, order = plan
-    workers = sorted({worker for worker, _nests in emissions})
+    workers = sorted({worker for worker, _nests, _pauses in emissions})
     turnstiles = {worker: _Turnstile() for worker in workers}
     for turnstile in turnstiles.values():
         turnstile.thread.start()
     try:
-        for index in order:
-            worker, nests = emissions[index]
-            # Read by the worker during the emission it is about to deliver.
-            nested.nest = nests
-            turnstiles[worker].run(
-                lambda delta=delta: context.run(_emit_rust_pump_hold, delta)
-            )
+        index = 0
+        while index < len(order):
+            index = _advance(plan, index, turnstiles, delta, context, nested, gate)
     finally:
+        # A failed assertion must not leave a delivery blocked behind the gate.
+        gate.release()
         for turnstile in turnstiles.values():
             turnstile.stop()
 
@@ -171,24 +279,26 @@ def test_a_generated_schedule_moves_the_gauge_once_per_emission(plan: _Plan) -> 
     it must return to zero once each hold is released the same way.
     """
     emissions, _order = plan
-    nested_count = sum(1 for _worker, nests in emissions if nests)
+    nested_count = sum(1 for _worker, nests, _pauses in emissions if nests)
     total = len(emissions) + nested_count
     collector = RecordingCollector()
     nested = NestedHoldEmitter()
+    gate = PausingHook()
 
     with (
         observe_pump(PumpMetricsHook(collector)),
+        observe_pump(gate),
         observe_pump(nested),
         observe_pump(PumpMetricsHook(collector)),
     ):
         context = contextvars.copy_context()
 
-        _deliver(plan, 1, context, nested)
+        _deliver(plan, 1, context, nested, gate)
         assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(
             float(total)
         ), "each emission must move the shared gauge exactly once"
 
-        _deliver(plan, -1, context, nested)
+        _deliver(plan, -1, context, nested, gate)
         assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(0.0), (
             "releasing every hold must return the gauge to zero"
         )

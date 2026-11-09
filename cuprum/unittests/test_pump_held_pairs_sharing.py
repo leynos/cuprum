@@ -31,34 +31,10 @@ from cuprum.pump_events import PumpEvent
 from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
     NestedHoldEmitter,
+    PausingHook,
     RecordingCollector,
     SlottedGaugeCollector,
 )
-
-
-class _PauseBetweenHooks:
-    """Stop one emission mid-delivery so another thread can emit.
-
-    Registered between two metrics hooks, this hook holds the main thread's
-    delivery of a hold until a worker has completed an emission of its own,
-    which is the interleaving the counter has to survive. It pauses only the
-    thread that created it, and only once, so the releases that follow pass
-    straight through.
-    """
-
-    def __init__(self) -> None:
-        """Remember the emitting thread and start with no pause taken."""
-        self._emitting = threading.get_ident()
-        self.paused = threading.Event()
-        self.resume = threading.Event()
-
-    def __call__(self, event: PumpEvent) -> None:
-        """Hold the delivery on the emitting thread until the test resumes it."""
-        del event
-        if threading.get_ident() != self._emitting or self.paused.is_set():
-            return
-        self.paused.set()
-        assert self.resume.wait(timeout=5.0), "the test must resume the delivery"
 
 
 def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
@@ -70,16 +46,17 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     """
     collector = RecordingCollector()
     hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
-    gate = _PauseBetweenHooks()
+    gate = PausingHook()
+    gate.arm()
 
     with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
         context = contextvars.copy_context()
 
         def emit_elsewhere() -> None:
             """Complete an emission while the main thread's delivery waits."""
-            assert gate.paused.wait(timeout=5.0), "the main delivery must pause"
+            assert gate.wait_paused(5.0), "the main delivery must pause"
             context.run(_emit_rust_pump_hold, 1)
-            gate.resume.set()
+            gate.release()
 
         worker = threading.Thread(target=emit_elsewhere)
         worker.start()
@@ -87,7 +64,7 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
             _emit_rust_pump_hold(1)
         finally:
             # Never leave the gated delivery blocked behind a failed assertion.
-            gate.resume.set()
+            gate.release()
             worker.join(timeout=5.0)
         assert not worker.is_alive(), "the interleaved emission must finish"
 
@@ -110,7 +87,7 @@ def test_a_hook_that_emits_while_called_does_not_count_the_outer_hold_again() ->
     """
     collector = RecordingCollector()
     nested = NestedHoldEmitter()
-    nested.nest = True
+    nested.arm(nest=True)
 
     with (
         observe_pump(PumpMetricsHook(collector)),

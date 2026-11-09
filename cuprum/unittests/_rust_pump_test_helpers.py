@@ -124,24 +124,29 @@ class SlottedGaugeCollector:
 
 
 class NestedHoldEmitter:
-    """Emit a matching hold from inside a delivery when asked to.
+    """Emit a matching hold from inside a delivery it was armed for.
 
     Pump hooks run inline on the emitting thread, so a hook that emits nests a
-    second emission inside the delivery of the first. :attr:`nest` decides
-    whether the next emission delivered through this hook does that, which lets
-    a test place a nested emission between two metrics hooks; the thread-local
-    guard keeps the nested emission from nesting again.
+    second emission inside the delivery of the first. :meth:`arm` decides, for
+    the calling thread only, whether that thread's deliveries through this hook
+    nest a hold; arming from the thread that will emit keeps one worker's
+    decision from leaking into a delivery paused on another thread. The
+    thread-local guard keeps the nested emission from nesting again.
     """
 
     def __init__(self) -> None:
-        """Start without nesting."""
-        self.nest = False
+        """Start without a pending nesting decision."""
+        self._pending = threading.local()
         self._nesting = threading.local()
+
+    def arm(self, *, nest: bool) -> None:
+        """Decide whether this thread's deliveries nest a hold from now on."""
+        self._pending.nest = nest
 
     def __call__(self, event: PumpEvent) -> None:
         """Emit a hold of the same direction, once, without recursion."""
         delta = event.held_delta
-        if not self.nest or delta is None:
+        if not getattr(self._pending, "nest", False) or delta is None:
             return
         if getattr(self._nesting, "active", False):
             return
@@ -150,6 +155,52 @@ class NestedHoldEmitter:
             _emit_rust_pump_hold(delta)
         finally:
             self._nesting.active = False
+
+
+class PausingHook:
+    """Pause one armed delivery so another thread can emit in between.
+
+    Pump hooks run inline on the thread delivering the event, so a hook that
+    blocks holds the delivery open between the hooks registered after it. A
+    test arms the hook on the thread about to emit, waits for :attr:`paused`,
+    lets another thread finish an emission of its own, and then calls
+    :meth:`release`; the remaining hooks then see the event that was held.
+    """
+
+    def __init__(self) -> None:
+        """Start with no armed pause and both handshake events clear."""
+        self._armed = threading.local()
+        self.paused = threading.Event()
+        self.resume = threading.Event()
+
+    def arm(self) -> None:
+        """Pause the next delivery on the calling thread, once."""
+        self._armed.pause = True
+
+    def wait_paused(self, timeout: float) -> bool:
+        """Wait for the armed delivery to reach this hook.
+
+        Returns
+        -------
+        bool
+            Whether the delivery paused before ``timeout`` elapsed.
+        """
+        return self.paused.wait(timeout=timeout)
+
+    def release(self) -> None:
+        """Let a paused delivery continue and clear the handshake."""
+        self.paused.clear()
+        self.resume.set()
+
+    def __call__(self, event: PumpEvent) -> None:
+        """Hold the armed delivery until the test releases it."""
+        del event
+        if not getattr(self._armed, "pause", False):
+            return
+        self._armed.pause = False
+        self.paused.set()
+        assert self.resume.wait(timeout=10.0), "the test must release the delivery"
+        self.resume.clear()
 
 
 @dc.dataclass(slots=True)
