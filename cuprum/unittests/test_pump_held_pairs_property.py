@@ -19,6 +19,7 @@ deterministically, so a failure names a real defect rather than a lost race.
 from __future__ import annotations
 
 import contextvars
+import dataclasses as dc
 import threading
 import typing as typ
 
@@ -149,124 +150,112 @@ def _schedules(draw: DrawFn) -> _Plan:
     return emissions, order
 
 
-def _emission_step(
-    context: contextvars.Context,
-    delta: int,
-    gate: PausingHook | None,
-    nested: NestedHoldEmitter,
-    *,
-    nests: bool,
-) -> _Step:
-    """Build the worker step, arming its hooks on the emitting thread.
+@dc.dataclass(slots=True)
+class _Replay:
+    """One phase's emissions: the delta, the hooks, and the context to enter."""
 
-    Arming happens here rather than in the driving thread so one worker's
-    nesting decision and pause cannot leak into a delivery that is paused on
-    another thread. Each step enters its own copy of the captured context: one
-    context object cannot be entered twice at once, and a paused delivery keeps
-    its copy entered while another worker completes an emission.
-    """
+    context: contextvars.Context
+    delta: int
+    nested: NestedHoldEmitter
+    gate: PausingHook
 
-    def emit() -> None:
-        nested.arm(nest=nests)
-        if gate is not None:
-            gate.arm()
-        context.copy().run(_emit_rust_pump_hold, delta)
+    def step(self, emission: _Emission, *, pauses: bool) -> _Step:
+        """Build the worker step for ``emission``, armed on the worker thread.
 
-    return emit
+        Arming happens here rather than in the driving thread so one worker's
+        nesting decision and pause cannot leak into a delivery that is paused
+        on another thread. Each step enters its own copy of the context: one
+        context object cannot be entered twice at once, and a paused delivery
+        keeps its copy entered while another worker completes an emission.
+        """
+        nests = emission[1]
+
+        def emit() -> None:
+            self.nested.arm(nest=nests)
+            if pauses:
+                self.gate.arm()
+            self.context.copy().run(_emit_rust_pump_hold, self.delta)
+
+        return emit
 
 
-def _run_others(
-    plan: _Plan,
-    index: int,
-    turnstiles: dict[int, _Turnstile],
-    delta: int,
-    context: contextvars.Context,
-    nested: NestedHoldEmitter,
-    paused_worker: int,
-) -> int:
-    """Complete other workers' emissions while one delivery waits mid-flight.
+class _Schedule:
+    """Replay one drawn plan as real emissions, one worker thread per emitter."""
 
-    Only an emission another worker may run is taken: the paused worker's own
-    stream stays in order, and a second pausing emission is left for the outer
-    replay loop, because one gate can only hold one delivery at a time.
+    def __init__(self, plan: _Plan, replay: _Replay) -> None:
+        """Start each worker's thread; nothing runs until :meth:`deliver`."""
+        self._plan = plan
+        self._replay = replay
+        emissions, _order = plan
+        workers = sorted({worker for worker, _nests, _pauses in emissions})
+        self._turnstiles = {worker: _Turnstile() for worker in workers}
 
-    Returns
-    -------
-    int
-        The index of the next emission the replay loop must run.
-    """
-    emissions, order = plan
-    while index < len(order):
-        worker, nests, pauses = emissions[order[index]]
-        if worker == paused_worker or pauses:
-            return index
-        turnstiles[worker].run(
-            _emission_step(context, delta, gate=None, nested=nested, nests=nests)
+    def deliver(self) -> None:
+        """Run every emission in the drawn order, interleaving where drawn."""
+        for turnstile in self._turnstiles.values():
+            turnstile.thread.start()
+        try:
+            _emissions, order = self._plan
+            index = 0
+            while index < len(order):
+                index = self._advance(index)
+        finally:
+            # A failed assertion must not leave a delivery blocked behind the gate.
+            self._replay.gate.release()
+            for turnstile in self._turnstiles.values():
+                turnstile.stop()
+
+    def _advance(self, index: int) -> int:
+        """Run the emission at ``index``, interleaving inside it when it pauses.
+
+        Returns
+        -------
+        int
+            The index of the next emission the replay loop must run.
+        """
+        emissions, order = self._plan
+        emission = emissions[order[index]]
+        worker, _nests, pauses = emission
+        turnstile = self._turnstiles[worker]
+        turnstile.start(self._replay.step(emission, pauses=pauses))
+        if not pauses:
+            turnstile.settle()
+            return index + 1
+
+        assert self._replay.gate.wait_paused(_HANG_S), (
+            "the paused delivery must reach the gate"
         )
-        index += 1
-    return index
+        index = self._run_others(index + 1, worker)
+        self._replay.gate.release()
+        turnstile.settle()
+        return index
 
+    def _run_others(self, index: int, paused_worker: int) -> int:
+        """Complete other workers' emissions while one delivery waits mid-flight.
 
-def _advance(
-    plan: _Plan,
-    index: int,
-    turnstiles: dict[int, _Turnstile],
-    delta: int,
-    context: contextvars.Context,
-    nested: NestedHoldEmitter,
-    gate: PausingHook,
-) -> int:
-    """Run the emission at ``index``, interleaving inside it when it pauses.
+        Only an emission another worker may run is taken: the paused worker's
+        own stream stays in order, and a second pausing emission is left for
+        :meth:`_advance`, because one gate can hold only one delivery at a time.
 
-    Returns
-    -------
-    int
-        The index of the next emission the replay loop must run.
-    """
-    emissions, order = plan
-    worker, nests, pauses = emissions[order[index]]
-    turnstiles[worker].start(
-        _emission_step(
-            context,
-            delta,
-            gate if pauses else None,
-            nested,
-            nests=nests,
-        )
-    )
-    if not pauses:
-        turnstiles[worker].settle()
-        return index + 1
-
-    assert gate.wait_paused(_HANG_S), "the paused delivery must reach the gate"
-    index = _run_others(plan, index + 1, turnstiles, delta, context, nested, worker)
-    gate.release()
-    turnstiles[worker].settle()
-    return index
-
-
-def _deliver(
-    plan: _Plan,
-    delta: int,
-    context: contextvars.Context,
-    nested: NestedHoldEmitter,
-    gate: PausingHook,
-) -> None:
-    """Replay ``plan`` as real emissions on one worker thread per emitter."""
-    emissions, order = plan
-    workers = sorted({worker for worker, _nests, _pauses in emissions})
-    turnstiles = {worker: _Turnstile() for worker in workers}
-    for turnstile in turnstiles.values():
-        turnstile.thread.start()
-    try:
-        index = 0
+        Returns
+        -------
+        int
+            The index of the next emission :meth:`deliver` must run.
+        """
+        emissions, order = self._plan
         while index < len(order):
-            index = _advance(plan, index, turnstiles, delta, context, nested, gate)
-    finally:
-        # A failed assertion must not leave a delivery blocked behind the gate.
-        gate.release()
-        for turnstile in turnstiles.values():
-            turnstile.stop()
+            emission = emissions[order[index]]
+            worker, _nests, pauses = emission
+            if worker == paused_worker or pauses:
+                return index
+            self._turnstiles[worker].run(self._replay.step(emission, pauses=False))
+            index += 1
+        return index
+
+
+def _deliver(plan: _Plan, replay: _Replay) -> None:
+    """Replay ``plan`` through ``replay``'s hooks and context."""
+    _Schedule(plan, replay).deliver()
 
 
 @settings(max_examples=25)
@@ -291,14 +280,18 @@ def test_a_generated_schedule_moves_the_gauge_once_per_emission(plan: _Plan) -> 
         observe_pump(nested),
         observe_pump(PumpMetricsHook(collector)),
     ):
-        context = contextvars.copy_context()
-
-        _deliver(plan, 1, context, nested, gate)
+        replay = _Replay(
+            context=contextvars.copy_context(),
+            delta=1,
+            nested=nested,
+            gate=gate,
+        )
+        _deliver(plan, replay)
         assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(
             float(total)
         ), "each emission must move the shared gauge exactly once"
 
-        _deliver(plan, -1, context, nested, gate)
+        _deliver(plan, dc.replace(replay, delta=-1))
         assert collector.gauge_values(RUST_PUMP_HELD_PAIRS)[-1] == pytest.approx(0.0), (
             "releasing every hold must return the gauge to zero"
         )
