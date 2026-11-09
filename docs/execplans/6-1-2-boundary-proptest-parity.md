@@ -194,7 +194,8 @@ ownership and error contracts, stop and report the exact incompatibility.
   `make lint-windows` then found four further cross-target defects invisible
   to the Linux gates — a wrapping `u32` cast, an `if let`/`else` clippy shape,
   an indexing slice in a test, and a missing-backtick module doc — plus a
-  `let`-chain that the 1.85 MSRV rejects. All are repaired; `make lint-windows`,
+  `let`-chain that the pinned MSRV rejects (the MSRV is 1.87.0 after issue
+  #507, and let-chains stabilize only in 1.88). All are repaired; `make lint-windows`,
   `make check-fmt`, and the focused Python and behavioural suites now pass.
   The branch then rebased onto the advanced `origin/main` at
   `e170f908f2a7b4187cc321296a9029e621169b07` (ten upstream commits, including
@@ -842,7 +843,7 @@ existing Linux and Windows extension CI jobs inherit it. Add or extend Makefile
 contract tests proving this routing and that ordinary `make test` keeps its
 extension-free contract. Do not add a second CI execution of the same suite.
 Check toolchain availability in both jobs during M1. Windows uses its existing
-stable 1.85 route; only Linux uses the prescribed dev-fast route. Preserve the
+stable 1.87 route; only Linux uses the prescribed dev-fast route. Preserve the
 existing Windows job timeout and report added duration. The existing
 `make boundary-test` checks native integration and verifier contracts; this new
 target specifically owns cross-language consume parity.

@@ -9,6 +9,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Make arg
 import pytest
 
 from tests.helpers.docs import repo_root
+from tests.helpers.makefile_pins import DEV_FAST_TOOLCHAIN
 
 
 def _make_dry_run(*arguments: str) -> str:
@@ -116,7 +117,9 @@ def test_boundary_route_uses_the_plain_cargo_on_every_host(host_linux: str) -> N
         if "probe-cargo" in line and "test -p cuprum-rust" in line
     )
 
-    assert "nightly-2026-08-23" not in command
+    assert DEV_FAST_TOOLCHAIN not in command, (
+        "the parity target must not select the dev-fast toolchain pin"
+    )
     assert "--config" not in command
     assert "-Zthreads" not in command, (
         "the parity target must not inherit nightly-only dev-fast RUSTFLAGS"
