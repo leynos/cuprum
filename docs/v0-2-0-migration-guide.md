@@ -119,7 +119,7 @@ one retained settled failure in the raw list. Capacity is admitted once per
 line event rather than once per task, so one event with several awaitable hooks
 may overshoot by the hooks it carries. Non-line events — `plan`, `start`,
 `exit`, `settled`, and the other lifecycle phases — are not admitted, so they
-may still add their own tasks.
+may still add their tasks.
 
 Two consequences need attention:
 
@@ -130,7 +130,7 @@ Two consequences need attention:
   `asyncio.timeout`.
 - A hook that is merely slow now applies backpressure to the child. That is the
   intended trade, but a run that previously completed quickly with a slow
-  observer may now take longer, because the child waits for the observer.
+  observer may now take longer because the child waits for the observer.
 
 Retention is observable without new public API. Entering backpressure logs
 `observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
