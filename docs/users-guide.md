@@ -3099,10 +3099,21 @@ observing output from an untrusted child, and make awaitable hooks finish
 promptly rather than waiting indefinitely; a hook that must block should
 observe cancellation or apply its own deadline.
 
-Capacity is checked once per event, so an event that schedules several
-awaitable hooks can briefly take the list to the ceiling plus one fewer than
-the number of hooks it schedules. The bound is still independent of how many
-lines the child writes.
+Capacity is checked once per decoded line event, so one line that schedules
+several awaitable hooks can briefly take the list to the ceiling plus one fewer
+than the number of hooks it schedules. Lifecycle events — `plan`, `start`,
+`exit`, `settled`, and the other phases — are emitted without an admission
+check, so their hook tasks are added without waiting for a slot. There are only
+a fixed handful of them per run, so what a child's output can grow stays
+bounded.
+
+Retention is observable without new public API. Entering backpressure logs
+`observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
+exit log at `DEBUG` on the `cuprum._retention_telemetry` logger. The metrics
+adapter projects each retention decision as a `cuprum_observe_hook_*` metric,
+and `TracingHook` records capacity waits and effective prunes as span events;
+see [Metrics adapter](#metrics-adapter) and
+[Observe-hook retention span events](#observe-hook-retention-span-events).
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.

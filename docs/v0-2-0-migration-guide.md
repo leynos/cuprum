@@ -136,7 +136,12 @@ Retention is observable without new public API. Entering backpressure logs
 `observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
 exit log at `DEBUG`. Every record carries the same `cuprum_*` fields — the
 execution's correlation token, the phase, the ceiling, and the counters — and
-no command text or decoded line.
+no command text or decoded line. The adapters expose the same decisions:
+`MetricsHook` projects them as the `cuprum_observe_hook_*` metrics, and
+`TracingHook` records capacity waits and effective prunes as
+`cuprum.observe_task_capacity_wait` and `cuprum.observe_task_retention` span
+events. The [users' guide](users-guide.md#metrics-adapter) lists every metric
+and the span events' attributes.
 
 ## Breaking changes
 
