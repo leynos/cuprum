@@ -32,6 +32,11 @@ _UNKNOWN = "unknown"
 class _RetentionMetricsMixin:
     """Project retention samples into bounded-cardinality metrics."""
 
+    # An empty slot declaration keeps the subclass's own ``__slots__``
+    # effective: without it, every ``MetricsHook`` instance would regain a
+    # ``__dict__`` through this base.
+    __slots__ = ()
+
     def report_retention(self, sample: _RetentionSample) -> None:
         """Apply one retention sample to the collector."""
         hook = typ.cast("MetricsHook", self)

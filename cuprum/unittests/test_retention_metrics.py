@@ -159,3 +159,13 @@ def test_retention_labels_exclude_the_execution_token() -> None:
     assert str(exec_id) not in repr(collector.counters + collector.histograms), (
         "the correlation token must not leak into any metric label"
     )
+
+
+def test_metrics_hook_has_no_instance_dictionary() -> None:
+    """The mixin must not hand every hook an unbounded ``__dict__``."""
+    hook = MetricsHook(RecordingCollector())
+
+    assert not hasattr(hook, "__dict__"), (
+        "a slotted adapter base must declare empty slots, or the subclass's "
+        "own slots no longer bound what an instance can carry"
+    )
