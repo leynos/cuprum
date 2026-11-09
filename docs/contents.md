@@ -190,6 +190,9 @@ and the content boundary.
 - [Rust boundary verification and unsafe inventory][rust-boundary-verification]
   - unsafe inventory, crate contracts, verifier evidence, and trusted
   assumptions for the native stream boundaries.
+- [Rust 1.95 cold-path and `cfg_select!` assessment (2026-11-08)][rust-1-95-assessment]
+  - the compiler-route inventory, the two workstream inventories, the
+  predeclared benchmark protocol, and why both opportunities are deferred.
 
 [adr-003]: adrs/adr-0003-two-tier-python-linting.md
 [adr-004]: adrs/adr-0004-interrogate-docstring-gate.md
@@ -224,6 +227,7 @@ and the content boundary.
 [rstest-bdd-migration-050]: rstest-bdd-v0-5-0-migration-guide.md
 [rstest-bdd-migration-060]: rstest-bdd-v0-6-0-migration-guide.md
 [rstest-bdd-provenance]: rstest-bdd-v0-6-0-import-provenance.md
+[rust-1-95-assessment]: rust-1-95-cold-path-and-cfg-select-assessment-2026-11-08.md
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
