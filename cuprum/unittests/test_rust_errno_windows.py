@@ -24,6 +24,10 @@ import typing as typ
 import pytest
 
 from cuprum import _streams_windows
+from cuprum.unittests._rust_stream_test_support import (
+    INVALID_FD_ERRNOS,
+    INVALID_FD_MESSAGE_RE,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -129,8 +133,12 @@ def test_binary_mode_setup_failure_closes_the_duplicate(
             pytest.fail("binary-mode setup should fail before yielding")
 
         assert len(duplicate_fds) == 1, "the helper must duplicate exactly once"
-        with pytest.raises(OSError, match="Bad file descriptor"):
+        # An unusable descriptor is EBADF on POSIX and WinError 6 on Windows;
+        # the shared helper matches both by their numeric prefix, which is what
+        # CPython formats itself, rather than locale-dependent strerror text.
+        with pytest.raises(OSError, match=INVALID_FD_MESSAGE_RE) as closed_duplicate:
             os.fstat(duplicate_fds[0])
+        assert closed_duplicate.value.errno in INVALID_FD_ERRNOS
     finally:
         for fd in (reader_fd, writer_fd):
             with contextlib.suppress(OSError):
