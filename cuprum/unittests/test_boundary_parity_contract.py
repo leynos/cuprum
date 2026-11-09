@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed Make argv.
 
+import pytest
+
 from tests.helpers.docs import repo_root
 
 
@@ -92,9 +94,22 @@ def test_ordinary_test_route_keeps_boundary_parity_extension_free() -> None:
     )
 
 
-def test_non_linux_boundary_route_uses_the_project_stable_cargo() -> None:
-    """Simulate Windows/macOS selection and retain the plain pinned Cargo route."""
-    output = _make_dry_run("DEV_FAST_HOST_IS_LINUX=", "test-boundary-parity")
+@pytest.mark.parametrize(
+    "host_linux",
+    ["yes", ""],
+    ids=("linux", "windows-or-macos"),
+)
+def test_boundary_route_uses_the_plain_cargo_on_every_host(host_linux: str) -> None:
+    """The parity target must never select the nightly dev-fast route.
+
+    ``test-extension`` is a prerequisite of the modern-stable lane, which the
+    repository's own contracts forbid from provisioning dev-fast. Taking that
+    route here made the modern-stable job demand a Cranelift component it never
+    installs, so both simulated hosts are pinned to the plain Cargo route.
+    """
+    output = _make_dry_run(
+        f"DEV_FAST_HOST_IS_LINUX={host_linux}", "test-boundary-parity"
+    )
     command = next(
         line
         for line in output.splitlines()
@@ -103,3 +118,6 @@ def test_non_linux_boundary_route_uses_the_project_stable_cargo() -> None:
 
     assert "nightly-2026-08-23" not in command
     assert "--config" not in command
+    assert "-Zthreads" not in command, (
+        "the parity target must not inherit nightly-only dev-fast RUSTFLAGS"
+    )

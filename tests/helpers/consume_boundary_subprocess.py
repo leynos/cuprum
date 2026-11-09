@@ -107,27 +107,24 @@ def _consume_in_thread(
     return consumer, outcome
 
 
-def _await_consumer(
-    consumer: threading.Thread,
-    outcome: queue.Queue[tuple[str, object]],
-    producer: subprocess.Popen[bytes],
-) -> str:
-    """Join the consumer, then unwrap its recorded result or failure."""
+def _join_consumer_or_terminate(
+    consumer: threading.Thread, producer: subprocess.Popen[bytes]
+) -> None:
+    """Join the consumer, escalating termination if it outlives the producer."""
     consumer.join(timeout=_PRODUCER_TIMEOUT_SECONDS)
+    if not consumer.is_alive():
+        return
+    producer.terminate()
+    consumer.join(timeout=_STATUS_TIMEOUT_SECONDS)
     if consumer.is_alive():
-        producer.terminate()
+        producer.kill()
         consumer.join(timeout=_STATUS_TIMEOUT_SECONDS)
-        if consumer.is_alive():
-            producer.kill()
-            consumer.join(timeout=_STATUS_TIMEOUT_SECONDS)
-        msg = "native consumer did not reach pipe EOF"
-        raise _ConsumerTimeoutError(msg)
+    msg = "native consumer did not reach pipe EOF"
+    raise _ConsumerTimeoutError(msg)
 
-    producer_status = producer.wait(timeout=_STATUS_TIMEOUT_SECONDS)
-    producer_error = producer.stderr.read(4096) if producer.stderr else b""
-    if producer_status != 0:
-        raise _ProducerExitError(producer_status, producer_error)
 
+def _recorded_result(outcome: queue.Queue[tuple[str, object]]) -> str:
+    """Unwrap the consumer's recorded result, re-raising its failure."""
     kind, result = outcome.get_nowait()
     if kind == "error":
         cause = typ.cast("Exception", result)
@@ -136,6 +133,22 @@ def _await_consumer(
         msg = "native consumer did not return text"
         raise _ConsumerOutcomeError(TypeError(msg))
     return result
+
+
+def _await_consumer(
+    consumer: threading.Thread,
+    outcome: queue.Queue[tuple[str, object]],
+    producer: subprocess.Popen[bytes],
+) -> str:
+    """Join the consumer, then unwrap its recorded result or failure."""
+    _join_consumer_or_terminate(consumer, producer)
+
+    producer_status = producer.wait(timeout=_STATUS_TIMEOUT_SECONDS)
+    producer_error = producer.stderr.read(4096) if producer.stderr else b""
+    if producer_status != 0:
+        raise _ProducerExitError(producer_status, producer_error)
+
+    return _recorded_result(outcome)
 
 
 def capture_from_producer(

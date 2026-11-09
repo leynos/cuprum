@@ -288,6 +288,35 @@ ownership and error contracts, stop and report the exact incompatibility.
   parity lane was not narrowed. An earlier attempt on the same candidate was
   reaped by an infrastructure timeout mid-`make test`; its log carries no
   footer and contributes no result.
+- [x] (2026-11-09) Three red hosted jobs were diagnosed and repaired after the
+  local bundle was already green, which is the case the bundle could not cover:
+  the Windows matrix (two jobs) and `modern-stable`. The Windows failures
+  shared one root cause. `maps_invalid_crt_descriptor_to_windows_error` handed
+  `i32::MAX` to the CRT `_read`, whose invalid-parameter handler fast-fails the
+  process with `0xC0000409` instead of returning `EBADF`, so the test killed
+  its own harness. The pure mapping is now `classify_crt_read_error` and is
+  asserted directly, with no descriptor reaching a CRT call it cannot accept.
+  The `modern-stable` failure was a route defect, not code:
+  `make modern-stable` → `make test-extension` → `make test-boundary-parity`
+  inherited the dev-fast prerequisite, and that job never installs Cranelift,
+  so it aborted with
+  `install rustc-codegen-cranelift for nightly-2026-08-23 before using dev-fast`
+  after 278 Python tests had passed. The target now takes the plain project
+  `CARGO` and no nightly `RUSTFLAGS`, and a contract test pins both simulated
+  hosts. The Windows consume wrapper also gained
+  `_validate_windows_consume_reader`, restoring the native
+  buffer-then-descriptor validation order ahead of `os.dup`. CodeScene then
+  flagged three new files, all refactored without behaviour change; `make lint`
+  and `make spelling` found four Ruff docstring findings and one misspelling,
+  all repaired. The repaired candidate then passed the full set at `dac3bfd4f`
+  with a stable diff hash
+  (`c3da12a86e75273929cc42da0439ab68b8e2fab717f7ea5f4c6027859371ffa3`):
+  `check-fmt`; `typecheck`; `test` (110m09s, zero `FAILED`, Nextest 183 passed
+  and 30 skipped, doctests clean); `lint` (6m09s, `interrogate` 100.0%, Clippy
+  and Whitaker clean); `spelling`; `markdownlint`; `nixie`; `lint-windows`; and
+  `test-extension` (parity `running 30 tests`, `30 passed`). Two earlier
+  `make test` attempts were terminated by the environment during the Rust
+  compile phase and contributed no result.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -295,6 +324,24 @@ ownership and error contracts, stop and report the exact incompatibility.
   reopen it if it exposes an in-scope gap.
 
 ## Surprises & discoveries
+
+A green Linux extension job did not prove the parity target's route was safe.
+`extension-tests` installs the dev-fast prerequisites before it calls
+`make test-extension`, so the dev-fast prerequisite on `test-boundary-parity`
+resolved there and the route looked correct. The `modern-stable` job calls
+`make modern-stable`, which reaches the same extension target without those
+prerequisites, and it failed with
+`install rustc-codegen-cranelift for nightly-2026-08-23 before using dev-fast`
+after the Rust and Python suites had already passed 278 tests. A prerequisite
+that a shared target inherits is only exercised by the jobs that actually reach
+it, so a passing one-consumer job says nothing about the other consumers.
+
+The repository's contracts already encoded the correct answer: the
+modern-stable lane is required to stay free of dev-fast, and `setup-dev-fast`
+is pinned to exactly two `ci.yml` uses. Those assertions ruled out the easy
+fixes (adding the action to a third job, or dropping the contract) and pointed
+at the dependency itself as the defect, which is why the parity target now uses
+the plain Cargo route rather than widening either job.
 
 Post-rebase `make test` passed 4,245 tests and skipped 96, but ten typing
 contract cases timed out. A bounded experiment showed that an unrelated
@@ -340,6 +387,56 @@ latent defect into a blocker. An earlier draft of this plan asserted the
 opposite — that `main` was already red — by reasoning from the miss count alone
 instead of dividing by the right denominator. Both numbers came from the same
 `interrogate` run, so the check that settles it is arithmetic, not another gate.
+
+A Windows CRT unit test that probes an invalid descriptor kills the whole test
+binary, so the suite reports a crash rather than a failed assertion. The first
+CI run on the pushed head failed `Native contracts (windows-2022)` with
+`exit code: 0xc0000409, STATUS_STACK_BUFFER_OVERRUN`. The archived
+`native-boundaries-Windows` log shows `running 11 tests` followed by seven
+`... ok` lines and then the failure; neither `windows_crt` test name appears.
+The order is the diagnosis: `maps_invalid_crt_descriptor_to_windows_error`
+sorts before `reads_binary_pipe_bytes_to_eof`, so it ran first and died before
+the harness could print its name. That code is not a stack overrun here; it is
+`__fastfail`, the CRT's deliberate fast-fail path. Microsoft documents that
+`_read` invokes the invalid parameter handler when `fd` is invalid, that the
+default handler is `_invoke_watson`, and that `_invoke_watson` calls
+`__fastfail` with `FAST_FAIL_INVALID_ARG` and terminates the process; the
+`-1`/`EBADF` return only happens if a handler is installed and *allows*
+execution to continue. Release builds install none, so
+`maps_invalid_crt_descriptor_to_windows_error` could never have observed its
+asserted error on Windows. The defect was invisible to every focused run, and to
+`cargo test` on Linux generally, because the test is `#[cfg(windows)]` and
+this branch is developed on Linux.
+
+The same defect appeared twice more in the Python lane, which is why one root
+cause produced three red jobs. `test_consume_maps_an_invalid_crt_descriptor`
+called the native entry point directly with `1_000_000` and asserted
+`WinError 6`; it aborted the interpreter mid-session, which is the stray
+`test_rust_errno_windows.py::test_consume_maps_an_invalid_crt_descriptor` line
+that `make test-extension` printed after its own `Error 127`.
+`test_buffer_validation_precedes_descriptor_conversion[consume]` was skipped on
+Windows, and that skip was the tell: the wrapper duplicated the CRT descriptor
+*before* native buffer validation, so the parameter row could not run there.
+The wrapper now validates the buffer and then the CRT descriptor before
+`os.dup`, which restores the order the native entry point documents on every
+platform and removes the reason for the skip.
+
+A second consequence is that the documented `-1`/`EBADF` branch is unreachable
+for any descriptor fault a test can synthesize against `_read` directly.
+Microsoft's documentation for `_read` makes the invalid parameter handler, not
+an error return, the response when `fd` is not valid, is not open for reading,
+or is locked, so an out-of-range, closed, or unreadable descriptor all take the
+same terminating path. The mapping in `crt_read_error` therefore cannot be
+witnessed end to end. It is now a pure function, `classify_crt_read_error`,
+taking the three observed error values and returning the native code; the
+CRT-observing wrapper only gathers them. That keeps the assertion meaningful
+without requiring the process to survive parameter validation, and it separates
+the fallible read from the decision about what its failure means. The Python
+test was rewritten to assert the rejection the wrapper can actually guarantee,
+and a new case pins the buffer-before-descriptor order with both arguments
+invalid. A closed-but-in-range descriptor still reaches `OSError` on the Python
+path because `os.dup` rejects it before the CRT is called, which is why the
+existing `test_propagates_io_errors` was green throughout.
 
 Roadmap 6.1.1 is already complete. `RustStreamError` lives in
 `rust/cuprum-rust/src/lib.rs`; `run_stream_operation` in
@@ -504,6 +601,21 @@ were corrected to use that manifest and all passed during replay.
 
 ## Decision log
 
+- (2026-11-05) Run `make test-boundary-parity` through the plain project
+  `CARGO`, not `RUST_DEBUG_CARGO`. The target was first declared with the
+  dev-fast prerequisite, which the plan's "prescribed Cargo route" wording
+  suggested, but `make test-extension` is also a prerequisite of
+  `make modern-stable`. That made the modern-stable CI job fail at
+  `dev-fast-check` demanding a `rustc-codegen-cranelift` component it never
+  installs, and two existing contracts
+  (`tests/test_ci_modern_stable_contract.py`,
+  `cuprum/unittests/test_modern_stable_make_contract.py`) forbid that job from
+  provisioning dev-fast at all. The parity check needs only whichever Cargo is
+  current plus the project interpreter, so it now takes neither the dev-fast
+  route nor its nightly-only `RUSTFLAGS`. This preserves the plan's operative
+  requirements — one sequential invocation after the guarded pytest run, only
+  the ignored parity cases selected, zero selected tests failing acceptance —
+  and removes the cross-route dependency rather than widening either route.
 - (2026-10-25) The user explicitly approved implementation and selected the
   plan as written, within its existing tolerances. No scope deviation is
   authorized.

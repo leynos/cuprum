@@ -250,6 +250,45 @@ def rust_pump_stream(
         raise
 
 
+def _validate_windows_consume_reader(reader_fd: int) -> int:
+    """Reject a CRT descriptor the Windows consume boundary cannot accept.
+
+    The checks mirror the native entry point's, but run before ``os.dup``:
+    duplicating first would surface ``os.dup``'s ``OSError`` for a descriptor
+    the caller was promised as ``ValueError``, and the duplicate would carry an
+    invalid value into a CRT call that fast-fails the process rather than
+    raising.
+
+    Parameters
+    ----------
+    reader_fd : int
+        Candidate CRT descriptor supplied by the caller.
+
+    Returns
+    -------
+    int
+        The same descriptor as an ``int``, once it is known to be usable.
+
+    Raises
+    ------
+    OverflowError
+        If the value does not fit PyO3's ``i64`` extraction range.
+    ValueError
+        If the descriptor is negative or exceeds the CRT's signed 32-bit range.
+    """
+    reader = operator.index(reader_fd)
+    if not _I64_MIN <= reader <= _I64_MAX:
+        msg = "Python int too large to convert to C long"
+        raise OverflowError(msg)
+    if reader < 0:
+        msg = "file descriptor must be non-negative"
+        raise ValueError(msg)
+    if reader > (1 << 31) - 1:
+        msg = "file descriptor out of range"
+        raise ValueError(msg)
+    return reader
+
+
 def rust_consume_stream(
     reader_fd: int,
     *,
@@ -285,32 +324,36 @@ def rust_consume_stream(
     On Windows, it duplicates the CRT reader descriptor, sets that duplicate
     to binary mode, and closes it after the native call; the caller keeps
     ownership and its original translation mode. The wrapper rejects a
-    negative or out-of-range Windows descriptor itself, because ``os.dup``
-    would otherwise raise ``OSError`` where the native boundary documents
-    ``ValueError``.
+    negative or out-of-range Windows descriptor and an invalid
+    ``buffer_size`` itself, before ``os.dup`` runs. Duplicating first would
+    raise ``os.dup``'s ``OSError`` where the native boundary documents
+    ``ValueError`` for both arguments, and would also put the native buffer
+    check after a descriptor conversion, reversing the order the entry point
+    guarantees on every platform.
 
     Failures propagate unchanged from the Rust extension rather than being
     raised here: ``ImportError`` if the native module cannot be imported,
     ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
     1 GiB maximum, and ``OSError`` if descriptor setup or reading fails.
     ``OverflowError`` reports an integer outside PyO3's ``i64`` range.
-    """  # ruff: ignore[docstring-missing-exception] - ValueError and OverflowError are raised above; the rule reads only the docstring body.
+    """
     native = _load_native()
     if os.name == "nt":
-        reader = operator.index(reader_fd)
-        if not _I64_MIN <= reader <= _I64_MAX:
-            msg = "Python int too large to convert to C long"
-            raise OverflowError(msg)
-        if reader < 0:
-            msg = "file descriptor must be non-negative"
-            raise ValueError(msg)
-        if reader > (1 << 31) - 1:
-            msg = "file descriptor out of range"
-            raise ValueError(msg)
+        # Buffer validation precedes descriptor conversion in the native entry
+        # point on every platform, so the wrapper keeps that order: it is part
+        # of the documented contract, not an implementation detail. Duplicating
+        # before either check would run `os.dup` — and its `OSError` — where
+        # the caller was promised `ValueError`, and would carry a descriptor
+        # the CRT will reject into a call that fast-fails the process instead
+        # of returning an error.
+        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
+            buffer_size
+        )
+        reader = _validate_windows_consume_reader(reader_fd)
         with _duplicate_binary_reader(reader) as duplicate_fd:
             return native.rust_consume_stream(
                 duplicate_fd,
-                buffer_size=buffer_size,
+                buffer_size=validated_buffer_size,
             )
 
     return native.rust_consume_stream(reader_fd, buffer_size=buffer_size)
