@@ -35,6 +35,8 @@ _windows_only = pytest.mark.skipif(
     reason="asserts the Windows-only raw-handle rejection boundary",
 )
 _ERROR_INVALID_HANDLE = 6
+# One past the CRT's signed 32-bit descriptor range.
+_ABOVE_I32_MAX = 1 << 31
 _RAW_HANDLE_MESSAGE = "do not accept raw Windows handles"
 
 
@@ -65,16 +67,35 @@ def _assert_invalid_windows_handle(raw_handle: int) -> None:
 
 
 @_windows_only
-def test_consume_maps_an_invalid_crt_descriptor(
+def test_consume_rejects_an_out_of_range_crt_descriptor(
     rust_streams: ModuleType,
 ) -> None:
-    """Direct native consume preserves the CRT's invalid-handle code."""
-    native = rust_streams._load_native()
-    with pytest.raises(OSError, match="WinError 6") as excinfo:
-        native.rust_consume_stream(1_000_000)
+    """The Python wrapper refuses a descriptor the CRT would fast-fail on.
 
-    assert excinfo.value.winerror == _ERROR_INVALID_HANDLE  # ty: ignore[unresolved-attribute]  # Windows-only attribute.
-    assert excinfo.value.errno == errno.EBADF
+    Passing an out-of-range descriptor to ``_read`` invokes the invalid
+    parameter handler, whose default ``_invoke_watson`` terminates the process
+    with ``STATUS_STACK_BUFFER_OVERRUN`` instead of returning ``EBADF``. The
+    rejection therefore has to happen before the CRT sees the value, so the
+    descriptor must exceed the CRT's signed 32-bit range: 1,000,000 is a
+    perfectly good ``int`` and would be duplicated and passed straight to
+    ``_read``.
+    """
+    with pytest.raises(ValueError, match="file descriptor out of range"):
+        rust_streams.rust_consume_stream(_ABOVE_I32_MAX)
+
+
+@_windows_only
+def test_consume_reports_a_buffer_error_before_a_descriptor_error(
+    rust_streams: ModuleType,
+) -> None:
+    """An invalid buffer is named even when the descriptor is also unusable.
+
+    Both arguments are invalid, so the message identifies which check ran
+    first. Reversing the order would put ``os.dup`` in front of a rejection the
+    native entry point documents as ``ValueError``.
+    """
+    with pytest.raises(ValueError, match="buffer_size"):
+        rust_streams.rust_consume_stream(_ABOVE_I32_MAX, buffer_size=0)
 
 
 @_windows_only

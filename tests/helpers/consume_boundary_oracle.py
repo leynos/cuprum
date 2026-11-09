@@ -194,6 +194,14 @@ def _consume_file(
     return result
 
 
+def _tail_difference(expected: str, actual: str) -> tuple[int, str, str]:
+    """Describe the first code point beyond the shorter operand as ``<EOF>``."""
+    index = min(len(expected), len(actual))
+    expected_char = expected[index] if index < len(expected) else "<EOF>"
+    actual_char = actual[index] if index < len(actual) else "<EOF>"
+    return index, expected_char, actual_char
+
+
 def _first_mismatch(expected: str, actual: str) -> tuple[int, str, str]:
     """Return a compact code-point difference, including a length boundary."""
     for index, (expected_char, actual_char) in enumerate(
@@ -202,10 +210,7 @@ def _first_mismatch(expected: str, actual: str) -> tuple[int, str, str]:
         if expected_char != actual_char:
             return index, f"U+{ord(expected_char):04X}", f"U+{ord(actual_char):04X}"
     if len(expected) != len(actual):
-        index = min(len(expected), len(actual))
-        expected_char = expected[index] if index < len(expected) else "<EOF>"
-        actual_char = actual[index] if index < len(actual) else "<EOF>"
-        return index, expected_char, actual_char
+        return _tail_difference(expected, actual)
     return -1, "", ""
 
 

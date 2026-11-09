@@ -6157,10 +6157,15 @@ Run the full extension target with `make test-extension`. Rust's parity child
 still uses its recorded proptest case counts and fixed seeds from
 `rust/cuprum-rust/tests/consume_boundary_parity.rs`; replay a stored failure
 with `make test-boundary-parity` after preserving the corresponding
-`proptest-regressions` entry. A focused failure should report the first payload
-mismatch, buffer size, and the producer or native error. For hangs, the
-producer helper terminates and reaps its child after 30 seconds, then closes
-both pipe ends; the outer Rust boundary child retains its own deadline.
+`proptest-regressions` entry. That target deliberately builds with the plain
+project `CARGO` rather than the dev-fast nightly: `make test-extension` is also
+a prerequisite of `make modern-stable`, whose lane must not provision dev-fast,
+so taking the accelerated route here would give the parity check a toolchain
+dependency the modern-stable job cannot satisfy. A focused failure should
+report the first payload mismatch, buffer size, and the producer or native
+error. For hangs, the producer helper terminates and reaps its child after 30
+seconds, then closes both pipe ends; the outer Rust boundary child retains its
+own deadline.
 
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,

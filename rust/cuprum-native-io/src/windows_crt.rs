@@ -82,6 +82,21 @@ fn crt_read_error() -> io::Error {
         get_errno(&mut crt_errno);
     }
 
+    classify_crt_read_error(dos_error, win32_error, crt_errno)
+}
+
+/// Map the CRT's three error channels onto the native code the caller sees.
+///
+/// `_read` reports failure through whichever channel matches its path: a DOS
+/// error for unterminated text-mode input, `GetLastError` for a failed Win32
+/// call, and `errno` alone for the descriptor failures the CRT detects itself.
+/// The fixups are applied in source order so the first populated channel wins.
+///
+/// This is separate from [`crt_read_error`] so it can be exercised directly.
+/// `_read` validates its descriptor before touching the buffer, and Microsoft
+/// documents that the invalid parameter handler then terminates the process, so
+/// a test cannot reach these branches by passing a bad descriptor.
+fn classify_crt_read_error(dos_error: i32, win32_error: u32, crt_errno: i32) -> io::Error {
     let native_error = if dos_error != 0 {
         Some(dos_error)
     } else if win32_error != 0 {
@@ -117,7 +132,7 @@ mod tests {
     use rstest::rstest;
     use windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE;
 
-    use super::{borrow_crt_reader, read_crt_once};
+    use super::{borrow_crt_reader, classify_crt_read_error, read_crt_once};
 
     struct OwnedCrtDescriptor(i32);
 
@@ -172,15 +187,32 @@ mod tests {
     }
 
     #[rstest]
-    fn maps_invalid_crt_descriptor_to_windows_error() {
-        // SAFETY: this deliberate invalid value tests that `_read` fails before
-        // dereferencing any buffer pointer or acquiring ownership.
-        let borrowed = unsafe { borrow_crt_reader(i32::MAX) };
-        let error =
-            read_crt_once(borrowed, &mut [0; 1]).expect_err("invalid CRT descriptor must fail");
+    #[case::ebadf_becomes_invalid_handle(0, 0, libc::EBADF, ERROR_INVALID_HANDLE)]
+    #[case::dos_error_wins_over_win32(5, 6, libc::EBADF, 5)]
+    #[case::win32_error_wins_over_crt_errno(0, 6, libc::EBADF, 6)]
+    fn classifies_crt_read_failure(
+        #[case] dos_error: i32,
+        #[case] win32_error: u32,
+        #[case] crt_errno: i32,
+        #[case] expected_native: u32,
+    ) {
+        let error = classify_crt_read_error(dos_error, win32_error, crt_errno);
         assert_eq!(
             error.raw_os_error(),
-            i32::try_from(ERROR_INVALID_HANDLE).ok(),
+            i32::try_from(expected_native).ok(),
+            "unexpected mapping for ({dos_error}, {win32_error}, {crt_errno})",
         );
+    }
+
+    #[rstest]
+    #[case::unclassified_errno(0, 0, libc::EIO)]
+    #[case::no_channel_populated(0, 0, 0)]
+    fn reports_unclassified_crt_failure_as_an_opaque_error(
+        #[case] dos_error: i32,
+        #[case] win32_error: u32,
+        #[case] crt_errno: i32,
+    ) {
+        let error = classify_crt_read_error(dos_error, win32_error, crt_errno);
+        assert_eq!(error.raw_os_error(), None);
     }
 }

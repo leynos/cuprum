@@ -13,17 +13,16 @@ seam:
 The accepted arguments — where the default applies and the transfer actually
 completes — are covered by ``test_rust_streams_roundtrip_property.py``.
 
-Native buffer-size validation runs before native descriptor conversion. The
-pump shim also validates its buffer before preparing descriptors; Windows
-consume duplicates and prepares its CRT descriptor before entering native
-code. The descriptor properties use the default buffer so conversion is the
-failing step.
+Native buffer-size validation runs before native descriptor conversion, and
+both shims keep that order before entering native code: the pump validates its
+buffer before preparing descriptors, and Windows consume validates its buffer
+and its CRT descriptor before duplicating the descriptor. The descriptor
+properties use the default buffer so conversion is the failing step.
 
 Windows consume accepts CRT descriptors in the same signed 32-bit range as
-Unix descriptors. The Python wrapper validates the Windows descriptor and
-duplicates it before native buffer validation, changing only the duplicate's
-mode. Pump tests retain the Unix-only marker because its Windows handle
-capability is still deliberately rejected at the Python boundary.
+Unix descriptors and duplicates the validated descriptor, changing only the
+duplicate's mode. Pump tests retain the Unix-only marker because its Windows
+handle capability is still deliberately rejected at the Python boundary.
 """
 
 from __future__ import annotations
@@ -55,10 +54,6 @@ _I64_MIN = -(1 << 63)
 _pump_unix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="pump still requires the Unix descriptor contract",
-)
-_windows_consume_reader_preparation = pytest.mark.skipif(
-    sys.platform != "win32",
-    reason="Windows consume prepares its CRT reader before native validation",
 )
 
 _SUPPRESS_FIXTURE = settings(
@@ -207,11 +202,7 @@ class _ReaderAndBufferEntryPoint(typ.Protocol):
 @pytest.mark.parametrize(
     "entry_point",
     [
-        pytest.param(
-            _consume_with_reader_and_buffer,
-            marks=_windows_consume_reader_preparation,
-            id="consume",
-        ),
+        pytest.param(_consume_with_reader_and_buffer, id="consume"),
         pytest.param(_pump_with_reader_and_buffer, id="pump"),
     ],
 )
@@ -234,10 +225,11 @@ def test_buffer_validation_precedes_descriptor_conversion(
     Native order is buffer then descriptor on every platform. The pump shim
     validates its buffer before preparing either descriptor; Unix consume
     leaves descriptor validation to the native function. Windows consume
-    prepares its CRT descriptor before native entry, so that parameter row is
-    skipped there. Both values are deliberately interior ``i64``, so PyO3
-    extracts them successfully and classification is the boundary's own rather
-    than an extraction error.
+    validates its buffer before it validates or duplicates its CRT descriptor,
+    which is also the order that keeps an unusable descriptor away from
+    ``_read``. Both values are deliberately interior ``i64``, so PyO3 extracts
+    them successfully and classification is the boundary's own rather than an
+    extraction error.
     """
     with pytest.raises(ValueError, match="buffer_size") as excinfo:
         entry_point(rust_streams, reader_fd=bad_fd, buffer_size=bad_size)

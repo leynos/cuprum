@@ -873,15 +873,23 @@ test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiri
 # This separate ignored Rust integration target launches the project's Python
 # interpreter and calls the compiled extension. Keep it out of ordinary
 # `make test`: the extension workflow owns it after the guarded pytest suite.
-test-boundary-parity: $(RUST_DEBUG_PREREQUISITE) ## Check consume parity through the compiled Python extension
+#
+# It deliberately uses the plain project Cargo rather than `RUST_DEBUG_CARGO`:
+# `test-extension` is also a prerequisite of the modern-stable route, which must
+# stay free of the dev-fast nightly (tests/test_ci_modern_stable_contract.py and
+# cuprum/unittests/test_modern_stable_make_contract.py both pin that). Depending
+# on the dev-fast route here made the modern-stable job demand a Cranelift
+# component it never installs. The parity check only needs whichever Cargo is
+# current and the project interpreter, so it takes neither that route nor its
+# nightly-only RUSTFLAGS.
+test-boundary-parity: ## Check consume parity through the compiled Python extension
 	python_path="$$($(UV_RUN_ENV) uv run --no-sync python -c 'import sys; print(sys.executable)')" || exit $$?; \
 	if [ -z "$$python_path" ]; then printf '%s\n' 'could not resolve the project Python interpreter' >&2; exit 1; fi; \
 	log_file="$$(mktemp)"; \
 	trap 'rm -f "$$log_file"' EXIT; \
 	(cd "$(RUST_DIR)" && \
 	  CUPRUM_BOUNDARY_PYTHON="$$python_path" \
-	  RUSTFLAGS="$(DEV_FAST_TEST_RUSTFLAGS)" \
-	  $(RUST_DEBUG_CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
+	  $(CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
 	cargo_status=$$?; \
 	cat "$$log_file"; \
 	if [ "$$cargo_status" -ne 0 ]; then exit "$$cargo_status"; fi; \
