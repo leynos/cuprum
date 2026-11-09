@@ -34,8 +34,9 @@ import types
 import typing as typ
 
 from cuprum.adapters._pump_held_pairs import (
+    _DEFAULT_REGISTRY,
+    HeldPairCounterRegistry,
     _HeldPairCounter,
-    register_held_counter,
 )
 from cuprum.adapters.gauge_metrics import GaugeMetricsCollector
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
@@ -165,6 +166,11 @@ class PumpMetricsHook:
       one of those hooks moves that total once. Gauges are optional so an
       existing two-method collector keeps working.
 
+    A :class:`HeldPairCounterRegistry` scopes that sharing. Each hook uses the
+    process-wide default unless its caller injects another, so hooks created
+    independently still agree while a test can isolate its own collector. Every
+    hook reporting to one collector must use the same registry.
+
     All labels are closed and bounded; descriptor values, exception details,
     and other event data are never labels. Unknown phases are ignored so a
     newer producer cannot make an existing observer fail. The collector must
@@ -174,6 +180,11 @@ class PumpMetricsHook:
     ----------
     collector:
         Thread-safe metrics backend receiving counters and histograms.
+    registry:
+        The registry that shares this hook's held-pair counter with every
+        other hook reporting to ``collector``. Defaults to the process-wide
+        registry. Pass a fresh :class:`HeldPairCounterRegistry` to give a
+        collector its own scope, such as in a test.
 
     Examples
     --------
@@ -186,7 +197,12 @@ class PumpMetricsHook:
 
     """
 
-    def __init__(self, collector: MetricsCollector) -> None:
+    def __init__(
+        self,
+        collector: MetricsCollector,
+        *,
+        registry: HeldPairCounterRegistry | None = None,
+    ) -> None:
         """Initialize the pump metrics hook with a collector."""
         self._collector = collector
         self._gauge: GaugeMetricsCollector | None = (
@@ -194,8 +210,9 @@ class PumpMetricsHook:
             if isinstance(collector, GaugeMetricsCollector)
             else None
         )
+        counters = _DEFAULT_REGISTRY if registry is None else registry
         self._held: _HeldPairCounter | None = (
-            register_held_counter(self, collector) if self._gauge is not None else None
+            counters.register(self, collector) if self._gauge is not None else None
         )
 
     def __call__(self, event: PumpEvent) -> None:
@@ -265,7 +282,11 @@ class PumpMetricsHook:
             )
 
 
-def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
+def pump_metrics_hook(
+    collector: MetricsCollector,
+    *,
+    registry: HeldPairCounterRegistry | None = None,
+) -> PumpHook:
     """Create a pump observation hook for the given collector.
 
     Parameters
@@ -273,6 +294,9 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
     collector:
         A :class:`~cuprum.adapters.metrics_adapter.MetricsCollector`
         implementation.
+    registry:
+        The registry that shares the held-pair counter with other hooks
+        reporting to ``collector``. Defaults to the process-wide registry.
 
     Returns
     -------
@@ -288,7 +312,7 @@ def pump_metrics_hook(collector: MetricsCollector) -> PumpHook:
             pipeline.run_sync()
 
     """
-    return PumpMetricsHook(collector)
+    return PumpMetricsHook(collector, registry=registry)
 
 
 __all__ = [
@@ -301,6 +325,7 @@ __all__ = [
     "RUST_PUMP_HANDOFF_TOTAL",
     "RUST_PUMP_HELD_PAIRS",
     "UNKNOWN_DECLINE_REASON",
+    "HeldPairCounterRegistry",
     "PumpMetricsHook",
     "pump_metrics_hook",
 ]

@@ -22,10 +22,11 @@ import gc
 import threading
 import typing as typ
 
-from cuprum.adapters._pump_held_pairs import _COUNTERS
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
     PumpMetricsHook,
+    pump_metrics_hook,
 )
 from cuprum.pump_events import PumpEvent
 from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
@@ -45,7 +46,11 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     so it must be recognized as the same emission and leave the total alone.
     """
     collector = RecordingCollector()
-    hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
+    registry = HeldPairCounterRegistry()
+    hooks = [
+        PumpMetricsHook(collector, registry=registry),
+        PumpMetricsHook(collector, registry=registry),
+    ]
     gate = PausingHook()
     gate.arm()
 
@@ -86,7 +91,11 @@ def test_an_interleaved_release_does_not_move_one_hold_twice() -> None:
     though the interleaved release has already moved it.
     """
     collector = RecordingCollector()
-    hooks = [PumpMetricsHook(collector), PumpMetricsHook(collector)]
+    registry = HeldPairCounterRegistry()
+    hooks = [
+        PumpMetricsHook(collector, registry=registry),
+        PumpMetricsHook(collector, registry=registry),
+    ]
     gate = PausingHook()
 
     with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
@@ -126,13 +135,14 @@ def test_a_hook_that_emits_while_called_does_not_count_the_outer_hold_again() ->
     each must move the shared total exactly once.
     """
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
     nested = NestedHoldEmitter()
     nested.arm(nest=True)
 
     with (
-        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
         observe_pump(nested),
-        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
     ):
         _emit_rust_pump_hold(1)
         assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
@@ -148,8 +158,9 @@ def test_a_hook_that_emits_while_called_does_not_count_the_outer_hold_again() ->
 def test_a_retired_hook_leaves_the_surviving_hook_its_shared_total() -> None:
     """Retiring one hook's claim must not reset another hook's running total."""
     collector = RecordingCollector()
-    first = PumpMetricsHook(collector)
-    second = PumpMetricsHook(collector)
+    registry = HeldPairCounterRegistry()
+    first = PumpMetricsHook(collector, registry=registry)
+    second = PumpMetricsHook(collector, registry=registry)
     first(PumpEvent(phase="handoff_hold", held_delta=1))
 
     del first
@@ -171,17 +182,17 @@ def test_the_registry_retires_a_slotted_collector_with_its_last_hook() -> None:
     referenced.
     """
     collector = SlottedGaugeCollector()
-    hook = PumpMetricsHook(typ.cast("typ.Any", collector))
+    registry = HeldPairCounterRegistry()
+    hook = PumpMetricsHook(typ.cast("typ.Any", collector), registry=registry)
     hook(PumpEvent(phase="handoff_hold", held_delta=1))
     hook(PumpEvent(phase="handoff_hold", held_delta=-1))
-    key = id(collector)
 
-    assert key in _COUNTERS, "a reporting hook must register its collector"
+    assert collector in registry, "a reporting hook must register its collector"
 
     del hook
     gc.collect()
 
-    assert key not in _COUNTERS, (
+    assert collector not in registry, (
         "the registry must not outlive the hooks that report to the collector"
     )
 
@@ -194,8 +205,9 @@ def test_two_slotted_collectors_keep_separate_gauges() -> None:
     """
     left = SlottedGaugeCollector()
     right = SlottedGaugeCollector()
-    left_hook = PumpMetricsHook(typ.cast("typ.Any", left))
-    right_hook = PumpMetricsHook(typ.cast("typ.Any", right))
+    registry = HeldPairCounterRegistry()
+    left_hook = PumpMetricsHook(typ.cast("typ.Any", left), registry=registry)
+    right_hook = PumpMetricsHook(typ.cast("typ.Any", right), registry=registry)
 
     left_hook(PumpEvent(phase="handoff_hold", held_delta=1))
     right_hook(PumpEvent(phase="handoff_hold", held_delta=1))
@@ -207,18 +219,70 @@ def test_two_slotted_collectors_keep_separate_gauges() -> None:
 def test_an_outstanding_hold_keeps_a_slotted_collectors_entry() -> None:
     """A hold outlives its reporting hook, so the count must stay reachable."""
     collector = SlottedGaugeCollector()
-    hook = PumpMetricsHook(typ.cast("typ.Any", collector))
+    registry = HeldPairCounterRegistry()
+    hook = PumpMetricsHook(typ.cast("typ.Any", collector), registry=registry)
     hook(PumpEvent(phase="handoff_hold", held_delta=1))
-    key = id(collector)
 
     del hook
     gc.collect()
 
-    assert key in _COUNTERS, "an outstanding hold must keep the count reachable"
+    assert collector in registry, "an outstanding hold must keep the count reachable"
 
-    later = PumpMetricsHook(typ.cast("typ.Any", collector))
+    later = PumpMetricsHook(typ.cast("typ.Any", collector), registry=registry)
     later(PumpEvent(phase="handoff_hold", held_delta=-1))
 
     assert collector.gauges == [1.0, 0.0], (
         "a hook created after the reporting hook must settle the same count"
     )
+
+
+def test_the_default_registry_shares_hooks_created_independently() -> None:
+    """Hooks that name no registry still share their collector's total.
+
+    The default is process-wide so an application that creates one hook per
+    pipeline scope still reports the collector's total rather than the last
+    hook's private count.
+    """
+    collector = RecordingCollector()
+    first = PumpMetricsHook(collector)
+    second = PumpMetricsHook(collector)
+
+    first(PumpEvent(phase="handoff_hold", held_delta=1))
+    second(PumpEvent(phase="handoff_hold", held_delta=1))
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
+        "hooks created without a registry must still share one running total"
+    )
+
+
+def test_separate_registries_keep_separate_totals() -> None:
+    """An injected registry scopes the sharing it performs.
+
+    Two hooks for one collector that name different registries hold two
+    counters, which is what lets a test keep its collector out of the default
+    registry's state. A caller must not use this to split one collector's
+    reporting.
+    """
+    collector = RecordingCollector()
+    first = PumpMetricsHook(collector, registry=HeldPairCounterRegistry())
+    second = PumpMetricsHook(collector, registry=HeldPairCounterRegistry())
+
+    first(PumpEvent(phase="handoff_hold", held_delta=1))
+    second(PumpEvent(phase="handoff_hold", held_delta=1))
+
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 1.0], (
+        "each registry must keep its own running total"
+    )
+
+
+def test_the_factory_forwards_an_injected_registry() -> None:
+    """The factory is the same injection seam as the hook constructor."""
+    collector = SlottedGaugeCollector()
+    registry = HeldPairCounterRegistry()
+    hook = pump_metrics_hook(typ.cast("typ.Any", collector), registry=registry)
+
+    assert collector in registry, "the factory must register with the injected registry"
+
+    hook(PumpEvent(phase="handoff_hold", held_delta=1))
+
+    assert collector.gauges == [1.0], "the forwarded registry must share the count"

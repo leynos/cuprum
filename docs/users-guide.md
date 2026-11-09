@@ -3753,7 +3753,13 @@ hand-off sets it one higher on acquisition and one lower on release, and the
 release lands on every settling path — submission, activation failure, drain
 failure, and cancellation. Every hook that reports to the same collector shares
 one running total, so registering a hook per pipeline scope still reports that
-collector's total held pairs. The same total is shared by a collector that
+collector's total held pairs. The registry that scopes that sharing can be
+injected. Import `HeldPairCounterRegistry` from `cuprum.adapters.pump_metrics`
+and pass it as `PumpMetricsHook(metrics, registry=HeldPairCounterRegistry())`;
+that keeps a collector's count in a registry the caller owns, which a test can
+use to isolate its own collector from the process-wide default. Every hook
+reporting to one collector must use the same registry; two registries give that
+collector two unrelated totals. The same total is shared by a collector that
 cannot be weakly referenced. If one event reaches more than one of those hooks
 — nested `observe_pump` registrations both receive every event — it moves the
 total once, so the gauge counts held pairs rather than hook deliveries. A hook

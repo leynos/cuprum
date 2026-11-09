@@ -6,6 +6,13 @@ to: one release from one hook must not report zero while another hook still
 holds a pair. This module owns that shared count and the registry that finds it
 again from a collector, so ``PumpMetricsHook`` only has to translate pump events
 into metric calls.
+
+A registry defines the scope in which a collector's hooks share their count.
+``PumpMetricsHook`` uses one process-wide registry unless its caller supplies
+another, so hooks created independently still agree, while a test can inject a
+fresh registry to keep its collectors out of that shared state. Every hook that
+reports to one collector must use the same registry; two registries would give
+that collector two unrelated totals.
 """
 
 from __future__ import annotations
@@ -98,112 +105,143 @@ class _CounterEntry:
         return self.reference() is collector
 
 
-# The count belongs to the collector, not to a hook: the metric name is
-# unlabelled, so every hook publishing to one collector must publish the same
-# running total. Keys are object identities because a collector need not be
-# hashable. A collector that can be weakly referenced retires its entry when it
-# dies, so a hold can outlive the hook that reported it. A collector that
-# cannot give that signal is held by its entry instead — its identity must stay
-# unique — and the entry is retired once the last hook reporting to it is gone
-# and nothing is held, which is the only end of use that is observable.
-_COUNTERS: dict[int, _CounterEntry] = {}
-# Reentrant because a weak-reference callback can drop the last reference to
-# another collector while this lock is already held on the collecting thread.
-_COUNTERS_LOCK = threading.RLock()
+class HeldPairCounterRegistry:
+    """The held-pair counters shared by the hooks of its registered collectors.
 
+    The count belongs to the collector, not to a hook: the metric name is
+    unlabelled, so every hook publishing to one collector must publish the same
+    running total. Keys are object identities because a collector need not be
+    hashable. A collector that can be weakly referenced retires its entry when
+    it dies, so a hold can outlive the hook that reported it. A collector that
+    cannot give that signal is held by its entry instead — its identity must
+    stay unique — and the entry is retired once the last hook reporting to it
+    is gone and nothing is held, which is the only end of use that is
+    observable.
 
-def _forget_counter(key: int, reference: weakref.ReferenceType[object]) -> None:
-    """Drop a retired collector's counter unless its identity was reused."""
-    with _COUNTERS_LOCK:
-        entry = _COUNTERS.get(key)
-        if entry is not None and entry.reference is reference:
-            del _COUNTERS[key]
-
-
-def _new_counter_entry(key: int, collector: object) -> _CounterEntry:
-    """Record a fresh counter for ``collector`` and return its entry.
-
-    Callers hold :data:`_COUNTERS_LOCK`, so the identity read here cannot be
-    claimed by another registration before the entry is stored.
-
-    Returns
-    -------
-    _CounterEntry
-        The entry recorded under ``key``.
+    A registry is the scope of that sharing, and it is thread-safe. Its lifetime
+    must cover the hooks registered with it: a hook's claim is released by a
+    weak-reference finalizer that calls back into the registry, so the finalizer
+    keeps an injected registry alive until the hooks registered with it are
+    collected. Hooks that report to one collector must share one registry; two
+    registries would give that collector two unrelated totals.
     """
-    counter = _HeldPairCounter()
-    try:
-        reference = weakref.ref(
-            collector,
-            lambda ref, key=key: _forget_counter(key, ref),
-        )
-    except TypeError:
-        entry = _CounterEntry(counter, reference=None, collector=collector)
-    else:
-        entry = _CounterEntry(counter, reference=reference, collector=None)
-    _COUNTERS[key] = entry
-    return entry
+
+    def __init__(self) -> None:
+        """Start with no registered collectors."""
+        self._entries: dict[int, _CounterEntry] = {}
+        # Reentrant because a weak-reference callback can drop the last
+        # reference to another collector while this lock is already held on the
+        # collecting thread.
+        self._lock = threading.RLock()
+
+    def __contains__(self, collector: object) -> bool:
+        """Report whether a counter is currently registered for ``collector``.
+
+        A retained entry outlives its hooks while a hold is outstanding, so a
+        caller can use this to observe that the entry has not retired yet.
+
+        Returns
+        -------
+        bool
+            Whether an entry still names ``collector``.
+        """
+        with self._lock:
+            entry = self._entries.get(id(collector))
+            return entry is not None and entry.names(collector)
+
+    def register(self, hook: object, collector: object) -> _HeldPairCounter:
+        """Return ``collector``'s shared counter and tie it to ``hook``'s lifetime.
+
+        A collector that can be weakly referenced gives the entry its own end
+        of use, so a hold can outlive the hook that reported it. A collector
+        that cannot is kept by its entry — the identity used as the key must
+        stay unique — and the entry ends when ``hook`` and every other hook
+        reporting to that collector have been collected, provided nothing is
+        still held.
+
+        Parameters
+        ----------
+        hook:
+            The reporting hook whose claim this registration records. It must
+            be weak-referenceable.
+        collector:
+            The collector the hook publishes to. A collector need not be
+            hashable or weakly referenceable.
+
+        Returns
+        -------
+        _HeldPairCounter
+            The counter this hook must move when a hold is taken or released.
+        """
+        key = id(collector)
+        with self._lock:
+            counter = self._claim_entry(key, collector).counter
+        weakref.finalize(hook, self._retire, key, counter)
+        return counter
+
+    def _forget(self, key: int, reference: weakref.ReferenceType[object]) -> None:
+        """Drop a retired collector's counter unless its identity was reused."""
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and entry.reference is reference:
+                del self._entries[key]
+
+    def _new_entry(self, key: int, collector: object) -> _CounterEntry:
+        """Record a fresh counter for ``collector`` and return its entry.
+
+        Callers hold :attr:`_lock`, so the identity read here cannot be claimed
+        by another registration before the entry is stored.
+
+        Returns
+        -------
+        _CounterEntry
+            The entry recorded under ``key``.
+        """
+        counter = _HeldPairCounter()
+        try:
+            reference = weakref.ref(
+                collector,
+                lambda ref, key=key: self._forget(key, ref),
+            )
+        except TypeError:
+            entry = _CounterEntry(counter, reference=None, collector=collector)
+        else:
+            entry = _CounterEntry(counter, reference=reference, collector=None)
+        self._entries[key] = entry
+        return entry
+
+    def _claim_entry(self, key: int, collector: object) -> _CounterEntry:
+        """Return the entry for ``collector``, adding one hook's claim.
+
+        Callers hold :attr:`_lock`.
+
+        Returns
+        -------
+        _CounterEntry
+            The entry the claiming hook reports through.
+        """
+        entry = self._entries.get(key)
+        if entry is None or not entry.names(collector):
+            entry = self._new_entry(key, collector)
+        entry.hooks += 1
+        return entry
+
+    def _retire(self, key: int, counter: _HeldPairCounter) -> None:
+        """Drop one hook's claim, retiring a retained entry with its last one."""
+        with self._lock:
+            entry = self._entries.get(key)
+            # The entry can already be gone while the interpreter shuts down,
+            # and another registration can have replaced it with a fresh
+            # counter.
+            if entry is None or entry.counter is not counter:
+                return
+            # An entry with a weak reference retires with its collector instead.
+            if entry.reference is not None:
+                return
+            entry.hooks -= 1
+            if entry.hooks <= 0 and counter.pairs == 0:
+                del self._entries[key]
 
 
-def _claim_entry(key: int, collector: object) -> _CounterEntry:
-    """Return the entry for ``collector``, adding one hook's claim.
-
-    Callers hold :data:`_COUNTERS_LOCK`.
-
-    Returns
-    -------
-    _CounterEntry
-        The entry the claiming hook reports through.
-    """
-    entry = _COUNTERS.get(key)
-    if entry is None or not entry.names(collector):
-        entry = _new_counter_entry(key, collector)
-    entry.hooks += 1
-    return entry
-
-
-def _retire_held_counter(key: int, counter: _HeldPairCounter) -> None:
-    """Drop one hook's claim, retiring a retained entry with its last one."""
-    with _COUNTERS_LOCK:
-        entry = _COUNTERS.get(key)
-        # The entry can already be gone while the interpreter shuts down, and
-        # another registration can have replaced it with a fresh counter.
-        if entry is None or entry.counter is not counter:
-            return
-        # An entry with a weak reference retires with its collector instead.
-        if entry.reference is not None:
-            return
-        entry.hooks -= 1
-        if entry.hooks <= 0 and counter.pairs == 0:
-            del _COUNTERS[key]
-
-
-def register_held_counter(hook: object, collector: object) -> _HeldPairCounter:
-    """Return ``collector``'s shared counter and tie it to ``hook``'s lifetime.
-
-    A collector that can be weakly referenced gives the entry its own end of
-    use, so a hold can outlive the hook that reported it. A collector that
-    cannot is kept by its entry — the identity used as the key must stay
-    unique — and the entry ends when ``hook`` and every other hook reporting to
-    that collector have been collected, provided nothing is still held.
-
-    Parameters
-    ----------
-    hook:
-        The reporting hook whose claim this registration records. It must be
-        weak-referenceable.
-    collector:
-        The collector the hook publishes to. A collector need not be hashable
-        or weakly referenceable.
-
-    Returns
-    -------
-    _HeldPairCounter
-        The counter this hook must move when a hold is taken or released.
-
-    """
-    key = id(collector)
-    with _COUNTERS_LOCK:
-        counter = _claim_entry(key, collector).counter
-    weakref.finalize(hook, _retire_held_counter, key, counter)
-    return counter
+_DEFAULT_REGISTRY = HeldPairCounterRegistry()
+"""The registry shared by hooks that do not name one."""

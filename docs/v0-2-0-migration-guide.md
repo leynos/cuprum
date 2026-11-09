@@ -1209,19 +1209,24 @@ registry must keep such a collector alive for as long as its entry exists,
 because the object's identity is the key that keeps the entry unique. It
 therefore retires the entry once the last hook reporting to the collector is
 gone and nothing is still held, so a collector whose hooks have all been
-released is not retained for the life of the process. A count that is still
-outstanding when its last hook is collected also keeps the entry, and so the
-collector, alive until some later hook settles it, because a collector that
-cannot be weakly referenced gives no signal when it dies. An event delivered to
-more than one hook for one collector, as a nested `observe_pump` registration
-does, moves the shared total once, so the gauge counts held pairs rather than
-hook deliveries; a hook that emits an event of its own while it is being called
-is a separate hold and counts separately. A collector written against the
-two-method `MetricsCollector` contract continues to work unchanged and is
-simply skipped for gauges. An exhaustive pump observer that matches on
-`PumpPhase` must add `handoff_hold`, and one that matches on
-`RustPumpHandoffOutcome` must add `drain_failed` and `submission_abandoned`; an
-observer that ignores unknown values needs no change.
+released is not retained for the life of the process. That registry can be
+injected with `PumpMetricsHook(collector, registry=HeldPairCounterRegistry())`,
+or the equivalent `pump_metrics_hook` argument, where `HeldPairCounterRegistry`
+is imported from `cuprum.adapters.pump_metrics`. An injected registry lets a
+test isolate its collector from the process-wide default; every hook reporting
+to one collector must share one registry. A count that is still outstanding
+when its last hook is collected also keeps the entry, and so the collector,
+alive until some later hook settles it, because a collector that cannot be
+weakly referenced gives no signal when it dies. An event delivered to more than
+one hook for one collector, as a nested `observe_pump` registration does, moves
+the shared total once, so the gauge counts held pairs rather than hook
+deliveries; a hook that emits an event of its own while it is being called is a
+separate hold and counts separately. A collector written against the two-method
+`MetricsCollector` contract continues to work unchanged and is simply skipped
+for gauges. An exhaustive pump observer that matches on `PumpPhase` must add
+`handoff_hold`, and one that matches on `RustPumpHandoffOutcome` must add
+`drain_failed` and `submission_abandoned`; an observer that ignores unknown
+values needs no change.
 
 See
 [Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)

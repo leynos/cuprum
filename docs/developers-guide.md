@@ -2784,22 +2784,27 @@ release cannot publish zero while another still holds a pair. That sharing also
 covers a collector without weak-reference support: an entry for a collector
 that can be weakly referenced retires with the collector, and one whose
 collector cannot be weakly referenced holds it — keeping its identity unique —
-and retires once the last hook reporting to it is gone and nothing is held. One
-event delivered to more than one of those hooks — a nested `observe_pump`
-registration delivers every event to both contexts — moves the shared total
-once, so the gauge counts held pairs rather than hook deliveries. The counter
-claims each event for the thread delivering it, and only while that event is
-still in flight: one emission's deliveries all run inline on the thread that
-emitted it, so a second thread's event arriving between them cannot make the
-rest count again, and a hook that emits an event of its own while it is being
-called nests a separate emission that counts on its own without releasing the
-outer event's claim. The running total is published under the same lock, so a
-release cannot reach the collector before the acquisition it followed. Gauges
-are a separate, optional capability: `GaugeMetricsCollector` in
-`cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol, and a
-collector that does not implement it keeps working for counters and histograms
-and is simply skipped for gauges. This keeps the existing two-method
-`MetricsCollector` contract intact.
+and retires once the last hook reporting to it is gone and nothing is held.
+That registry is a `HeldPairCounterRegistry`, and a caller can inject one at
+the hook boundary instead of using the process-wide default. The default keeps
+independently created hooks in agreement; an injected registry gives a test, or
+an application with more than one observer configuration, its own scope. Every
+hook reporting to one collector must use the same registry, because two
+registries would give that collector two unrelated totals. One event delivered
+to more than one of those hooks — a nested `observe_pump` registration delivers
+every event to both contexts — moves the shared total once, so the gauge counts
+held pairs rather than hook deliveries. The counter claims each event for the
+thread delivering it, and only while that event is still in flight: one
+emission's deliveries all run inline on the thread that emitted it, so a second
+thread's event arriving between them cannot make the rest count again, and a
+hook that emits an event of its own while it is being called nests a separate
+emission that counts on its own without releasing the outer event's claim. The
+running total is published under the same lock, so a release cannot reach the
+collector before the acquisition it followed. Gauges are a separate, optional
+capability: `GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a
+runtime-checkable protocol, and a collector that does not implement it keeps
+working for counters and histograms and is simply skipped for gauges. This
+keeps the existing two-method `MetricsCollector` contract intact.
 
 #### Pump hook failure policy
 
