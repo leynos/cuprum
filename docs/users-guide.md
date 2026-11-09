@@ -2948,12 +2948,33 @@ attributed to the mode that hit it. Like `env_mode` it is a trusted field on
 the typed event rather than an observation tag, because a caller may shadow any
 tag key; `None` appears only on legacy or hand-built events.
 
-Awaitable hook results are scheduled as `asyncio.Task` instances and awaited
-before the run completes.
+A hook may be any callable whose return value is awaitable, including
+`async def` functions, bound async methods, objects with `async def __call__`,
+and plain functions or lambdas that return a coroutine. An awaitable result is
+scheduled as an `asyncio.Task` and awaited before the run completes.
+
+The decision is made on the result, not on the hook. A hook that returns
+`None` — what a synchronous function returns when it does not name a value —
+costs no scheduling, and any other result is checked for awaitability. Cuprum
+never asks you to declare a hook synchronous or asynchronous at registration
+time, and a hook that returns a coroutine from behind a wrapper or a lambda
+still works.
 
 Each output line produces a fresh `ExecEvent` with a fresh timestamp. A run
 with no observe hook and no `on_line` callback creates no line callback at all,
 so observing lines costs nothing until something asks for them.
+
+Dispatching each line to a synchronous hook is cheaper still. Cuprum used to ask
+`inspect.isawaitable` of every hook's return value for every line; it now
+dismisses a `None` result by identity and recognizes a native coroutine by
+exact type, so only the remaining shapes reach the general test. In the
+benchmarked dispatch loop a hook that returns `None` costs about 114 ns per
+event instead of 386 ns, a 3.4x reduction. An `async def` hook is unchanged,
+because its cost is the `asyncio.Task` that carries the coroutine, not the
+check. On the full line-callback workload the geometric-mean candidate/control
+wall-time ratio was 0.9529 across six paired runs, with a 95% interval of
+[0.9199, 1.0001]. See the
+[evidence record](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 #### Aggregate Python stream-operation events
 

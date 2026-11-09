@@ -175,6 +175,10 @@ and the content boundary.
       implemented and measured at a 29.9087% construction share against an
       approved 30% limit, with the evidence under
       `profiling/5-2-1-line-event-emission/`.
+  - [Observe-hook dispatch plan](execplans/5-2-2-remove-the-per-hook-inspect-isawaitable-call.md)
+    - implementation and validation for roadmap item 5.2.2. The per-line
+      `inspect.isawaitable` call is removed, with the evidence under
+      `profiling/5-2-2-observe-hook-dispatch/`.
 - [Tee hot-path profiling baseline (2026-06-12)][tee-baseline] - measured
   hotspot verdicts from the tee profiling harness, gating ADR-002 Phase 2.
 - [Tee hot-path read-size sweep (2026-08-29)][tee-read-size-sweep] - the
@@ -182,11 +186,19 @@ and the content boundary.
   item 5.1.1.
 - [Tee hot-path line-event emission (5.2.1)][tee-line-event-emission] - the
   construction-share analysis, its verdict against the 30% limit, and the
-  forecast that item 5.2.2 inverts the same metric by succeeding.
+  forecast, since measured, that item 5.2.2 inverts the same metric by
+  succeeding.
 - [5.2.1 line-event-emission profile evidence](profiling/5-2-1-line-event-emission/README.md)
   - the six matched captures, the thirty unprofiled runs, the committed
   classifier rules, and the 30% reclassification the report's arithmetic rests
   on.
+- [Tee hot-path observe-hook dispatch (5.2.2)][tee-observe-hook-dispatch] - the
+  hot-path census that shows the per-line `inspect.isawaitable` call gone, the
+  construction-share rise it causes, and the timing and microbenchmark
+  comparisons.
+- [5.2.2 observe-hook-dispatch profile evidence](profiling/5-2-2-observe-hook-dispatch/README.md)
+  - the six matched captures, the ABBA unprofiled pairs, and the census,
+  classifier, and worker result documents the report's numbers come from.
 - [Rust boundary verification and unsafe inventory][rust-boundary-verification]
   - unsafe inventory, crate contracts, verifier evidence, and trusted
   assumptions for the native stream boundaries.
@@ -231,6 +243,7 @@ and the content boundary.
 [rust-boundary-verification]: rust-boundary-verification.md
 [tee-baseline]: tee-hotpath-profiling-baseline-2026-06-12.md
 [tee-line-event-emission]: tee-hotpath-line-event-emission-5-2-1.md
+[tee-observe-hook-dispatch]: tee-hotpath-observe-hook-dispatch-5-2-2.md
 [tee-read-size-sweep]: tee-hotpath-read-size-sweep-2026-08-29.md
 [rfc-0001]: rfcs/rfc-0001-execution-interception.md
 [rfc-0002]: rfcs/rfc-0002-command-composition-helpers.md

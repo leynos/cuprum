@@ -1,7 +1,8 @@
-"""Microbenchmarks for stream pumping and stream consumption throughput."""
+"""Microbenchmarks for stream pumping, consumption, and observe dispatch."""
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc as cabc
 import os
 import sys
@@ -11,6 +12,7 @@ import typing as typ
 import pytest
 
 from cuprum import (
+    ECHO,
     Program,
     ProgramCatalogue,
     ProjectSettings,
@@ -19,12 +21,15 @@ from cuprum import (
     scoped,
     sh,
 )
+from cuprum._observability import _emit_exec_event
+from cuprum.events import ExecEvent
 from cuprum.unittests._rust_stream_test_support import _safe_close
 from tests.helpers.parity import parity_catalogue
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
+    from cuprum.events import ExecHook, ExecPhase
     from cuprum.sh import PipelineResult
 
 if os.environ.get("CUPRUM_RUN_BENCHMARKS") != "1":
@@ -145,6 +150,70 @@ def test_benchmark_consume_throughput(
     )
 
 
+# Roadmap 5.2.2 removed the unconditional ``inspect.isawaitable`` call from
+# the per-line dispatcher. Each benchmark call below dispatches this many
+# events, so the reported mean is divided by it to get the per-event figure:
+# one event per call would measure pytest-benchmark's own loop entry instead
+# of the dispatcher.
+_DISPATCH_BATCH = 1_000
+
+
+def _dispatch_event() -> ExecEvent:
+    """Return a per-line ``stdout`` event for the dispatcher benchmark."""
+    return ExecEvent(
+        phase=typ.cast("ExecPhase", "stdout"),
+        program=ECHO,
+        argv=(str(ECHO),),
+        cwd=None,
+        env=None,
+        pid=0,
+        timestamp=0.0,
+        line="benchmark line",
+        exit_code=None,
+        duration_s=None,
+        tags={},
+    )
+
+
+def _sync_observe_hook(_event: ExecEvent) -> None:
+    """Stand in for the synchronous hooks that dominate per-line dispatch."""
+
+
+async def _async_observe_hook(_event: ExecEvent) -> None:
+    """Stand in for an ``async def`` observe hook."""
+
+
+@pytest.fixture(scope="module")
+def dispatch_loop() -> cabc.Iterator[asyncio.AbstractEventLoop]:
+    """Provide one event loop, so a batch amortizes loop entry, not dispatch."""
+    loop = asyncio.new_event_loop()
+    try:
+        yield loop
+    finally:
+        loop.close()
+
+
+def _dispatch_batch(
+    loop: asyncio.AbstractEventLoop,
+    hooks: tuple[ExecHook, ...],
+    event: ExecEvent,
+) -> int:
+    """Dispatch ``_DISPATCH_BATCH`` events and return the count dispatched."""
+
+    async def _drive() -> None:
+        """Dispatch one batch, then settle every scheduled task."""
+        # Tasks accumulate, as they do in production, and settle once at the
+        # end, so the batch times dispatch rather than task completion.
+        tasks: list[asyncio.Task[None]] = []
+        for _ in range(_DISPATCH_BATCH):
+            tasks.extend(_emit_exec_event(hooks, event))
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    loop.run_until_complete(_drive())
+    return _DISPATCH_BATCH
+
+
 @pytest.mark.skipif(
     os.name == "nt",
     reason="raw Windows handles cannot establish the synchronous native-I/O capability",
@@ -204,4 +273,28 @@ def test_benchmark_consume_invalid_utf8(
     assert output == expected, (
         f"invalid UTF-8 payload of {payload_bytes} bytes must decode like "
         "Python's replace semantics"
+    )
+
+
+@pytest.mark.benchmark(group="observe-dispatch")
+@pytest.mark.parametrize(
+    "hook",
+    [_sync_observe_hook, _async_observe_hook],
+    ids=["sync", "async"],
+)
+def test_benchmark_observe_dispatch(
+    benchmark: _IntBenchmark,
+    dispatch_loop: asyncio.AbstractEventLoop,
+    hook: ExecHook,
+) -> None:
+    """Benchmark per-line dispatch for a ``None`` and an ``async def`` hook."""
+    event = _dispatch_event()
+
+    def dispatch_batch() -> int:
+        """Dispatch one batch for the hook under test."""
+        return _dispatch_batch(dispatch_loop, (hook,), event)
+
+    dispatched = benchmark(dispatch_batch)
+    assert dispatched == _DISPATCH_BATCH, (
+        f"expected {_DISPATCH_BATCH} dispatches, got {dispatched}"
     )

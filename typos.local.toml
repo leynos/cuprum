@@ -116,6 +116,12 @@ ignore = [
   '\bASTROID_VERSION\b',
   '\b_ASTROID\b',
   '\btest_classic_astroid_[a-z0-9_]+\b',
+  # pytest-benchmark records the host CPU's feature flags verbatim. AMD's
+  # upstream flag for the Succor capability is spelled US-style by the
+  # hardware interface, and it appears only inside the quoted flag list of a
+  # benchmark result document. Rewriting it would falsify the capture, so the
+  # quoted token is exempted while prose stays checked.
+  '"succor"',
 ]
 
 # ADR 009 requires en-GB-oxendict spelling in source identifiers, so the fenced
