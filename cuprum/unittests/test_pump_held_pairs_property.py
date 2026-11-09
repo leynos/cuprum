@@ -167,10 +167,16 @@ class _Replay:
         on another thread. Each step enters its own copy of the context: one
         context object cannot be entered twice at once, and a paused delivery
         keeps its copy entered while another worker completes an emission.
+
+        Returns
+        -------
+        _Step
+            A zero-argument worker step that delivers the drawn emission.
         """
         nests = emission[1]
 
         def emit() -> None:
+            """Deliver one emission on the thread the turnstile runs it on."""
             self.nested.arm(nest=nests)
             if pauses:
                 self.gate.arm()
