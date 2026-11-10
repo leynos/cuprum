@@ -9,6 +9,8 @@ on:
       - 'cuprum/_pipeline_stream*.py'
       - 'pyproject.toml'
       - 'scripts/*boundary*'
+      - 'scripts/pypy_download.py'
+      - 'scripts/install_pypy312.py'
       - 'scripts/tests/test_boundary*'
       - 'scripts/tests/boundary_download_*.py'
       - 'tools/**'

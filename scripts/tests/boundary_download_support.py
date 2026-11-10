@@ -4,7 +4,8 @@ The server speaks just enough HTTP/1.1 to drive one download per scenario. It
 records the request paths and the number of body bytes it emitted, so a test
 can show that the client stopped reading rather than merely reporting an
 error. Certificates are generated with OpenSSL into a private directory and
-trusted only by the isolated driver process through `SSL_CERT_FILE`.
+trusted through `SSL_CERT_FILE`, both by the isolated driver process and by the
+PyPy HTTPS tests that open their own connections.
 """
 
 from __future__ import annotations

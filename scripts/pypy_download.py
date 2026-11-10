@@ -100,10 +100,15 @@ def _require_digest(pending: Path, destination: Path, digest: str) -> None:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class _Transfer:
-    """The one deadline and clock every redirect hop of a download shares."""
+    """The one deadline, clock, and wait every redirect hop of a download shares.
+
+    A test supplies `wait` beside the clock it advances, so one injected time
+    source covers the deadline check and the wait that releases a blocked read.
+    """
 
     deadline: float
     clock: Clock
+    wait: Waiter | None = None
 
     def expired(self) -> bool:
         """Report whether the transfer has outlived its deadline."""
@@ -139,19 +144,18 @@ class _DeadlineWatchdog:
         self,
         connection: http.client.HTTPSConnection,
         transfer: _Transfer,
-        *,
-        wait: Waiter | None = None,
     ) -> None:
         """Arm a watchdog for `connection`'s current socket.
 
         The remaining time comes from the transfer's own clock, so the wait and
-        every deadline check share one time source. Tests inject `wait` to
-        advance that clock instead of blocking for the remaining real seconds.
+        every deadline check share one time source. A transfer that carries a
+        test's waiter advances that clock instead of blocking for the remaining
+        real seconds.
         """
         self._sock = connection.sock
         self._transfer = transfer
         self._stop = threading.Event()
-        self._wait = self._stop.wait if wait is None else wait
+        self._wait = self._stop.wait if transfer.wait is None else transfer.wait
         self._thread = threading.Thread(target=self._watch, daemon=True)
 
     def __enter__(self) -> _DeadlineWatchdog:
@@ -178,10 +182,19 @@ def _download(
     destination: Path,
     *,
     clock: Clock = time.monotonic,
+    wait: Waiter | None = None,
 ) -> None:
-    """Follow bounded HTTPS-only release redirects into a temporary file."""
-    # Tests pass a controlled clock so a deadline is reached without waiting.
-    transfer = _Transfer(clock() + _TRANSFER_DEADLINE_SECONDS, clock)
+    """Follow bounded HTTPS-only release redirects into a temporary file.
+
+    Tests inject `clock` and `wait` together, so a deadline is reached and a
+    blocked read released without waiting for real seconds.
+
+    Raises
+    ------
+    ValueError
+        If a hop is not HTTPS or the redirect limit is exceeded.
+    """
+    transfer = _Transfer(clock() + _TRANSFER_DEADLINE_SECONDS, clock, wait)
     for _ in range(6):
         redirect = _download_once(url, destination, transfer)
         if redirect is None:
