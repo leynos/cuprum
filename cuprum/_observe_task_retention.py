@@ -117,7 +117,7 @@ def _prune_finished_hook_tasks(
     return pruned
 
 
-def _has_hook_capacity(
+def _prune_for_capacity(
     pending_tasks: list[asyncio.Task[None]],
     ceiling: int,
     *,
@@ -128,10 +128,12 @@ def _has_hook_capacity(
 
     This is a command, not a query. Reaching the ceiling prunes settled tasks
     in place and retrieves their exceptions before the slot count is judged, so
-    the mutation is part of the decision rather than a hidden side effect of a
-    read. The fast path below the ceiling only compares the raw list length:
-    the extra scan would be pure overhead, and the list only ever holds settled
-    tasks long enough to cross that threshold.
+    the mutation and the depth and prune samples it publishes are part of the
+    decision rather than hidden side effects of a read. The name says so: a
+    caller may not read it as a ``has_*`` capacity query. The fast path below
+    the ceiling only compares the raw list length: the extra scan would be pure
+    overhead, and the list only ever holds settled tasks long enough to cross
+    that threshold.
 
     It records no admission. The capacity-wait loop re-checks after every
     completion, and those re-checks belong to one deferred line rather than to
@@ -197,7 +199,7 @@ def _admit_hook_capacity(
         ``True`` when a task may be scheduled.
 
     """
-    admitted = _has_hook_capacity(
+    admitted = _prune_for_capacity(
         pending_tasks,
         ceiling,
         telemetry=telemetry,
@@ -257,7 +259,7 @@ async def _wait_for_hook_capacity(
     while True:
         unfinished = [task for task in pending_tasks if not task.done()]
         _ = await asyncio.wait(unfinished, return_when=asyncio.FIRST_COMPLETED)
-        if _has_hook_capacity(
+        if _prune_for_capacity(
             pending_tasks,
             ceiling,
             telemetry=telemetry,
@@ -355,6 +357,6 @@ __all__ = [
     "_OBSERVE_TASK_CEILING",
     "_admit_hook_capacity",
     "_await_hook_capacity",
-    "_has_hook_capacity",
     "_prune_finished_hook_tasks",
+    "_prune_for_capacity",
 ]
