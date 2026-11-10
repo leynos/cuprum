@@ -435,7 +435,9 @@ assert [(line.stream, line.text) for line in lines] == [
 ```
 
 The callback runs synchronously and should return promptly. Line order is
-guaranteed within each stream, not across streams.
+guaranteed within each stream, not across streams. An awaitable observe hook
+observing the same lines is retained and bounded differently; see
+[Awaitable hooks and line backpressure](#awaitable-hooks-and-line-backpressure).
 
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
@@ -3072,6 +3074,47 @@ hook raises on a new phase — and so fails the run — until it grows an arm fo
 it. Give exhaustive hooks a default arm that ignores phases they do not track.
 A hook that must never influence the run should catch its own exceptions.
 
+#### Awaitable hooks and line backpressure
+
+An awaitable observe hook is scheduled as one task per event and retained until
+the run finishes. Cuprum therefore bounds retention per execution: the
+unfinished count is admitted against a ceiling of 256 tasks, shared by every
+stage of a pipeline. A child that floods output cannot grow the list with the
+number of lines it writes, whether or not capture and echo are enabled.
+
+Settled successes are pruned as the run proceeds, along with every failure
+later than the first: finalization reports the earliest failed or cancelled
+task, and a later failure could never be raised. Each failure derived from
+`Exception` is still logged when its task fails, so pruning hides nothing from
+the logs; cancellations and other `BaseException` instances are not logged.
+Delivery stays lossless and per-stream ordered throughout.
+
+When the bound is reached, Cuprum stops reading new output until a hook task
+settles. A slow hook therefore slows how fast the child's output is read; a
+hook blocked indefinitely eventually pauses the child once the operating
+system's pipe buffers fill. Final completion also waits for pending hook tasks,
+so a blocked hook holds the run open even after the child has exited: a
+`timeout` bounds the child's run, not that final wait. Pass a `timeout` when
+observing output from an untrusted child, and make awaitable hooks finish
+promptly rather than waiting indefinitely; a hook that must block should
+observe cancellation or apply its own deadline.
+
+Capacity is checked once per decoded line event, so one line that schedules
+several awaitable hooks can briefly take the list to the ceiling plus one fewer
+than the number of hooks it schedules. Lifecycle events — `plan`, `start`,
+`exit`, `settled`, and the other phases — are emitted without an admission
+check, so their hook tasks are added without waiting for a slot. There are only
+a fixed handful of them per run, so what a child's output can grow stays
+bounded.
+
+Retention is observable without new public API. Entering backpressure logs
+`observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
+exit log at `DEBUG` on the `cuprum._retention_telemetry` logger. The metrics
+adapter projects refusals, depth, pruned tasks, and capacity waits as
+`cuprum_observe_hook_*` metrics, and `TracingHook` records capacity waits and
+effective prunes as span events; see [Metrics adapter](#metrics-adapter) and
+[Observe-hook retention span events](#observe-hook-retention-span-events).
+
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
 it with `from cuprum import ExecHook` or `from cuprum.events import ExecHook`.
 The former `from cuprum.context import ExecHook` path is no longer supported;
@@ -3140,6 +3183,25 @@ The hook collects:
 
 All metrics carry `program` and `project` labels; missing, empty, or explicit
 `None` project tags fall back to `unknown`.
+
+The observe-hook retention metrics are the exception: they describe the run's
+shared retention list rather than one child, so they carry only the closed
+`phase` and `outcome` labels and never the per-run execution token. They are:
+
+- `cuprum_observe_hook_depth`: Histogram of the unfinished observe-hook tasks
+  the prune path measured
+- `cuprum_observe_hook_saturations_total`: Counter of refused line admissions
+- `cuprum_observe_hook_pruned_total`: Counter of settled tasks dropped
+- `cuprum_observe_hook_pruned_failures_total`: Counter of dropped failures,
+  incremented only when at least one was dropped
+- `cuprum_observe_hook_capacity_wait_seconds`: Histogram of how long a line
+  waited for capacity, labelled by `outcome` (`resumed`, `cancelled`, or
+  `interrupted`)
+
+The two pruned counters count dropped _tasks_, not prune operations, so a prune
+that drops nothing moves neither. A successful admission has no metric at all:
+it is logged at `DEBUG` only, because a counter incremented once per admitted
+line would grow with the child's output.
 
 `cuprum_executions_total` and `cuprum_failures_total` additionally carry an
 `env_mode` label holding the execution's effective policy — `inherit`,
@@ -3246,6 +3308,27 @@ carries no captured stdout or stderr payload.
 On a `stdio_error` event, `error_category` reaches the tracing backend as its
 plain value, such as `producer`, and tells a producer failure apart from a pipe
 fault, as it does on the metrics counter.
+
+#### Observe-hook retention span events
+
+`TracingHook` also records what explains a run that paused its child. A line
+that waits for observer capacity is recorded as a
+`cuprum.observe_task_capacity_wait` event on the waiting execution's span,
+carrying the fixed `operation` value `observe_task_capacity_wait`, the wait's
+`outcome` (`resumed`, `cancelled`, or `interrupted`), `wait_seconds`, `depth`,
+and the phase. A prune is recorded as `cuprum.observe_task_retention` only when
+it actually dropped settled tasks, carrying `kind`, `depth`, `pruned`, and
+`pruned_failures`.
+
+Both events run on the per-line path: a run held at the ceiling takes one wait
+per deferred line, and may prune once for each. Each kind is therefore recorded
+at most once per execution span, which keeps a verbose child's span from
+growing with its line count. The span keeps one event of each kind; the
+aggregate lives in the metrics adapter, which records capacity-wait durations
+by outcome and counts the tasks a prune drops.
+
+Depth and saturation samples are not recorded as span events at all, although
+the metrics adapter does project them; they repeat on the same per-line path.
 
 #### Correlating events with spans
 

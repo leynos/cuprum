@@ -83,6 +83,7 @@ from cuprum.adapters._tracing_fields import (
 )
 from cuprum.adapters._tracing_line_stream import _LineStreamTracingMixin
 from cuprum.adapters._tracing_native_pump_cleanup import _NativePumpCleanupTracingMixin
+from cuprum.adapters._tracing_retention import _RetentionTracingMixin
 from cuprum.adapters.tracing_memory import InMemorySpan, InMemoryTracer
 from cuprum.events import TerminalOutcome
 from cuprum.tracing_protocols import Span, Tracer
@@ -94,17 +95,19 @@ if typ.TYPE_CHECKING:
 
 @dc.dataclass(slots=True)
 class _ActiveSpan:
-    """One open span and the lock that serializes its callbacks."""
+    """One open span, its callback lock, and the event names recorded once."""
 
     span: Span
     lock: threading.Lock = dc.field(default_factory=threading.Lock)
     is_closed: bool = False
+    once_events: set[str] = dc.field(default_factory=set)
 
 
 class TracingHook(
     _ControlJoinTracingMixin,
     _LineStreamTracingMixin,
     _NativePumpCleanupTracingMixin,
+    _RetentionTracingMixin,
 ):
     """Project correlated execution events onto backend spans.
 
@@ -228,8 +231,7 @@ class TracingHook(
         if exec_id is None:
             return
 
-        # Tracer setup is independent of the span bookkeeping; do it before
-        # taking the lock so unrelated handlers are not blocked on it.
+        # Build before the lock, so unrelated handlers are not blocked on it.
         attributes = self._build_attributes(
             event, original_project_tag=original_project_tag
         )

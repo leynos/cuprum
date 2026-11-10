@@ -1784,6 +1784,179 @@ and the event loop does not pre-empt an `emit()` call halfway through the list
 append, so no explicit lock is required. Do not call `_StageObservation.emit`
 from a worker thread; marshal back to the execution loop first.
 
+That list is bounded. `_OBSERVE_TASK_CEILING` (256, in
+`cuprum/_observe_task_retention.py`) caps the unfinished tasks one execution
+retains. It matches `_LINE_QUEUE_CAPACITY` in
+`cuprum/_line_stream/line_queue.py`: the two describe the same quantity — how
+much asynchronous work one observed run may have in flight. Because a line
+event is emitted per decoded line even with capture off, an unbounded list lets
+a chatty child exhaust parent memory. The rules:
+
+- `_prune_finished_hook_tasks(pending_tasks)` mutates the list **in place**.
+  Never rebind it: every pipeline stage retains into the same object, and a new
+  list would leave the other stages appending somewhere finalization never
+  drains. It keeps every unfinished task plus the earliest failed or cancelled
+  task in list order, because that is exactly what `_wait_for_exec_hook_tasks`
+  would raise from an unpruned gather. Later failures are dropped only after
+  `task.exception()` has retrieved them, so pruning cannot manufacture a "Task
+  exception was never retrieved" warning. Check `task.cancelled()` before
+  `task.exception()`: calling the latter on a cancelled task raises its
+  `CancelledError`.
+- `_StageObservation._retain_hook_tasks` extends the shared list and prunes once
+  its raw length reaches the ceiling. It also retains the prefix tasks carried
+  by `_ExecEventEmissionError`, so a failing synchronous hook cannot orphan
+  work scheduled before it.
+- `_admit_hook_capacity` is the admission **command**, `_prune_for_capacity` the
+  capacity decision it records, and `_await_hook_capacity` the wait.
+  `_prune_for_capacity` is a command rather than a query: reaching the ceiling
+  prunes settled tasks in place before the slot count is judged, so the
+  mutation is part of the decision rather than a side effect a caller might
+  mistake for a pure `has_*` read. Below the ceiling it takes a fast path over
+  the raw list length. The wait uses `asyncio.wait(..., FIRST_COMPLETED)`
+  rather than `asyncio.gather`: gathering would block until every task settled,
+  and cancelling the waiter must release only the wait, never the observer
+  tasks the execution still owns and drains. Capacity is admitted once per
+  event rather than once per task, so the bound to assert is
+  `ceiling + hooks_per_event - 1` unfinished tasks, plus at most one retained
+  settled failure in the raw list. Non-line events bypass admission entirely:
+  only the line callback calls the admission pair, so lifecycle and terminal
+  events may still add their own hook tasks.
+- `_compose_line_callbacks` admits before dispatch. With capacity it emits the
+  line's observation synchronously and returns the caller's `on_line` outcome
+  unchanged, with no suspension point between the check and the task append.
+  Without capacity it returns a coroutine that awaits capacity, dispatches the
+  observation, then calls `on_line`. Observation stays ahead of `on_line`, and
+  a failing synchronous observation prevents `on_line` from running at all. The
+  deferred line's `LineEvent` is stamped before the wait, so `LineEvent.at`
+  reports when the line was decoded and never includes observer backpressure;
+  `ExecEvent.timestamp` stays the wall-clock moment the event is emitted.
+
+Retention is observable. `_RetentionTelemetry` in
+`cuprum/_retention_telemetry.py` records one stage's admission timeline: the
+depth and high-water mark of the shared list, admissions and refusals, pruned
+tasks and pruned failures, and the count and duration of capacity waits.
+`_StageObservation.retention_telemetry` creates it on first use, so a run
+nothing observes pays nothing and every existing positional construction of the
+observation keeps its arguments. The counters are per stage, but `depth` and
+`max_depth` read the list every stage shares, so they describe the run. Every
+record carries the same fixed `cuprum_*` field set — the execution's
+correlation token, the closed phase name, the ceiling, and the counters — and
+nothing else: no argv, decoded line, or error message. That bounds each
+record's contents and the values it can be labelled with, not how many records
+are written: a run held at the ceiling still writes one admission record per
+line it admits, so lower the level when a child floods output. Entering
+backpressure logs once at `INFO`; admissions, prunes, and each wait's exit log
+at `DEBUG`. `record_wait_outcome` wraps `record_wait` for the wait's `finally`
+path: a projection failure is logged when the recorded outcome is `cancelled`,
+so it cannot replace the `CancelledError` the caller is receiving, and is
+re-raised for every other outcome. `_RetentionTelemetry._fields` prefixes the
+per-record values it is handed, so a per-prune delta lands as
+`cuprum_prune_delta` and cannot overwrite the running `cuprum_pruned` total.
+Callers that supply no recorder (the retention helpers default
+`telemetry=None`) still get the behaviour, only without the logs.
+
+The same samples feed the bundled adapters through a sink port.
+`_RetentionMetricsSink` in `cuprum/_retention_telemetry.py` is a runtime-
+checkable protocol with one method, `report_retention(sample)`;
+`_StageObservation.retention_telemetry` discovers the observe hooks that
+implement it once, when it first builds the recorder, using the same
+`isinstance`-over-hooks pattern as `_PipelineWaitReporter`. Adapters therefore
+stay plain exec hooks with no registration API. Two mixins project the samples:
+`_RetentionMetricsMixin` in `cuprum/adapters/_retention_metrics.py` emits
+`cuprum_observe_hook_depth` and `cuprum_observe_hook_capacity_wait_seconds`
+histograms plus `cuprum_observe_hook_saturations_total`,
+`cuprum_observe_hook_pruned_total`, and
+`cuprum_observe_hook_pruned_failures_total` counters, labelled only by the
+closed `phase` and `outcome` values. The two pruned counters sum dropped
+*tasks*, not prune operations, so a prune that drops nothing moves neither and
+a successful admission has no metric of its own; `_RetentionTracingMixin` in
+`cuprum/adapters/_tracing_retention.py` records a
+`cuprum.observe_task_capacity_wait` span event carrying `operation`, `outcome`,
+`wait_seconds`, `depth`, and the phase, for the async wait boundary, plus a
+`cuprum.observe_task_retention` event for a prune only when it actually dropped
+settled tasks. Depth and saturation samples are not traced at all: they arrive
+on the per-line path, so projecting every one would grow the span with the line
+count, which is the failure class the bound removes. The two traced kinds share
+that path, so each is recorded through `record_span_event_once` at most once
+per execution span. That helper and the plain `record_span_event` share
+`_append_span_event`, which finds the execution's open span and appends under
+its lock; the `_SpanEvent.once` flag makes it remember the event name in the
+open span's own `once_events` set and skip a repeat, so the bound is per
+execution and is discarded with the span. `record_span_event` does not
+deduplicate, so use it only for events that should repeat. The metrics mixin
+still counts every capacity wait by outcome and every task a prune drops, so
+the repetition stays observable. The per-run `exec_id` is deliberately never a
+metric label: it correlates the log record and the span and would otherwise
+multiply every series by the number of runs. Both mixins are bases of the
+existing `MetricsHook` and `TracingHook`. Only the tracing mixin records
+through the shared span-event helpers, so the active-span, closed-span, and
+once-per-execution rules live in one place; the metrics mixin labels its
+collector calls directly.
+
+Tests for the bound are split by level.
+`cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity, and
+cancellation isolation. Its capacity-wait case releases exactly one held task
+and asserts the waiter returns while the other two stay unfinished; the settled
+task is pruned from the shared list in place, so hold task references rather
+than list indices when asserting on it. That is what distinguishes
+`FIRST_COMPLETED` from a gather. Its two-producer handoff case starts two
+waiters behind one held slot and has the woken producer append its task
+synchronously, as the emitter does; only one may be admitted, so a freed slot
+is refilled before it can be spent twice.
+`test_observe_task_retention_property.py` holds pruning to the outcome
+finalization reports with Hypothesis: one property compares a single prune with
+an unpruned drain over success, failure, cancellation, and pending sequences,
+and a second generates several prune steps interleaved with new spawns, earlier
+tasks that only fail later, and tasks cancelled after every prune, comparing
+the reported outcome with the unpruned run each time.
+`test_observe_task_retention_callbacks.py` covers the composed callback with a
+patched ceiling (patch `cuprum._line_event_emitter._OBSERVE_TASK_CEILING`,
+never the shared constant; the emitter module is where the ceiling is read, so
+patching a re-export in the composing module would leave the real call site
+unchanged): the deferred dispatch, the decode-time stamp a deferred line keeps,
+the per-event overshoot, and the ordering guarantee that a failed observation
+never reaches `on_line`. `test_observe_task_retention_telemetry.py` covers the
+recorder's counters and the field set of its records; `test_retention_sink.py`
+covers the sink port, the injectable clock, and the projection failure policy —
+a failing sink surfaces on the path it served, but is logged instead of
+replacing the `CancelledError` that ended an abandoned wait. The clock makes a
+capacity wait's recorded duration exact and is asserted even for a cancelled
+wait. `test_retention_metrics.py` and `test_tracing_retention.py` pin each
+adapter's names, values, and label or attribute set.
+`test_line_observe_retention_projection.py` then installs both adapters on one
+flooded real child, so both project the same retention samples, and holds the
+child's span to exactly one capacity-wait and one retention event. The split
+keeps each module inside the repository's file-size ceiling.
+
+The real-child cases share their scaffolding in
+`cuprum/unittests/test_line_observe_support.py`: the chatty child and pipeline
+builders, the observe hooks, the `_emit_event` spy, and the delivery assertion.
+The spy records `len(observation.pending_tasks)` after each emission to measure
+the high-water mark, and `monkeypatch` installs it so a failing test cannot
+leave the dispatcher wrapped for the rest of the session.
+
+`test_line_observe_backpressure.py` runs the hook matrix — fast, slow, blocked,
+and failing hooks over 20,000, 2,000, 5,000, and 600 lines — twice: once with
+capture on and once with capture off. The uncaptured run is the regression
+configuration, and it registers a no-op `on_line` sink because cuprum folds a
+stream that nothing consumes to DEVNULL; without the sink no line event would
+be emitted and the test would pass vacuously. The blocked case proves delivery
+pauses at saturation and resumes losslessly; the timeout case proves a blocked
+observer holds final completion rather than being abandoned.
+
+`test_line_observe_pipeline_backpressure.py` makes both pipeline stages flood
+their own stderr, so two producers dispatch line events concurrently. It
+asserts one shared pending-task list object across both stages and a single
+bounded high-water mark, which a per-stage bound would not produce.
+
+`test_line_observe_child_backpressure.py` distinguishes reader-side
+backpressure from child-write backpressure. The child writes 4,000 lines of 1
+KiB each — well past any pipe buffer — and flushes a progress marker to a side
+file every 50 lines. While the observer is gated shut the marker stops
+advancing, which is evidence the child is blocked in `write` because the parent
+stopped reading, rather than merely slow to produce. Releasing the gate lets it
+finish, and the last marker reads `done`.
+
 ### Presentation-sink session lifecycle
 
 `SessionStart` remains unchanged. Single-command sessions pass the full argv to
@@ -8046,7 +8219,9 @@ Table 1: Line-observation implementation boundaries
 | `cuprum/_line_stream/result_assembly.py`                                                                                                                        | Owns `_assemble_line_stream_result`; the coordinator imports it directly and supplies `_wait_for_line_stream_exit`; it is not re-exported.                                                            |
 | `cuprum/_line_iteration.py`                                                                                                                                     | Exposes `LineStream`, owns the deferred re-authorization in `_iter_line_events`, starts plan and before hooks when iteration begins, and closes its inner event generator deterministically.          |
 | `cuprum/_line_stream_finalization.py`                                                                                                                           | Settles a line stream: reconciles the coordinator, drains observe-hook tasks, closes the delivery worker, and maps how iteration ended onto the session's terminal outcome before the shielded close. |
-| `cuprum/_line_callbacks.py`                                                                                                                                     | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction.                                                                              |
+| `cuprum/_line_callbacks.py`                                                                                                                                     | Performs one decoded-line fan-out to observe output events and the caller's `on_line`, including timestamp construction; also owns the callback composition and the per-stream emitter factory.       |
+| `cuprum/_line_event_emitter.py`                                                                                                                                 | Bound per-stream emitter that holds the invariant half of a line `ExecEvent`, emits one event per decoded line, and applies the observer-task admission bound.                                        |
+| `cuprum/_line_hook_chaining.py`                                                                                                                                 | Chains several per-line hooks into one fan-out, so every hook sees each line and the drain loop awaits all of their outcomes.                                                                         |
 | `cuprum/_subprocess_streams.py`                                                                                                                                 | Builds the stdout and stderr consumer tasks and attaches the shared per-line callback composition.                                                                                                    |
 | `cuprum/_execution_tracking.py`                                                                                                                                 | Carries execution hooks and the pending asynchronous observe-hook tasks used by line iteration.                                                                                                       |
 | `cuprum/_subprocess_execution.py`, `cuprum/_subprocess_spawn.py`, `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_wait.py`, and `cuprum/_stream_drain.py` | Supply the shared spawn, deadline, result, and consumer-drain primitives used by `run()` and `lines()`.                                                                                               |
@@ -8174,16 +8349,19 @@ publication, and the outcome precedence over generated endings.
 
 ### The per-stream line-event emitter
 
-`_LineEventEmitter` in `cuprum/_line_callbacks.py` is a frozen slotted private
-dataclass holding the invariant half of a line `ExecEvent`.
-`_line_event_emitter` builds it once per observed stream, after spawn, so the
-pid is known; the dispatcher then calls `emit_line` per decoded line.
-Everything bound at preparation time — the program, the full argv, cwd, the
-environment overlay, the pid, the stream, the observation's tags, the project
-name, the execution id, and the observation's own `_emit_event` — is fixed for
-the life of that stream, so a line event needs only a line and one fresh clock
-read to complete. The per-line `_EventDetails` construction and the per-line
-`argv_with_program` walk are what this type exists to remove.
+`_LineEventEmitter` in `cuprum/_line_event_emitter.py` is a frozen slotted
+private dataclass holding the invariant half of a line `ExecEvent`. The class
+lives in the emitter module while `_line_event_emitter` and the callback
+composition remain in `cuprum/_line_callbacks.py`, so the split keeps each file
+inside the size ceiling. `_line_event_emitter` builds it once per observed
+stream, after spawn, so the pid is known; the dispatcher then calls `emit_line`
+per decoded line. Everything bound at preparation time — the program, the full
+argv, cwd, the environment overlay, the pid, the stream, the observation's
+tags, the project name, the execution id, and the observation's own
+`_emit_event` — is fixed for the life of that stream, so a line event needs
+only a line and one fresh clock read to complete. The per-line `_EventDetails`
+construction and the per-line `argv_with_program` walk are what this type
+exists to remove.
 
 The emitter holds `observation._emit_event` **bound rather than called**. That
 method catches `_ExecEventEmissionError`, retains the observation's

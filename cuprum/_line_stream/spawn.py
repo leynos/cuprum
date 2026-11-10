@@ -19,7 +19,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._idle_heartbeat import _stop_idle_monitor
-from cuprum._line_callbacks import _chain_line_hooks
+from cuprum._line_hook_chaining import _chain_line_hooks
 from cuprum._line_stream.line_queue import (
     _LineStreamRun,
     _observed_line_hook,
