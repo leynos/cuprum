@@ -16,7 +16,6 @@ recorder the helpers log through lives in :mod:`cuprum._retention_telemetry`.
 from __future__ import annotations
 
 import asyncio
-import logging
 
 from cuprum._retention_telemetry import (
     _WAIT_CANCELLED,
@@ -24,8 +23,6 @@ from cuprum._retention_telemetry import (
     _WAIT_RESUMED,
     _RetentionTelemetry,
 )
-
-_LOGGER = logging.getLogger(__name__)
 
 # How many unfinished async observe-hook tasks one execution may retain before
 # line observation applies backpressure. The value matches
@@ -333,24 +330,12 @@ async def _await_hook_capacity(
         raise
     finally:
         if telemetry is not None:
-            try:
-                telemetry.record_wait(
-                    elapsed=telemetry.clock() - started,
-                    ceiling=ceiling,
-                    phase=phase,
-                    outcome=outcome,
-                )
-            except Exception:
-                # Keep the cancelled task cancelled: replacing
-                # ``CancelledError`` with a sink error would make it fail
-                # instead, and every other outcome keeps the documented
-                # propagation so a broken exporter still fails what it served.
-                if outcome != _WAIT_CANCELLED:
-                    raise
-                _LOGGER.exception(
-                    "observe_task_retention_failed phase=%s",
-                    phase,
-                )
+            telemetry.record_wait_outcome(
+                started=started,
+                ceiling=ceiling,
+                phase=phase,
+                outcome=outcome,
+            )
 
 
 __all__ = [

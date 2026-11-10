@@ -1846,11 +1846,14 @@ record's contents and the values it can be labelled with, not how many records
 are written: a run held at the ceiling still writes one admission record per
 line it admits, so lower the level when a child floods output. Entering
 backpressure logs once at `INFO`; admissions, prunes, and each wait's exit log
-at `DEBUG`. `_RetentionTelemetry._fields` prefixes the per-record values it is
-handed, so a per-prune delta lands as `cuprum_prune_delta` and cannot overwrite
-the running `cuprum_pruned` total. Callers that supply no recorder (the
-retention helpers default `telemetry=None`) still get the behaviour, only
-without the logs.
+at `DEBUG`. `record_wait_outcome` wraps `record_wait` for the wait's `finally`
+path: a projection failure is logged when the recorded outcome is `cancelled`,
+so it cannot replace the `CancelledError` the caller is receiving, and is
+re-raised for every other outcome. `_RetentionTelemetry._fields` prefixes the
+per-record values it is handed, so a per-prune delta lands as
+`cuprum_prune_delta` and cannot overwrite the running `cuprum_pruned` total.
+Callers that supply no recorder (the retention helpers default
+`telemetry=None`) still get the behaviour, only without the logs.
 
 The same samples feed the bundled adapters through a sink port.
 `_RetentionMetricsSink` in `cuprum/_retention_telemetry.py` is a runtime-

@@ -281,6 +281,34 @@ class _RetentionTelemetry:
                 ),
             )
 
+    def record_wait_outcome(
+        self,
+        *,
+        started: float,
+        ceiling: int,
+        phase: str | None,
+        outcome: str,
+    ) -> None:
+        """Record a finished wait without ever masking its cancellation.
+
+        The wait records from a ``finally`` block, so a projection failure
+        raised there would replace the ``CancelledError`` the caller is about
+        to receive. A cancelled wait therefore logs the failure; every other
+        outcome keeps the documented propagation, because a broken exporter
+        should still fail the work it served.
+        """
+        try:
+            self.record_wait(
+                elapsed=self.clock() - started,
+                ceiling=ceiling,
+                phase=phase,
+                outcome=outcome,
+            )
+        except Exception:
+            if outcome != _WAIT_CANCELLED:
+                raise
+            _LOGGER.exception("observe_task_retention_failed phase=%s", phase)
+
     def _publish(self, sample: _RetentionSample) -> None:
         """Offer one bounded sample to every installed metrics sink."""
         for sink in self.sinks:
