@@ -255,3 +255,7 @@ def test_the_boundary_workflow_watches_the_download_harness() -> None:
     assert "scripts/tests/boundary_download_*.py" in paths, (
         "the download harness modules must trigger the boundary workflow"
     )
+    assert {"scripts/pypy_download.py", "scripts/install_pypy312.py"} <= set(paths), (
+        "editing the downloader or its installer must not skip the controlled "
+        "HTTPS coverage that only this workflow runs"
+    )
