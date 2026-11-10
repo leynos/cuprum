@@ -3323,8 +3323,9 @@ it actually dropped settled tasks, carrying `kind`, `depth`, `pruned`, and
 Both events run on the per-line path: a run held at the ceiling takes one wait
 per deferred line, and may prune once for each. Each kind is therefore recorded
 at most once per execution span, which keeps a verbose child's span from
-growing with its line count. Nothing is lost, because the metrics adapter
-counts every capacity wait by outcome and every task a prune drops.
+growing with its line count. The span keeps one event of each kind; the
+aggregate lives in the metrics adapter, which records capacity-wait durations
+by outcome and counts the tasks a prune drops.
 
 Depth and saturation samples are not recorded as span events at all, although
 the metrics adapter does project them; they repeat on the same per-line path.
