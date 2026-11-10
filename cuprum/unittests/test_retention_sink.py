@@ -4,8 +4,10 @@ The recorder publishes one bounded sample per retention decision. These tests
 pin the two seams that carry those samples out of the recorder: how a stage
 discovers a hook that implements the sink port, and how the injectable clock
 makes a capacity wait's duration exact and observable even when the wait is
-cancelled. The log records themselves are pinned in
-``test_observe_task_retention_telemetry.py``.
+cancelled. They also pin the failure policy those seams imply: a failing
+projection surfaces on the path it served, but it can never replace the
+``CancelledError`` that ended an abandoned wait. The log records themselves are
+pinned in ``test_observe_task_retention_telemetry.py``.
 """
 
 from __future__ import annotations
@@ -84,6 +86,29 @@ class _RaisingSink:
             Always, so a caller can observe how the emission handles it.
         """
         raise _SinkError
+
+
+class _WaitRaisingSink:
+    """Observe hook whose projection fails only for the capacity wait.
+
+    Admission publishes depth, prune, and saturation samples first, so a sink
+    that raised for every kind would fail before the wait these cases need to
+    reach exists at all.
+    """
+
+    def __call__(self, event: object) -> None:
+        """Accept an execution event and project nothing about it."""
+
+    def report_retention(self, sample: _RetentionSample) -> None:
+        """Fail for the wait sample, as a broken exporter would.
+
+        Raises
+        ------
+        _SinkError
+            When ``sample`` is the capacity wait.
+        """
+        if sample.kind == _RETENTION_CAPACITY_WAIT:
+            raise _SinkError
 
 
 async def _immediate() -> None:
@@ -211,6 +236,66 @@ def test_cancelled_capacity_wait_is_recorded() -> None:
         )
 
         gate.set()
+        await _wait_for_exec_hook_tasks(pending)
+
+    asyncio.run(case())
+
+
+def test_raising_wait_sink_does_not_replace_cancelled_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sink failure must not turn a cancelled waiter into a failed one."""
+
+    async def case() -> None:
+        """Cancel a capacity wait whose projection fails."""
+        gate = asyncio.Event()
+        recorder = _RetentionTelemetry(
+            exec_id=new_exec_id(),
+            sinks=(_WaitRaisingSink(),),
+        )
+        pending = [asyncio.create_task(_hold(gate))]
+        await asyncio.sleep(0)
+
+        waiter = asyncio.create_task(
+            _await_hook_capacity(pending, 1, telemetry=recorder, phase=_STDOUT)
+        )
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        assert recorder.waits == 1, "the abandoned wait must still be counted"
+        gate.set()
+        await _wait_for_exec_hook_tasks(pending)
+
+    asyncio.run(case())
+
+    assert "observe_task_retention_failed" in caplog.text, (
+        "the sink failure must be reported rather than replacing cancellation"
+    )
+
+
+def test_raising_wait_sink_fails_the_resumed_wait_it_serves() -> None:
+    """Outside cancellation a failing projection must still surface."""
+
+    async def case() -> None:
+        """Release the held slot so the wait resumes and records."""
+        gate = asyncio.Event()
+        recorder = _RetentionTelemetry(
+            exec_id=new_exec_id(),
+            sinks=(_WaitRaisingSink(),),
+        )
+        pending = [asyncio.create_task(_hold(gate))]
+        await asyncio.sleep(0)
+
+        waiter = asyncio.create_task(
+            _await_hook_capacity(pending, 1, telemetry=recorder, phase=_STDOUT)
+        )
+        await asyncio.sleep(0)
+        gate.set()
+        with pytest.raises(_SinkError):
+            await waiter
+
         await _wait_for_exec_hook_tasks(pending)
 
     asyncio.run(case())

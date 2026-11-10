@@ -16,6 +16,7 @@ recorder the helpers log through lives in :mod:`cuprum._retention_telemetry`.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from cuprum._retention_telemetry import (
     _WAIT_CANCELLED,
@@ -23,6 +24,8 @@ from cuprum._retention_telemetry import (
     _WAIT_RESUMED,
     _RetentionTelemetry,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # How many unfinished async observe-hook tasks one execution may retain before
 # line observation applies backpressure. The value matches
@@ -282,7 +285,10 @@ async def _await_hook_capacity(
     cancel them out from under it.
 
     The wait itself is recorded on every exit path, including cancellation, so
-    a suspended-then-abandoned line is not invisible to an operator.
+    a suspended-then-abandoned line is not invisible to an operator. A failing
+    retention sink propagates from that record on every path except
+    cancellation: there it is logged instead, because a sink error must not
+    replace ``CancelledError`` and break the caller's cancellation contract.
 
     Parameters
     ----------
@@ -299,7 +305,9 @@ async def _await_hook_capacity(
     ------
     asyncio.CancelledError
         If the waiter is cancelled while suspended; the wait is recorded with
-        the ``cancelled`` outcome before the exception propagates.
+        the ``cancelled`` outcome before the exception propagates. A retention
+        sink that fails while recording it is logged rather than raised, so
+        cancellation still reaches the caller.
 
     """
     if _admit_hook_capacity(
@@ -323,12 +331,24 @@ async def _await_hook_capacity(
         raise
     finally:
         if telemetry is not None:
-            telemetry.record_wait(
-                elapsed=telemetry.clock() - started,
-                ceiling=ceiling,
-                phase=phase,
-                outcome=outcome,
-            )
+            try:
+                telemetry.record_wait(
+                    elapsed=telemetry.clock() - started,
+                    ceiling=ceiling,
+                    phase=phase,
+                    outcome=outcome,
+                )
+            except Exception:
+                # Keep the cancelled task cancelled: replacing
+                # ``CancelledError`` with a sink error would make it fail
+                # instead, and every other outcome keeps the documented
+                # propagation so a broken exporter still fails what it served.
+                if outcome != _WAIT_CANCELLED:
+                    raise
+                _LOGGER.exception(
+                    "observe_task_retention_failed phase=%s",
+                    phase,
+                )
 
 
 __all__ = [
