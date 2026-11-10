@@ -1806,16 +1806,17 @@ a chatty child exhaust parent memory. The rules:
   its raw length reaches the ceiling. It also retains the prefix tasks carried
   by `_ExecEventEmissionError`, so a failing synchronous hook cannot orphan
   work scheduled before it.
-- `_admit_hook_capacity` is the admission **command** and
-  `_await_hook_capacity` the wait. The name is deliberate: reaching the ceiling
+- `_admit_hook_capacity` is the admission **command**, `_prune_for_capacity` the
+  capacity decision it records, and `_await_hook_capacity` the wait.
+  `_prune_for_capacity` is a command rather than a query: reaching the ceiling
   prunes settled tasks in place before the slot count is judged, so the
   mutation is part of the decision rather than a side effect a caller might
-  mistake for a pure query. Below the ceiling it takes a fast path over the raw
-  list length. The wait uses `asyncio.wait(..., FIRST_COMPLETED)` rather than
-  `asyncio.gather`: gathering would block until every task settled, and
-  cancelling the waiter must release only the wait, never the observer tasks
-  the execution still owns and drains. Capacity is admitted once per event
-  rather than once per task, so the bound to assert is
+  mistake for a pure `has_*` read. Below the ceiling it takes a fast path over
+  the raw list length. The wait uses `asyncio.wait(..., FIRST_COMPLETED)`
+  rather than `asyncio.gather`: gathering would block until every task settled,
+  and cancelling the waiter must release only the wait, never the observer
+  tasks the execution still owns and drains. Capacity is admitted once per
+  event rather than once per task, so the bound to assert is
   `ceiling + hooks_per_event - 1` unfinished tasks, plus at most one retained
   settled failure in the raw list. Non-line events bypass admission entirely:
   only the line callback calls the admission pair, so lifecycle and terminal
@@ -1863,7 +1864,9 @@ stay plain exec hooks with no registration API. Two mixins project the samples:
 histograms plus `cuprum_observe_hook_saturations_total`,
 `cuprum_observe_hook_pruned_total`, and
 `cuprum_observe_hook_pruned_failures_total` counters, labelled only by the
-closed `phase` and `outcome` values; `_RetentionTracingMixin` in
+closed `phase` and `outcome` values. The two pruned counters sum dropped
+*tasks*, not prune operations, so a prune that drops nothing moves neither and
+a successful admission has no metric of its own; `_RetentionTracingMixin` in
 `cuprum/adapters/_tracing_retention.py` records a
 `cuprum.observe_task_capacity_wait` span event carrying `operation`, `outcome`,
 `wait_seconds`, `depth`, and the phase, for the async wait boundary, plus a
@@ -1871,16 +1874,21 @@ closed `phase` and `outcome` values; `_RetentionTracingMixin` in
 settled tasks. Depth and saturation samples are not traced at all: they arrive
 on the per-line path, so projecting every one would grow the span with the line
 count, which is the failure class the bound removes. The two traced kinds share
-that path, so each is recorded at most once per execution span — the
-`_SpanEvent.once` flag that `record_span_event` remembers on the span itself —
-which keeps the span bounded by a constant. The metrics mixin still counts
-every wait and every prune, so the repetition stays observable. The per-run
-`exec_id` is deliberately never a metric label: it correlates the log record
-and the span and would otherwise multiply every series by the number of runs.
-Both mixins are bases of the existing `MetricsHook` and `TracingHook`. Only the
-tracing mixin records through the shared `record_span_event` helper, so the
-active-span and closed-span rules live in one place; the metrics mixin labels
-its collector calls directly.
+that path, so each is recorded through `record_span_event_once` at most once
+per execution span. That helper and the plain `record_span_event` share
+`_append_span_event`, which finds the execution's open span and appends under
+its lock; the `_SpanEvent.once` flag makes it remember the event name in the
+open span's own `once_events` set and skip a repeat, so the bound is per
+execution and is discarded with the span. `record_span_event` does not
+deduplicate, so use it only for events that should repeat. The metrics mixin
+still counts every capacity wait by outcome and every task a prune drops, so
+the repetition stays observable. The per-run `exec_id` is deliberately never a
+metric label: it correlates the log record and the span and would otherwise
+multiply every series by the number of runs. Both mixins are bases of the
+existing `MetricsHook` and `TracingHook`. Only the tracing mixin records
+through the shared span-event helpers, so the active-span, closed-span, and
+once-per-execution rules live in one place; the metrics mixin labels its
+collector calls directly.
 
 Tests for the bound are split by level.
 `cuprum/unittests/test_observe_task_retention.py` covers pruning, capacity, and
@@ -1888,26 +1896,34 @@ cancellation isolation. Its capacity-wait case releases exactly one held task
 and asserts the waiter returns while the other two stay unfinished; the settled
 task is pruned from the shared list in place, so hold task references rather
 than list indices when asserting on it. That is what distinguishes
-`FIRST_COMPLETED` from a gather. `test_observe_task_retention_property.py`
-holds pruning to the outcome finalization reports with Hypothesis: one property
-compares a single prune with an unpruned drain over success, failure,
-cancellation, and pending sequences, and a second generates several prune steps
-interleaved with new spawns, earlier tasks that only fail later, and tasks
-cancelled after every prune, comparing the reported outcome with the unpruned
-run each time. `test_observe_task_retention_callbacks.py` covers the composed
-callback with a patched ceiling (patch
-`cuprum._line_event_emitter._OBSERVE_TASK_CEILING`, never the shared constant;
-the emitter module is where the ceiling is read, so patching a re-export in the
-composing module would leave the real call site unchanged): the deferred
-dispatch, the decode-time stamp a deferred line keeps, the per-event overshoot,
-and the ordering guarantee that a failed observation never reaches `on_line`.
-`test_observe_task_retention_telemetry.py` covers the recorder's counters and
-the field set of its records; `test_retention_sink.py` covers the sink port and
-the injectable clock, which makes a capacity wait's recorded duration exact and
-is asserted even for a cancelled wait; `test_retention_metrics.py` and
-`test_tracing_retention.py` pin each adapter's names, values, and label or
-attribute set. The split keeps each module inside the repository's file-size
-ceiling.
+`FIRST_COMPLETED` from a gather. Its two-producer handoff case starts two
+waiters behind one held slot and has the woken producer append its task
+synchronously, as the emitter does; only one may be admitted, so a freed slot
+is refilled before it can be spent twice.
+`test_observe_task_retention_property.py` holds pruning to the outcome
+finalization reports with Hypothesis: one property compares a single prune with
+an unpruned drain over success, failure, cancellation, and pending sequences,
+and a second generates several prune steps interleaved with new spawns, earlier
+tasks that only fail later, and tasks cancelled after every prune, comparing
+the reported outcome with the unpruned run each time.
+`test_observe_task_retention_callbacks.py` covers the composed callback with a
+patched ceiling (patch `cuprum._line_event_emitter._OBSERVE_TASK_CEILING`,
+never the shared constant; the emitter module is where the ceiling is read, so
+patching a re-export in the composing module would leave the real call site
+unchanged): the deferred dispatch, the decode-time stamp a deferred line keeps,
+the per-event overshoot, and the ordering guarantee that a failed observation
+never reaches `on_line`. `test_observe_task_retention_telemetry.py` covers the
+recorder's counters and the field set of its records; `test_retention_sink.py`
+covers the sink port, the injectable clock, and the projection failure policy —
+a failing sink surfaces on the path it served, but is logged instead of
+replacing the `CancelledError` that ended an abandoned wait. The clock makes a
+capacity wait's recorded duration exact and is asserted even for a cancelled
+wait. `test_retention_metrics.py` and `test_tracing_retention.py` pin each
+adapter's names, values, and label or attribute set.
+`test_line_observe_retention_projection.py` then installs both adapters on one
+flooded real child, so both project the same retention samples, and holds the
+child's span to exactly one capacity-wait and one retention event. The split
+keeps each module inside the repository's file-size ceiling.
 
 The real-child cases share their scaffolding in
 `cuprum/unittests/test_line_observe_support.py`: the chatty child and pipeline

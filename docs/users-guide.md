@@ -3110,9 +3110,9 @@ bounded.
 Retention is observable without new public API. Entering backpressure logs
 `observe_task_capacity_wait` at `INFO`; admissions, prunes, and each wait's
 exit log at `DEBUG` on the `cuprum._retention_telemetry` logger. The metrics
-adapter projects each retention decision as a `cuprum_observe_hook_*` metric,
-and `TracingHook` records capacity waits and effective prunes as span events;
-see [Metrics adapter](#metrics-adapter) and
+adapter projects refusals, depth, pruned tasks, and capacity waits as
+`cuprum_observe_hook_*` metrics, and `TracingHook` records capacity waits and
+effective prunes as span events; see [Metrics adapter](#metrics-adapter) and
 [Observe-hook retention span events](#observe-hook-retention-span-events).
 
 `ExecHook` is defined in `cuprum.events` and re-exported from `cuprum`. Import
@@ -3197,6 +3197,11 @@ shared retention list rather than one child, so they carry only the closed
 - `cuprum_observe_hook_capacity_wait_seconds`: Histogram of how long a line
   waited for capacity, labelled by `outcome` (`resumed`, `cancelled`, or
   `interrupted`)
+
+The two pruned counters count dropped _tasks_, not prune operations, so a prune
+that drops nothing moves neither. A successful admission has no metric at all:
+it is logged at `DEBUG` only, because a counter incremented once per admitted
+line would grow with the child's output.
 
 `cuprum_executions_total` and `cuprum_failures_total` additionally carry an
 `env_mode` label holding the execution's effective policy — `inherit`,
@@ -3319,7 +3324,7 @@ Both events run on the per-line path: a run held at the ceiling takes one wait
 per deferred line, and may prune once for each. Each kind is therefore recorded
 at most once per execution span, which keeps a verbose child's span from
 growing with its line count. Nothing is lost, because the metrics adapter
-counts every wait — with its outcome — and every prune.
+counts every capacity wait by outcome and every task a prune drops.
 
 Depth and saturation samples are not recorded as span events at all, although
 the metrics adapter does project them; they repeat on the same per-line path.
