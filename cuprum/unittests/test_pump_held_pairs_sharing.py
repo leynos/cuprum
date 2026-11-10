@@ -22,6 +22,9 @@ import gc
 import threading
 import typing as typ
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_HELD_PAIRS,
     HeldPairCounterRegistry,
@@ -45,34 +48,16 @@ def test_an_interleaved_event_does_not_move_one_hold_twice() -> None:
     has completed an emission of its own. The outer event is still in flight,
     so it must be recognized as the same emission and leave the total alone.
     """
-    collector = RecordingCollector()
-    registry = HeldPairCounterRegistry()
-    hooks = [
-        PumpMetricsHook(collector, registry=registry),
-        PumpMetricsHook(collector, registry=registry),
-    ]
+    collector, hooks = _two_hooks_sharing_a_collector()
     gate = PausingHook()
     gate.arm()
 
     with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
-        context = contextvars.copy_context()
-
-        def emit_elsewhere() -> None:
-            """Complete an emission while the main thread's delivery waits."""
-            assert gate.wait_paused(5.0), "the main delivery must pause"
-            context.run(_emit_rust_pump_hold, 1)
-            gate.release()
-
-        worker = threading.Thread(target=emit_elsewhere)
-        worker.start()
-        try:
-            _emit_rust_pump_hold(1)
-        finally:
-            # Never leave the gated delivery blocked behind a failed assertion.
-            gate.release()
-            worker.join(timeout=5.0)
-        assert not worker.is_alive(), "the interleaved emission must finish"
-
+        _interleave(
+            gate,
+            main=lambda: _emit_rust_pump_hold(1),
+            other=lambda: _emit_rust_pump_hold(1),
+        )
         _emit_rust_pump_hold(-1)
         _emit_rust_pump_hold(-1)
 
@@ -90,35 +75,18 @@ def test_an_interleaved_release_does_not_move_one_hold_twice() -> None:
     still in flight, so its remaining delivery must leave the total alone even
     though the interleaved release has already moved it.
     """
-    collector = RecordingCollector()
-    registry = HeldPairCounterRegistry()
-    hooks = [
-        PumpMetricsHook(collector, registry=registry),
-        PumpMetricsHook(collector, registry=registry),
-    ]
+    collector, hooks = _two_hooks_sharing_a_collector()
     gate = PausingHook()
 
     with observe_pump(hooks[0]), observe_pump(gate), observe_pump(hooks[1]):
-        context = contextvars.copy_context()
         _emit_rust_pump_hold(1)
         _emit_rust_pump_hold(1)
         gate.arm()
-
-        def release_elsewhere() -> None:
-            """Complete a release while the outer release waits between hooks."""
-            assert gate.wait_paused(5.0), "the outer release must pause"
-            context.run(_emit_rust_pump_hold, -1)
-            gate.release()
-
-        worker = threading.Thread(target=release_elsewhere)
-        worker.start()
-        try:
-            _emit_rust_pump_hold(-1)
-        finally:
-            # Never leave the gated delivery blocked behind a failed assertion.
-            gate.release()
-            worker.join(timeout=5.0)
-        assert not worker.is_alive(), "the interleaved release must finish"
+        _interleave(
+            gate,
+            main=lambda: _emit_rust_pump_hold(-1),
+            other=lambda: _emit_rust_pump_hold(-1),
+        )
 
     assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0, 1.0, 0.0], (
         "the second delivery of one release must not count while the first "
@@ -286,3 +254,46 @@ def test_the_factory_forwards_an_injected_registry() -> None:
     hook(PumpEvent(phase="handoff_hold", held_delta=1))
 
     assert collector.gauges == [1.0], "the forwarded registry must share the count"
+
+
+def _two_hooks_sharing_a_collector() -> tuple[
+    RecordingCollector, list[PumpMetricsHook]
+]:
+    """Return a collector and two hooks reporting to one shared counter."""
+    collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
+    hooks = [
+        PumpMetricsHook(collector, registry=registry),
+        PumpMetricsHook(collector, registry=registry),
+    ]
+    return collector, hooks
+
+
+def _interleave(
+    gate: PausingHook,
+    *,
+    main: cabc.Callable[[], None],
+    other: cabc.Callable[[], None],
+) -> None:
+    """Emit ``main`` here while ``other`` finishes on another thread.
+
+    ``other`` runs only after the main emission has paused at ``gate``, so the
+    main event is still in flight when the other thread's emission completes.
+    The gate is released on every path, so a failed assertion cannot leave the
+    delivery blocked behind it.
+    """
+    context = contextvars.copy_context()
+
+    def emit_elsewhere() -> None:
+        assert gate.wait_paused(5.0), "the main delivery must pause"
+        context.run(other)
+        gate.release()
+
+    worker = threading.Thread(target=emit_elsewhere)
+    worker.start()
+    try:
+        main()
+    finally:
+        gate.release()
+        worker.join(timeout=5.0)
+    assert not worker.is_alive(), "the interleaved emission must finish"
