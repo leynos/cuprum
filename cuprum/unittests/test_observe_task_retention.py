@@ -275,6 +275,69 @@ def test_await_hook_capacity_returns_when_a_task_settles() -> None:
     asyncio.run(case())
 
 
+#: Ceiling the producer handoff case admits against.
+_HANDOFF_CEILING = 3
+
+
+async def _admitting_producer(
+    pending: list[asyncio.Task[None]],
+    gate: asyncio.Event,
+    admitted: list[str],
+) -> None:
+    """Wait for capacity, then dispatch one held task before yielding again.
+
+    Appending the new task synchronously after admission is what the line
+    emitter does, and it is what makes a freed slot a handoff rather than a
+    race: the producer that wakes first refills the slot before the other
+    waiter re-checks the shared list.
+    """
+    await _await_hook_capacity(pending, _HANDOFF_CEILING)
+    admitted.append("admitted")
+    pending.append(asyncio.create_task(_hold(gate)))
+
+
+def test_one_freed_slot_admits_only_one_waiting_producer() -> None:
+    """A single freed slot must admit one waiting producer, not both."""
+
+    async def case() -> None:
+        """Exercise the scenario inside a running event loop."""
+        gates = [asyncio.Event() for _ in range(_HANDOFF_CEILING)]
+        pending = [asyncio.create_task(_hold(gate)) for gate in gates]
+        await asyncio.sleep(0)
+        admitted: list[str] = []
+        producer_gates = [asyncio.Event(), asyncio.Event()]
+        producers = [
+            asyncio.create_task(_admitting_producer(pending, gate, admitted))
+            for gate in producer_gates
+        ]
+        await asyncio.sleep(0)
+
+        gates[0].set()
+        # Give the settlement and both waiters every scheduling turn they can
+        # need; the turns are event-loop handoffs, not elapsed time.
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert len(admitted) == 1, (
+            f"one freed slot must admit exactly one producer; admitted {len(admitted)}"
+        )
+        assert not producers[1].done(), "the second producer must keep waiting"
+        assert len(pending) == _HANDOFF_CEILING, (
+            "the admitted producer must refill the slot it took"
+        )
+
+        gates[1].set()
+        await asyncio.wait_for(producers[1], timeout=5.0)
+
+        assert len(admitted) == 2, "the second slot must admit the other producer"
+
+        for gate in (*gates, *producer_gates):
+            gate.set()
+        await _wait_for_exec_hook_tasks(pending)
+
+    asyncio.run(case())
+
+
 def test_cancelling_the_waiter_leaves_observer_tasks_running() -> None:
     """Cancelling the wait must not cancel the tasks the execution owns."""
 
