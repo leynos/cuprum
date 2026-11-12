@@ -5841,21 +5841,25 @@ so the default suite never reaches the network.
 `test_boundary_pypy_https.py`, which drives the PyPy downloader and the
 `install` entry point over the same loopback server.
 `test_boundary_pypy_transfer.py` holds the unit and property cases that need no
-socket, `test_boundary_pypy_watchdog.py` holds the deadline-watchdog cases, and
-both take their fake responses and clocks from
-`boundary_pypy_transfer_support.py`. The PyPy downloader keeps one deadline
-across the redirects, the header parse, and the body, and a watchdog shuts the
-socket down when that deadline passes, so a server that trickles header or body
-bytes, or stalls a close-delimited body, cannot hold the transfer open. The
-watchdog captures the socket before the header parse, because `getresponse`
-hands a close-delimited response that socket and clears the connection's
-reference. `_download` accepts the watchdog's waiter beside its clock, so a
-test can drive a blocked read through the whole download boundary and advance
-that one clock past the deadline without sleeping. The target needs the
-`openssl` binary to mint the throwaway certificate authority, `uv` with a
-Python 3.14 interpreter for the isolated driver, network access to install the
-pinned `rust-prover-tools` revision, and a loopback socket for each scenario.
-The PyPy cases need only `openssl` and the loopback socket; they trust the test
+socket, `test_boundary_pypy_watchdog.py` holds the deadline-watchdog cases,
+`test_boundary_pypy_metrics.py` holds the metric and span cases, and all three
+take their fake responses and clocks from `boundary_pypy_transfer_support.py`.
+The PyPy downloader keeps one deadline across the redirects, the header parse,
+and the body, and a watchdog shuts the socket down when that deadline passes,
+so a server that trickles header or body bytes, or stalls a close-delimited
+body, cannot hold the transfer open. The watchdog captures the socket before
+the header parse, because `getresponse` hands a close-delimited response that
+socket and clears the connection's reference. It re-reads the transfer's clock
+after every wait, so a wakeup that arrives before the deadline starts another
+wait instead of shutting down a healthy read. `_download` accepts the
+watchdog's waiter beside its clock, so a test can drive a blocked read through
+the whole download boundary and advance that one clock past the deadline
+without sleeping. The deadline, the clock and waiter seam, and the watchdog
+live in `scripts/pypy_download_deadline.py`. The target needs the `openssl`
+binary to mint the throwaway certificate authority, `uv` with a Python 3.14
+interpreter for the isolated driver, network access to install the pinned
+`rust-prover-tools` revision, and a loopback socket for each scenario. The PyPy
+cases need only `openssl` and the loopback socket; they trust the test
 certificate authority through `SSL_CERT_FILE` for the duration of one test.
 
 The retired `scripts/install_boundary_kani.py` and
@@ -5864,6 +5868,17 @@ The retired `scripts/install_boundary_kani.py` and
 including its byte ceiling, transfer deadline, and digest check, and
 `scripts/install_pypy312.py` owns the release layout and the extraction that
 turns a verified archive into the configured interpreter.
+`scripts/pypy_download_metrics.py` owns the download's observability: one
+outcome counter, byte and duration histograms, and one timed span. The outcome
+label is drawn from a fixed vocabulary (`cached`, `success`, `oversize`,
+`deadline`, `checksum_mismatch`, `transfer_error`, `refused`), so no URL,
+filename, or error text can reach a label and a hostile server cannot inflate
+cardinality. The installer runs under `uv run --no-project`, where no metrics
+backend is importable, so `LoggingMetrics` renders every sample as a structured
+log record and `install_pypy312.main()` enables INFO to surface the span
+summary. A caller with a backend passes anything that matches the local
+`MetricsSink` protocol, whose methods mirror cuprum's `MetricsCollector`,
+through `checked_download`'s `metrics` keyword.
 `scripts/boundary_fault_invocations.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
 abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and

@@ -20,6 +20,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from scripts import pypy_download as downloader
+from scripts import pypy_download_deadline as deadline
 from scripts.tests.boundary_pypy_transfer_support import (
     download_response,
     download_with_clock,
@@ -336,7 +337,7 @@ def test_copy_body_keeps_accepted_bytes_and_refuses_overflow(
         downloader._copy_body(
             fake_response(None, chunks),
             output,
-            downloader._Transfer(_DEADLINE, fixed_clock),
+            deadline._Transfer(_DEADLINE, fixed_clock),
         )
         assert output.getvalue() == body, (
             "a body inside the ceiling must be copied unchanged"
@@ -346,7 +347,7 @@ def test_copy_body_keeps_accepted_bytes_and_refuses_overflow(
         downloader._copy_body(
             fake_response(None, chunks),
             output,
-            downloader._Transfer(_DEADLINE, fixed_clock),
+            deadline._Transfer(_DEADLINE, fixed_clock),
         )
     written = output.getvalue()
     assert len(written) <= limit, "no write may take the output past the ceiling"

@@ -17,6 +17,7 @@ from unittest import mock
 import pytest
 
 from scripts import pypy_download as downloader
+from scripts import pypy_download_deadline as deadline
 from scripts.tests.boundary_pypy_transfer_support import (
     fake_response,
     fixed_clock,
@@ -37,8 +38,8 @@ class TestDeadlineWatchdog:
         sock.shutdown.side_effect = lambda _how: stopped.set()
         connection = mock.Mock()
         connection.sock = sock
-        watchdog = downloader._DeadlineWatchdog(
-            connection, downloader._Transfer(0.0, fixed_clock)
+        watchdog = deadline._DeadlineWatchdog(
+            connection, deadline._Transfer(0.0, fixed_clock)
         )
         # A close-delimited response leaves the socket with the response and
         # clears the connection's reference, as `getresponse` does.
@@ -59,12 +60,13 @@ class TestDeadlineWatchdog:
         connection.sock = sock
 
         def wait(seconds: float) -> bool:
-            """Record the remaining time and report the deadline as reached."""
+            """Record the remaining time and advance the clock to the deadline."""
             waits.append(seconds)
+            clock.return_value = 9.0
             return False
 
-        watchdog = downloader._DeadlineWatchdog(
-            connection, downloader._Transfer(9.0, clock, wait)
+        watchdog = deadline._DeadlineWatchdog(
+            connection, deadline._Transfer(9.0, clock, wait)
         )
         with watchdog:
             pass
@@ -73,24 +75,55 @@ class TestDeadlineWatchdog:
         )
         sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
 
+    def test_an_early_wakeup_waits_again_instead_of_shutting_down(self) -> None:
+        """A wakeup before the deadline re-reads the clock and waits again."""
+        clock = manual_clock()
+        clock.return_value = 4.0
+        waits: list[float] = []
+
+        def wait(seconds: float) -> bool:
+            """Wake early once, then reach the deadline on the next wait."""
+            waits.append(seconds)
+            clock.return_value = 6.0 if len(waits) == 1 else 9.0
+            return False
+
+        sock = mock.Mock()
+        connection = mock.Mock()
+        connection.sock = sock
+        watchdog = deadline._DeadlineWatchdog(
+            connection, deadline._Transfer(9.0, clock, wait)
+        )
+        with watchdog:
+            pass
+        assert waits == [pytest.approx(5.0), pytest.approx(3.0)], (
+            "each wakeup must re-read the transfer clock before waiting again"
+        )
+        sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
+
     def test_a_blocked_read_is_released_by_the_injected_waiter(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A read blocked past the deadline fails once the injected waiter fires."""
         clock = manual_clock()
+        reading = threading.Event()
         released = threading.Event()
         waits: list[float] = []
         sock = mock.Mock()
         sock.shutdown.side_effect = lambda _how: released.set()
 
         def wait(seconds: float) -> bool:
-            """Record the remaining time and reach the deadline without sleeping."""
+            """Hold the deadline until the read is blocked, then reach it."""
+            if not reading.wait(5.0):
+                # Never shut down a socket whose read never began: report a
+                # stop, and the bounded read below fails with its own message.
+                return True
             waits.append(seconds)
             clock.return_value = 1_000.0
             return False
 
         def read1(_size: int) -> bytes:
             """Block until the watchdog shuts the socket down, then report EOF."""
+            reading.set()
             if not released.wait(5.0):
                 msg = "the watchdog never shut the blocked socket down"
                 raise AssertionError(msg)
@@ -113,6 +146,8 @@ class TestDeadlineWatchdog:
                 clock=clock,
                 wait=wait,
             )
+        assert reading.is_set(), "the body read must have started"
+        assert released.is_set(), "socket shutdown must release the blocked read"
         assert waits == [pytest.approx(downloader._TRANSFER_DEADLINE_SECONDS)], (
             "the download boundary must pass the transfer's remaining time"
         )
