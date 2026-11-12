@@ -12,22 +12,34 @@ could reject it.
 
 from __future__ import annotations
 
-import contextlib
-import dataclasses
 import hashlib
 import http.client
-import socket
-import threading
 import time
 import typing as typ
 import urllib.parse
 
+from scripts.pypy_download_deadline import (
+    _DeadlineWatchdog,
+    _require_time_left,
+    _Transfer,
+)
+from scripts.pypy_download_metrics import (
+    CACHED,
+    CHECKSUM_MISMATCH,
+    DEADLINE,
+    OVERSIZE,
+    REFUSED,
+    SUCCESS,
+    TRANSFER_ERROR,
+    LoggingMetrics,
+    report_download,
+)
+
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
-    type Clock = cabc.Callable[[], float]
-    type Waiter = cabc.Callable[[float], bool]
+    from scripts.pypy_download_deadline import Clock, Waiter
+    from scripts.pypy_download_metrics import MetricsSink
 
 # Large enough for the pinned PyPy archive with room to spare, small enough
 # that a hostile or broken response cannot exhaust the host disk.
@@ -38,7 +50,21 @@ _TRANSFER_DEADLINE_SECONDS = 900.0
 _CHUNK_BYTES = 64 * 1024
 
 
-def checked_download(url: str, destination: Path, digest: str) -> None:
+class _OversizeError(ValueError):
+    """A response declared or streamed more bytes than the ceiling allows."""
+
+
+class _ChecksumMismatchError(ValueError):
+    """A completed body did not match the approved digest."""
+
+
+def checked_download(
+    url: str,
+    destination: Path,
+    digest: str,
+    *,
+    metrics: MetricsSink | None = None,
+) -> None:
     """Fetch an HTTPS artefact and fail closed on any checksum mismatch.
 
     Parameters
@@ -49,27 +75,71 @@ def checked_download(url: str, destination: Path, digest: str) -> None:
         Local cache path; an existing file is reused only if its digest matches.
     digest : str
         Expected SHA-256 digest from the approved release manifest.
+    metrics : MetricsSink, optional
+        Backend for the outcome, byte, and duration samples. The default
+        renders them as structured log records, the collection path available
+        to the isolated bootstrap.
 
     Raises
     ------
     ValueError
-        If the URL is not HTTPS or downloaded bytes do not match the pin.
+        If the URL is not HTTPS.
+    _OversizeError
+        If the response declares or streams more bytes than the ceiling allows.
+    _ChecksumMismatchError
+        If the body does not match the approved digest.
+    TimeoutError
+        If the transfer outlives the transfer deadline.
     OSError
         If an existing cache entry cannot be inspected, or the download cannot
         be transferred into the cache.
-    """  # ruff: ignore[docstring-extraneous-exception] - OSError propagates from _cache_is_current and _digest.
+    """
+    sink = LoggingMetrics() if metrics is None else metrics
+    started = time.monotonic()
     if not url.startswith("https://"):
+        report_download(sink, REFUSED, 0, time.monotonic() - started)
         msg = "binary downloads require HTTPS"
         raise ValueError(msg)
     if _cache_is_current(destination, digest):
+        report_download(
+            sink, CACHED, _size_or_zero(destination), time.monotonic() - started
+        )
         return
     pending = destination.with_suffix(".download")
+    outcome = SUCCESS
+    written: int | None = None
     try:
         _download(url, pending)
+        written = _size_or_zero(pending)
         _require_digest(pending, destination, digest)
         pending.replace(destination)
+    except _OversizeError:
+        outcome = OVERSIZE
+        raise
+    except _ChecksumMismatchError:
+        outcome = CHECKSUM_MISMATCH
+        raise
+    except TimeoutError:
+        outcome = DEADLINE
+        raise
+    except ValueError:
+        outcome = REFUSED
+        raise
+    except OSError:
+        outcome = TRANSFER_ERROR
+        raise
     finally:
+        measured = written if written is not None else _size_or_zero(pending)
+        report_download(sink, outcome, measured, time.monotonic() - started)
         pending.unlink(missing_ok=True)
+
+
+def _size_or_zero(path: Path) -> int:
+    """Report a file's size, treating an absent file as empty."""
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
 
 
 def _cache_is_current(destination: Path, digest: str) -> bool:
@@ -95,86 +165,7 @@ def _require_digest(pending: Path, destination: Path, digest: str) -> None:
     """Refuse downloaded bytes that do not match the approved digest."""
     if _digest(pending) != digest:
         msg = f"binary checksum mismatch: {destination.name}"
-        raise ValueError(msg)
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class _Transfer:
-    """The one deadline, clock, and wait every redirect hop of a download shares.
-
-    A test supplies `wait` beside the clock it advances, so one injected time
-    source covers the deadline check and the wait that releases a blocked read.
-    """
-
-    deadline: float
-    clock: Clock
-    wait: Waiter | None = None
-
-    def expired(self) -> bool:
-        """Report whether the transfer has outlived its deadline."""
-        return self.clock() > self.deadline
-
-    def remaining(self) -> float:
-        """Report the seconds left before the deadline, never below zero."""
-        return max(self.deadline - self.clock(), 0.0)
-
-
-def _require_time_left(transfer: _Transfer) -> None:
-    """Refuse to continue a transfer once its deadline has passed."""
-    if transfer.expired():
-        msg = "release download exceeded the transfer deadline"
-        raise TimeoutError(msg)
-
-
-class _DeadlineWatchdog:
-    """Shut a connection's socket down when its transfer deadline passes.
-
-    A deadline checked only between reads cannot stop a server that trickles
-    header bytes, because each individual read still finishes inside the
-    socket timeout. Shutting the socket down makes the blocked read fail, so
-    the deadline covers the header parse as well as the body.
-
-    The socket is captured when the watchdog is armed, because
-    `HTTPConnection.getresponse` hands a close-delimited response its socket
-    and clears `connection.sock`. Reading it at the deadline would find
-    nothing and leave a stalled body blocked until the socket timeout.
-    """
-
-    def __init__(
-        self,
-        connection: http.client.HTTPSConnection,
-        transfer: _Transfer,
-    ) -> None:
-        """Arm a watchdog for `connection`'s current socket.
-
-        The remaining time comes from the transfer's own clock, so the wait and
-        every deadline check share one time source. A transfer that carries a
-        test's waiter advances that clock instead of blocking for the remaining
-        real seconds.
-        """
-        self._sock = connection.sock
-        self._transfer = transfer
-        self._stop = threading.Event()
-        self._wait = self._stop.wait if transfer.wait is None else transfer.wait
-        self._thread = threading.Thread(target=self._watch, daemon=True)
-
-    def __enter__(self) -> _DeadlineWatchdog:
-        """Start watching, so a blocked read fails at the deadline."""
-        self._thread.start()
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        """Stop watching and wait for the watchdog thread to finish."""
-        self._stop.set()
-        self._thread.join()
-
-    def _watch(self) -> None:
-        """Wait for the deadline, then shut the captured socket down."""
-        if self._wait(self._transfer.remaining()):
-            return
-        if self._sock is not None:
-            with contextlib.suppress(OSError):
-                self._sock.shutdown(socket.SHUT_RDWR)
+        raise _ChecksumMismatchError(msg)
 
 
 def _download(
@@ -279,7 +270,7 @@ def _reject_oversize_declaration(response: http.client.HTTPResponse) -> None:
             f"release download declared {length} bytes, above the "
             f"{_MAX_BODY_BYTES}-byte limit"
         )
-        raise ValueError(msg)
+        raise _OversizeError(msg)
 
 
 def _copy_body(
@@ -304,7 +295,7 @@ def _copy_body(
         written += len(chunk)
         if written > _MAX_BODY_BYTES:
             msg = f"release download exceeded the {_MAX_BODY_BYTES}-byte limit"
-            raise ValueError(msg)
+            raise _OversizeError(msg)
         output.write(chunk)
 
 

@@ -10,6 +10,8 @@ on:
       - 'pyproject.toml'
       - 'scripts/*boundary*'
       - 'scripts/pypy_download.py'
+      - 'scripts/pypy_download_deadline.py'
+      - 'scripts/pypy_download_metrics.py'
       - 'scripts/install_pypy312.py'
       - 'scripts/tests/test_boundary*'
       - 'scripts/tests/boundary_download_*.py'

@@ -20,6 +20,7 @@ interpreter.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import platform
 import tarfile
@@ -178,6 +179,10 @@ def main() -> None:
         If the archive cannot be downloaded or the destination cannot be read
         or created.
     """  # ruff: ignore[docstring-extraneous-exception] - these propagate from installation_from_environment and install.
+    # The bootstrap downloads its archive without the project environment, so
+    # the standard logging framework is its only collection path. Enabling INFO
+    # surfaces the downloader's timed span and outcome summary on the CLI.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     install(installation_from_environment())
 
 
