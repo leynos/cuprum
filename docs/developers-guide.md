@@ -6650,9 +6650,11 @@ and neither is a defect to repair.
   is the single source for all three. The CI literals in
   `.github/workflows/ci.yml`, `.github/workflows/rust-boundaries.yml` and
   `.github/actions/setup-dev-fast/action.yml` mirror those values, and the
-  contracts in `cuprum/unittests/test_dev_fast_contract.py` and
-  `cuprum/unittests/test_rust_formatter_toolchain.py` fail when the dev-fast or
-  formatter mirror drifts from the Makefile; the Miri mirror has no such
+  contracts in `cuprum/unittests/test_dev_fast_contract.py`,
+  `cuprum/unittests/test_rust_formatter_toolchain.py` and
+  `cuprum/unittests/test_toolchain_pins.py` fail when the dev-fast or formatter
+  mirror drifts from the Makefile (the last one checks the `DEV_FAST_TOOLCHAIN`
+  value in the `typecheck-test` job of `ci.yml`); the Miri mirror has no such
   contract, so check it by hand. Change a side nightly in the Makefile and in
   every mirror in one pull request.
 
