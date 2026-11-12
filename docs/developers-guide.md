@@ -6646,8 +6646,8 @@ and neither is a defect to repair.
   of the project compiler and of the others: `RUSTFMT_TOOLCHAIN` (rustfmt),
   `DEV_FAST_TOOLCHAIN` (the Cranelift backend and its Clippy) and
   `MIRI_TOOLCHAIN` (Miri). Each moves on its own schedule, because a nightly
-  that carries one tool's component or option may lack another's. The
-  Makefile is the single source for all three. The CI literals in
+  that carries one tool's component or option may lack another's. The Makefile
+  is the single source for all three. The CI literals in
   `.github/workflows/ci.yml`, `.github/workflows/rust-boundaries.yml` and
   `.github/actions/setup-dev-fast/action.yml` mirror those values, and the
   contracts in `cuprum/unittests/test_dev_fast_contract.py` and
