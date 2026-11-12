@@ -6628,6 +6628,36 @@ boundary cases, and avoid broad symbolic comparisons that force Kani through
 large allocation-heavy standard-library internals unless the proof genuinely
 requires that surface.
 
+### Side nightlies and the compatibility pin: named exception
+
+The toolchain-pin policy (DF12-102) asks for one toolchain source per
+repository, a daily Dependabot `rust-toolchain` entry, and no dated nightly in
+CI beyond the toolchain file's own. Cuprum records two named exceptions to it,
+and neither is a defect to repair.
+
+- **Compatibility pin.** `rust/rust-toolchain.toml` pins the supported
+  compiler, which is also the MSRV (`rust-version` in the workspace). It is
+  held deliberately: the MSRV check, coverage, release and verification routes
+  rely on it, and a Dependabot bump would raise the floor silently. For that
+  reason `.github/dependabot.yml` carries no `rust-toolchain` entry for
+  `/rust`. Raise the pin by hand, together with `rust-version` and the MSRV
+  documentation.
+- **Side nightlies.** Three tools need a nightly of their own, each independent
+  of the project compiler and of the others: `RUSTFMT_TOOLCHAIN` (rustfmt),
+  `DEV_FAST_TOOLCHAIN` (the Cranelift backend and its Clippy) and
+  `MIRI_TOOLCHAIN` (Miri). Each moves on its own schedule, because a nightly
+  that carries one tool's component or option may lack another's. The Makefile
+  is the single source for all three. The CI literals in
+  `.github/workflows/ci.yml`, `.github/workflows/rust-boundaries.yml` and
+  `.github/actions/setup-dev-fast/action.yml` mirror those values, and the
+  contracts in `cuprum/unittests/test_dev_fast_contract.py`,
+  `cuprum/unittests/test_rust_formatter_toolchain.py` and
+  `cuprum/unittests/test_toolchain_pins.py` fail when the dev-fast or formatter
+  mirror drifts from the Makefile (the last one checks the `DEV_FAST_TOOLCHAIN`
+  value in the `typecheck-test` job of `ci.yml`); the Miri mirror has no such
+  contract, so check it by hand. Change a side nightly in the Makefile and in
+  every mirror in one pull request.
+
 ## Python linting
 
 Cuprum uses a seven-stage Python lint gate. Ruff is the first stage and remains
