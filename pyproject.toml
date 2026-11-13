@@ -54,39 +54,6 @@ dev = [
     "cyclopts>=4.0",
 ]
 
-[tool.ty.src]
-# The duplication gate is isolated tooling, not application code. Its entry
-# point declares `>=3.14` in a PEP 723 header, and the sibling modules it loads
-# run under that same interpreter; together they use `typing.TypeIs` and
-# `PurePosixPath.full_match`, which do not exist at this project's 3.12 floor,
-# so their tests carry the same floor. Already-excluded files stay checked when
-# named explicitly, so `make typecheck` runs them in their own pass at the
-# interpreter they actually target; excluding them here only keeps the
-# application pass honest about the floor the application itself supports.
-exclude = [
-    "scripts/atomic_write.py",
-    "scripts/duplication_allowlist.py",
-    "scripts/duplication_gate.py",
-    "scripts/nose_detector.py",
-    "scripts/nose_schema.py",
-    "scripts/tests/duplication_gate_test_support.py",
-    "scripts/tests/nose_detector_test_support.py",
-    "scripts/tests/test_atomic_write.py",
-    "scripts/tests/test_duplication_gate.py",
-    "scripts/tests/test_duplication_gate_blocking.py",
-    "scripts/tests/test_duplication_gate_commands.py",
-    "scripts/tests/test_duplication_gate_make.py",
-    "scripts/tests/test_duplication_gate_persistence.py",
-    "scripts/tests/test_duplication_gate_properties.py",
-    "scripts/tests/test_duplication_gate_seams.py",
-    "scripts/tests/test_make_install_nose.py",
-    "scripts/tests/test_nose_binary.py",
-    "scripts/tests/test_nose_detector.py",
-    "scripts/tests/test_nose_schema.py",
-    "scripts/tests/test_nose_scope_contract.py",
-    "scripts/tests/test_nose_settings.py",
-]
-
 [tool.interrogate]
 # Overload signatures share the implementation's documentation; Ruff requires
 # the docstring to live on the implementation rather than each signature.
@@ -460,7 +427,16 @@ also_copy = [
 
 [tool.uv]
 package = true
+
+# The dead-code gate is the installed `df12-skylos` command from
+# df12-python-lints. `roots` limits liveness analysis to production sources and
+# the exclusion keeps the in-package test tree out of the liveness graph.
+[tool.df12_skylos]
+roots = ["cuprum"]
+python = "3.14"
+
 [tool.skylos]
+exclude = ["cuprum/unittests"]
 
 [tool.skylos.gate]
 strict = true
@@ -610,7 +586,8 @@ full_name = [
 reason = "Called by BoundedCapture.__post_init__ and FileBackedCapture.__post_init__ and by nothing else. The reference graph does not traverse a dataclass __post_init__ body at all, so a helper whose only callers live there reads as unreferenced; a probe against skylos 4.33.2 confirmed it follows a plain __init__ and an explicit dataclass __init__, but not __post_init__, with slots and frozen ruled out as the trigger. Both policies reject a non-positive bound through this helper, covered by test_bounded_capture_rejects_a_non_positive_bound and test_file_backed_capture_rejects_a_non_positive_threshold."
 
 # The code-duplication gate. `make duplication` and `make lint` run the pinned
-# `nose` binary through `scripts/duplication_gate.py` with these settings.
+# `nose` binary through the installed `df12-duplication` command with these
+# settings; `version` below is the only detector pin.
 #
 # `roots` is the shipped production package. Cuprum has no `src/` layout, so
 # `cuprum/` is the import package itself; `tests/`, `benchmarks/` and

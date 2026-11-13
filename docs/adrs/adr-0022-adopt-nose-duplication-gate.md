@@ -7,6 +7,15 @@ Accepted on 2026-09-27. Cuprum adopts nose 0.20.0 behind
 `make lint`, with reasoned location-keyed exceptions in
 `[tool.duplication_gate]`.
 
+Update, 2026-11-13: the vendored gate scripts, their tests, the
+`make install-nose` and `make duplication-test` targets, and the detector pins
+in the Makefile and CI were replaced by the `df12-duplication` command from
+`df12-python-lints`, run locally through `make duplication` and in CI through
+the shared-actions `df12-duplication` action. The decision to run the gate, the
+scan scope (`top = 0`), and the exception contract stand; `[tool.nose] version`
+is now the only detector pin, and the implementation notes below describe the
+earlier vendored form.
+
 ## Date
 
 2026-09-27.
