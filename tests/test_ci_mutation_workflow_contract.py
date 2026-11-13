@@ -45,10 +45,13 @@ USES_RE = re.compile(
 
 #: The exact caller configuration: flat layout, so change detection
 #: watches the cuprum/ package and no src/ prefix is stripped before
-#: module-glob translation.
+#: module-glob translation. mutmut is pinned to 3.7.0 because 3.6.0's
+#: async-generator trampoline defers cleanup until loop shutdown, which
+#: fails the unchanged-source baseline.
 EXPECTED_WITH = {
     "paths": "cuprum/",
     "module-prefix-strip": "",
+    "mutmut-version": "3.7.0",
 }
 
 
@@ -141,6 +144,6 @@ def test_with_block_is_exactly_the_documented_configuration() -> None:
     with_block = _mutation_job(_load()).get("with")
     assert with_block == EXPECTED_WITH, (
         f"jobs.mutation-python.with must be exactly {EXPECTED_WITH!r} "
-        f"(flat cuprum/ layout: watch the package, strip no prefix), got "
-        f"{with_block!r}"
+        "(flat cuprum/ layout: watch the package, strip no prefix, and pin "
+        f"the mutmut release with the async-generator fix), got {with_block!r}"
     )

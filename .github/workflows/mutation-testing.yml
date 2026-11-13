@@ -35,3 +35,9 @@ jobs:
       # Flat layout has no src/ prefix to strip before module-glob
       # translation.
       module-prefix-strip: ""
+      # 3.7.0 is the first release whose async-generator trampoline forwards
+      # close()/athrow() to the wrapped generator (boxed/mutmut#525). Under
+      # 3.6.0 the wrapper only iterated, so a mutated async generator kept
+      # its cleanup pending until loop shutdown and the unchanged-source
+      # baseline failed in test_bounded_delivery_lines.
+      mutmut-version: "3.7.0"
