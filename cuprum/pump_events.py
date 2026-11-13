@@ -57,12 +57,18 @@ class RustPumpDeclineReason(enum.StrEnum):
 class RustPumpHandoffOutcome(enum.StrEnum):
     """A bounded result of attempting the Rust writer-resource hand-off.
 
-    ``DRAIN_FAILED`` covers a failed buffered drain and a cancellation during
-    it. The acquired pair is released and the original exception is re-raised,
-    so the hop settles without a submission. A pump observer that raises a
-    shutdown signal while this outcome is emitted takes precedence over that
-    re-raise, because a shutdown signal must still travel; the drain error
-    remains reachable through the raised signal's exception context chain.
+    The three outcomes around the buffered drain stay distinct so that an
+    operator reading `cuprum_rust_pump_handoff_total` can tell what the drain
+    did. ``DRAIN_FAILED`` is an error the drain itself raised,
+    ``DRAIN_CANCELLED`` is the caller's cancellation reaching the drain, and
+    ``HOLD_OBSERVER_SHUTDOWN`` is a shutdown signal from a hold observer raised
+    while the acquired pair was being published, before the drain began. All
+    three release the acquired pair, resume the reader, and re-raise the
+    original exception, so the hop settles without a submission. A pump
+    observer that raises a shutdown signal while one of these outcomes is
+    emitted takes precedence over that re-raise, because a shutdown signal must
+    still travel; the original error remains reachable through the raised
+    signal's exception context chain.
 
     ``SUBMISSION_ABANDONED`` covers the same observer problem one step later:
     the drain finished and blocking activation ran, but a hold observer raised
@@ -75,6 +81,8 @@ class RustPumpHandoffOutcome(enum.StrEnum):
     DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
     DRAIN_FAILED = "drain_failed"
+    DRAIN_CANCELLED = "drain_cancelled"
+    HOLD_OBSERVER_SHUTDOWN = "hold_observer_shutdown"
     SUBMISSION_ABANDONED = "submission_abandoned"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"

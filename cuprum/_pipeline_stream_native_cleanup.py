@@ -225,6 +225,17 @@ def _close_unactivated_rust_pump_fds(worker_fds: _NativePumpWorkerFds) -> None:
         _close_native_pump_worker_fd(worker_fds.writer_fd)
 
 
+def _release_unactivated_pair(
+    worker_fds: _NativePumpWorkerFds,
+    reader_pause: _ReaderPause,
+    outcome: RustPumpHandoffOutcome,
+) -> None:
+    """Close the unactivated pair, resume the reader, and settle ``outcome``."""
+    _close_unactivated_rust_pump_fds(worker_fds)
+    _resume_reader_transport(reader_pause.resume)
+    _settle_hold_outcome(outcome)
+
+
 async def _drain_before_rust_pump_submission(
     worker_fds: _NativePumpWorkerFds,
     reader_pause: _ReaderPause,
@@ -235,15 +246,41 @@ async def _drain_before_rust_pump_submission(
     A failed or cancelled drain never falls back: the pair closes, the reader
     resumes, and the error travels. ``drain`` is injected to keep its test seam
     with the coordinator owning the ordering.
+
+    Each failure carries its own bounded outcome, because an operator reading
+    the hand-off counter has different questions for each. ``DRAIN_CANCELLED``
+    is the caller's cancellation reaching the drain, ``DRAIN_FAILED`` is an
+    error raised by the drain itself, and ``HOLD_OBSERVER_SHUTDOWN`` is a
+    shutdown signal from a hold observer raised while the acquisition was being
+    published, before the drain began. Publishing that acquisition is a
+    separate guarded step: the observer's signal is not a drain failure, and
+    reporting it as one would hide the drain never having started.
     """
     try:
         # Publication can itself raise the shutdown signal this guard handles.
         _emit_rust_pump_hold(1)
-        await drain()
     except BaseException:
-        _close_unactivated_rust_pump_fds(worker_fds)
-        _resume_reader_transport(reader_pause.resume)
-        _settle_hold_outcome(RustPumpHandoffOutcome.DRAIN_FAILED)
+        _release_unactivated_pair(
+            worker_fds,
+            reader_pause,
+            RustPumpHandoffOutcome.HOLD_OBSERVER_SHUTDOWN,
+        )
+        raise
+    try:
+        await drain()
+    except asyncio.CancelledError:
+        _release_unactivated_pair(
+            worker_fds,
+            reader_pause,
+            RustPumpHandoffOutcome.DRAIN_CANCELLED,
+        )
+        raise
+    except BaseException:
+        _release_unactivated_pair(
+            worker_fds,
+            reader_pause,
+            RustPumpHandoffOutcome.DRAIN_FAILED,
+        )
         raise
 
 

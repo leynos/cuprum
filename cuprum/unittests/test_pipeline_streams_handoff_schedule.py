@@ -263,7 +263,7 @@ class HandoffSettlementMachine(RuleBasedStateMachine):
     def cancelled_drain(self) -> None:
         """Settle a hold whose drain is cancelled before activation."""
         self.runner.run_cancelled()
-        self._settled(RustPumpHandoffOutcome.DRAIN_FAILED)
+        self._settled(RustPumpHandoffOutcome.DRAIN_CANCELLED)
 
     @rule()
     def refused_activation(self) -> None:

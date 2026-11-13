@@ -248,6 +248,11 @@ class _DrainFailureHarness:
 
     def _assert_released(self, reader_fd: int, writer_fd: int) -> None:
         """Assert the unactivated pair closed once and the transports survived."""
+        expected = (
+            RustPumpHandoffOutcome.DRAIN_CANCELLED
+            if isinstance(self.error, asyncio.CancelledError)
+            else RustPumpHandoffOutcome.DRAIN_FAILED
+        )
         assert len(self.acquired) == 2, "acquisition must open both worker descriptors"
         assert self.close_worker_fd.call_args_list == [
             mock.call(self.acquired[0]),
@@ -265,13 +270,13 @@ class _DrainFailureHarness:
             "the hold must be released exactly once, after the pair is closed"
         )
         assert [event.outcome for event in self.events if event.phase == "handoff"] == [
-            RustPumpHandoffOutcome.DRAIN_FAILED
+            expected
         ], "the drain failure must settle the hop with its own bounded outcome"
         assert self.collector.counters == [
             (
                 RUST_PUMP_HANDOFF_TOTAL,
                 1.0,
-                {"outcome": RustPumpHandoffOutcome.DRAIN_FAILED},
+                {"outcome": expected},
             )
         ], "the drain failure must increment one bounded hand-off metric"
 
@@ -537,7 +542,7 @@ class _HoldSignalHarness:
 def test_a_shutdown_signal_at_acquisition_releases_the_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A signal raised on the hold release closes the unactivated pair."""
+    """A signal raised while the acquisition is published closes the pair."""
     harness = _HoldSignalHarness(delta=1)
     harness.install(monkeypatch)
 
@@ -545,8 +550,8 @@ def test_a_shutdown_signal_at_acquisition_releases_the_pair(
 
     assert harness.restores == 0, "no blocking mode was engaged to restore"
     assert [event.outcome for event in harness.events if event.phase == "handoff"] == [
-        RustPumpHandoffOutcome.DRAIN_FAILED
-    ], "the interrupted drain window must settle with its own bounded outcome"
+        RustPumpHandoffOutcome.HOLD_OBSERVER_SHUTDOWN
+    ], "a hold observer shutdown is not a drain failure"
 
 
 def test_a_shutdown_signal_at_release_rolls_back_the_activated_pair(

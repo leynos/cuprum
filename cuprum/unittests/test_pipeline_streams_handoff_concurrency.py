@@ -335,11 +335,12 @@ class ConcurrentHandoffMachine(RuleBasedStateMachine):
     def _settle(self, act: _HeldHandoff, *, cancel: bool) -> None:
         """Settle one parked act and audit what it owed."""
         before = len(self._published())
-        expected = (
-            [RustPumpHandoffOutcome.DRAIN_FAILED]
-            if cancel or act.drain_fails
-            else [RustPumpHandoffOutcome.SUBMITTED]
-        )
+        if cancel:
+            expected = [RustPumpHandoffOutcome.DRAIN_CANCELLED]
+        elif act.drain_fails:
+            expected = [RustPumpHandoffOutcome.DRAIN_FAILED]
+        else:
+            expected = [RustPumpHandoffOutcome.SUBMITTED]
         self.pending.remove(act)
         self._by_marker.pop(id(act.marker), None)
         self._settling = act
@@ -442,9 +443,10 @@ class ConcurrentHandoffMachine(RuleBasedStateMachine):
         """Derive what an unfinished act owed from how its task really ended."""
         task = act.task
         if task is None:
-            return [RustPumpHandoffOutcome.DRAIN_FAILED]
+            # An act that never started published no hand-off outcome.
+            return []
         if task.cancelled():
-            return [RustPumpHandoffOutcome.DRAIN_FAILED]
+            return [RustPumpHandoffOutcome.DRAIN_CANCELLED]
         if task.exception() is not None:
             return [RustPumpHandoffOutcome.DRAIN_FAILED]
         return [RustPumpHandoffOutcome.SUBMITTED]
