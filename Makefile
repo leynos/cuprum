@@ -555,6 +555,7 @@ duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
 duplication-allow: ## Record one reasoned duplication exception
 	@case "$${DUPLICATION_FIRST}" in *[![:space:]]*) ;; *) printf "Error: FIRST is required (a 'path[::name]' key)\\n" >&2; exit 2;; esac
 	@case "$${DUPLICATION_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2;; esac
+	$(DUPLICATION) install
 	$(DUPLICATION) allow --first "$${DUPLICATION_FIRST}" \
 	  $(foreach member,$(call cli_value,MEMBERS),--second $(call shell_quote,$(member))) \
 	  --reason "$${DUPLICATION_REASON}"
