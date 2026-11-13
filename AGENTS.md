@@ -100,8 +100,9 @@
     Both `SYMBOL` and `REASON` are required and reject empty or
     whitespace-only values. Use `SYMBOL` rather than `NAME` because WSL may
     inject `NAME` with the hostname.
-    The target serializes allow-list updates with its ignored lock file, so
-    concurrent invocations do not overwrite one another.
+    The installed `df12-skylos allow` command serializes allow-list updates
+    with the ignored `.pyproject.toml.df12.lock` file, so concurrent
+    invocations do not overwrite one another.
   - **Duplication:** Passes the blocking nose code-duplication gate
     (`make duplication`), which `make lint` runs. Treat every new finding as
     copy-paste until proven otherwise: prefer extracting the smallest coherent

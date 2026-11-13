@@ -342,85 +342,17 @@ DF12_PYLINT = $(DF12_PYLINT_ENV) $(UV_RUN_ENV) uv tool run \
 # Snapshot leak scanning is a CPython 3.14 tool pass. Keep it out of the
 # project virtual environment so linting never changes the application venv.
 AMBRLEAKS = $(UV_RUN_ENV) uv run --isolated --python $(DF12_PYTHON) ambrleaks
-SKYLOS_VERSION = 4.33.2
-# Skylos parses source using its own Python AST, so Python 3.14 prevents
-# phantom dead-code findings from syntax older tool runtimes cannot parse.
-SKYLOS_CLI = $(UV_RUN_ENV) uv tool run --python 3.14 --from 'skylos==$(SKYLOS_VERSION)' skylos
-SKYLOS = $(SKYLOS_CLI) --config-file pyproject.toml
-SKYLOS_PRODUCTION_TARGETS ?= cuprum
-SKYLOS_EXCLUDE_FOLDERS ?= cuprum/unittests
-SKYLOS_WHITELIST_LOCK ?= .skylos-whitelist.lock
-# The pinned `nose` duplication detector, `https://github.com/corca-ai/nose`.
-# Pin so a new release cannot change the gate's findings without a repository
-# change. The same literal appears as `[tool.nose] version` in pyproject.toml
-# and as `NOSE_VERSION` in .github/workflows/ci.yml; the parity contract tests
-# in cuprum/unittests/test_toolchain_pins.py keep the three sites aligned.
-NOSE_VERSION ?= 0.20.0
-NOSE_TOOLS_DIR ?= .tools/nose
-NOSE_BIN ?= $(NOSE_TOOLS_DIR)/nose
-CARGO_BINSTALL ?= cargo-binstall
-# The gate is isolated tooling, not application code. It runs with
-# `--no-project` under its own interpreter, with the inline script dependencies
-# in `scripts/duplication_gate.py`'s PEP 723 header, so it needs neither the
-# application virtualenv nor the compiled extension. NOSE_BIN is exported
-# because a relative override resolves against the repository root, and it is
-# shell-quoted so a path containing spaces survives.
-DUPLICATION_PYTHON ?= 3.14
-# The gate modules, in the order `[tool.ty.src] exclude` names them: `typecheck`
-# re-checks them at their real floor, and the duplication gate module is the
-# entry point that pulls the other four in.
-DUPLICATION_SOURCES = scripts/atomic_write.py scripts/nose_schema.py \
-  scripts/nose_detector.py scripts/duplication_allowlist.py \
-  scripts/duplication_gate.py
-# The tooling tests ride the same 3.14 interpreter as the modules they cover,
-# so they carry the same floor and the same excluded-from-the-3.12-pass
-# treatment.
-DUPLICATION_TEST_SOURCES = scripts/tests/duplication_gate_test_support.py \
-  scripts/tests/nose_detector_test_support.py \
-  scripts/tests/test_atomic_write.py scripts/tests/test_duplication_gate.py \
-  scripts/tests/test_duplication_gate_blocking.py \
-  scripts/tests/test_duplication_gate_commands.py \
-  scripts/tests/test_duplication_gate_make.py \
-  scripts/tests/test_duplication_gate_persistence.py \
-  scripts/tests/test_duplication_gate_properties.py \
-  scripts/tests/test_duplication_gate_seams.py \
-  scripts/tests/test_gate_entrypoint_binding.py \
-  scripts/tests/test_make_install_nose.py \
-  scripts/tests/test_nose_binary.py \
-  scripts/tests/test_nose_detector.py \
-  scripts/tests/test_nose_schema.py \
-  scripts/tests/test_nose_scope_contract.py \
-  scripts/tests/test_nose_settings.py
-# A script path, not `-m`: `uv run` only reads a PEP 723 header from a script
-# named on the command line, so `-m` silently falls back to the ambient
-# environment and resolves the gate's pins from whatever happens to be active
-# instead of from the header. PYTHONPATH supplies the repository root so the
-# modules can still import each other as `scripts.<name>`, which `__package__`
-# and a namespace `scripts/` directory make workable without an `__init__.py`.
-DUPLICATION_GATE = $(UV_RUN_ENV) PYTHONPATH=. \
-  NOSE_BIN=$(call shell_quote,$(NOSE_BIN)) \
-  uv run --no-project --python $(DUPLICATION_PYTHON) \
-  scripts/duplication_gate.py
-# The helper tests are 3.14-only tooling tests, so they run isolated from the
-# application suite with the gate's own dependencies and no project install.
-DUPLICATION_TEST_DEPS = --with pytest==9.0.2 --with cyclopts==4.25.2 \
-  --with tomlkit==0.15.1 --with 'hypothesis[asyncio]==6.151.9' \
-  --with syrupy==6.0.0
-DUPLICATION_TEST_TARGETS ?= scripts/tests/test_atomic_write.py \
-  scripts/tests/test_duplication_gate.py \
-  scripts/tests/test_duplication_gate_blocking.py \
-  scripts/tests/test_duplication_gate_commands.py \
-  scripts/tests/test_duplication_gate_make.py \
-  scripts/tests/test_duplication_gate_persistence.py \
-  scripts/tests/test_duplication_gate_properties.py \
-  scripts/tests/test_duplication_gate_seams.py \
-  scripts/tests/test_gate_entrypoint_binding.py \
-  scripts/tests/test_make_install_nose.py \
-  scripts/tests/test_nose_binary.py \
-  scripts/tests/test_nose_detector.py \
-  scripts/tests/test_nose_schema.py \
-  scripts/tests/test_nose_scope_contract.py \
-  scripts/tests/test_nose_settings.py
+# The gates are the installed df12-skylos and df12-duplication commands. The
+# package pin is separate from the DF12 Pylint tag above, so adopting the gates
+# does not move the Pylint plugin. The `skylos` extra carries the one Skylos
+# pin; Skylos parses source with its own runtime AST, so its tool environment
+# runs Python 3.14. `[tool.nose] version` is the only detector pin.
+DF12_GATES_SHA = 56ad71721c3f1f2164ec84b69150582488f1a927
+DF12_GATES = git+https://github.com/leynos/df12-python-lints.git@$(DF12_GATES_SHA)
+SKYLOS = $(UV_RUN_ENV) uv tool run --python 3.14 --from \
+  'df12-python-lints[skylos] @ $(DF12_GATES)' df12-skylos
+DUPLICATION = $(UV_RUN_ENV) uv tool run --from \
+  'df12-python-lints[duplication] @ $(DF12_GATES)' df12-duplication
 # `git ls-files` covers tracked files and nonignored untracked files without
 # traversing ignored paths. The shell filter keeps only regular non-symlink
 # files, and prefixes a leading dash so the linter cannot parse it as an option.
@@ -433,8 +365,8 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         github-actions-lint \
         lint-windows fmt check-fmt \
         markdownlint spelling nixie test test-selection test-python test-rust loom test-act typecheck \
-        test-extension test-markdown-format develop makeutil skylos-allow \
-        install-nose duplication duplication-test duplication-allow \
+        test-extension test-markdown-format develop makeutil skylos skylos-allow \
+        duplication duplication-allow \
         test-dev-fast-contract dev-fast-check dev-build dev-test msrv-check \
         modern-stable-toolchain-check modern-stable-cargo-check modern-stable-clippy \
         modern-stable-test modern-stable-doc modern-stable-doctest modern-stable-check \
@@ -582,12 +514,10 @@ pylint-classic: verify-classic-pylint ## Run the baseline Pylint pass under PyPy
 	$(PYLINT) $(PYLINT_STRICT_TARGETS)
 	$(PYLINT) --disable=too-many-lines $(PYLINT_TEST_TARGETS)
 
-python-lint: ruff uv install-nose pylint-integration pylint-classic verify-df12-pylint ## Run Ruff, interrogate, pylint, df12-python-lints, ambrleaks, and the duplication gate
+python-lint: ruff uv pylint-integration pylint-classic verify-df12-pylint skylos duplication ## Run Ruff, interrogate, pylint, df12-python-lints, ambrleaks, and the dead-code and duplication gates
 	$(RUFF) check && $(INTERROGATE)
 	$(DF12_PYLINT) $(DF12_PYLINT_TARGETS)
 	$(AMBRLEAKS) cuprum/unittests scripts/tests tests
-	$(SKYLOS) $(SKYLOS_PRODUCTION_TARGETS) --exclude $(SKYLOS_EXCLUDE_FOLDERS) --category dead_code --gate --format concise --no-upload --no-provenance --no-grep-verify
-	$(DUPLICATION_GATE) check
 
 rust-lint: lint-clippy lint-whitaker spelling ## Run Rust documentation, Clippy, Whitaker, and spelling checks
 
@@ -604,34 +534,12 @@ lint-whitaker: ## Run Whitaker for every Rust workspace package
 # shells, quotes and `$$` survive into the gate's argv uninterpreted.
 cli_value = $(if $(filter command line,$(origin $(1))),$(value $(1)))
 
-install-nose: ## Install the pinned nose duplication detector
-	@if [ "$$($(call shell_quote,$(NOSE_BIN)) --version 2>/dev/null)" = "nose $(NOSE_VERSION)" ]; then \
-	  printf "nose %s already installed at %s\n" "$(NOSE_VERSION)" "$(NOSE_BIN)"; \
-	else \
-	  printf "Installing nose %s into %s\n" "$(NOSE_VERSION)" "$(NOSE_TOOLS_DIR)"; \
-	  mkdir -p "$(NOSE_TOOLS_DIR)"; \
-	  $(call shell_quote,$(CARGO_BINSTALL)) \
-	    --no-confirm --disable-strategies compile,quick-install \
-	    --install-path "$(NOSE_TOOLS_DIR)" \
-	    --git https://github.com/corca-ai/nose 'nose-cli@$(NOSE_VERSION)' || exit $$?; \
-	  installed=$$($(call shell_quote,$(NOSE_BIN)) --version 2>/dev/null) || exit $$?; \
-	  if [ "$$installed" != "nose $(NOSE_VERSION)" ]; then \
-	    printf "install-nose: expected 'nose %s', got '%s'\n" \
-	      "$(NOSE_VERSION)" "$$installed" >&2; \
-	    exit 1; \
-	  fi; \
-	  printf "Installed %s\n" "$$installed"; \
-	fi
+skylos: ## Detect dead production code
+	$(SKYLOS) check --repository .
 
-duplication: install-nose ## Run the blocking code-duplication gate
-	$(DUPLICATION_GATE) check
-
-duplication-test: ## Run the duplication-gate helper tests
-	@NOSE_BIN=$(call shell_quote,$(NOSE_BIN)) \
-	  $(UV_RUN_ENV) uv run --no-project --python $(DUPLICATION_PYTHON) \
-	  $(DUPLICATION_TEST_DEPS) \
-	  python -m pytest -c /dev/null --rootdir=. -p no:cacheprovider \
-	  $(DUPLICATION_TEST_TARGETS)
+duplication: ## Run the blocking code-duplication gate
+	$(DUPLICATION) install
+	$(DUPLICATION) check
 
 # `MEMBERS` carries every location past the first as one whitespace-separated
 # value, each forwarded as its own `--second`. GNU Make overwrites a repeated
@@ -647,16 +555,14 @@ duplication-allow: export DUPLICATION_REASON = $(call cli_value,REASON)
 duplication-allow: ## Record one reasoned duplication exception
 	@case "$${DUPLICATION_FIRST}" in *[![:space:]]*) ;; *) printf "Error: FIRST is required (a 'path[::name]' key)\\n" >&2; exit 2;; esac
 	@case "$${DUPLICATION_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a duplication exception\\n" >&2; exit 2;; esac
-	$(DUPLICATION_GATE) allow --first "$${DUPLICATION_FIRST}" \
+	$(DUPLICATION) allow --first "$${DUPLICATION_FIRST}" \
 	  $(foreach member,$(call cli_value,MEMBERS),--second $(call shell_quote,$(member))) \
 	  --reason "$${DUPLICATION_REASON}"
 
 skylos-allow: export SKYLOS_SYMBOL = $(value SYMBOL)
 skylos-allow: export SKYLOS_REASON = $(value REASON)
-skylos-allow: ## Document one named Skylos exception, not an entry point
-	@case "$${SKYLOS_SYMBOL}" in *[![:space:]]*) ;; *) printf "Error: SYMBOL is required for a named whitelist exception\\n" >&2; exit 2;; esac
-	@case "$${SKYLOS_REASON}" in *[![:space:]]*) ;; *) printf "Error: REASON is required for a named whitelist exception\\n" >&2; exit 2;; esac
-	flock "$(SKYLOS_WHITELIST_LOCK)" env $(SKYLOS_CLI) whitelist "$${SKYLOS_SYMBOL}" --reason "$${SKYLOS_REASON}"
+skylos-allow: ## Document one named Skylos exception (SYMBOL=name REASON=text)
+	$(SKYLOS) allow --repository . --symbol="$${SKYLOS_SYMBOL}" --reason="$${SKYLOS_REASON}"
 
 # `-shellcheck=` disables actionlint's shellcheck integration so the gate needs
 # no shellcheck binary and matches the lint job, which installs none. It is not
@@ -682,8 +588,6 @@ typecheck: build ## Run typechecking
 	$(UV_RUN_ENV) uv sync --group dev
 	$(TY) --version
 	$(TY) check --python .venv
-	$(TY) check --python .venv --python-version $(DUPLICATION_PYTHON) \
-	  $(DUPLICATION_SOURCES) $(DUPLICATION_TEST_SOURCES)
 
 markdownlint: $(MDLINT) ## Lint Markdown files
 	$(call run_markdownlint_files,$(MDLINT_CHECK_COMMAND))
