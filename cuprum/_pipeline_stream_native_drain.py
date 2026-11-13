@@ -5,12 +5,17 @@ buffered drain, so the drain is the window in which a failure must give the
 pair back. This module owns that window and every way it can end, keeping the
 release identical on all of them: the pair closes exactly once, the reader
 resumes, and the bounded hand-off outcome names what actually happened.
+
+It also owns the close of a pair that never reached activation, because that is
+the same gesture: a release that happens before any submission. Activation
+fails after the drain has succeeded, so its caller asks this module for it
+rather than repeating the close order there.
 """
 
 from __future__ import annotations
 
 import asyncio
-import collections.abc as cabc
+import typing as typ
 
 from cuprum._pipeline_stream_fds import (
     _close_native_pump_worker_fd,
@@ -23,6 +28,9 @@ from cuprum.pump_observation import (
     _emit_rust_pump_hold,
     _settle_hold_outcome,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def _close_unactivated_rust_pump_fds(worker_fds: _NativePumpWorkerFds) -> None:

@@ -1,10 +1,12 @@
-"""Supply the acquire, drain, activate, and submit steps of the hand-off.
+"""Supply the acquire, activate, and submit steps of the hand-off.
 
 The ordering — pause, acquire before the first await, drain, activate, submit —
-belongs to `_pipeline_streams._pump_over_raw_fds`; this module supplies the
-steps and keeps each failure shape local: acquisition returns `None` to allow
-the Python fallback, activation declines with `_RustPumpBlockingModeError`, and
-`_close_unactivated_rust_pump_fds` releases a pair activation never took over.
+belongs to `_pipeline_streams._pump_over_raw_fds`, and the drain window itself
+to `_pipeline_stream_native_drain`. This module supplies the steps around it and
+keeps each failure shape local: acquisition returns `None` to allow the Python
+fallback, and activation declines with `_RustPumpBlockingModeError`. A pair
+activation never took over is given back through the drain module, which owns
+every release that happens before submission.
 """
 
 from __future__ import annotations
