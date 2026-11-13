@@ -156,6 +156,46 @@ def test_a_failed_download_reports_a_bounded_outcome(
     )
 
 
+def test_the_default_collector_reports_through_logging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A caller that supplies no sink still gets the counter, samples, and span."""
+    caplog.set_level(logging.DEBUG, logger="cuprum.pypy_download")
+    body = b"pypy archive bytes"
+    _serve_once(monkeypatch, body)
+    downloader.checked_download(
+        "https://example.invalid/asset",
+        tmp_path / "archive.tar.gz",
+        hashlib.sha256(body).hexdigest(),
+    )
+    records = [r for r in caplog.records if r.name == "cuprum.pypy_download"]
+    samples = [
+        (
+            record.__dict__["metric"],
+            record.__dict__["value"],
+            dict(record.__dict__["labels"]),
+        )
+        for record in records
+        if "metric" in record.__dict__
+    ]
+    assert [metric for metric, _, _ in samples] == [
+        metrics.DOWNLOADS_TOTAL,
+        metrics.DOWNLOAD_BYTES,
+        metrics.DOWNLOAD_SECONDS,
+    ], "the default collector must record the counter and both histograms"
+    assert samples[0][2] == {"outcome": metrics.SUCCESS}, (
+        "the counter sample must carry the bounded outcome"
+    )
+    assert samples[1][1] == pytest.approx(len(body)), (
+        "the byte sample must equal the bytes the transfer wrote"
+    )
+    assert samples[2][1] >= 0.0, "the duration sample must be a non-negative number"
+    (span,) = [r for r in records if "span" in r.__dict__]
+    assert span.__dict__["outcome"] == metrics.SUCCESS, (
+        "the span record must name the outcome it closed with"
+    )
+
+
 class _ExplodingSink:
     """Fail every sample, as a broken metrics backend would."""
 
@@ -164,16 +204,18 @@ class _ExplodingSink:
         self.message = "metrics backend unavailable"
 
     def inc_counter(
-        self, _name: str, _value: float, _labels: cabc.Mapping[str, str]
-    ) -> None:
-        """Fail the counter sample."""
-        raise RuntimeError(self.message)
+        self, name: str, value: float, labels: cabc.Mapping[str, str]
+    ) -> typ.NoReturn:
+        """Fail the counter sample, naming what the backend refused."""
+        msg = f"{self.message}: counter {name}={value} {dict(labels)}"
+        raise RuntimeError(msg)
 
     def observe_histogram(
-        self, _name: str, _value: float, _labels: cabc.Mapping[str, str]
-    ) -> None:
-        """Fail the histogram sample."""
-        raise RuntimeError(self.message)
+        self, name: str, value: float, labels: cabc.Mapping[str, str]
+    ) -> typ.NoReturn:
+        """Fail the histogram sample, naming what the backend refused."""
+        msg = f"{self.message}: histogram {name}={value} {dict(labels)}"
+        raise RuntimeError(msg)
 
 
 def test_a_failing_sink_cannot_fail_a_published_download(
