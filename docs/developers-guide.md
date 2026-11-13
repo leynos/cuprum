@@ -7589,7 +7589,7 @@ different questions:
   way `python -m maturin build` will at runtime?
 
 The two disagree in layered or ephemeral interpreters — most importantly the
-`uv run --with mutmut==3.6.0` overlay used by the mutation-testing workflow.
+`uv run --with mutmut==3.7.0` overlay used by the mutation-testing workflow.
 There, the project virtualenv is on `sys.path` (so the module imports and
 `toolchain_available()` returns `True`), but `sys.prefix` points at a temporary
 environment that never received maturin's script, so `python -m maturin build`
@@ -7654,23 +7654,152 @@ uv run pytest tests/test_native_sdist.py -q
 ## Mutation-testing harness
 
 The mutmut mutation-testing workflow runs the selected test suite from its
-`mutants/` working tree. Files at the repository root that those tests read
-must therefore be listed in `[tool.mutmut].also_copy` in `pyproject.toml`:
+`mutants/` working tree. mutmut copies `source_paths` (`cuprum/`), the entries
+in `[tool.mutmut].also_copy` in `pyproject.toml`, and its own defaults
+(`tests/`, `test/`, `setup.cfg`, `pyproject.toml`, and root-level `test*.py`).
+Anything the baseline resolves relative to the repository root must therefore
+be declared in `also_copy`.
 
-- `CHANGELOG.md`, read by
+mutmut skips a declared entry that does not exist without failing, and the
+baseline runs pytest with `-x -q`, so an omission surfaces as the first
+missing-file or import error only. Audit the suite for root-relative reads
+rather than adding one file per failure.
+
+### Declared inputs
+
+Directories are listed before loose files. mutmut creates parent directories
+only when it copies a directory, so a loose file listed ahead of the directory
+that would create its parent fails with `FileNotFoundError`. `rust/` is copied
+piecewise so a local `rust/target/` build directory is never included; the same
+rule excludes `build/`, `.cache/`, `__pycache__/`, and `.pytest_cache/`.
+
+Directories:
+
+- `benchmarks/`, `docs/`, `.github/`, and `scripts/`: packages and files
+  imported or read by the benchmark, documentation, workflow, release, and
+  helper contract tests. `scripts/` is imported at collection time by
+  `tests/helpers/` and several `cuprum/unittests/` modules.
+- `tools/dev-fast/`: `test_dev_fast_contract` reads `config.toml` and
+  `test_dev_fast_adapter` executes the `cargo` adapter.
+- `tools/mold/`: `test_dev_fast_prerequisites` reads `VERSION`, and the
+  `Makefile` parses it while loading.
+- `rust/.config/`: the timeout-lane helpers read `nextest.toml`.
+- `rust/cuprum-rust/`, `rust/cuprum-streams/`, and `rust/cuprum-native-io/`:
+  the wheel-build snapshot test builds from the crates.
+
+Loose files:
+
+- `conftest.py`: the shared root fixture module.
+- `README.md`: read while the documentation examples are collected by
+  `tests/behaviour/_documentation_examples_support.py`, so its absence fails
+  collection before any test runs.
+- `.yamllint.yml`: read by `test_workflow_lint_provisioning`.
+- `.concordat`: read by `test_rust_dev_build_footprint` and
+  `test_dev_fast_contract`.
+- `CHANGELOG.md`: read by
   `test_changelog_records_cleanup_telemetry_contract` in
   `cuprum/unittests/test_tracing_native_pump_cleanup.py`.
-- `Makefile`, read by `test_toolchain_pins` in
-  `cuprum/unittests/test_toolchain_pins.py`.
+- `Makefile`: read by `test_toolchain_pins` in
+  `cuprum/unittests/test_toolchain_pins.py`, and by the make-based contracts.
+- `pyproject.toml`: a mutmut default, declared explicitly so the harness inputs
+  stay visible in one place.
+- `rust/Cargo.toml`, `rust/Cargo.lock`, `rust/clippy.toml`, `rust/dylint.toml`,
+  and `rust/rust-toolchain.toml`: read by the Rust toolchain, build-footprint,
+  and wheel-build contracts.
 
-`cuprum/unittests/test_mutmut_config_contract.py` checks this list and names
-the reader for each required root-level file. Update the configuration and this
-contract's fixture map together when a test gains another repository-root file
-dependency. Run the focused check with:
+`cuprum/unittests/test_mutmut_config_contract.py` checks this inventory: it
+asserts the declared entries exist with the expected kind, that the list is
+exactly the inventoried set, that no directory entry names a build output, and
+that directories precede the loose files that depend on them. Update the
+configuration and this inventory together when a test gains another
+repository-root dependency. Run the focused check with:
 
 ```bash
 uv run pytest cuprum/unittests/test_mutmut_config_contract.py -q
 ```
+
+### Mutation selection
+
+mutmut rewrites every sandboxed module to import `mutmut` and installs itself
+in an ephemeral `uv run --with` overlay. A test that builds an environment of
+its own therefore sees the rewritten `cuprum` without the `mutmut` it imports.
+Two tooling contracts do exactly that and are omitted from the mutation
+selection through `pytest_add_cli_args_test_selection`:
+
+- `cuprum/unittests/test_nextest_route_floor.py` drives `make test-rust`, whose
+  `uv run --frozen` creates a project environment with no `mutmut`.
+- `cuprum/unittests/test_sh_typing_contract.py` points `ty` at `sys.prefix`,
+  which under `uv run --with` is an overlay whose package paths `ty` cannot
+  read.
+
+Both modules keep running in every `make test`, pull-request gate, and direct
+`uv run pytest` invocation; only the mutation harness omits them.
+`test_mutmut_config_contract.py` pins the exclusion list, so widening it fails
+the contract, and it asserts each ignored module still exists under a selected
+suite root so the exclusion cannot hide a deletion. Do not add a behavioural
+test to this list: a test that fails only because of the sandbox environment
+belongs here, but a test that can catch a mutant must run.
+
+### Hypothesis in the sandbox
+
+mutmut runs the suite more than once in a single process: statistics
+collection, the clean baseline, and then a rerun per mutant in a forked worker.
+A class-based `@given` test is therefore observed from a different executor on
+each pass, and Hypothesis raises its `differing_executors` health check even
+though the test is correct. The root `conftest.py` registers a `mutmut-sandbox`
+Hypothesis profile that inherits the suite profile (`deadline=None`) and
+suppresses only that check; `[tool.mutmut]. pytest_add_cli_args` selects it with
+`--hypothesis-profile=mutmut-sandbox`, so every ordinary run keeps the check
+enabled. `test_mutmut_config_contract.py` pins both the flag and the profile's
+contents, including the inherited deadline, so the relaxation cannot widen into
+the normal suite and cannot silently drop the suite's own settings.
+
+Suppress a health check this way only when the harness, not the test, creates
+the condition. A check that a real test defect triggers must still fail.
+
+The workflow pins `mutmut-version: "3.7.0"` in
+`.github/workflows/mutation-testing.yml`. 3.7.0 is the first release whose
+async-generator trampoline forwards `close()` and `athrow()` to the wrapped
+generator; 3.6.0 only iterated, so cleanup in a mutated async generator stayed
+pending until loop shutdown and the unchanged-source baseline failed in
+`test_bounded_delivery_lines`. `tests/test_ci_mutation_workflow_contract.py`
+pins the version the caller passes.
+
+To reproduce the baseline in a fresh sandbox, remove `mutants/` and run the
+harness as Continuous Integration (CI) does under Python 3.13:
+
+```bash
+rm -rf mutants
+uv run --python 3.13 --with mutmut==3.7.0 mutmut run
+```
+
+`mutmut run` exits zero when mutants survive; a non-zero exit means the clean
+baseline run failed, or mutmut itself errored. Inspect the results with
+`uv run --python 3.13 --with mutmut==3.7.0 mutmut results --all true`. The
+documentation helpers resolve the repository root from their own location, so
+inside the sandbox they read the copied `README.md` and `docs/` files rather
+than the working tree.
+
+### The forced-fail probe
+
+Before running mutants, mutmut verifies its setup by setting
+`MUTANT_UNDER_TEST=fail` and running the tests once. The trampoline raises
+`MutmutProgrammaticFailException` from the first trampolined call, and mutmut
+accepts any non-zero outcome except pytest's usage-error code: an exception
+that escapes the test run is the expected signal, while exit code 4 is refused
+and aborts the whole run.
+
+That makes the root `conftest.py` an implicit harness input. Importing the
+package under test from the conftest body raises during conftest import, which
+pytest reports as a usage error, so mutmut never reaches the first mutant. Keep
+`cuprum` imports inside the fixtures that need them, and declare fixture-only
+modules under `pytest_plugins` rather than importing them: in the sandbox the
+probe then fails where the mutated package actually runs, which is the
+condition mutmut tests for. `test_mutmut_config_contract.py` imports the root
+conftest in a fresh interpreter and asserts `cuprum` was not imported.
+
+An ordinary run is unchanged: the fixtures import the same modules when they
+first run.
 
 ## Rust stream buffer-size validation
 

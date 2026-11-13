@@ -43,6 +43,41 @@
   settles now holds completion indefinitely, because the final drain runs
   outside the configured `timeout=`
   ([#544](https://github.com/leynos/cuprum/issues/544)).
+- **The mutation sandbox copies every root input the baseline reads:** mutmut
+  builds `mutants/` from `cuprum/`, `[tool.mutmut].also_copy`, and its own
+  defaults, so the baseline previously failed during collection because
+  `README.md` was absent, then failed again on the next missing root input
+  because pytest runs with `-x`. `also_copy` now also carries `README.md`,
+  `.yamllint.yml`, `.concordat`, `pyproject.toml`, `scripts/`,
+  `tools/dev-fast/`, `tools/mold/`, `rust/.config/`, and
+  `rust/rust-toolchain.toml`, with directories listed before the loose files
+  they parent. The configuration contract test checks the complete inventory,
+  that each entry exists with the expected kind, and that no build output or
+  cache directory is copied
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation harness pins mutmut 3.7.0 and scopes its test selection:**
+  3.6.0's async-generator trampoline forwarded iteration only, so a mutated
+  async generator deferred its cleanup until event-loop shutdown and the
+  unchanged-source baseline failed in `test_bounded_delivery_lines`. The caller
+  now passes `mutmut-version: "3.7.0"`, the first release that forwards
+  `close()` and `athrow()` to the wrapped generator. The mutation selection
+  also omits the two tooling contracts that construct an environment of their
+  own (`test_nextest_route_floor` and `test_sh_typing_contract`): the sandbox's
+  rewritten modules import `mutmut`, which those environments do not provide.
+  Both modules still run in every normal gate, and the configuration contract
+  pins the exclusion list. Because mutmut reruns the suite in one process,
+  Hypothesis saw each class-based property test from several executors and
+  raised its `differing_executors` health check; a `mutmut-sandbox` profile,
+  selected through `pytest_add_cli_args`, now suppresses that one check while
+  inheriting the suite's unlimited deadline. mutmut's forced-fail probe then
+  aborted the run as well: the root `conftest.py` imported `cuprum` in its
+  module body, so the probe raised during conftest import, which pytest reports
+  as a usage error that mutmut refuses. The conftest now imports the package
+  under test only inside the fixtures that need it and declares its
+  fixture-only module under `pytest_plugins`, so the probe fails where the
+  mutated package runs, which is the outcome mutmut expects. A contract test
+  imports the root conftest in a fresh interpreter and asserts `cuprum` stays
+  unimported ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine

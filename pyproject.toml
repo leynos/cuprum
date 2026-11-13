@@ -425,37 +425,84 @@ timeout = 30
 # Flat layout: the package lives at the repository root.
 source_paths = ["cuprum/"]
 # The suite is split between tests/ and the in-package unit tests.
-pytest_add_cli_args_test_selection = ["tests/", "cuprum/unittests/"]
+#
+# Two tooling contracts build an environment of their own inside the test and
+# are therefore unobservable from the mutation sandbox: the nextest-route tests
+# drive `uv run --frozen` (which creates a project environment without mutmut),
+# and the typing contract points ty at `sys.prefix` (an ephemeral overlay whose
+# package paths ty cannot read). mutmut rewrites every module in the sandbox to
+# import `mutmut`, so cuprum is only importable from an environment that has
+# mutmut installed; neither constructed environment does. They keep running in
+# every `make test` and pull-request gate; only the mutation selection omits
+# them, and test_mutmut_config_contract.py pins exactly which modules.
+pytest_add_cli_args_test_selection = [
+    "tests/",
+    "cuprum/unittests/",
+    "--ignore=cuprum/unittests/test_nextest_route_floor.py",
+    "--ignore=cuprum/unittests/test_sh_typing_contract.py",
+]
+# mutmut reruns the suite in one process, so Hypothesis sees each class-based
+# property test from more than one executor and raises its differing-executors
+# health check. The named profile, registered in conftest.py, suppresses only
+# that check; every ordinary run keeps it.
+pytest_add_cli_args = ["--hypothesis-profile=mutmut-sandbox"]
 # cuprum/unittests/ is the in-package unit-test suite and
 # cuprum/_testing.py is a test-only re-export surface for internal
 # helpers; mutants in either would be noise.
 do_not_mutate = ["cuprum/unittests/*", "cuprum/_testing.py"]
-# mutmut runs pytest from mutants/; copy the assets the suite resolves
-# relative to the repository root: the shared root conftest, the
-# benchmarks package imported by the benchmark and profiling tests, the
-# documentation exercised by the docs contract tests, the workflow and
-# action files read by the maturin pin and ratchet tests, and the Rust
-# tree the wheel-build snapshot test builds from (listed piecewise so a
-# local rust/target/ build directory is never copied; the crate
-# directory precedes the loose workspace files because mutmut creates
-# parent directories only when copying directories).
+# mutmut builds mutants/ from source_paths plus this list and its own
+# defaults (tests/, setup.cfg, pyproject.toml, and root-level test*.py).
+# Anything the baseline suite resolves relative to the repository root must
+# be named here: mutmut skips an entry that does not exist without failing,
+# so an omission surfaces only as a missing-file or import error inside the
+# sandbox.
+#
+# Directories come first. mutmut creates parent directories only when it
+# copies a directory, so a loose file listed ahead of the directory that
+# would create its parent fails with FileNotFoundError. rust/ is copied
+# piecewise rather than whole so a local rust/target/ build directory is
+# never included.
 also_copy = [
-    "conftest.py",
+    # Packages and trees imported or read by the baseline suite: benchmarks/
+    # by the benchmark tests, docs/ by the documentation contracts, .github/
+    # by the workflow and action contracts, and scripts/ by the release and
+    # helper contracts, which import it at collection time.
     "benchmarks/",
     "docs/",
     ".github/",
-    # test_changelog_records_cleanup_telemetry_contract reads the loose
-    # root-level CHANGELOG.md, and test_toolchain_pins.py reads the
-    # Makefile's tool-version defaults.
-    "CHANGELOG.md",
-    "Makefile",
+    "scripts/",
+    # test_dev_fast_contract reads config.toml and test_dev_fast_adapter
+    # executes the cargo adapter; test_dev_fast_prerequisites reads the mold
+    # version the Makefile also parses while loading.
+    "tools/dev-fast/",
+    "tools/mold/",
+    # The timeout-lane helpers read .config/nextest.toml, and the wheel-build
+    # snapshot test builds from the crates.
+    "rust/.config/",
     "rust/cuprum-rust/",
     "rust/cuprum-streams/",
     "rust/cuprum-native-io/",
+    # Loose files read from the repository root. conftest.py is the shared
+    # root fixture module; README.md is read while the documentation examples
+    # are collected; .yamllint.yml by the workflow lint provisioning contract;
+    # .concordat by the Rust build-footprint contracts; CHANGELOG.md by the
+    # cleanup telemetry contract; and Makefile by the toolchain pin tests.
+    "conftest.py",
+    "README.md",
+    ".yamllint.yml",
+    ".concordat",
+    "CHANGELOG.md",
+    "Makefile",
+    # pyproject.toml is a mutmut default, declared here so the harness inputs
+    # stay visible in one place.
+    "pyproject.toml",
+    # Loose Rust workspace files; the crate directories above have already
+    # created rust/ in the sandbox.
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/clippy.toml",
     "rust/dylint.toml",
+    "rust/rust-toolchain.toml",
 ]
 
 [tool.uv]
