@@ -109,6 +109,12 @@ def report_download(
 ) -> None:
     """Report one finished download and close its timed span.
 
+    Reporting is diagnostic, so a backend that raises is logged and discarded
+    rather than propagated: it must neither fail a download whose archive was
+    already verified and published, nor replace the transfer error that is on
+    its way to the caller. The span record is written whatever the backend
+    does, because it is the isolated bootstrap's only collection path.
+
     Parameters
     ----------
     sink : MetricsSink
@@ -121,9 +127,16 @@ def report_download(
         Seconds the transfer took, measured on a monotonic clock.
     """
     labels = {"outcome": outcome}
-    sink.inc_counter(DOWNLOADS_TOTAL, 1.0, labels)
-    sink.observe_histogram(DOWNLOAD_BYTES, float(written), labels)
-    sink.observe_histogram(DOWNLOAD_SECONDS, duration, labels)
+    try:
+        sink.inc_counter(DOWNLOADS_TOTAL, 1.0, labels)
+        sink.observe_histogram(DOWNLOAD_BYTES, float(written), labels)
+        sink.observe_histogram(DOWNLOAD_SECONDS, duration, labels)
+    except Exception as exc:
+        LOGGER.warning(
+            "pypy download metrics could not be recorded: %s",
+            type(exc).__name__,
+            exc_info=True,
+        )
     LOGGER.info(
         "pypy download finished: %s, %d bytes in %.3f s",
         outcome,
