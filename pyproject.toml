@@ -447,11 +447,11 @@ _check_rust_available = "Re-exported as the public is_rust_available backend pro
 [[tool.skylos.dead_code.entrypoints]]
 type = "parameter"
 full_name = [
-    "cuprum.adapters.metrics_adapter.InMemoryMetrics.inc_counter.labels",
-    "cuprum.adapters.metrics_adapter.InMemoryMetrics.observe_histogram.labels",
-    "cuprum.adapters.metrics_adapter.InMemoryMetrics.set_gauge.labels",
+    "cuprum.adapters._in_memory_metrics.InMemoryMetrics.inc_counter.labels",
+    "cuprum.adapters._in_memory_metrics.InMemoryMetrics.observe_histogram.labels",
+    "cuprum.adapters._in_memory_metrics.InMemoryMetrics.set_gauge.labels",
 ]
-reason = "InMemoryMetrics preserves the MetricsCollector protocol signature while intentionally discarding labels."
+reason = "InMemoryMetrics preserves the MetricsCollector protocol signature while intentionally discarding labels. The class definitions live in `_in_memory_metrics`, which `metrics_adapter` re-exports, so this rule names the defining module."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
