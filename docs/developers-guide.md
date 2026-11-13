@@ -2622,33 +2622,38 @@ switching early would make asyncio's own descriptor blocking while the drain
 still awaits. If the drain raises or is cancelled, the unactivated pair is
 closed exactly once, the reader is resumed, and the original exception
 propagates unchanged; blocking mode was never engaged, so there is nothing to
-restore. Two observers can instead raise a shutdown signal on this path: a hold
-observer, while the release of the hold is delivered, and an outcome observer,
-while the `drain_failed` outcome is emitted. `_emit_pump_event` lets
-`BaseException` travel, so a signal wins over the drain error, which is kept in
-its `__context__` chain. A signal raised on the release carries the drain error
-as its immediate `__context__`; if the outcome observer then raises a distinct
-signal, that signal propagates with the release signal as its immediate
-`__context__`, leaving the drain error one link further down. The release is
-delivered to every registered hook before such a signal travels, and the
-outcome is emitted from a `finally` around that release, so both the release
-and the outcome survive whichever observer raised, and the pair has already
-been released before the outcome is emitted. An observer registered after the
-one that raised still sees the release; without that rule the held-pair gauge
-would stand at one with no hold behind it. Once the drain completes, the
-acquired pair is switched to blocking mode and handed to the worker, which
-receives a further duplicate reader and duplicate writer descriptor and handles
-the remaining raw bytes. Rust borrows the reader duplicate and consumes the
-writer duplicate. After the worker settles, Python closes the remaining reader
-duplicate; it closes the writer duplicate itself only when preparation or
-executor submission fails. Dispatch falls back to the Python pump only when a
-step *declines*: descriptor acquisition from the paused transport, or blocking
-activation. Loading the native module, duplicating descriptors Cuprum already
-owns, and rejecting executor submission are re-raised after their outcome and
-rollback. That fall-back has one exception, and it is test-only:
-`_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
-overrules the closing-reader decline — and only that one — when the dispatch
-test seam has installed its own descriptor supply
+restore. The bounded outcome follows the failure that caused it: an error
+raised by the drain emits `drain_failed`, the caller's cancellation reaching
+the drain emits `drain_cancelled`, and a shutdown signal raised while the
+acquisition is being published, before the drain starts, emits
+`hold_observer_shutdown`. The publish is guarded separately from the drain for
+exactly that reason. Two observers can instead raise a shutdown signal on this
+path: a hold observer, while the release of the hold is delivered, and an
+outcome observer, while one of those outcomes is emitted. `_emit_pump_event`
+lets `BaseException` travel, so a signal wins over the drain error, which is
+kept in its `__context__` chain. A signal raised on the release carries the
+original error as its immediate `__context__`; if the outcome observer then
+raises a distinct signal, that signal propagates with the release signal as its
+immediate `__context__`, leaving the original error one link further down. The
+release is delivered to every registered hook before such a signal travels, and
+the outcome is emitted from a `finally` around that release, so both the
+release and the outcome survive whichever observer raised, and the pair has
+already been released before the outcome is emitted. An observer registered
+after the one that raised still sees the release; without that rule the
+held-pair gauge would stand at one with no hold behind it. Once the drain
+completes, the acquired pair is switched to blocking mode and handed to the
+worker, which receives a further duplicate reader and duplicate writer
+descriptor and handles the remaining raw bytes. Rust borrows the reader
+duplicate and consumes the writer duplicate. After the worker settles, Python
+closes the remaining reader duplicate; it closes the writer duplicate itself
+only when preparation or executor submission fails. Dispatch falls back to the
+Python pump only when a step *declines*: descriptor acquisition from the paused
+transport, or blocking activation. Loading the native module, duplicating
+descriptors Cuprum already owns, and rejecting executor submission are
+re-raised after their outcome and rollback. That fall-back has one exception,
+and it is test-only: `_permit_test_owned_descriptor_handoff` in
+`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
+that one — when the dispatch test seam has installed its own descriptor supply
 (`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
 hand-off derives its worker descriptor from the transport and keeps the
 decline. The permitted verdict carries no resume hook, because nothing was
@@ -2753,7 +2758,8 @@ Table 1: metrics emitted by `PumpMetricsHook`
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
 six in Table 1 above. The `outcome` label is also closed: it is exactly
-`submitted`, `blocking_setup_failed`, `drain_failed`, `submission_abandoned`,
+`submitted`, `blocking_setup_failed`, `drain_failed`, `drain_cancelled`,
+`hold_observer_shutdown`, `submission_abandoned`,
 `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`,
 `native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, or
@@ -2778,33 +2784,41 @@ travels. A failed drain and a refused activation close the pair before the hold
 ends, so their release follows that closure. After a successful activation the
 order reverses: the release lands first, and a native load, a descriptor
 duplication, or an executor rejection that then fails rolls the pair back
-afterwards. `PumpMetricsHook` accumulates those deltas per collector under one
-lock, and hooks reporting to the same collector share the count, so one hook's
-release cannot publish zero while another still holds a pair. That sharing also
-covers a collector without weak-reference support: an entry for a collector
-that can be weakly referenced retires with the collector, and one whose
-collector cannot be weakly referenced holds it — keeping its identity unique —
-and retires once the last hook reporting to it is gone and nothing is held.
+afterwards.
+
+`PumpMetricsHook` accumulates those deltas per collector under one lock, and
+hooks reporting to the same collector share the count, so one hook's release
+cannot publish zero while another still holds a pair.
+
+That sharing also covers a collector without weak-reference support: an entry
+for a collector that can be weakly referenced retires with the collector, and
+one whose collector cannot be weakly referenced holds it — keeping its identity
+unique — and retires once the last hook reporting to it is gone and nothing is
+held.
+
 That registry is a `HeldPairCounterRegistry`, and a caller can inject one at
 the hook boundary instead of using the process-wide default. The default keeps
 independently created hooks in agreement; an injected registry gives a test, or
 an application with more than one observer configuration, its own scope. Every
 hook reporting to one collector must use the same registry, because two
-registries would give that collector two unrelated totals. One event delivered
-to more than one of those hooks — a nested `observe_pump` registration delivers
-every event to both contexts — moves the shared total once, so the gauge counts
-held pairs rather than hook deliveries. The counter claims each event for the
-thread delivering it, and only while that event is still in flight: one
-emission's deliveries all run inline on the thread that emitted it, so a second
-thread's event arriving between them cannot make the rest count again, and a
-hook that emits an event of its own while it is being called nests a separate
-emission that counts on its own without releasing the outer event's claim. The
-running total is published under the same lock, so a release cannot reach the
-collector before the acquisition it followed. Gauges are a separate, optional
-capability: `GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a
-runtime-checkable protocol, and a collector that does not implement it keeps
-working for counters and histograms and is simply skipped for gauges. This
-keeps the existing two-method `MetricsCollector` contract intact.
+registries would give that collector two unrelated totals.
+
+One event delivered to more than one of those hooks — a nested `observe_pump`
+registration delivers every event to both contexts — moves the shared total
+once, so the gauge counts held pairs rather than hook deliveries. The counter
+claims each event for the thread delivering it, and only while that event is
+still in flight: one emission's deliveries all run inline on the thread that
+emitted it, so a second thread's event arriving between them cannot make the
+rest count again, and a hook that emits an event of its own while it is being
+called nests a separate emission that counts on its own without releasing the
+outer event's claim. The running total is published under the same lock, so a
+release cannot reach the collector before the acquisition it followed.
+
+Gauges are a separate, optional capability: `GaugeMetricsCollector` in
+`cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol, and a
+collector that does not implement it keeps working for counters and histograms
+and is simply skipped for gauges. This keeps the existing two-method
+`MetricsCollector` contract intact.
 
 #### Pump hook failure policy
 
@@ -5964,20 +5978,21 @@ exception class, and `errno` when available; they contain no descriptor number
 or exception text. Duplicate-creation failure emits `duplicate_writer_failed`,
 and reader-preparation failure emits `reader_preparation_failed`. Executor
 rejection emits `executor_submission_rejected` before it is re-raised.
-Blocking-mode failure emits `blocking_setup_failed`. A drain failure or
-cancellation emits `drain_failed` once the acquired pair has been released. The
-outcome events are counted by `cuprum_rust_pump_handoff_total` as described
-above. `_settle_hold_outcome` and `_release_declined_hold` in
-`cuprum/pump_observation.py` publish those two outcomes around the hold
-release, so a shutdown signal raised by a hold observer still leaves the
-failure counted. They interpose differently. `_settle_hold_outcome` publishes
-the outcome from a `finally` around the release: a hold observer's signal does
-not skip it, and a signal raised by the outcome observer itself travels only
-once the pair has been released and the failure counted.
-`_release_declined_hold` publishes the decline from an `except BaseException`
-handler around the release and then re-raises, so the decline is emitted only
-when the release was interrupted — the caller publishes `BLOCKING_SETUP_FAILED`
-itself when the release returns.
+Blocking-mode failure emits `blocking_setup_failed`. A drain failure emits
+`drain_failed` and a drain cancellation emits `drain_cancelled`, each once the
+acquired pair has been released, and a hold observer's shutdown signal raised
+while the acquisition is published emits `hold_observer_shutdown`. The outcome
+events are counted by `cuprum_rust_pump_handoff_total` as described above.
+`_settle_hold_outcome` and `_release_declined_hold` in
+`cuprum/pump_observation.py` publish their outcome around the hold release, so
+a shutdown signal raised by a hold observer still leaves the failure counted.
+They interpose differently. `_settle_hold_outcome` publishes the outcome from a
+`finally` around the release: a hold observer's signal does not skip it, and a
+signal raised by the outcome observer itself travels only once the pair has
+been released and the failure counted. `_release_declined_hold` publishes the
+decline from an `except BaseException` handler around the release and then
+re-raises, so the decline is emitted only when the release was interrupted —
+the caller publishes `BLOCKING_SETUP_FAILED` itself when the release returns.
 
 Two setup failures still re-raise, and the distinction between them and the
 declines is what the two duplication stages exist to draw.
