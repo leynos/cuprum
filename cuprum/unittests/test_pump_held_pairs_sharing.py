@@ -285,6 +285,7 @@ def _interleave(
     context = contextvars.copy_context()
 
     def emit_elsewhere() -> None:
+        """Wait for the main emission to pause, then emit ``other`` and release."""
         assert gate.wait_paused(5.0), "the main delivery must pause"
         context.run(other)
         gate.release()
