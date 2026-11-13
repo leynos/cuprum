@@ -21,6 +21,7 @@ from cuprum import (
     ScopeConfig,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_drain,
     _pipeline_streams,
     scoped,
     sh,
@@ -132,7 +133,7 @@ class _DrainFailureHarness:
         self.collector = RecordingCollector()
         self.held_during_drain: float | None = None
         self.close_worker_fd = mock.Mock(
-            wraps=_pipeline_stream_native_cleanup._close_native_pump_worker_fd
+            wraps=_pipeline_stream_native_drain._close_native_pump_worker_fd
         )
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
@@ -151,8 +152,10 @@ class _DrainFailureHarness:
             "_open_native_pump_worker_fds",
             self.record_open,
         )
+        # The drain module resolves the close helper, so patching the
+        # cleanup module's re-export would miss the consumer.
         monkeypatch.setattr(
-            _pipeline_stream_native_cleanup,
+            _pipeline_stream_native_drain,
             "_close_native_pump_worker_fd",
             self.close_worker_fd,
         )
@@ -367,8 +370,8 @@ def test_submission_releases_the_hold_before_native_work_starts(
         held_at_submission.append(
             (collector.gauge_values(RUST_PUMP_HELD_PAIRS) or [None])[-1]
         )
-        _pipeline_stream_native_cleanup._close_native_pump_worker_fd(state.reader_fd)
-        _pipeline_stream_native_cleanup._close_native_pump_worker_fd(state.writer_fd)
+        _pipeline_stream_native_drain._close_native_pump_worker_fd(state.reader_fd)
+        _pipeline_stream_native_drain._close_native_pump_worker_fd(state.writer_fd)
 
     # The seam is awaited, so the synchronous double is wrapped rather than
     # given a dummy await just to satisfy the coroutine contract.
@@ -586,7 +589,7 @@ class _UnexpectedActivationFailure:
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
         self._original_close = (
-            _pipeline_stream_native_cleanup._close_native_pump_worker_fd
+            _pipeline_stream_native_drain._close_native_pump_worker_fd
         )
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -603,7 +606,7 @@ class _UnexpectedActivationFailure:
             self.record_open,
         )
         monkeypatch.setattr(
-            _pipeline_stream_native_cleanup,
+            _pipeline_stream_native_drain,
             "_close_native_pump_worker_fd",
             self.record_close,
         )

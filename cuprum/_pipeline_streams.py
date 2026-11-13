@@ -49,9 +49,11 @@ from cuprum._pipeline_stream_fds import (
 from cuprum._pipeline_stream_native_cleanup import (
     _acquire_rust_pump_worker_fds,
     _activate_rust_pump_state_or_release,
-    _drain_before_rust_pump_submission,
     _release_activated_rust_pump_hold,
     _run_rust_pump_with_blocking_fds,
+)
+from cuprum._pipeline_stream_native_drain import (
+    _drain_before_rust_pump_submission,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum._streams_pump import _current_read_size

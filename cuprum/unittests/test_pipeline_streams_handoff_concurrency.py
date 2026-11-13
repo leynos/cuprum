@@ -30,6 +30,7 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 from cuprum import (
     _pipeline_stream_native_cleanup,
     _pipeline_stream_native_completion,
+    _pipeline_stream_native_drain,
     _pipeline_streams,
 )
 from cuprum.adapters.pump_metrics import RUST_PUMP_HELD_PAIRS, PumpMetricsHook
@@ -188,7 +189,7 @@ class ConcurrentHandoffMachine(RuleBasedStateMachine):
         for module, name in (
             (_pipeline_stream_native_cleanup, "_close_rust_reader_fd"),
             (_pipeline_stream_native_cleanup, "_close_rust_writer_fd"),
-            (_pipeline_stream_native_cleanup, "_close_native_pump_worker_fd"),
+            (_pipeline_stream_native_drain, "_close_native_pump_worker_fd"),
             (_pipeline_stream_native_completion, "_close_rust_reader_fd"),
             (_pipeline_stream_native_completion, "_close_rust_state_fd"),
         ):
