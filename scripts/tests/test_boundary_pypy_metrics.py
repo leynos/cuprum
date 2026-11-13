@@ -125,6 +125,9 @@ def test_a_cache_hit_reports_the_cached_outcome(tmp_path: Path) -> None:
         (TimeoutError("late"), metrics.DEADLINE),
         (ValueError("refused"), metrics.REFUSED),
         (OSError("reset"), metrics.TRANSFER_ERROR),
+        # An exception the downloader does not anticipate is still a failed
+        # transfer, never a success the vocabulary would have to lie about.
+        (RuntimeError("unexpected"), metrics.TRANSFER_ERROR),
     ],
 )
 def test_a_failed_download_reports_a_bounded_outcome(

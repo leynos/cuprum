@@ -12,6 +12,7 @@ could reject it.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import http.client
 import time
@@ -58,6 +59,18 @@ class _ChecksumMismatchError(ValueError):
     """A completed body did not match the approved digest."""
 
 
+# Ordered so a subclass is matched before its base: `_OversizeError` and
+# `_ChecksumMismatchError` are `ValueError`s, and `TimeoutError` is an
+# `OSError`. A failure matching none of them is still a transfer failure.
+_FAILURE_OUTCOMES: typ.Final[tuple[tuple[type[BaseException], str], ...]] = (
+    (_OversizeError, OVERSIZE),
+    (_ChecksumMismatchError, CHECKSUM_MISMATCH),
+    (TimeoutError, DEADLINE),
+    (ValueError, REFUSED),
+    (OSError, TRANSFER_ERROR),
+)
+
+
 def checked_download(
     url: str,
     destination: Path,
@@ -93,44 +106,71 @@ def checked_download(
     OSError
         If an existing cache entry cannot be inspected, or the download cannot
         be transferred into the cache.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - the transfer helpers raise every listed type.
     sink = LoggingMetrics() if metrics is None else metrics
-    started = time.monotonic()
-    if not url.startswith("https://"):
-        report_download(sink, REFUSED, 0, time.monotonic() - started)
-        msg = "binary downloads require HTTPS"
-        raise ValueError(msg)
+    reporting = _Reporting(sink, time.monotonic())
+    _require_https(url, reporting)
     if _cache_is_current(destination, digest):
-        report_download(
-            sink, CACHED, _size_or_zero(destination), time.monotonic() - started
-        )
+        reporting.report(CACHED, _size_or_zero(destination))
         return
+    _transfer_into_cache(url, destination, digest, reporting)
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Reporting:
+    """One download's metric sink and the instant its clock started."""
+
+    sink: MetricsSink
+    started: float
+
+    def report(self, outcome: str, written: int) -> None:
+        """Publish one outcome with the bytes written and the time taken."""
+        report_download(self.sink, outcome, written, time.monotonic() - self.started)
+
+
+def _require_https(url: str, reporting: _Reporting) -> None:
+    """Refuse a non-HTTPS URL, reporting the refusal it causes."""
+    if url.startswith("https://"):
+        return
+    reporting.report(REFUSED, 0)
+    msg = "binary downloads require HTTPS"
+    raise ValueError(msg)
+
+
+def _failure_outcome(error: BaseException) -> str:
+    """Map a failed transfer onto the outcome vocabulary it belongs to."""
+    for kind, outcome in _FAILURE_OUTCOMES:
+        if isinstance(error, kind):
+            return outcome
+    return TRANSFER_ERROR
+
+
+def _transfer_into_cache(
+    url: str,
+    destination: Path,
+    digest: str,
+    reporting: _Reporting,
+) -> None:
+    """Transfer through a temporary file, reporting the outcome either way.
+
+    The pending file is removed in every case, so a refused or interrupted
+    transfer leaves neither a partial download nor a metric that claims one
+    succeeded.
+    """
     pending = destination.with_suffix(".download")
-    outcome = SUCCESS
     written: int | None = None
+    outcome = SUCCESS
     try:
         _download(url, pending)
         written = _size_or_zero(pending)
         _require_digest(pending, destination, digest)
         pending.replace(destination)
-    except _OversizeError:
-        outcome = OVERSIZE
-        raise
-    except _ChecksumMismatchError:
-        outcome = CHECKSUM_MISMATCH
-        raise
-    except TimeoutError:
-        outcome = DEADLINE
-        raise
-    except ValueError:
-        outcome = REFUSED
-        raise
-    except OSError:
-        outcome = TRANSFER_ERROR
+    except Exception as error:
+        outcome = _failure_outcome(error)
         raise
     finally:
         measured = written if written is not None else _size_or_zero(pending)
-        report_download(sink, outcome, measured, time.monotonic() - started)
+        reporting.report(outcome, measured)
         pending.unlink(missing_ok=True)
 
 
