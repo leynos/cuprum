@@ -156,6 +156,79 @@ def test_a_failed_download_reports_a_bounded_outcome(
     )
 
 
+class _ExplodingSink:
+    """Fail every sample, as a broken metrics backend would."""
+
+    def __init__(self) -> None:
+        """Name the failure every sample reports."""
+        self.message = "metrics backend unavailable"
+
+    def inc_counter(
+        self, _name: str, _value: float, _labels: cabc.Mapping[str, str]
+    ) -> None:
+        """Fail the counter sample."""
+        raise RuntimeError(self.message)
+
+    def observe_histogram(
+        self, _name: str, _value: float, _labels: cabc.Mapping[str, str]
+    ) -> None:
+        """Fail the histogram sample."""
+        raise RuntimeError(self.message)
+
+
+def test_a_failing_sink_cannot_fail_a_published_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Telemetry is diagnostic, so a broken backend must not undo a good download."""
+    caplog.set_level(logging.WARNING, logger="cuprum.pypy_download")
+    body = b"pypy archive bytes"
+    destination = tmp_path / "archive.tar.gz"
+    _serve_once(monkeypatch, body)
+    downloader.checked_download(
+        "https://example.invalid/asset",
+        destination,
+        hashlib.sha256(body).hexdigest(),
+        metrics=_ExplodingSink(),
+    )
+    assert destination.read_bytes() == body, (
+        "a failing sink must not fail a download whose archive was published"
+    )
+    assert not destination.with_suffix(".download").exists(), (
+        "the pending file must not survive the finished transfer"
+    )
+    warned = [
+        record
+        for record in caplog.records
+        if "could not be recorded" in record.getMessage()
+    ]
+    assert warned, "a failing sink must be reported rather than silently swallowed"
+
+
+def test_a_failing_sink_does_not_replace_the_transfer_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller must still see the transfer's own failure, not the sink's."""
+    destination = tmp_path / "archive.tar.gz"
+
+    def fail_after_writing(_url: str, pending: Path) -> None:
+        """Leave a partial download behind, then fail the transfer."""
+        pending.write_bytes(b"partial")
+        msg = "connection reset"
+        raise OSError(msg)
+
+    monkeypatch.setattr(downloader, "_download", fail_after_writing)
+    with pytest.raises(OSError, match="connection reset"):
+        downloader.checked_download(
+            "https://example.invalid/asset",
+            destination,
+            "0" * 64,
+            metrics=_ExplodingSink(),
+        )
+    assert not destination.with_suffix(".download").exists(), (
+        "the partial download must be removed even when the sink fails"
+    )
+
+
 def test_metric_labels_carry_only_the_outcome(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

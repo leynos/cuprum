@@ -169,9 +169,13 @@ def _transfer_into_cache(
         outcome = _failure_outcome(error)
         raise
     finally:
-        measured = written if written is not None else _size_or_zero(pending)
-        reporting.report(outcome, measured)
-        pending.unlink(missing_ok=True)
+        # Cleanup keeps its own block: even a reporting path that fails must
+        # not leave a partial `.download` file behind the failed transfer.
+        try:
+            measured = written if written is not None else _size_or_zero(pending)
+            reporting.report(outcome, measured)
+        finally:
+            pending.unlink(missing_ok=True)
 
 
 def _size_or_zero(path: Path) -> int:

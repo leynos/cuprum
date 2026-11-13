@@ -5878,21 +5878,25 @@ backend is importable, so `LoggingMetrics` renders every sample as a structured
 log record and `install_pypy312.main()` enables INFO to surface the span
 summary. A caller with a backend passes anything that matches the local
 `MetricsSink` protocol, whose methods mirror cuprum's `MetricsCollector`,
-through `checked_download`'s `metrics` keyword.
-`scripts/boundary_fault_invocations.py` scopes its runner to the four
-verification commands and a disposable source copy; it is not a general process
-abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
-calls that runner rather than defining its own. The runner upholds the
-allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
-progress and ownership checks have separate private runners; their scope is the
-existing four mutations, with the same controls and failure diagnostics. Native
-`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
-a global `--frozen` before dispatching an external subcommand, and cargo-kani
-`0.67.0` rejects that flag itself. The Kani route therefore relies on the
-run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
-lockfile digest after every run so a build that rewrites it fails closed. The
-compiler-contract checker uses a named predicate requiring both failure and an
-unsafe-forbid diagnostic, so unrelated compiler failures cannot pass the probe.
+through `checked_download`'s `metrics` keyword. Reporting is diagnostic, so a
+backend that raises is logged as a warning and discarded: telemetry can neither
+fail a download whose archive was verified and published nor replace the
+transfer error on its way to the caller, and the pending file is removed even
+when the reporting path fails. `scripts/boundary_fault_invocations.py` scopes
+its runner to the four verification commands and a disposable source copy; it
+is not a general process abstraction. `scripts/check_boundary_faults.py` owns
+the fault catalogue and calls that runner rather than defining its own. The
+runner upholds the allowlisted-verifier, offline-Cargo and lockfile contract
+described below. Its progress and ownership checks have separate private
+runners; their scope is the existing four mutations, with the same controls and
+failure diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani`
+check cannot: Cargo consumes a global `--frozen` before dispatching an external
+subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
+therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
+the copied workspace's lockfile digest after every run so a build that rewrites
+it fails closed. The compiler-contract checker uses a named predicate requiring
+both failure and an unsafe-forbid diagnostic, so unrelated compiler failures
+cannot pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains
