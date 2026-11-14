@@ -397,6 +397,21 @@ ownership and error contracts, stop and report the exact incompatibility.
   `1f1484a72672f57bce35b7e186a6b57319ee9100` against base `dedb39514`, with
   every log naming that head, that base, diff `5782c1290…`, `DIRTY_AT_END: 0`,
   and an `# EXIT:` footer.
+- [x] (2026-11-14) Model the parity payload and its buffer size as one value.
+  The hosted `CodeScene Code Health Review` job scored the branch-owned
+  `rust/cuprum-rust/tests/consume_boundary_parity.rs` at 9.68 with a
+  `Primitive Obsession` finding: `run_boundary_case` took a payload slice and a
+  buffer size as unrelated positional arguments, and `require_successful_run`
+  took the same pair again to rebuild the same description by hand in each of
+  its three messages. A borrowed `BoundaryCase` now carries the pair and owns
+  the single `describe` used by every diagnostic, so a call site cannot pass a
+  buffer size belonging to a different case. The change is
+  behaviour-preserving: payloads, buffer sizes, and message wording are
+  unchanged. `cs review` on the file went from 9.68 with
+  `🚩 Issue: Primitive Obsession` to `Overall code health score: 10.0`, and
+  `cargo +nightly-2026-05-28 fmt --all -- --check` passed. This commit is the
+  only code change above the certified candidate `1f1484a72`, so the bundle had
+  to be re-run against it.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -425,6 +440,29 @@ ownership and error contracts, stop and report the exact incompatibility.
   faithful reapplication and spend the bundle on the new base. The corollary
   matters more than the check: a rebase that *does* conflict gets read closely,
   so the silent clean one is the case where fidelity must be demonstrated.
+
+- **A check that is not required is still worth reading.**
+  `CodeScene Code Health Review` is not one of the twelve required contexts in
+  the `main-required-checks` ruleset, so its red status never blocked the
+  merge. It was reporting a real defect in a file this branch introduced,
+  though, and the repair cost one local refactor. The distinction that mattered
+  was between a gate that decides whether the branch may land and a finding
+  that says something true about the code; conflating them would have meant
+  either treating a non-blocking result as fatal or ignoring a genuine defect
+  because the branch protection did not enforce it. The local
+  `cs review <file>` reproduces the hosted score, so the fix was verified
+  before pushing rather than discovered from a second red run.
+
+- **A stale language-server snapshot looks exactly like a broken edit.** After
+  the `BoundaryCase` refactor the editor reported
+  `E0061: expected 1 argument, found 2` at six call sites, which is precisely
+  the error a half-finished signature change produces. It was not real. The
+  cited lines were the *pre-edit* numbering — the current line 235 is a
+  `payload.replace` statement, not a call — and the target had already compiled
+  clean after the rewrite. The rule that follows is that a diagnostic about a
+  file rewritten outside the editor is a hypothesis until the compiler has been
+  asked directly; compiling the target, not reading the squiggles, is what
+  settles it.
 
 A green Linux extension job did not prove the parity target's route was safe.
 `extension-tests` installs the dev-fast prerequisites before it calls
