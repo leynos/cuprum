@@ -49,7 +49,7 @@ struct BoundaryCase<'payload> {
 }
 
 impl<'payload> BoundaryCase<'payload> {
-    fn new(payload: &'payload [u8], buffer_size: u32) -> Self {
+    const fn new(payload: &'payload [u8], buffer_size: u32) -> Self {
         Self {
             payload,
             buffer_size,
