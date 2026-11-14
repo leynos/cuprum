@@ -373,6 +373,27 @@ ownership and error contracts, stop and report the exact incompatibility.
   pass with it, 3 pass plus 27 skips without it, and
   `CUPRUM_REQUIRE_RUST_EXTENSION=1` still aborts the session instead of letting
   the skips pass silently.
+- [x] (2026-11-14) Rebase onto `dedb39514` and re-certify. `origin/main`
+  advanced five commits (82 files, +5,362/−6,907) while the branch was in
+  review, and a gate certifies only the base it ran against. All 28 commits
+  reapplied with no conflict; the reapplication was verified rather than
+  trusted: the branch patch before and after the rebase is identical once
+  `index` blobs and `@@` offsets are stripped (5,922 body lines each). The
+  upstream restructure moved the Skylos and nose gates onto `df12-python-lints`
+  and deleted `scripts/duplication_gate.py`, `scripts/nose_detector.py`,
+  `scripts/nose_schema.py`, `scripts/atomic_write.py`,
+  `.skylos-whitelist.lock`, and the `test_skylos_*` modules; this branch
+  references none of them, and its one apparent hit — a
+  `[tool.duplication_gate]` citation in `docs/developers-guide.md` — is
+  upstream's own text and still resolves because `pyproject.toml` keeps that
+  table. `EXTENSION_TEST_TARGETS`, `test-boundary-parity`, and
+  `DEV_FAST_TOOLCHAIN` survived the `Makefile` rewrite. Upstream's new
+  `test-selection` contract sweeps only `tests/` root, so this branch's
+  `tests/helpers/test_consume_boundary_oracle.py` needs no exemption and the
+  contract passed. The full sequential bundle is green at
+  `1f1484a72672f57bce35b7e186a6b57319ee9100` against base `dedb39514`, with
+  every log naming that head, that base, diff `5782c1290…`, `DIRTY_AT_END: 0`,
+  and an `# EXIT:` footer.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -390,6 +411,17 @@ ownership and error contracts, stop and report the exact incompatibility.
   reachable in CI. The lesson is that "green locally" for a module in that
   position proves nothing about its behaviour without the extension; the
   decisive check is to hide the `.so` and run the module directly.
+
+- **A conflict-free rebase is a claim, not a result.** The second rebase
+  reapplied 28 commits over 82 changed upstream files with no conflict at all,
+  which is easy to read as "nothing to check". A stat line would not have
+  settled it: stat totals are name-plus-count pairs, so two different edits can
+  produce identical numbers. What settles it is stripped-patch identity —
+  compare `base_old..head_old` against `base_new..head_new` with `index` blobs
+  and `@@` offsets removed. Only then is it safe to treat the rebase as a
+  faithful reapplication and spend the bundle on the new base. The corollary
+  matters more than the check: a rebase that *does* conflict gets read closely,
+  so the silent clean one is the case where fidelity must be demonstrated.
 
 A green Linux extension job did not prove the parity target's route was safe.
 `extension-tests` installs the dev-fast prerequisites before it calls
