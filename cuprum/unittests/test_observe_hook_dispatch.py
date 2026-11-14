@@ -10,9 +10,11 @@ cannot inflate or mask the count.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import gc
 import inspect
+import logging
 import sys
 import typing as typ
 import warnings
@@ -20,13 +22,31 @@ import warnings
 import pytest
 
 from cuprum import ECHO
-from cuprum._observability import _emit_exec_event, _emit_observe_hook
+from cuprum._observability import (
+    _LOGGER,
+    _emit_exec_event,
+    _emit_observe_hook,
+    _ExecEventEmissionError,
+)
 from cuprum.events import ExecEvent
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.events import ExecHook, ExecPhase
+
+
+class _ClassLookupError(RuntimeError):
+    """Raised by an opaque failure's ``__class__`` property."""
+
+
+class _OpaqueFailureError(Exception):
+    """A hook failure that no ``isinstance`` check can classify."""
+
+    @property
+    def __class__(self) -> type:
+        """Raise so a classifier that consults ``__class__`` cannot proceed."""
+        raise _ClassLookupError
 
 
 def _event(phase: str = "plan") -> ExecEvent:
@@ -195,3 +215,121 @@ def test_sync_callable_returning_coroutine_is_still_scheduled(shape: str) -> Non
         warning for warning in caught if "never awaited" in str(warning.message)
     ]
     assert not never_awaited, "no coroutine may be left unawaited"
+
+
+class _RecordSink(logging.Handler):
+    """Collect records without formatting them."""
+
+    def __init__(self) -> None:
+        """Start with an empty record list."""
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Keep the record as emitted; formatting is deliberately not attempted."""
+        self.records.append(record)
+
+
+@contextlib.contextmanager
+def _captured_records() -> cabc.Iterator[list[logging.LogRecord]]:
+    """Capture cuprum's records without formatting an unformattable error."""
+    sink = _RecordSink()
+    previous_propagate = _LOGGER.propagate
+    _LOGGER.addHandler(sink)
+    _LOGGER.propagate = False
+    try:
+        yield sink.records
+    finally:
+        _LOGGER.removeHandler(sink)
+        _LOGGER.propagate = previous_propagate
+
+
+def _failure_records(
+    records: cabc.Iterable[logging.LogRecord],
+) -> list[logging.LogRecord]:
+    """Return the ``observe_hook_failed`` records among ``records``."""
+    return [
+        record
+        for record in records
+        if record.getMessage().startswith("observe_hook_failed")
+    ]
+
+
+def test_opaque_failure_is_wrapped_and_keeps_the_scheduled_prefix() -> None:
+    """A failure whose ``__class__`` raises is wrapped and logged, not lost.
+
+    The base implementation matched cancellation with an ``except`` clause,
+    which compares types without consulting ``__class__``. Classifying the
+    caught error with ``isinstance`` would re-raise from inside the handler,
+    replacing the original failure and dropping the tasks scheduled before it.
+    """
+    error = _OpaqueFailureError("opaque failure")
+    recorded: list[ExecEvent] = []
+
+    async def earlier(event: ExecEvent) -> None:  # ruff: ignore[unused-async]
+        """Record the event once its task runs."""
+        recorded.append(event)
+
+    def failing(_event: ExecEvent) -> None:
+        """Raise the error that no classifier can place."""
+        raise error
+
+    async def run() -> list[logging.LogRecord]:
+        """Emit one event and settle whatever task was scheduled."""
+        with _captured_records() as records:
+            with pytest.raises(_ExecEventEmissionError) as exc_info:
+                _emit_exec_event((earlier, failing), _event())
+            emission = exc_info.value
+            assert emission.error is error, "the original error must be wrapped"
+            assert len(emission.scheduled_tasks) == 1, (
+                "the scheduled prefix must survive the failure"
+            )
+            await asyncio.gather(*emission.scheduled_tasks, return_exceptions=True)
+        return records
+
+    records = asyncio.run(run())
+
+    assert len(recorded) == 1, "the prefix task must still run"
+    failures = _failure_records(records)
+    assert len(failures) == 1, "the failure must still be logged"
+    assert failures[0].cuprum_error_type == "_OpaqueFailureError", (
+        "the record must name the failure's real type"
+    )
+
+
+def test_opaque_settled_failure_keeps_every_scheduled_task() -> None:
+    """A settled failure retains tasks from hooks on both sides of the failure."""
+    error = _OpaqueFailureError("opaque failure")
+    recorded: list[str] = []
+
+    async def earlier(_event: ExecEvent) -> None:  # ruff: ignore[unused-async]
+        """Record that the hook before the failure ran."""
+        recorded.append("earlier")
+
+    def failing(_event: ExecEvent) -> None:
+        """Raise the error that no classifier can place."""
+        raise error
+
+    async def later(_event: ExecEvent) -> None:  # ruff: ignore[unused-async]
+        """Record that the hook after the failure still ran."""
+        recorded.append("later")
+
+    async def run() -> list[logging.LogRecord]:
+        """Emit the terminal event and settle every retained task."""
+        with _captured_records() as records:
+            with pytest.raises(_ExecEventEmissionError) as exc_info:
+                _emit_exec_event((earlier, failing, later), _event("settled"))
+            emission = exc_info.value
+            assert emission.error is error, "settlement must surface the first error"
+            assert len(emission.scheduled_tasks) == 2, (
+                "settlement must retain tasks scheduled after the failure too"
+            )
+            await asyncio.gather(*emission.scheduled_tasks, return_exceptions=True)
+        return records
+
+    records = asyncio.run(run())
+
+    assert recorded == ["earlier", "later"], (
+        "a settled failure must not stop later hooks"
+    )
+    assert len(_failure_records(records)) == 1, "the failure must still be logged"
