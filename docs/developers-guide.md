@@ -2623,38 +2623,45 @@ switching early would make asyncio's own descriptor blocking while the drain
 still awaits. If the drain raises or is cancelled, the unactivated pair is
 closed exactly once, the reader is resumed, and the original exception
 propagates unchanged; blocking mode was never engaged, so there is nothing to
-restore. The bounded outcome follows the failure that caused it: an error
-raised by the drain emits `drain_failed`, the caller's cancellation reaching
-the drain emits `drain_cancelled`, and a shutdown signal raised while the
-acquisition is being published, before the drain starts, emits
-`hold_observer_shutdown`. The publish is guarded separately from the drain for
-exactly that reason. Two observers can instead raise a shutdown signal on this
-path: a hold observer, while the release of the hold is delivered, and an
-outcome observer, while one of those outcomes is emitted. `_emit_pump_event`
-lets `BaseException` travel, so a signal wins over the drain error, which is
-kept in its `__context__` chain. A signal raised on the release carries the
-original error as its immediate `__context__`; if the outcome observer then
-raises a distinct signal, that signal propagates with the release signal as its
-immediate `__context__`, leaving the original error one link further down. The
-release is delivered to every registered hook before such a signal travels, and
-the outcome is emitted from a `finally` around that release, so both the
+restore.
+
+The bounded outcome follows the failure that caused it: an error raised by the
+drain emits `drain_failed`, the caller's cancellation reaching the drain emits
+`drain_cancelled`, and a shutdown signal raised while the acquisition is being
+published, before the drain starts, emits `hold_observer_shutdown`. The publish
+is guarded separately from the drain for exactly that reason.
+
+Two observers can instead raise a shutdown signal on this path: a hold
+observer, while the release of the hold is delivered, and an outcome observer,
+while one of those outcomes is emitted. `_emit_pump_event` lets `BaseException`
+travel, so a signal wins over the drain error, which is kept in its
+`__context__` chain. A signal raised on the release carries the original error
+as its immediate `__context__`; if the outcome observer then raises a distinct
+signal, that signal propagates with the release signal as its immediate
+`__context__`, leaving the original error one link further down.
+
+The release is delivered to every registered hook before such a signal travels,
+and the outcome is emitted from a `finally` around that release, so both the
 release and the outcome survive whichever observer raised, and the pair has
 already been released before the outcome is emitted. An observer registered
 after the one that raised still sees the release; without that rule the
-held-pair gauge would stand at one with no hold behind it. Once the drain
-completes, the acquired pair is switched to blocking mode and handed to the
-worker, which receives a further duplicate reader and duplicate writer
-descriptor and handles the remaining raw bytes. Rust borrows the reader
+held-pair gauge would stand at one with no hold behind it.
+
+Once the drain completes, the acquired pair is switched to blocking mode and
+handed to the worker, which receives a further duplicate reader and duplicate
+writer descriptor and handles the remaining raw bytes. Rust borrows the reader
 duplicate and consumes the writer duplicate. After the worker settles, Python
 closes the remaining reader duplicate; it closes the writer duplicate itself
-only when preparation or executor submission fails. Dispatch falls back to the
-Python pump only when a step *declines*: descriptor acquisition from the paused
-transport, or blocking activation. Loading the native module, duplicating
-descriptors Cuprum already owns, and rejecting executor submission are
-re-raised after their outcome and rollback. That fall-back has one exception,
-and it is test-only: `_permit_test_owned_descriptor_handoff` in
-`cuprum/_pipeline_streams.py` overrules the closing-reader decline — and only
-that one — when the dispatch test seam has installed its own descriptor supply
+only when preparation or executor submission fails.
+
+Dispatch falls back to the Python pump only when a step *declines*: descriptor
+acquisition from the paused transport, or blocking activation. Loading the
+native module, duplicating descriptors Cuprum already owns, and rejecting
+executor submission are re-raised after their outcome and rollback. That
+fall-back has one exception, and it is test-only:
+`_permit_test_owned_descriptor_handoff` in `cuprum/_pipeline_streams.py`
+overrules the closing-reader decline — and only that one — when the dispatch
+test seam has installed its own descriptor supply
 (`_PUMP_STREAM_DISPATCH_TEST_HOOKS.raw_fd_extractor` is not `None`). A real
 hand-off derives its worker descriptor from the transport and keeps the
 decline. The permitted verdict carries no resume hook, because nothing was
