@@ -12,6 +12,7 @@ import pytest
 
 from scripts import install_pypy312 as installer
 from scripts import pypy_download as downloader
+from scripts.tests.boundary_pypy_transfer_support import connection_factory
 
 #: The default suite runs these tests only while this module is named in
 #: `PYTEST_TARGETS`; the coverage job's bare `pytest` is not a substitute,
@@ -194,7 +195,9 @@ class TestCheckedDownload:
         archive = tmp_path / "binary.tar.gz"
         archive.write_bytes(b"old cache")
 
-        def fetch(_url: str, destination: Path) -> None:
+        def fetch(
+            _url: str, destination: Path, _environment: downloader.Environment
+        ) -> None:
             """Supply a corrupt release body without network access."""
             destination.write_bytes(b"corrupt body")
 
@@ -216,7 +219,9 @@ class TestCheckedDownload:
         archive.write_bytes(b"cached archive")
         downloads: list[str] = []
 
-        def fetch(url: str, _destination: Path) -> None:
+        def fetch(
+            url: str, _destination: Path, _environment: downloader.Environment
+        ) -> None:
             """Record any attempted download so the test can reject it."""
             downloads.append(url)
 
@@ -245,7 +250,9 @@ class TestCheckedDownload:
         content = b"fresh archive"
         digest = hashlib.sha256(content).hexdigest()
 
-        def fetch(_url: str, destination: Path) -> None:
+        def fetch(
+            _url: str, destination: Path, _environment: downloader.Environment
+        ) -> None:
             """Supply a fresh release body without network access."""
             destination.write_bytes(content)
 
@@ -271,7 +278,6 @@ class TestCheckedDownload:
     def test_release_redirects_fail_closed(
         self,
         tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
         redirect: tuple[str | None, str],
     ) -> None:
         """Insecure, malformed, and looping redirects cannot install a binary."""
@@ -283,12 +289,12 @@ class TestCheckedDownload:
         response.getheader.return_value = location
         connection = mock.Mock()
         connection.getresponse.return_value = response
-        monkeypatch.setattr(
-            downloader.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
+        environment = downloader.Environment(
+            connect=connection_factory(*[connection] * downloader._MAX_REDIRECTS)
         )
         with pytest.raises(ValueError, match=message):
-            downloader._download("https://example.invalid/asset", tmp_path / "binary")
+            downloader._download(
+                "https://example.invalid/asset", tmp_path / "binary", environment
+            )
         connection.close.assert_called()
         assert not (tmp_path / "binary").exists(), "rejected redirect created a binary"

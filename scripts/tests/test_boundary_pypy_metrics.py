@@ -17,7 +17,12 @@ import pytest
 
 from scripts import pypy_download as downloader
 from scripts import pypy_download_metrics as metrics
-from scripts.tests.boundary_pypy_transfer_support import streaming_response
+from scripts.tests.boundary_pypy_transfer_support import (
+    fake_environment,
+    fake_response,
+    manual_clock,
+    streaming_response,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -63,29 +68,24 @@ class _Recorder:
         return [value for metric, value, _ in self.histograms if metric == name]
 
 
-def _serve_once(monkeypatch: pytest.MonkeyPatch, body: bytes) -> None:
-    """Serve `body` once as the response of the next download."""
+def _serving(
+    body: bytes, sink: metrics.MetricsSink | None = None
+) -> downloader.Environment:
+    """Build an environment that serves `body` once and reports into `sink`."""
     connection = mock.Mock()
     connection.getresponse.return_value = streaming_response(body)
-    monkeypatch.setattr(
-        downloader.http.client,
-        "HTTPSConnection",
-        lambda *_args, **_kwargs: connection,
-    )
+    return fake_environment(connection, sink=sink)
 
 
-def test_a_successful_download_reports_bytes_and_outcome(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_successful_download_reports_bytes_and_outcome(tmp_path: Path) -> None:
     """A completed transfer reports success and the bytes it wrote."""
     body = b"pypy archive bytes"
-    _serve_once(monkeypatch, body)
     recorder = _Recorder()
     downloader.checked_download(
         "https://example.invalid/asset",
         tmp_path / "archive.tar.gz",
         hashlib.sha256(body).hexdigest(),
-        metrics=recorder,
+        environment=_serving(body, recorder),
     )
     assert recorder.outcomes() == [metrics.SUCCESS], (
         "a completed transfer must report exactly one success outcome"
@@ -95,6 +95,35 @@ def test_a_successful_download_reports_bytes_and_outcome(
     )
     (duration,) = recorder.observed(metrics.DOWNLOAD_SECONDS)
     assert duration >= 0.0, "the duration must be a non-negative number of seconds"
+
+
+def test_the_duration_sample_measures_the_injected_clock(tmp_path: Path) -> None:
+    """The reported duration is the elapsed time on the environment's clock."""
+    body = b"pypy archive bytes"
+    clock = manual_clock()
+    clock.return_value = 100.0
+    chunks = iter([body, b""])
+
+    def read1(_size: int) -> bytes:
+        """Serve the body, then reach EOF half a second later."""
+        chunk = next(chunks)
+        clock.return_value = 100.5
+        return chunk
+
+    response = fake_response(None, [])
+    response.read1.side_effect = read1
+    connection = mock.Mock()
+    connection.getresponse.return_value = response
+    recorder = _Recorder()
+    downloader.checked_download(
+        "https://example.invalid/asset",
+        tmp_path / "archive.tar.gz",
+        hashlib.sha256(body).hexdigest(),
+        environment=fake_environment(connection, clock=clock, sink=recorder),
+    )
+    assert recorder.observed(metrics.DOWNLOAD_SECONDS) == [pytest.approx(0.5)], (
+        "the duration sample must be the time elapsed on the injected clock"
+    )
 
 
 def test_a_cache_hit_reports_the_cached_outcome(tmp_path: Path) -> None:
@@ -107,7 +136,8 @@ def test_a_cache_hit_reports_the_cached_outcome(tmp_path: Path) -> None:
         "https://example.invalid/asset",
         destination,
         hashlib.sha256(body).hexdigest(),
-        metrics=recorder,
+        # No connection is prepared: a cache hit must not open one.
+        environment=fake_environment(sink=recorder),
     )
     assert recorder.outcomes() == [metrics.CACHED], (
         "a matching cache entry must report the cached outcome"
@@ -149,7 +179,7 @@ def test_a_failed_download_reports_a_bounded_outcome(
             "https://example.invalid/asset",
             tmp_path / "archive.tar.gz",
             "0" * 64,
-            metrics=recorder,
+            environment=fake_environment(sink=recorder),
         )
     assert recorder.outcomes() == [outcome], (
         "each failure mode must report its own bounded outcome"
@@ -157,16 +187,16 @@ def test_a_failed_download_reports_a_bounded_outcome(
 
 
 def test_the_default_collector_reports_through_logging(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A caller that supplies no sink still gets the counter, samples, and span."""
     caplog.set_level(logging.DEBUG, logger="cuprum.pypy_download")
     body = b"pypy archive bytes"
-    _serve_once(monkeypatch, body)
     downloader.checked_download(
         "https://example.invalid/asset",
         tmp_path / "archive.tar.gz",
         hashlib.sha256(body).hexdigest(),
+        environment=_serving(body),
     )
     records = [r for r in caplog.records if r.name == "cuprum.pypy_download"]
     samples = [
@@ -219,18 +249,17 @@ class _ExplodingSink:
 
 
 def test_a_failing_sink_cannot_fail_a_published_download(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Telemetry is diagnostic, so a broken backend must not undo a good download."""
     caplog.set_level(logging.WARNING, logger="cuprum.pypy_download")
     body = b"pypy archive bytes"
     destination = tmp_path / "archive.tar.gz"
-    _serve_once(monkeypatch, body)
     downloader.checked_download(
         "https://example.invalid/asset",
         destination,
         hashlib.sha256(body).hexdigest(),
-        metrics=_ExplodingSink(),
+        environment=_serving(body, _ExplodingSink()),
     )
     assert destination.read_bytes() == body, (
         "a failing sink must not fail a download whose archive was published"
@@ -252,7 +281,9 @@ def test_a_failing_sink_does_not_replace_the_transfer_error(
     """The caller must still see the transfer's own failure, not the sink's."""
     destination = tmp_path / "archive.tar.gz"
 
-    def fail_after_writing(_url: str, pending: Path) -> None:
+    def fail_after_writing(
+        _url: str, pending: Path, _environment: downloader.Environment
+    ) -> None:
         """Leave a partial download behind, then fail the transfer."""
         pending.write_bytes(b"partial")
         msg = "connection reset"
@@ -264,26 +295,23 @@ def test_a_failing_sink_does_not_replace_the_transfer_error(
             "https://example.invalid/asset",
             destination,
             "0" * 64,
-            metrics=_ExplodingSink(),
+            environment=fake_environment(sink=_ExplodingSink()),
         )
     assert not destination.with_suffix(".download").exists(), (
         "the partial download must be removed even when the sink fails"
     )
 
 
-def test_metric_labels_carry_only_the_outcome(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_metric_labels_carry_only_the_outcome(tmp_path: Path) -> None:
     """No URL, filename, or error text may reach a metric label."""
     body = b"pypy archive bytes"
     destination = tmp_path / "secret-archive.tar.gz"
-    _serve_once(monkeypatch, body)
     recorder = _Recorder()
     downloader.checked_download(
         "https://example.invalid/private/asset",
         destination,
         hashlib.sha256(body).hexdigest(),
-        metrics=recorder,
+        environment=_serving(body, recorder),
     )
     samples = [labels for _, _, labels in recorder.counters + recorder.histograms]
     assert samples, "a completed download must report at least one sample"
@@ -302,18 +330,17 @@ def test_metric_labels_carry_only_the_outcome(
 
 
 def test_the_timed_span_logs_its_outcome_without_server_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The span's finish record names the outcome but never the URL or file."""
     caplog.set_level(logging.INFO, logger="cuprum.pypy_download")
     body = b"pypy archive bytes"
     destination = tmp_path / "secret-archive.tar.gz"
-    _serve_once(monkeypatch, body)
     downloader.checked_download(
         "https://example.invalid/private/asset",
         destination,
         hashlib.sha256(body).hexdigest(),
-        metrics=_Recorder(),
+        environment=_serving(body, _Recorder()),
     )
     records = [r for r in caplog.records if r.name == "cuprum.pypy_download"]
     assert len(records) == 1, "one finish record must close the span"
