@@ -36,6 +36,39 @@ struct PropertyRun {
     label: String,
 }
 
+/// One payload paired with the buffer size it must be consumed under.
+///
+/// The two travel together everywhere: a payload is only meaningful against
+/// the read boundary it straddles, and every diagnostic has to name both.
+/// Keeping them as one value stops the pair drifting apart at a call site and
+/// keeps the failure text consistent across the child, the interpreter check,
+/// and the property runner.
+struct BoundaryCase<'payload> {
+    payload: &'payload [u8],
+    buffer_size: u32,
+}
+
+impl<'payload> BoundaryCase<'payload> {
+    fn new(payload: &'payload [u8], buffer_size: u32) -> Self {
+        Self {
+            payload,
+            buffer_size,
+        }
+    }
+
+    /// Describe the case for a failure message.
+    ///
+    /// Length rather than content: a generated payload can be a mebibyte of
+    /// arbitrary bytes, and echoing it would bury the diagnostic it belongs to.
+    fn describe(&self) -> String {
+        format!(
+            "payload_bytes={} buffer_size={}",
+            self.payload.len(),
+            self.buffer_size
+        )
+    }
+}
+
 fn repository_root() -> Result<PathBuf, String> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -77,31 +110,27 @@ fn boundary_child_command(python: &Path, buffer_size: u32) -> Result<Command, St
 /// Reject a child that failed, timed out, or could not receive its payload.
 fn require_successful_run(
     output: &bounded_child::ChildOutput,
-    payload: &[u8],
-    buffer_size: u32,
+    case: &BoundaryCase<'_>,
 ) -> Result<String, String> {
     if let Some(error) = &output.stdin_error {
         return Err(format!(
-            "boundary child input transfer failed for payload_bytes={} buffer_size={buffer_size}: \
-             {error}",
-            payload.len()
+            "boundary child input transfer failed for {}: {error}",
+            case.describe()
         ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success() {
         return Err(format!(
-            "boundary child exited with {}; payload_bytes={} buffer_size={buffer_size}; \
-             stdout={stdout:?}; stderr={stderr:?}",
+            "boundary child exited with {}; {}; stdout={stdout:?}; stderr={stderr:?}",
             output.status,
-            payload.len()
+            case.describe()
         ));
     }
     if !stdout.lines().any(|line| line.starts_with("PASS ")) {
         return Err(format!(
-            "boundary child reported no success marker for payload_bytes={} \
-             buffer_size={buffer_size}: {stdout:?}",
-            payload.len()
+            "boundary child reported no success marker for {}: {stdout:?}",
+            case.describe()
         ));
     }
     Ok(stdout)
@@ -146,12 +175,12 @@ fn require_native_module(stdout: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn run_boundary_case(payload: &[u8], buffer_size: u32) -> Result<(), String> {
+fn run_boundary_case(case: &BoundaryCase<'_>) -> Result<(), String> {
     let python = project_python()?;
-    let mut command = boundary_child_command(&python, buffer_size)?;
-    let output = bounded_child::run_child(&mut command, payload, CHILD_TIMEOUT)
+    let mut command = boundary_child_command(&python, case.buffer_size)?;
+    let output = bounded_child::run_child(&mut command, case.payload, CHILD_TIMEOUT)
         .map_err(|failure| format!("boundary child failed: {failure}"))?;
-    let stdout = require_successful_run(&output, payload, buffer_size)?;
+    let stdout = require_successful_run(&output, case)?;
     require_expected_interpreter(&stdout, &python)?;
     require_native_module(&stdout)
 }
@@ -178,7 +207,8 @@ where
 {
     let mut runner = property_runner(run);
     let outcome = runner.run(&strategy, |(payload, buffer_size)| {
-        run_boundary_case(payload.as_bytes(), buffer_size).map_err(TestCaseError::fail)
+        run_boundary_case(&BoundaryCase::new(payload.as_bytes(), buffer_size))
+            .map_err(TestCaseError::fail)
     });
     outcome.map_err(|error| format!("{} failed: {error}", run.label))?;
     Ok(())
@@ -203,7 +233,8 @@ where
     let payload = RefCell::new(None);
     let outcome = runner.run(&strategy, |generated| {
         payload.replace(Some(generated.clone()));
-        run_boundary_case(generated.as_bytes(), buffer_size).map_err(TestCaseError::fail)
+        run_boundary_case(&BoundaryCase::new(generated.as_bytes(), buffer_size))
+            .map_err(TestCaseError::fail)
     });
     outcome.map_err(|error| format!("seed {seed} replay failed: {error}"))?;
     payload
@@ -225,7 +256,8 @@ where
 #[case::truncated_at_eof(b"prefix-\xe2\x98", 8)]
 #[ignore = "requires the compiled extension; run make test-boundary-parity"]
 fn native_boundary_named_utf8_witnesses(#[case] payload: &[u8], #[case] buffer_size: u32) {
-    run_boundary_case(payload, buffer_size).unwrap_or_else(|error| panic!("{error}"));
+    run_boundary_case(&BoundaryCase::new(payload, buffer_size))
+        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[rstest]
@@ -240,7 +272,8 @@ fn native_boundary_splits_four_byte_scalar_at_small_buffers(
 ) {
     let mut payload = vec![b'x'; prefix_length];
     payload.extend_from_slice("🌱".as_bytes());
-    run_boundary_case(&payload, buffer_size).unwrap_or_else(|error| panic!("{error}"));
+    run_boundary_case(&BoundaryCase::new(&payload, buffer_size))
+        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[rstest]
@@ -251,7 +284,8 @@ fn native_boundary_splits_four_byte_scalar_at_small_buffers(
 fn native_boundary_splits_four_byte_scalar_at_large_buffers(#[case] buffer_size: u32) {
     let payload =
         boundary_strategies::patterned_large_witness(buffer_size as usize + 3, "🌱".as_bytes());
-    run_boundary_case(&payload, buffer_size).unwrap_or_else(|error| panic!("{error}"));
+    run_boundary_case(&BoundaryCase::new(&payload, buffer_size))
+        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[rstest]
@@ -271,7 +305,8 @@ fn native_boundary_named_large_length_witnesses(
     #[case] tail: &[u8],
 ) {
     let payload = boundary_strategies::patterned_large_witness(length, tail);
-    run_boundary_case(&payload, buffer_size).unwrap_or_else(|error| panic!("{error}"));
+    run_boundary_case(&BoundaryCase::new(&payload, buffer_size))
+        .unwrap_or_else(|error| panic!("{error}"));
 }
 
 #[test]
