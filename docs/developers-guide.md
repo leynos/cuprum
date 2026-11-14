@@ -2810,10 +2810,12 @@ for a collector that can be weakly referenced retires with the collector, and
 one whose collector cannot be weakly referenced holds it — keeping its identity
 unique — and retires once the last hook reporting to it is gone and nothing is
 held. The registry retires such an entry from a weak-reference finalizer, which
-can run inside publication, so it reads the counter's total without taking the
-counter's lock. The counter's lock guards the claim, the update, and the
-publication; the registry's lock guards only its entries; the two are never
-nested.
+can run inside publication and so can take the registry's lock while the
+counter's is still held. The nesting is one-way: retirement reads the counter's
+total without taking the counter's lock, and nothing else in the registry
+acquires it, so the two locks cannot form a cycle. The counter's lock guards
+the claim, the update, and the publication; the registry's lock guards only its
+entries.
 
 One event delivered to more than one of those hooks — a nested `observe_pump`
 registration delivers every event to both contexts — moves the shared total

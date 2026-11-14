@@ -72,8 +72,11 @@ class HeldPairCounterRegistry:
     collected. Hooks that report to one collector must share one registry; two
     registries would give that collector two unrelated totals.
 
-    The registry's lock is never nested with a counter's: no method here moves a
-    count, and the counter never calls back into the registry.
+    The registry's lock can be acquired while a counter's lock is held: a
+    finalizer that retires an entry may run during that counter's publication.
+    The reverse never happens, because nothing here acquires a counter's lock —
+    retirement reads the total without it — so the one-way nesting cannot
+    deadlock.
 
     Examples
     --------

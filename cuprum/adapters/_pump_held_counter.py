@@ -85,13 +85,16 @@ class _HeldPairCounter:
         event corrects. Publishing while holding the lock is safe because
         ``publish`` is a collector call that must record the value and return.
 
-        Lock ordering is trivial because the two locks in this adapter family
-        are never nested: this lock guards only the count, the registry lock
-        guards only its entries, and neither is taken while the other is held.
-        That is deliberate, not incidental — the registry retires an entry from
-        a weak-reference finalizer, which can run at any allocation, including
-        inside ``publish``; a finalizer that waited on this lock could therefore
-        deadlock against the very callback that triggered it.
+        The nesting with the registry's lock is one-way, and that is what keeps
+        it safe. A weak-reference finalizer can run at any allocation, so
+        ``publish`` may trigger one; the registry's finalizers then take the
+        registry lock while this one is still held. Nothing in the registry
+        acquires this lock: retirement reads :attr:`pairs` without it, and no
+        other registry path moves a count. Every nesting is therefore
+        counter-then-registry and never the reverse, so no thread can hold the
+        registry lock and then wait here. A finalizer that took this lock would
+        break that order and could deadlock against the very publication that
+        triggered it.
         """
         with self._lock:
             if not self.claim_delivery(event):

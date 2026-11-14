@@ -1479,10 +1479,13 @@ reports no held-pair gauge and registers nowhere. The registry
 identity, and the counter (`cuprum/adapters/_pump_held_counter.py`) holds the
 count. One lock in the counter guards the claim, the update, and the
 publication, so two threads cannot publish the running total out of order; the
-registry's lock guards only its entries, and the two are never nested. That is
-deliberate: the registry retires an entry from a weak-reference finalizer that
-can run inside publication, so a finalizer waiting on the counter's lock could
-deadlock against the callback that triggered it.
+registry's lock guards only its entries. The registry's lock can be acquired
+while the counter's is held, because a weak-reference finalizer may run during
+publication and retire an entry. That nesting is one-way and deliberate:
+nothing in the registry acquires the counter's lock — retirement reads its
+total without it — so the locks form no cycle, and a finalizer that did take
+the counter's lock could deadlock against the very publication that triggered
+it.
 
 The registry's lifetime rule follows whoever owns the count. A collector that
 can be weakly referenced retires its entry when the collector dies, so a hold
