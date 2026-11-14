@@ -745,7 +745,7 @@ modern-stable-develop: build uv $(VENV_TOOLS) modern-stable-toolchain-check ## B
 modern-stable-extension: ## Rebuild and exercise the native extension on modern stable Rust
 	$(MAKE) modern-stable-toolchain-check
 	$(MAKE) modern-stable-develop
-	$(MAKE) test-extension
+	$(MAKE) test-extension PARITY_CARGO='$(MODERN_STABLE_CARGO_ENV)'
 
 modern-stable: ## Run modern stable Rust validation and native extension tests
 	$(MAKE) modern-stable-check
@@ -792,6 +792,16 @@ test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiri
 # component it never installs. The parity check only needs whichever Cargo is
 # current and the project interpreter, so it takes neither that route nor its
 # nightly-only RUSTFLAGS.
+#
+# `PARITY_CARGO` is the caller-supplied environment prefix, so the modern-stable
+# route can select its own toolchain, target directory, and warning policy.
+# Passing it explicitly rather than reading ambient variables keeps the ordinary
+# extension lanes on the plain project Cargo: a caller that sets nothing gets
+# no prefix, which is the previous behaviour exactly. Compiling the parity test
+# under modern stable is not new coverage — `modern-stable-test` already builds
+# every target on that toolchain — but *running* the ignored parity cases there
+# was previously done on the default toolchain.
+PARITY_CARGO =
 test-boundary-parity: ## Check consume parity through the compiled Python extension
 	python_path="$$($(UV_RUN_ENV) uv run --no-sync python -c 'import sys; print(sys.executable)')" || exit $$?; \
 	if [ -z "$$python_path" ]; then printf '%s\n' 'could not resolve the project Python interpreter' >&2; exit 1; fi; \
@@ -799,7 +809,7 @@ test-boundary-parity: ## Check consume parity through the compiled Python extens
 	trap 'rm -f "$$log_file"' EXIT; \
 	(cd "$(RUST_DIR)" && \
 	  CUPRUM_BOUNDARY_PYTHON="$$python_path" \
-	  $(CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
+	  $(PARITY_CARGO) $(CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
 	cargo_status=$$?; \
 	cat "$$log_file"; \
 	if [ "$$cargo_status" -ne 0 ]; then exit "$$cargo_status"; fi; \

@@ -79,6 +79,31 @@ ownership and error contracts, stop and report the exact incompatibility.
 
 ## Risks
 
+- **High impact, low likelihood, open: a write-only CRT descriptor can still
+  reach `_read`.** Raised by the hosted assessment on `3603b1e3e` and confirmed
+  against the source at `c0c8dc3e2`. `convert_crt_fd` rejects only a negative
+  or out-of-`i32` descriptor, and `os.dup` succeeds for an open descriptor
+  regardless of its access mode. Microsoft's [`_read` contract][ms-read] says
+  the invalid parameter handler is invoked when "the file isn't open for
+  reading", and the parameter-validation page states the default handler
+  terminates the process, so a caller passing an open but write-only descriptor
+  may fast-fail the interpreter rather than receive `OSError`. The existing
+  `-1` test exercises range rejection, not this case, and the pure
+  `classify_crt_read_error` tests cannot reach it because they do not cross the
+  process boundary. This is recorded rather than repaired because the fix is a
+  production change to the native descriptor boundary, which the Tolerances
+  section reserves for explicit approval, and because the decisive premise is
+  not yet established: the documentation does not say whether UCRT invokes the
+  handler or returns `-1`/`EBADF` for a *valid-range but unreadable*
+  descriptor, and the section above on `_read` records that the `-1` return is
+  reachable only when a handler is installed and permits continuation.
+  Resolution requires a Windows subprocess test that passes an owned, closed
+  descriptor and an open write-only descriptor and asserts the process survives
+  with the documented `OSError` fields. Likelihood is low because
+  `rust_consume_stream` is implemented but not integrated: no production
+  dispatch reaches it, and every in-repository caller passes a readable
+  descriptor.
+
 - High impact, medium likelihood: a pre-filled pipe blocks on a large input.
   Use temporary files for generated native consumption and a concurrent
   producer only for a small number of real-pipe integration scenarios.
@@ -412,6 +437,35 @@ ownership and error contracts, stop and report the exact incompatibility.
   `cargo +nightly-2026-05-28 fmt --all -- --check` passed. This commit is the
   only code change above the certified candidate `1f1484a72`, so the bundle had
   to be re-run against it.
+- [x] (2026-11-15) Reconcile the hosted assessment's three findings against
+  current source. The reply at
+  [comment 6884261953](https://github.com/leynos/cuprum/pull/619#issuecomment-6884261953)
+  assessed `3603b1e3e`, which three later commits superseded, so each finding
+  was re-checked in the source rather than accepted or dismissed on its stated
+  head. Two were real and are repaired; the third is recorded as risk.
+  - Validation order. The finding cited plan lines 733–737 and 984–988, which
+    do not contain the text it quoted, but the contradiction it described was
+    real: the Decision log's 2026-11-03 entry and the Verification plan both
+    still said Windows consume prepares its reader first. The code, the native
+    entry point, and the plan's own 2026-11-09 repair entry all say
+    buffer-first. The stale Verification-plan sentence is corrected and the
+    2026-11-03 decision is marked superseded in place, with a 2026-11-09 entry
+    recording why the order was reversed. The reply explicitly withdrew its
+    earlier advice to reverse that skip once the supersession was pointed out,
+    which is why the earlier entry is annotated rather than deleted: a reader
+    who saw the original approval needs to see that it no longer applies.
+  - modern-stable parity route. `test-boundary-parity` invoked plain
+    `$(CARGO)`, so under `make modern-stable-extension` the parity suite ran on
+    the default 1.87.0 toolchain and Cargo's default target directory, while
+    the Maturin build above it used the modern environment. The finding
+    overstated this as the parity target never running under modern stable:
+    `modern-stable-test` already compiles every workspace target on 1.99.1
+    with `--all-targets`, so this file's *compilation* was covered; what was
+    not covered is *execution* of the 30 ignored parity cases. A
+    `PARITY_CARGO` prefix now carries the caller's choice, empty by default, and
+    `modern-stable-extension` passes `$(MODERN_STABLE_CARGO_ENV)` through
+    `test-extension`. The ordinary routes are byte-identical to before, which
+    the added contract test pins in both directions.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -773,6 +827,22 @@ were corrected to use that manifest and all passed during replay.
   native function validates `buffer_size` before its descriptor conversion. The
   competing-invalid-input wrapper property skips only Windows consume;
   direct-native order tests continue to cover that platform's native contract.
+  **Superseded 2026-11-09; see the entry below.** This states the order as it
+  was before that repair, and is retained as the record of what was approved at
+  the time rather than silently rewritten.
+- (2026-11-09) Reverse the Windows consume wrapper to buffer-first, then
+  descriptor validation, then `os.dup`. The earlier reader-first layer looked
+  safer because it kept an unusable descriptor away from `_read`, but it
+  surfaced `os.dup`'s `OSError` for an argument the entry point documents as
+  `ValueError`, and it put the wrapper out of step with the native function's
+  buffer-then-descriptor order on every other platform. It also made
+  `test_buffer_validation_precedes_descriptor_conversion[consume]` unrunnable
+  on Windows, and that skip was the tell. A later assessment asked for the
+  reader-first order back on the strength of the 2026-11-03 text above; it was
+  withdrawn once the supersession was pointed out. The approved contract is now
+  buffer-first for the Windows consume wrapper, matching the native entry
+  point. An unusable descriptor still cannot reach `_read`, because
+  `_validate_windows_consume_reader` rejects it before `os.dup`.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle
@@ -1022,16 +1092,16 @@ exactly, but compare OS-derived messages against a same-platform reference, not
 English literals. Cover competing invalid arguments to establish native
 buffer-before-descriptor validation separately from Windows wrapper handle
 preparation. Audit each entry point separately: the pump wrapper validates its
-buffer before reader preparation, while consume prepares its reader first.
-Correct stale property-test commentary rather than imposing a uniform order.
-Reuse existing owned-resource fixtures; never invent arbitrary positive
-descriptor numbers that could alias unrelated open resources. Consume borrows
-its reader; assert its continued usability after success and each reachable
-error, not just equality of a descriptor number. Pump writer adoption and
-cleanup must follow the existing contract on success and failure. E4 includes
-the existing `rstest` and `rstest-bdd` classification suite plus real Python
-exception assertions. A removed error assertion or broad `except` is not an
-acceptable green result.
+buffer before reader preparation, and Windows consume validates its buffer
+before validating or duplicating its CRT descriptor. Correct stale
+property-test commentary rather than imposing a uniform order. Reuse existing
+owned-resource fixtures; never invent arbitrary positive descriptor numbers
+that could alias unrelated open resources. Consume borrows its reader; assert
+its continued usability after success and each reachable error, not just
+equality of a descriptor number. Pump writer adoption and cleanup must follow
+the existing contract on success and failure. E4 includes the existing `rstest`
+and `rstest-bdd` classification suite plus real Python exception assertions. A
+removed error assertion or broad `except` is not an acceptable green result.
 
 V4 preserves reproducibility and harness integrity. Configure case counts and
 non-zero shrink budgets explicitly in code; use 1024 shrink iterations for
@@ -1267,6 +1337,7 @@ platform feasibility before wider coverage. The user approved this plan on
 
 [proptest-persistence]: https://proptest-rs.github.io/proptest/proptest/failure-persistence.html
 [pyo3-building]: https://pyo3.rs/v0.29.0/building-and-distribution.html
+[ms-read]: https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/read?view=msvc-170
 
 Revision note (2026-10-13): initial approval-gated plan, grounded in current
 coverage and the completed 6.1.1 boundary. Implementation remains pending.

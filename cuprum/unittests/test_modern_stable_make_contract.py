@@ -306,6 +306,46 @@ def test_modern_extension_and_aggregate_targets_preserve_order() -> None:
     assert check < extend, "modern-stable must finish checks before the extension suite"
 
 
+def test_modern_extension_selects_its_toolchain_for_the_parity_run() -> None:
+    """Hand the selected toolchain to the parity lane, and to nothing else.
+
+    `test-boundary-parity` is reached from `test-extension` on every route, so
+    it cannot select a toolchain for itself without also changing the ordinary
+    extension lanes. `PARITY_CARGO` is empty by default and carries the modern
+    environment only when the modern route supplies it, which keeps each
+    caller's choice explicit instead of inferring it from ambient variables.
+    """
+    extension = dry_run("modern-stable-extension")
+    assert "PARITY_CARGO='env " in extension, (
+        "the modern route must pass its environment to the parity lane"
+    )
+    for expected in (
+        f"RUSTUP_TOOLCHAIN={MODERN_STABLE_TOOLCHAIN}",
+        "CARGO_BUILD_WARNINGS=deny",
+    ):
+        assert expected in extension, (
+            f"the modern parity run must inherit {expected}; got: {extension}"
+        )
+
+    # The target directory is defined against `$(CURDIR)` and expands to an
+    # absolute path, so pin the distinctive suffix rather than a checkout
+    # location the test cannot know.
+    assert re.search(r"CARGO_TARGET_DIR=\S*" + MODERN_STABLE_TARGET_DIR, extension), (
+        "the modern parity run must use the dedicated modern-stable target "
+        f"directory; got: {extension}"
+    )
+
+    ordinary = dry_run("test-boundary-parity")
+    assert "RUSTUP_TOOLCHAIN" not in ordinary, (
+        "the ordinary parity route must keep the caller's toolchain; got: "
+        f"{ordinary}"
+    )
+    assert "CARGO_TARGET_DIR" not in ordinary, (
+        "the ordinary parity route must not redirect Cargo's target directory; "
+        f"got: {ordinary}"
+    )
+
+
 def test_existing_routes_keep_their_warning_policy() -> None:
     """Retain warning-fatality flags on MSRV, dev-fast, rustdoc, and Whitaker."""
     makefile = makefile_text()
