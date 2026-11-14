@@ -101,6 +101,33 @@ class TestDeadlineWatchdog:
         )
         sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
 
+    def test_a_cancelled_watchdog_stops_without_shutting_the_socket_down(
+        self,
+    ) -> None:
+        """A waiter that never reaches the deadline must not block `__exit__`.
+
+        A substituted waiter can return before the deadline every time it is
+        called. The watchdog therefore re-reads its own stop signal after each
+        wait, so a finished transfer joins its thread instead of spinning with
+        the socket still live.
+        """
+        waited = threading.Event()
+
+        def wait(_seconds: float) -> bool:
+            """Wake early without advancing the clock, as a frozen clock does."""
+            waited.set()
+            return False
+
+        sock = mock.Mock()
+        connection = mock.Mock()
+        connection.sock = sock
+        watchdog = deadline._DeadlineWatchdog(
+            connection, deadline._Transfer(9.0, fixed_clock, wait)
+        )
+        with watchdog:
+            assert waited.wait(5.0), "the watchdog must wait before it is stopped"
+        sock.shutdown.assert_not_called()
+
     def test_a_blocked_read_is_released_by_the_injected_waiter(
         self, tmp_path: Path
     ) -> None:

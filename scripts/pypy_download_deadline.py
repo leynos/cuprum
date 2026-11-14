@@ -7,7 +7,10 @@ timeout. The watchdog therefore shuts the connection's socket down once the
 transfer's own clock says no time remains, which makes a blocked read fail.
 
 The clock and the waiter are seams: a test supplies both together, so a
-deadline is reached and a blocked read released without real seconds.
+deadline is reached and a blocked read released without real seconds. A
+substituted waiter returns `True` once the watchdog has been asked to stop,
+exactly as `threading.Event.wait` does, so a finished transfer never leaves the
+watchdog spinning in a loop it cannot exit.
 """
 
 from __future__ import annotations
@@ -23,6 +26,8 @@ if typ.TYPE_CHECKING:
     import http.client
 
     type Clock = cabc.Callable[[], float]
+    # Takes the seconds left and returns True once the watchdog must stop, the
+    # same contract as `threading.Event.wait`.
     type Waiter = cabc.Callable[[float], bool]
 
 
@@ -98,13 +103,23 @@ class _DeadlineWatchdog:
         before the deadline only starts another wait; the socket is shut down
         only once the transfer's own clock says no time remains. Without that
         re-check a coarse or injected waiter could interrupt a healthy read.
+
+        The stop signal is re-read too. A substituted waiter can return before
+        the deadline however often it is called, so without this check a
+        transfer that finished first would leave the loop spinning and
+        `__exit__` blocked in `join` for ever.
         """
-        while True:
+        while not self._stop.is_set():
             remaining = self._transfer.remaining()
             if remaining <= 0.0:
-                break
+                self._shut_down()
+                return
             if self._wait(remaining):
                 return
+        # The transfer finished first, so the socket is no longer ours to stop.
+
+    def _shut_down(self) -> None:
+        """Shut down the captured socket, treating a closed one as done."""
         if self._sock is not None:
             with contextlib.suppress(OSError):
                 self._sock.shutdown(socket.SHUT_RDWR)

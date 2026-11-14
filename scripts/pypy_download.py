@@ -32,6 +32,7 @@ from scripts.pypy_download_metrics import (
     CACHED,
     CHECKSUM_MISMATCH,
     DEADLINE,
+    LOGGER,
     OVERSIZE,
     REFUSED,
     SUCCESS,
@@ -42,6 +43,7 @@ from scripts.pypy_download_metrics import (
 )
 
 if typ.TYPE_CHECKING:
+    import logging
     from pathlib import Path
 
     from scripts.pypy_download_deadline import Clock, Waiter
@@ -82,15 +84,17 @@ class Connect(typ.Protocol):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Environment:
-    """The clock, connection factory, and metric sink one download uses.
+    """The clock, connection factory, metric sink, and logger one download uses.
 
-    The defaults are the real ones. A test replaces any of them at the boundary
-    it drives, so no seam is monkeypatched into this module.
+    The defaults are the real ones; a test replaces them at the boundary it
+    drives, and the logger is a field so one download's span record can be
+    redirected without reconfiguring the shared module logger.
     """
 
     clock: Clock = time.monotonic
     connect: Connect = http.client.HTTPSConnection
     metrics: MetricsSink = dataclasses.field(default_factory=LoggingMetrics)
+    logger: logging.Logger = LOGGER
 
 
 _DEFAULT_ENVIRONMENT = Environment()
@@ -125,10 +129,10 @@ def checked_download(
     digest : str
         Expected SHA-256 digest from the approved release manifest.
     environment : Environment, optional
-        Clock, connection factory, and metric sink. The defaults use wall-clock
-        time, the standard HTTPS connection, and the logging collector, which
-        renders every sample as a structured log record — the collection path
-        available to the isolated bootstrap.
+        Clock, connection factory, metric sink, and span logger. The defaults
+        use wall-clock time, the standard HTTPS connection, the logging
+        collector that renders every sample as a structured record, and this
+        module's logger — the collection path the isolated bootstrap has.
 
     Raises
     ------
@@ -176,7 +180,7 @@ def _report(
 ) -> None:
     """Publish one outcome with the bytes written and the time since `started`."""
     sample = Sample(written, environment.clock() - started)
-    report_download(environment.metrics, outcome, sample)
+    report_download(environment.metrics, outcome, sample, logger=environment.logger)
 
 
 def _require_https(url: str) -> None:

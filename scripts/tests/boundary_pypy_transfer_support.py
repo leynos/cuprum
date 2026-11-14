@@ -14,10 +14,11 @@ import typing as typ
 from unittest import mock
 
 from scripts import pypy_download as downloader
-from scripts.pypy_download_metrics import LoggingMetrics
+from scripts.pypy_download_metrics import LOGGER, LoggingMetrics
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import logging
     from pathlib import Path
 
     from scripts.pypy_download_metrics import MetricsSink
@@ -60,26 +61,57 @@ def connection_factory(*fakes: mock.Mock) -> downloader.Connect:
     return connect
 
 
+class RecordingMetrics:
+    """Collect every metric sample a download reports, in order."""
+
+    def __init__(self) -> None:
+        """Start with no samples."""
+        self.counters: list[tuple[str, float, dict[str, str]]] = []
+        self.histograms: list[tuple[str, float, dict[str, str]]] = []
+
+    def inc_counter(
+        self, name: str, value: float, labels: cabc.Mapping[str, str]
+    ) -> None:
+        """Record one counter sample."""
+        self.counters.append((name, value, dict(labels)))
+
+    def observe_histogram(
+        self, name: str, value: float, labels: cabc.Mapping[str, str]
+    ) -> None:
+        """Record one histogram sample."""
+        self.histograms.append((name, value, dict(labels)))
+
+    def outcomes(self) -> list[str]:
+        """Return the outcome label of every counter sample."""
+        return [labels["outcome"] for _, _, labels in self.counters]
+
+    def observed(self, name: str) -> list[float]:
+        """Return every value observed for `name`."""
+        return [value for metric, value, _ in self.histograms if metric == name]
+
+
 def fake_environment(
     *fakes: mock.Mock,
     clock: cabc.Callable[[], float] = time.monotonic,
     sink: MetricsSink | None = None,
+    logger: logging.Logger | None = None,
 ) -> downloader.Environment:
     """Build an environment whose connections come from `fakes` in order.
 
-    The sink defaults to the same logging collector the bootstrap uses, so a
-    case that inspects log records needs to supply nothing.
+    The sink and logger default to the same ones the bootstrap uses, so a case
+    that inspects log records needs to supply nothing.
 
     Returns
     -------
     downloader.Environment
         An environment that serves each hop from the next fake in `fakes` and
-        reports through `sink`.
+        reports through `sink` and `logger`.
     """
     return downloader.Environment(
         clock=clock,
         connect=connection_factory(*fakes),
         metrics=LoggingMetrics() if sink is None else sink,
+        logger=LOGGER if logger is None else logger,
     )
 
 

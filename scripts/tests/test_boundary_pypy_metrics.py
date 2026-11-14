@@ -18,6 +18,7 @@ import pytest
 from scripts import pypy_download as downloader
 from scripts import pypy_download_metrics as metrics
 from scripts.tests.boundary_pypy_transfer_support import (
+    RecordingMetrics,
     fake_environment,
     fake_response,
     manual_clock,
@@ -39,48 +40,21 @@ _OUTCOMES = frozenset({
 })
 
 
-class _Recorder:
-    """Collect every metric sample a download reports."""
-
-    def __init__(self) -> None:
-        """Start with no samples."""
-        self.counters: list[tuple[str, float, dict[str, str]]] = []
-        self.histograms: list[tuple[str, float, dict[str, str]]] = []
-
-    def inc_counter(
-        self, name: str, value: float, labels: cabc.Mapping[str, str]
-    ) -> None:
-        """Record one counter sample."""
-        self.counters.append((name, value, dict(labels)))
-
-    def observe_histogram(
-        self, name: str, value: float, labels: cabc.Mapping[str, str]
-    ) -> None:
-        """Record one histogram sample."""
-        self.histograms.append((name, value, dict(labels)))
-
-    def outcomes(self) -> list[str]:
-        """Return the outcome label of every counter sample."""
-        return [labels["outcome"] for _, _, labels in self.counters]
-
-    def observed(self, name: str) -> list[float]:
-        """Return every value observed for `name`."""
-        return [value for metric, value, _ in self.histograms if metric == name]
-
-
 def _serving(
-    body: bytes, sink: metrics.MetricsSink | None = None
+    body: bytes,
+    sink: metrics.MetricsSink | None = None,
+    logger: logging.Logger | None = None,
 ) -> downloader.Environment:
     """Build an environment that serves `body` once and reports into `sink`."""
     connection = mock.Mock()
     connection.getresponse.return_value = streaming_response(body)
-    return fake_environment(connection, sink=sink)
+    return fake_environment(connection, sink=sink, logger=logger)
 
 
 def test_a_successful_download_reports_bytes_and_outcome(tmp_path: Path) -> None:
     """A completed transfer reports success and the bytes it wrote."""
     body = b"pypy archive bytes"
-    recorder = _Recorder()
+    recorder = RecordingMetrics()
     downloader.checked_download(
         "https://example.invalid/asset",
         tmp_path / "archive.tar.gz",
@@ -114,7 +88,7 @@ def test_the_duration_sample_measures_the_injected_clock(tmp_path: Path) -> None
     response.read1.side_effect = read1
     connection = mock.Mock()
     connection.getresponse.return_value = response
-    recorder = _Recorder()
+    recorder = RecordingMetrics()
     downloader.checked_download(
         "https://example.invalid/asset",
         tmp_path / "archive.tar.gz",
@@ -131,7 +105,7 @@ def test_a_cache_hit_reports_the_cached_outcome(tmp_path: Path) -> None:
     body = b"cached archive"
     destination = tmp_path / "archive.tar.gz"
     destination.write_bytes(body)
-    recorder = _Recorder()
+    recorder = RecordingMetrics()
     downloader.checked_download(
         "https://example.invalid/asset",
         destination,
@@ -173,7 +147,7 @@ def test_a_failed_download_reports_a_bounded_outcome(
         raise error
 
     monkeypatch.setattr(downloader, "_download", fail)
-    recorder = _Recorder()
+    recorder = RecordingMetrics()
     with pytest.raises(type(error)):
         downloader.checked_download(
             "https://example.invalid/asset",
@@ -223,6 +197,57 @@ def test_the_default_collector_reports_through_logging(
     (span,) = [r for r in records if "span" in r.__dict__]
     assert span.__dict__["outcome"] == metrics.SUCCESS, (
         "the span record must name the outcome it closed with"
+    )
+
+
+def test_a_supplied_logger_receives_the_span_record(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A caller's logger receives the span, so no module logger is patched."""
+    caplog.set_level(logging.INFO)
+    custom = logging.getLogger("cuprum.tests.download")
+    body = b"pypy archive bytes"
+    downloader.checked_download(
+        "https://example.invalid/asset",
+        tmp_path / "archive.tar.gz",
+        hashlib.sha256(body).hexdigest(),
+        environment=_serving(body, RecordingMetrics(), custom),
+    )
+    spans = [record for record in caplog.records if "span" in record.__dict__]
+    assert [record.name for record in spans] == [custom.name], (
+        "the span record must go to the supplied logger, not the module logger"
+    )
+    assert spans[0].__dict__["outcome"] == metrics.SUCCESS, (
+        "the supplied logger must receive the outcome the span closed with"
+    )
+
+
+def test_a_supplied_logger_receives_a_failed_downloads_span(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed transfer closes its span on the supplied logger too."""
+    caplog.set_level(logging.INFO)
+    custom = logging.getLogger("cuprum.tests.download")
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        """Fail the transfer with a connection reset."""
+        msg = "connection reset"
+        raise OSError(msg)
+
+    monkeypatch.setattr(downloader, "_download", fail)
+    with pytest.raises(OSError, match="connection reset"):
+        downloader.checked_download(
+            "https://example.invalid/asset",
+            tmp_path / "archive.tar.gz",
+            "0" * 64,
+            environment=fake_environment(sink=RecordingMetrics(), logger=custom),
+        )
+    spans = [record for record in caplog.records if "span" in record.__dict__]
+    assert [record.name for record in spans] == [custom.name], (
+        "a failed download must still report through the supplied logger"
+    )
+    assert spans[0].__dict__["outcome"] == metrics.TRANSFER_ERROR, (
+        "the span must name the failure outcome it closed with"
     )
 
 
@@ -306,7 +331,7 @@ def test_metric_labels_carry_only_the_outcome(tmp_path: Path) -> None:
     """No URL, filename, or error text may reach a metric label."""
     body = b"pypy archive bytes"
     destination = tmp_path / "secret-archive.tar.gz"
-    recorder = _Recorder()
+    recorder = RecordingMetrics()
     downloader.checked_download(
         "https://example.invalid/private/asset",
         destination,
@@ -340,7 +365,7 @@ def test_the_timed_span_logs_its_outcome_without_server_input(
         "https://example.invalid/private/asset",
         destination,
         hashlib.sha256(body).hexdigest(),
-        environment=_serving(body, _Recorder()),
+        environment=_serving(body, RecordingMetrics()),
     )
     records = [r for r in caplog.records if r.name == "cuprum.pypy_download"]
     assert len(records) == 1, "one finish record must close the span"
