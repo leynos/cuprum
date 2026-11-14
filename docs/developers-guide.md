@@ -5851,13 +5851,17 @@ body, cannot hold the transfer open. The watchdog captures the socket before
 the header parse, because `getresponse` hands a close-delimited response that
 socket and clears the connection's reference. It re-reads the transfer's clock
 after every wait, so a wakeup that arrives before the deadline starts another
-wait instead of shutting down a healthy read. `_download` takes its clock from
-the injected `Environment` and accepts the watchdog's waiter beside it, so a
-test can drive a blocked read through the whole download boundary and advance
-that one clock past the deadline without sleeping. The deadline, the clock and
-waiter seam, and the watchdog live in `scripts/pypy_download_deadline.py`. The
-target needs the `openssl` binary to mint the throwaway certificate authority,
-`uv` with a Python 3.14 interpreter for the isolated driver, network access to
+wait instead of shutting down a healthy read. It re-reads its own stop signal
+after every wait as well, so a substituted waiter that never reaches the
+deadline cannot leave the watchdog spinning after the transfer has finished.
+`_download` takes its clock from the injected `Environment` and accepts the
+watchdog's waiter beside it, so a test can drive a blocked read through the
+whole download boundary and advance that one clock past the deadline without
+sleeping. A substituted waiter returns `True` once the watchdog must stop,
+exactly as `threading.Event.wait` does. The deadline, the clock and waiter
+seam, and the watchdog live in `scripts/pypy_download_deadline.py`. The target
+needs the `openssl` binary to mint the throwaway certificate authority, `uv`
+with a Python 3.14 interpreter for the isolated driver, network access to
 install the pinned `rust-prover-tools` revision, and a loopback socket for each
 scenario. The PyPy cases need only `openssl` and the loopback socket; they
 trust the test certificate authority through `SSL_CERT_FILE` for the duration
@@ -5868,27 +5872,28 @@ The retired `scripts/install_boundary_kani.py` and
 `scripts/pypy_download.py` owns the linter interpreter's bounded HTTPS fetch,
 including its byte ceiling, transfer deadline, and digest check. Every
 dependency it cannot supply itself — the monotonic clock, the HTTPS connection
-factory, and the metric sink — enters through the `Environment` passed to
-`checked_download`, so a test injects its doubles at the public boundary rather
-than patching the module. `scripts/install_pypy312.py` owns the release layout
-and the extraction that turns a verified archive into the configured
-interpreter. `scripts/pypy_download_metrics.py` owns the download's
-observability: one outcome counter, byte and duration histograms, and one timed
-span. The outcome label is drawn from a fixed vocabulary (`cached`, `success`,
-`oversize`, `deadline`, `checksum_mismatch`, `transfer_error`, `refused`), so
-no URL, filename, or error text can reach a label and a hostile server cannot
-inflate cardinality. The installer runs under `uv run --no-project`, where no
-metrics backend is importable, so `LoggingMetrics` renders every sample as a
-structured log record and `install_pypy312.main()` enables INFO to surface the
-span summary. A caller with a backend passes anything that matches the local
+factory, the metric sink, and the logger its span record is written through —
+enters through the `Environment` passed to `checked_download`, so a test
+injects its doubles at the public boundary rather than patching the module.
+`scripts/install_pypy312.py` owns the release layout and the extraction that
+turns a verified archive into the configured interpreter.
+`scripts/pypy_download_metrics.py` owns the download's observability: one
+outcome counter, byte and duration histograms, and one timed span. The outcome
+label is drawn from a fixed vocabulary (`cached`, `success`, `oversize`,
+`deadline`, `checksum_mismatch`, `transfer_error`, `refused`), so no URL,
+filename, or error text can reach a label and a hostile server cannot inflate
+cardinality. The installer runs under `uv run --no-project`, where no metrics
+backend is importable, so `LoggingMetrics` renders every sample as a structured
+log record and `install_pypy312.main()` enables INFO to surface the span
+summary. A caller with a backend passes anything that matches the local
 `MetricsSink` protocol, whose methods mirror cuprum's `MetricsCollector`,
-through the `metrics` field of that `Environment`. `report_download` takes the
-finished measurement as one `Sample` and an optional `logger`, so a caller can
-redirect the span record without touching the module logger. Reporting is
-diagnostic, so a backend that raises is logged as a warning and discarded:
-telemetry can neither fail a download whose archive was verified and published
-nor replace the transfer error on its way to the caller, and the pending file
-is removed even when the reporting path fails.
+through the `metrics` field of that `Environment`, and redirects the span
+record by supplying its own logger through the `logger` field.
+`report_download` takes the finished measurement as one `Sample` and that
+logger. Reporting is diagnostic, so a backend that raises is logged as a
+warning and discarded: telemetry can neither fail a download whose archive was
+verified and published nor replace the transfer error on its way to the caller,
+and the pending file is removed even when the reporting path fails.
 `scripts/boundary_fault_invocations.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
 abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
