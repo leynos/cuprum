@@ -16,6 +16,7 @@ from cuprum import (
     _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_completion,
     _pipeline_streams,
 )
 from cuprum.pump_observation import observe_pump
@@ -132,19 +133,19 @@ def test_grace_expiry_defers_worker_owned_descriptor_cleanup(
     pump_events: list[PumpEvent] = []
     native_fds: list[tuple[int, int]] = []
     close_native_reader = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+        wraps=_pipeline_stream_native_completion._close_rust_reader_fd
     )
     close_state_fd = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
+        wraps=_pipeline_stream_native_completion._close_rust_state_fd
     )
     install_fake_pump(monkeypatch, _blocking_pump(context, native_fds))
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_reader_fd",
         close_native_reader,
     )
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_state_fd",
         close_state_fd,
     )

@@ -1182,6 +1182,67 @@ The registration is context-local. Remove the registration by leaving its
 context manager or calling `detach()` on the returned handle. The existing
 `ExecEvent` observation API is unchanged.
 
+### Pump hand-off hold events and settlement outcomes
+
+The pump observation channel gains a `handoff_hold` phase and two settlement
+outcomes. No event is emitted unless an application registers an `observe_pump`
+hook.
+
+- `handoff_hold` reports the window in which a hop holds its acquired
+  descriptor pair: `PumpEvent.held_delta` is `1` after acquisition and before
+  the buffered drain, and `-1` when the hold ends. `held_delta` is appended
+  after every existing `PumpEvent` field, so a caller constructing the public
+  dataclass positionally keeps its existing argument order.
+- `drain_failed`, `drain_cancelled`, `hold_observer_shutdown`, and
+  `submission_abandoned` join `RustPumpHandoffOutcome`. Each is counted in
+  `cuprum_rust_pump_handoff_total`, so an exhaustive outcome handler or
+  dashboard must add them. They keep three drain-window destinations apart:
+  `drain_failed` is an error the buffered drain raised, `drain_cancelled` is
+  the caller's cancellation reaching it, and `hold_observer_shutdown` is a
+  shutdown signal from a hold observer raised while the acquired pair was being
+  published, before the drain began. `blocking_setup_failed` already exists in
+  this release's base and keeps its meaning: the hop fell back to the Python
+  pump because blocking mode was unavailable.
+
+An optional gauge, `cuprum_rust_pump_held_pairs`, reports the pairs held across
+pending drains. It is set only for a collector that implements
+`GaugeMetricsCollector`, and every hook reporting to one collector shares its
+running total, so a dashboard reads one value per collector rather than one per
+hook. That holds for a collector without weak-reference support as well. The
+registry must keep such a collector alive for as long as its entry exists,
+because the object's identity is the key that keeps the entry unique. It
+therefore retires the entry once the last hook reporting to the collector is
+gone and nothing is still held, so a collector whose hooks have all been
+released is not retained for the life of the process. That registry can be
+injected, using `HeldPairCounterRegistry` imported from
+`cuprum.adapters.pump_metrics`: bind one to a caller-held name and pass it as
+the `registry` argument of every `PumpMetricsHook` or `pump_metrics_hook` call
+that reports to the collector. Binding it, rather than creating one inline at
+the call, keeps the count alive for as long as any hook exists; a registry
+created per call gives that collector an unrelated total per hook, and one
+discarded with a hold outstanding loses the hold, so a later release reports a
+count below zero instead of zero. An injected registry lets a test isolate its
+collector from the process-wide default; every hook reporting to one collector
+must share one registry.
+[Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)
+binds one in its worked example. A count that is still outstanding when its
+last hook is collected also keeps the entry, and so the collector, alive until
+some later hook settles it, because a collector that cannot be weakly
+referenced gives no signal when it dies. An event delivered to more than one
+hook for one collector, as a nested `observe_pump` registration does, moves the
+shared total once, so the gauge counts held pairs rather than hook deliveries;
+a hook that emits an event of its own while it is being called is a separate
+hold and counts separately. A collector written against the two-method
+`MetricsCollector` contract continues to work unchanged and is simply skipped
+for gauges. An exhaustive pump observer that matches on `PumpPhase` must add
+`handoff_hold`, and one that matches on `RustPumpHandoffOutcome` must add
+`drain_failed`, `drain_cancelled`, `hold_observer_shutdown`, and
+`submission_abandoned`; an observer that ignores unknown values needs no change.
+
+See
+[Counting pump routing decisions](users-guide.md#counting-pump-routing-decisions)
+for the full event and metric list.
+
 ### Windows raw-handle hand-off outcome
 
 `RustPumpHandoffOutcome` gains `WINDOWS_RAW_HANDLE_REJECTED`, recorded as

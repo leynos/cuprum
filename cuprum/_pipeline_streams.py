@@ -10,6 +10,15 @@ The module intentionally consumes the canonical stage stream policy instead of
 recomputing it. That keeps spawning code responsible for process ownership,
 ``_pipeline_stage_streams`` responsible for stdio shape, and this module
 responsible for moving and collecting bytes once those streams exist.
+
+For the native backend this module is the hand-off coordinator: it pauses the
+reader, acquires the worker descriptor pair synchronously before the first
+await, drains the buffered prefix, and submits the worker. The two failure
+paths differ. A failed acquisition resumes the reader and falls back to the
+Python pump with the buffered prefix intact; a drain failure or cancellation
+closes the unactivated pair, resumes the reader, and re-raises the original
+error — unless a pump observer raises a shutdown signal while that outcome is
+emitted, which takes precedence because shutdown signals must still travel.
 """
 
 from __future__ import annotations
@@ -25,9 +34,7 @@ from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._pipeline_native_pump_types import (
     _DEFAULT_NATIVE_PUMP_CLEANUP_GRACE,
-    _RustPumpBlockingModeError,
     _RustPumpHandoff,
-    _RustPumpStateDuplicationError,
 )
 from cuprum._pipeline_pipe_tasks import (
     _create_pipe_tasks as _create_pipe_tasks_with_context,
@@ -40,8 +47,13 @@ from cuprum._pipeline_stream_fds import (
     _suppressed_teardown_failure,
 )
 from cuprum._pipeline_stream_native_cleanup import (
-    _create_rust_pump_state,
+    _acquire_rust_pump_worker_fds,
+    _activate_rust_pump_state_or_release,
+    _release_activated_rust_pump_hold,
     _run_rust_pump_with_blocking_fds,
+)
+from cuprum._pipeline_stream_native_drain import (
+    _drain_before_rust_pump_submission,
 )
 from cuprum._streams import _close_stream_writer, _pump_stream
 from cuprum._streams_pump import _current_read_size
@@ -202,44 +214,42 @@ async def _pump_over_raw_fds(
             reader_pause.decline_reason or RustPumpDeclineReason.READER_PAUSE_FAILED,
         )
         return False
-    try:
-        await _drain_reader_buffer(reader, writer)
-    except BaseException:
-        _resume_reader_transport(reader_pause.resume)
-        raise
-    try:
-        # These duplicates outlive the caller-facing task. They carry the
-        # blocking-mode state that only the completion callback may restore
-        # after native I/O has stopped.
-        state = _create_rust_pump_state(
-            handoff,
-            reader_pause.resume,
-            reader_pause.release,
-        )
-    except _RustPumpStateDuplicationError as failure:
+    # Acquire the worker descriptors before the first await. The hand-off
+    # carries descriptor numbers, so opening them after the buffered drain
+    # would let a transport that closed during that await release its number
+    # for another pipeline to reuse, attaching the worker to the wrong pipe.
+    worker_fds = _acquire_rust_pump_worker_fds(handoff)
+    if worker_fds is None:
         # Duplication is best-effort, and declining is the only safe response.
-        # The descriptor set was extracted a moment earlier, but asyncio closes
-        # an EOF'd transport on its own schedule, so a duplicate can race that
-        # close. Raising here used to leave the writer transport open: the
-        # downstream stage never saw EOF and the pipeline wedged until its
-        # deadline. Nothing was transferred and no state outlived the attempt,
-        # so the Python pump carries the hop exactly as it does when blocking
-        # mode is unavailable.
+        # Nothing was transferred and no state outlived the attempt, so the
+        # Python pump carries the hop exactly as it does when blocking mode is
+        # unavailable.
         _resume_reader_transport(reader_pause.resume)
+        failure = OSError("could not create native pump worker descriptors")
         _pump_obs._log_native_pump_handoff_failed(
             _LOGGER,
             "duplicate_writer",
-            failure.error,
+            failure,
         )
         _log_rust_pump_declined(RustPumpDeclineReason.DUPLICATE_FDS_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.DUPLICATE_WRITER_FAILED)
         return False
-    except _RustPumpBlockingModeError:
-        _resume_reader_transport(reader_pause.resume)
+        # The pair is held across the drain, and released on every failing path.
+    await _drain_before_rust_pump_submission(
+        worker_fds,
+        reader_pause,
+        lambda: _drain_reader_buffer(reader, writer),
+    )
+    # These duplicates outlive the caller-facing task: only the completion
+    # callback may restore their blocking mode, after native I/O stops.
+    state = _activate_rust_pump_state_or_release(worker_fds, reader_pause, handoff)
+    if state is None:
         _log_rust_pump_declined(RustPumpDeclineReason.BLOCKING_MODE_UNAVAILABLE)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
         return False
 
+    # Activation owns the pair now; the release rolls it back if interrupted.
+    _release_activated_rust_pump_hold(state)
     await _run_rust_pump_with_blocking_fds(state=state)
     return True
 

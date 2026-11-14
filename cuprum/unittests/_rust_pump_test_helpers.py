@@ -28,9 +28,12 @@ from cuprum import (
     _pipeline_streams,
 )
 from cuprum.pump_events import RustPumpDeclineReason
+from cuprum.pump_observation import _emit_rust_pump_hold
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from cuprum.pump_events import PumpEvent
 
 
 class RecordingCollector:
@@ -41,9 +44,10 @@ class RecordingCollector:
     """
 
     def __init__(self) -> None:
-        """Start with no recorded counter or histogram calls."""
+        """Start with no recorded counter, histogram, or gauge calls."""
         self.counters: list[tuple[str, float, dict[str, str]]] = []
         self.histograms: list[tuple[str, float, dict[str, str]]] = []
+        self.gauges: list[tuple[str, float, dict[str, str]]] = []
 
     def inc_counter(
         self,
@@ -63,9 +67,155 @@ class RecordingCollector:
         """Record a histogram observation and the labels it carried."""
         self.histograms.append((name, value, dict(labels)))
 
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record a gauge value and the labels it carried."""
+        self.gauges.append((name, value, dict(labels)))
+
     def counter_names(self) -> list[str]:
         """Return the names of the counters recorded, in call order."""
         return [name for name, _value, _labels in self.counters]
+
+    def gauge_values(self, name: str) -> list[float]:
+        """Return the values recorded for gauge ``name``, in call order."""
+        return [value for gauge, value, _labels in self.gauges if gauge == name]
+
+
+class SlottedGaugeCollector:
+    """A gauge collector with no ``__weakref__`` slot."""
+
+    __slots__ = ("gauges",)
+
+    def __init__(self) -> None:
+        """Start with no recorded gauge values."""
+        self.gauges: list[float] = []
+
+    def inc_counter(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore counter increments."""
+        del name, value, labels
+
+    def observe_histogram(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Ignore histogram observations."""
+        del name, value, labels
+
+    def set_gauge(
+        self,
+        name: str,
+        value: float,
+        labels: cabc.Mapping[str, str],
+    ) -> None:
+        """Record the reported value."""
+        del name, labels
+        self.gauges.append(value)
+
+
+class NestedHoldEmitter:
+    """Emit a matching hold from inside a delivery it was armed for.
+
+    Pump hooks run inline on the emitting thread, so a hook that emits nests a
+    second emission inside the delivery of the first. :meth:`arm` decides, for
+    the calling thread only, whether that thread's deliveries through this hook
+    nest a hold; arming from the thread that will emit keeps one worker's
+    decision from leaking into a delivery paused on another thread. The
+    thread-local guard keeps the nested emission from nesting again.
+    """
+
+    def __init__(self) -> None:
+        """Start without a pending nesting decision."""
+        self._pending = threading.local()
+        self._nesting = threading.local()
+
+    def arm(self, *, nest: bool) -> None:
+        """Decide whether this thread's deliveries nest a hold from now on."""
+        self._pending.nest = nest
+
+    def __call__(self, event: PumpEvent) -> None:
+        """Emit a hold of the same direction, once, without recursion."""
+        delta = event.held_delta
+        if not getattr(self._pending, "nest", False) or delta is None:
+            return
+        if getattr(self._nesting, "active", False):
+            return
+        self._nesting.active = True
+        try:
+            _emit_rust_pump_hold(delta)
+        finally:
+            self._nesting.active = False
+
+
+class PausingHook:
+    """Pause one armed delivery so another thread can emit in between.
+
+    Pump hooks run inline on the thread delivering the event, so a hook that
+    blocks holds the delivery open between the hooks registered after it. A
+    test arms the hook on the thread about to emit, waits for :attr:`paused`,
+    lets another thread finish an emission of its own, and then calls
+    :meth:`release`; the remaining hooks then see the event that was held.
+    """
+
+    def __init__(self) -> None:
+        """Start with no armed pause and both handshake events clear."""
+        self._armed = threading.local()
+        self.paused = threading.Event()
+        self.resume = threading.Event()
+
+    def arm(self) -> None:
+        """Pause the next delivery on the calling thread, once."""
+        self._armed.pause = True
+
+    def wait_paused(self, timeout: float) -> bool:
+        """Wait for the armed delivery to reach this hook.
+
+        Returns
+        -------
+        bool
+            Whether the delivery paused before ``timeout`` elapsed.
+        """
+        return self.paused.wait(timeout=timeout)
+
+    def release(self) -> None:
+        """Let a paused delivery continue and clear the handshake."""
+        self.paused.clear()
+        self.resume.set()
+
+    def is_open(self) -> bool:
+        """Whether a release is still unclaimed, so an armed delivery cannot block."""
+        return self.resume.is_set()
+
+    def reset(self) -> None:
+        """Close the handshake so a later replay starts with the gate shut.
+
+        Cleaning up a failed replay releases the gate, which leaves the resume
+        event set. Without this reset a delivery armed by the next replay would
+        find that event already set and run straight through the gate, so the
+        planned interleaving would not happen.
+        """
+        self.paused.clear()
+        self.resume.clear()
+
+    def __call__(self, event: PumpEvent) -> None:
+        """Hold the armed delivery until the test releases it."""
+        del event
+        if not getattr(self._armed, "pause", False):
+            return
+        self._armed.pause = False
+        self.paused.set()
+        assert self.resume.wait(timeout=10.0), "the test must release the delivery"
+        self.resume.clear()
 
 
 @dc.dataclass(slots=True)

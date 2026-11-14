@@ -1,10 +1,12 @@
-"""Own native-pump executor cleanup, spans, and deferred descriptor hand-back.
+"""Supply the acquire, activate, and submit steps of the hand-off.
 
-This module owns callback-managed native-pump descriptors and their
-executor-hop spans. Rust owns a submitted writer duplicate; the completion
-callback closes its borrowed reader and callback duplicates, ends the hop
-spans with the worker's terminal outcome, restores blocking mode, and resumes
-the paused reader only after native I/O has settled.
+The ordering — pause, acquire before the first await, drain, activate, submit —
+belongs to `_pipeline_streams._pump_over_raw_fds`, and the drain window itself
+to `_pipeline_stream_native_drain`. This module supplies the steps around it and
+keeps each failure shape local: acquisition returns `None` to allow the Python
+fallback, and activation declines with `_RustPumpBlockingModeError`. A pair
+activation never took over is given back through the drain module, which owns
+every release that happens before submission.
 """
 
 from __future__ import annotations
@@ -17,8 +19,6 @@ import logging
 import os
 import typing as typ
 
-from cuprum import _pipeline_rust_pump_completion as _pump_completion
-from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._pipeline_native_pump_runtime import (
     _DEFAULT_NATIVE_PUMP_RUNTIME,
     _NativePumpRuntime,
@@ -32,20 +32,33 @@ from cuprum._pipeline_native_pump_types import (
     _RustPumpStateDuplicationError,
 )
 from cuprum._pipeline_stream_cleanup_observation import (
-    _log_native_pump_cleanup,
     _log_native_pump_handoff_failed,
 )
 from cuprum._pipeline_stream_fds import (
     _BlockingModeGuard,
     _close_rust_reader_fd,
-    _close_rust_state_fd,
     _close_rust_writer_fd,
+    _NativePumpWorkerFds,
     _open_native_pump_worker_fds,
+    _ReaderPause,
     _resume_reader_transport,
-    _suppressed_teardown_failure,
+)
+from cuprum._pipeline_stream_native_completion import (
+    _await_native_pump_cleanup,
+    _close_rust_pump_state_fds,
+    _complete_rust_pump,
+    _consume_native_pump_result,
+    _restore_rust_pump_state,
+)
+from cuprum._pipeline_stream_native_drain import (
+    _close_unactivated_rust_pump_fds,
 )
 from cuprum.pump_events import RustPumpHandoffOutcome
-from cuprum.pump_observation import _emit_rust_pump_handoff_outcome
+from cuprum.pump_observation import (
+    _emit_rust_pump_handoff_outcome,
+    _emit_rust_pump_hold,
+    _release_declined_hold,
+)
 from cuprum.pump_span_events import (
     NATIVE_PUMP_BUFFER_SIZE,
     PUMP_HOP_BUFFER_SIZE_ATTRIBUTE,
@@ -66,18 +79,6 @@ if typ.TYPE_CHECKING:
     from cuprum.pump_span_observation import _PumpHopSpans
 
 _LOGGER = logging.getLogger("cuprum._pipeline_streams")
-
-
-def _restore_rust_pump_state(state: _RustPumpState) -> None:
-    """Restore pipe state before returning reader transport control to asyncio."""
-    state.blocking_mode_guard.restore()
-    _resume_reader_transport(state.resume_reader)
-
-
-def _close_rust_pump_state_fds(state: _RustPumpState) -> None:
-    """Release callback-owned duplicates after restoring their state."""
-    _close_rust_state_fd(state.reader_fd)
-    _close_rust_state_fd(state.writer_fd)
 
 
 def _duplicate_native_pump_fds(state: _RustPumpState) -> _NativePumpFds:
@@ -119,6 +120,23 @@ def _rollback_rust_pump_start(
             outcome=PumpHopOutcome.FAILED,
             total_bytes=None,
         )
+
+
+def _release_activated_rust_pump_hold(state: _RustPumpState) -> None:
+    """Release the coordinator's hold on an activated but unsubmitted pair.
+
+    The hold precedes the completion callback's ownership, so a shutdown signal
+    from a hold observer would otherwise strand the open pair, its blocking
+    modes, and the paused reader; rolling back first keeps the signal going.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    except BaseException:
+        _rollback_rust_pump_start(
+            state,
+            RustPumpHandoffOutcome.SUBMISSION_ABANDONED,
+        )
+        raise
 
 
 def _open_rust_pump_hop_spans() -> _PumpHopSpans:
@@ -178,129 +196,94 @@ def _engage_rust_pump_blocking_mode(
         raise
 
 
-def _create_rust_pump_state(
+def _acquire_rust_pump_worker_fds(
     handoff: _RustPumpHandoff,
-    resume_reader: cabc.Callable[[], None] | None,
-    release_reader: cabc.Callable[[], None] | None = None,
+) -> _NativePumpWorkerFds | None:
+    """Open worker descriptors before the hand-off first awaits.
+
+    The hand-off carries descriptor *numbers*. Opening them after the buffered
+    drain would let a transport that closed during that await release its
+    number, which another concurrent pipeline can then reuse; the worker would
+    attach to the wrong pipe. Opening here runs before the first suspension, so
+    the numbers still name the pipe the hand-off was authorized to borrow.
+
+    Returns
+    -------
+    _NativePumpWorkerFds or None
+        The owned worker pair, or ``None`` when the descriptors cannot be
+        opened and the hop must fall back to the Python pump.
+    """
+    try:
+        reader_fd, writer_fd = _duplicate_rust_pump_state_fds(handoff)
+    except _RustPumpStateDuplicationError:
+        return None
+    return _NativePumpWorkerFds(reader_fd=reader_fd, writer_fd=writer_fd)
+
+
+def _activate_rust_pump_state_or_release(
+    worker_fds: _NativePumpWorkerFds,
+    reader_pause: _ReaderPause,
+    handoff: _RustPumpHandoff,
+) -> _RustPumpState | None:
+    """Activate the pair, or release it and return ``None`` on a decline.
+
+    Activation closes the pair when it refuses, so only the reader and the hold
+    remain. A refusal is the one error answered with the Python pump; anything
+    else is re-raised after the same release, because a shutdown signal must
+    not be reported as a routing decision.
+
+    Returns
+    -------
+    _RustPumpState or None
+        The completion-owned state, or ``None`` when the hop must fall back.
+    """
+    try:
+        return _activate_rust_pump_state(worker_fds, reader_pause, handoff)
+    except BaseException as error:
+        _resume_reader_transport(reader_pause.resume)
+        if not isinstance(error, _RustPumpBlockingModeError):
+            _emit_rust_pump_hold(-1)
+            raise
+        _release_declined_hold()
+        return None
+
+
+def _activate_rust_pump_state(
+    worker_fds: _NativePumpWorkerFds,
+    reader_pause: _ReaderPause,
+    handoff: _RustPumpHandoff,
 ) -> _RustPumpState:
-    """Duplicate a hand-off's descriptor state for completion-owned cleanup."""
-    reader_fd, writer_fd = _duplicate_rust_pump_state_fds(handoff)
-    blocking_mode_guard = _engage_rust_pump_blocking_mode(reader_fd, writer_fd)
-    return _RustPumpState(
-        reader_fd=reader_fd,
-        writer_fd=writer_fd,
-        blocking_mode_guard=blocking_mode_guard,
-        resume_reader=resume_reader,
-        release_reader=release_reader,
-        cleanup_grace_s=handoff.cleanup_grace_s,
+    """Engage blocking mode on acquired descriptors and build completion state.
+
+    Blocking activation stays after the buffered drain because ``os.dup``
+    shares the transport's status flags on non-Linux platforms, so an early
+    switch would block asyncio's own descriptor during the drain.
+    ``_engage_rust_pump_blocking_mode`` closes both descriptors when it fails.
+
+    Returns
+    -------
+    _RustPumpState
+        Completion-owned state carrying the blocking-mode guard and callbacks.
+    """
+    blocking_mode_guard = _engage_rust_pump_blocking_mode(
+        worker_fds.reader_fd,
+        worker_fds.writer_fd,
     )
-
-
-def _resume_reader_after_rust_pump_cleanup(cleanup: _RustPumpCompletion) -> None:
-    """Resume asyncio's reader and settle normal loop-owned cleanup waiting."""
     try:
-        with _suppressed_teardown_failure(
-            _LOGGER,
-            "resume_reader",
-            OSError,
-            ValueError,
-        ):
-            _resume_reader_transport(cleanup.state.resume_reader)
-    finally:
-        if not cleanup.cleanup_complete.done():
-            cleanup.cleanup_complete.set_result(None)
-
-
-def _complete_rust_pump(
-    completed: cf.Future[int],
-    cleanup: _RustPumpCompletion,
-) -> None:
-    """Finalize descriptors independently of whether the original loop survives."""
-    cleanup.completion_context.run(
-        _finalize_rust_pump_cleanup,
-        completed,
-        cleanup,
-    )
-
-
-def _finalize_native_pump_resources(
-    completed: cf.Future[int],
-    cleanup: _RustPumpCompletion,
-) -> None:
-    """Release callback-owned descriptors after shared terminal handling."""
-    try:
-        _close_rust_reader_fd(cleanup.native_fds.reader_fd)
-    finally:
-        try:
-            with _suppressed_teardown_failure(
-                _LOGGER,
-                "restore_state",
-                OSError,
-                ValueError,
-            ):
-                cleanup.state.blocking_mode_guard.restore()
-        finally:
-            try:
-                _close_rust_pump_state_fds(cleanup.state)
-            finally:
-                if cleanup.state.complete_cleanup():
-                    _log_native_pump_cleanup(_LOGGER, "cleanup_deferred")
-                cleanup.runtime.retained_futures.discard(completed)
-
-
-def _schedule_native_pump_completion(cleanup: _RustPumpCompletion) -> None:
-    """Schedule reader resumption on the original loop when it still exists."""
-    loop = cleanup.cleanup_complete.get_loop()
-    # The loop may close after the caller receives cancellation. Descriptor
-    # finalization above remains valid; a closed transport cannot resume.
-    with contextlib.suppress(RuntimeError):
-        loop.call_soon_threadsafe(
-            functools.partial(_resume_reader_after_rust_pump_cleanup, cleanup)
+        return _RustPumpState(
+            reader_fd=worker_fds.reader_fd,
+            writer_fd=worker_fds.writer_fd,
+            blocking_mode_guard=blocking_mode_guard,
+            resume_reader=reader_pause.resume,
+            release_reader=reader_pause.release,
+            cleanup_grace_s=handoff.cleanup_grace_s,
         )
-
-
-def _finalize_rust_pump_cleanup(
-    completed: cf.Future[int],
-    cleanup: _RustPumpCompletion,
-) -> None:
-    """Close worker descriptors and schedule reader resumption when possible."""
-    _pump_completion._complete_rust_pump(
-        completed,
-        state=cleanup.state,
-        hooks=_pump_completion._RustPumpCompletionHooks(
-            close_spans=lambda outcome, total_bytes: _close_pump_hop_spans(
-                cleanup.pump_hop_spans,
-                outcome=outcome,
-                total_bytes=total_bytes,
-            ),
-            restore_state=functools.partial(
-                _finalize_native_pump_resources,
-                completed,
-                cleanup,
-            ),
-            signal_completion=functools.partial(
-                _schedule_native_pump_completion,
-                cleanup,
-            ),
-        ),
-        logger=_LOGGER,
-    )
-
-
-async def _await_native_pump_cleanup(
-    cleanup_complete: asyncio.Future[None],
-    *,
-    monotonic_clock: cabc.Callable[[], float],
-    cleanup_grace_s: float,
-    state: _RustPumpState | None = None,
-) -> None:
-    """Wait for cleanup or defer it when its caller grace expires."""
-    await _pump_obs._await_native_pump_cleanup(
-        cleanup_complete,
-        wait=_pump_obs._NativePumpCleanupWait(
-            _LOGGER, monotonic_clock, cleanup_grace_s, state
-        ),
-    )
+    except BaseException:
+        # No completion callback exists yet, so the guard's modes and the pair
+        # are released here before the caller sees the construction failure.
+        blocking_mode_guard.restore()
+        _close_unactivated_rust_pump_fds(worker_fds)
+        raise
 
 
 def _start_rust_pump_with_cleanup(
@@ -388,9 +371,3 @@ async def _run_rust_pump_with_blocking_fds(
         await asyncio.shield(cleanup_complete)
         raise
     await asyncio.shield(cleanup_complete)
-
-
-def _consume_native_pump_result(future: asyncio.Future[int]) -> None:
-    """Retrieve a worker failure after caller cancellation leaves it unawaited."""
-    if not future.cancelled():
-        future.exception()

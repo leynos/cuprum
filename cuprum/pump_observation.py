@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 import typing as typ
 from contextvars import ContextVar
 
@@ -38,6 +39,28 @@ _pump_event_exec_id: ContextVar[ExecId | None] = ContextVar(
     "cuprum_pump_event_exec_id",
     default=None,
 )
+# The events this thread is delivering to hooks, innermost last. A hook may
+# emit while it is being called, and that emission nests inside the delivery
+# that caused it, so a consumer that must count one emission once needs the
+# whole nesting rather than only the most recent event.
+_delivering = threading.local()
+
+
+def _in_flight_pump_events() -> tuple[PumpEvent, ...]:
+    """Return the pump events this thread is delivering to hooks right now.
+
+    Delivery runs inline on the emitting thread, so this is empty outside an
+    emission. A hook that emits while it is being called nests: the outer
+    event stays in flight until the inner event's delivery has finished and
+    the outer loop resumes.
+
+    Returns
+    -------
+    tuple[PumpEvent, ...]
+        The events whose delivery loops are running on this thread, outermost
+        first.
+    """
+    return tuple(getattr(_delivering, "events", ()))
 
 
 @contextlib.contextmanager
@@ -150,16 +173,42 @@ def _emit_pump_event(event: PumpEvent) -> None:
     Anything that is not an :class:`Exception` — ``SystemExit``,
     ``KeyboardInterrupt``, ``asyncio.CancelledError`` — propagates untouched, on
     the same reasoning as :func:`cuprum._pipeline_streams._await_rust_pump`: a
-    shutdown signal arriving here must still travel.
+    shutdown signal arriving here must still travel. It travels *after* every
+    registered hook has seen the event, because a signal raised by one hook
+    must not deny another the observation it was registered for. Accounting
+    hooks in particular rely on that: the held-pair gauge would be left standing
+    at one if a shutdown signal raised ahead of it skipped the release it
+    matches.
 
     With no hooks registered this returns before touching the event, so a caller
     that has not opted in pays nothing and behaves exactly as before.
+
+    While the loop runs, the event is recorded as in flight on this thread and
+    :func:`_in_flight_pump_events` reports it. A consumer that must count one
+    emission once — an event reaches several hooks when contexts nest — can
+    therefore tell a repeat delivery from a new event, and keeps counting the
+    outer event after a hook has nested an emission of its own inside it.
     """
     hooks = _pump_hooks.get()
     if not hooks:
         return
-    for hook in hooks:
-        _invoke_pump_hook(hook, event)
+    events = getattr(_delivering, "events", None)
+    if events is None:
+        events = _delivering.events = []
+    events.append(event)
+    try:
+        shutdown: BaseException | None = None
+        for hook in hooks:
+            # A shutdown signal is held until every hook has seen the event.
+            try:
+                _invoke_pump_hook(hook, event)
+            except BaseException as signal:  # ruff: ignore[blind-except] - re-raise last.
+                if shutdown is None:
+                    shutdown = signal
+    finally:
+        events.pop()
+    if shutdown is not None:
+        raise shutdown
 
 
 def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
@@ -171,6 +220,51 @@ def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
     so a propagating signal cannot strand one.
     """
     _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
+
+
+def _emit_rust_pump_hold(delta: int) -> None:
+    """Publish one transition of a hand-off's acquired descriptor pair.
+
+    ``delta`` is ``+1`` when the coordinator takes the pair before the buffered
+    drain and ``-1`` when it releases it. Every ``+1`` is matched by exactly one
+    ``-1`` on each settling path — submission, activation failure, drain failure
+    and cancellation — so a consumer that accumulates the deltas reports the
+    pairs held across pending drains and returns to zero when none are.
+
+    Hook failures follow :func:`_emit_pump_event`, including its rule that every
+    hook sees the event before a shutdown signal travels. The coordinator
+    releases the last hold only once the pair is closed or its activated state
+    can be rolled back, so a propagating signal cannot strand it.
+    """
+    _emit_pump_event(PumpEvent(phase="handoff_hold", held_delta=delta))
+
+
+def _settle_hold_outcome(outcome: RustPumpHandoffOutcome) -> None:
+    """Release the hold, publishing ``outcome`` whichever way release goes.
+
+    A shutdown signal raised by a hold observer would otherwise skip the
+    outcome, leaving the hand-off counter without the settle the hop just
+    performed. Publishing from a ``finally`` keeps the outcome counted and
+    still lets the signal travel afterwards.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    finally:
+        _emit_rust_pump_handoff_outcome(outcome)
+
+
+def _release_declined_hold() -> None:
+    """Release the hold, counting the decline if release is interrupted.
+
+    The caller publishes ``BLOCKING_SETUP_FAILED`` itself when release returns,
+    so a decline keeps its existing event order; only a release interrupted by
+    a shutdown signal publishes the decline here, before that signal travels.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    except BaseException:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
+        raise
 
 
 def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:

@@ -1464,6 +1464,33 @@ bounds the `reason` label on the decline metric, and `PumpMetricsHook` emits
 counters without extending the closed `ExecPhase` contract. See
 [ADR-008](adrs/adr-0008-rust-pump-observation-channel.md).
 
+`cuprum_rust_pump_held_pairs` is a level rather than an event count, and it
+carries no labels, so its scope is the collector every reporting hook publishes
+to. The coordinator reports a hold around the buffered drain: `handoff_hold`
+with `held_delta=1` after the pair is acquired, and `held_delta=-1` when that
+hold ends, on every settling path. Because the metric name is unlabelled, two
+hooks publishing to one collector would otherwise report two private totals,
+and one hook's release could publish zero while the other still held a pair.
+`HeldPairCounterRegistry` in `cuprum/adapters/_pump_held_pairs.py` supplies
+that sharing: it keys one counter per collector identity, and `PumpMetricsHook`
+takes the counter from it under the same lock that guards publication, so two
+threads cannot publish the running total out of order.
+
+The registry's lifetime rule follows whoever owns the count. A collector that
+can be weakly referenced retires its entry when the collector dies, so a hold
+outlives the hook that reported it. A collector that cannot give that signal is
+held by its entry, which keeps the identity used as the key unique, and the
+entry retires once the last hook reporting to it is gone and nothing is still
+held — the only end of use such a collector can signal. One emission that
+reaches several hooks reporting to one collector moves the shared total once,
+because the counter claims each event for the thread delivering it only while
+that emission is still in flight, so the gauge counts held pairs rather than
+hook deliveries. Gauge publication is a separate, optional capability:
+`GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a
+runtime-checkable protocol that adds `set_gauge`, which reports an absolute
+level, and a collector implementing only the two-method `MetricsCollector`
+contract is skipped for gauges.
+
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
 observation channel, not an extension of `ExecEvent`. A caller registers the
 same `TracingHook` on both `sh.observe(hook)` and
@@ -4430,18 +4457,32 @@ Python's built-in I/O operations.
 
 The Python pipeline retains ownership of the original reader and writer
 descriptors held by the asyncio transports. Before native I/O starts, it pauses
-the reader transport and lets callbacks queued before the pause settle. If the
-`StreamReader` has bytes in `_buffer`, the hand-off delivers them once to the
-downstream writer and clears the buffer only after delivery succeeds or
-downstream closure is known. The native worker then handles the remaining raw
-bytes. It receives worker-owned duplicates for both descriptors: Rust borrows
-the worker reader duplicate without closing it; it consumes the worker writer
-duplicate and closes it on every exit path. The Python hand-off owner closes
-the reader duplicate after the worker settles, and closes either duplicate
-itself when preparation or executor submission fails. On Windows the shim
-converts the worker duplicates to independently owned Win32 handles and closes
-the temporary CRT descriptors at the native boundary. No descriptor number is
-shared between asyncio and the worker.
+the reader transport and acquires the worker descriptor pair synchronously,
+before the hand-off first awaits. The hand-off carries descriptor numbers, so
+acquiring after the buffered drain would let a transport that closed during
+that await release its number for another pipeline to reuse, and the worker
+would attach to the wrong pipe. Acquiring first keeps the numbers naming the
+pipe the hand-off was authorized to borrow; a failed acquisition resumes the
+reader and falls back without draining, leaving the buffered prefix for the
+Python pump.
+
+Only then does the hand-off let callbacks queued before the pause settle and,
+if the `StreamReader` has bytes in `_buffer`, deliver them once to the
+downstream writer, clearing the buffer only after delivery succeeds or
+downstream closure is known. Blocking activation stays after the drain because
+non-Linux `os.dup` duplicates share the transport's status flags: switching
+early would make asyncio's own descriptor blocking while the drain still
+awaits. A drain failure or cancellation closes the unactivated pair exactly
+once and resumes the reader without restoring blocking mode, since none was
+engaged. The native worker then handles the remaining raw bytes. It receives
+worker-owned duplicates for both descriptors: Rust borrows the worker reader
+duplicate without closing it; it consumes the worker writer duplicate and
+closes it on every exit path. The Python hand-off owner closes the reader
+duplicate after the worker settles, and closes either duplicate itself when
+preparation or executor submission fails. On Windows the shim converts the
+worker duplicates to independently owned Win32 handles and closes the temporary
+CRT descriptors at the native boundary. No descriptor number is shared between
+asyncio and the worker.
 
 Blocking mode is applied only to worker-owned duplicates. After the native
 worker settles, Python closes the remaining reader duplicate, restores the

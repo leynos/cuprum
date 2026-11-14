@@ -3581,20 +3581,49 @@ teardown problem worth investigating.
 ### A pump hand-off failed before submission
 
 When Cuprum cannot prepare the worker-owned descriptors, it rolls the hand-off
-back and the hop falls back to the Python pump. Each failed step records a
-bounded `DEBUG` diagnostic with `cuprum_action="rust_pump_handoff_failed"`,
-`cuprum_outcome="failed"`, a `cuprum_phase` naming the step,
-`cuprum_error_type` holding the exception class, and `cuprum_errno` when one is
-available. The `duplicate_writer` and `executor_submission` phases log on
-`cuprum._pipeline_streams`; the `reader_preparation` and
-`platform_writer_transfer` phases log on `cuprum._streams_rs`.
+back. Descriptor acquisition or blocking-mode activation declines, and the hop
+falls back to the Python pump; failure to create the later worker duplicates,
+or a rejected executor submission, is re-raised instead. The recording steps
+emit a bounded `DEBUG` diagnostic with
+`cuprum_action="rust_pump_handoff_failed"`, `cuprum_outcome="failed"`, a
+`cuprum_phase` naming the step, `cuprum_error_type` holding the exception
+class, and `cuprum_errno` when one is available. The `duplicate_writer` and
+`executor_submission` phases log on `cuprum._pipeline_streams`; the
+`reader_preparation` and `platform_writer_transfer` phases log on
+`cuprum._streams_rs`.
 
 A writer that could not be duplicated records the `duplicate_writer` phase,
 declines with `duplicate_fds_unavailable`, and counts the
 `duplicate_writer_failed` hand-off outcome. Descriptors that could not be
 switched to blocking mode write no hand-off record: the hop declines with
 `blocking_mode_unavailable`, and `blocking_setup_failed` appears only as the
-hand-off outcome counted by the [pump metrics](#pump-metrics).
+hand-off outcome counted by the [pump metrics](#pump-metrics). A buffered drain
+that fails or is cancelled after the pair is acquired releases the pair,
+resumes the reader, and re-raises the original exception. The two cases count
+different outcomes: an error raised by the drain counts `drain_failed`, and the
+caller's cancellation reaching it counts `drain_cancelled`. A shutdown signal
+from a hold observer raised while the acquisition is being published, before
+the drain starts, counts `hold_observer_shutdown`, because it is not a drain
+failure at all. The hop owns no descriptors past any of these points, so the
+counter is the only record that the drain window closed without a submission.
+
+One exception outranks that re-raise. If a pump observer raises a shutdown
+signal, such as `KeyboardInterrupt`, while the hold is being released or while
+one of those three outcomes is being emitted, the signal propagates and the
+original error stays reachable in its `__context__` chain. A signal raised on
+the release carries the original error as its immediate `__context__`; if the
+outcome observer then raises a distinct signal, that signal propagates with the
+release signal as its immediate `__context__`, leaving the original error one
+link further down. A signal raised on the release does not lose the outcome: it
+is still counted before the signal travels. Shutdown signals must travel, and
+the pair has already been released by then, so nothing is stranded. A shutdown
+signal raised on the hold release that follows a successful drain and
+activation is handled the same way: the activated pair is rolled back —
+blocking mode restored, both descriptors closed, the reader resumed — the hop
+counts the `submission_abandoned` outcome, and the signal then travels. Every
+registered pump observer sees the event before any such signal propagates, so a
+metrics hook registered behind the observer that raised still records the
+release.
 
 Two setup failures still reach the caller. A rejected executor submission
 reports `executor_submission_rejected` and re-raises after rollback, because
@@ -3619,6 +3648,13 @@ emits a `handoff` event and increments
 `cuprum_rust_pump_handoff_total{outcome="submitted"}` once. The same counter
 records each failed hand-off outcome once, so it can show both the number of
 hops that were submitted successfully and each terminal hand-off failure.
+
+A hand-off also emits two `handoff_hold` events around the window in which it
+holds its acquired descriptor pair: one with `PumpEvent.held_delta` set to `1`
+before the buffered drain, and one with `held_delta` set to `-1` when the pair
+is released. Every settling path releases exactly once, so a consumer that
+accumulates the deltas reports the pairs currently held across pending drains
+and returns to zero when none are.
 
 #### Cleanup after cancellation
 
@@ -3711,8 +3747,65 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_cleanup_grace_expired_total` | none      | caller-facing cleanup grace expired                              |
 | `cuprum_rust_pump_cleanup_deferred_total`      | none      | deferred callback cleanup completed                              |
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
+| `cuprum_rust_pump_held_pairs`                  | none      | a hand-off acquired or released the pair held across a drain     |
 
 _Table 8: Metrics emitted by `PumpMetricsHook`._
+
+`cuprum_rust_pump_held_pairs` is a gauge rather than a counter: it is set to
+the number of descriptor pairs currently held across pending buffered drains. A
+hand-off sets it one higher on acquisition and one lower on release, and the
+release lands on every settling path — submission, activation failure, drain
+failure, and cancellation. Every hook that reports to the same collector shares
+one running total, so registering a hook per pipeline scope still reports that
+collector's total held pairs. The registry that scopes that sharing can be
+injected. Import `HeldPairCounterRegistry` from `cuprum.adapters.pump_metrics`,
+bind one to a name the caller keeps, and pass it to every hook that reports to
+the collector. Binding it, rather than creating one inline at the call, keeps
+the count for as long as any hook exists: hooks that share a registry share its
+count, while a registry created afresh for each hook gives that collector an
+unrelated total per hook, and one discarded with a hold still outstanding loses
+the hold, so a later release reports a count below zero instead of back at
+zero. A bound registry also lets a test isolate its own collector from the
+process-wide default. Every hook reporting to one collector must use the same
+registry; two registries give that collector two unrelated totals.
+
+<!-- tested-example: pump-held-pair-registry -->
+
+```python
+from cuprum.adapters.metrics_adapter import InMemoryMetrics
+from cuprum.adapters.pump_metrics import HeldPairCounterRegistry, PumpMetricsHook
+from cuprum.pump_events import PumpEvent
+
+metrics = InMemoryMetrics()
+registry = HeldPairCounterRegistry()
+hook = PumpMetricsHook(metrics, registry=registry)
+hook(PumpEvent(phase="handoff_hold", held_delta=1))
+assert metrics.gauges["cuprum_rust_pump_held_pairs"] == 1.0
+hook(PumpEvent(phase="handoff_hold", held_delta=-1))
+assert metrics.gauges["cuprum_rust_pump_held_pairs"] == 0.0
+```
+
+The same total is shared by a collector that cannot be weakly referenced. If
+one event reaches more than one of those hooks — nested `observe_pump`
+registrations both receive every event — it moves the total once, so the gauge
+counts held pairs rather than hook deliveries. A hook that emits an event of
+its own while it is being called reports a separate hold, and that hold moves
+the total once as well.
+
+Gauge support is optional. A collector receives this gauge by implementing
+`GaugeMetricsCollector` from `cuprum.adapters.gauge_metrics`, a
+runtime-checkable protocol that adds one method to the two-method
+`MetricsCollector` contract:
+`set_gauge(name: str, value: float, labels: Mapping[str, str]) -> None`. `name`
+is the metric name, `value` is the level to report — an absolute value, not a
+delta added to whatever the collector already holds — and `labels` maps label
+names to values, which is empty for `cuprum_rust_pump_held_pairs` because that
+gauge carries no labels. The hook calls the method while it holds its own count
+lock, so an implementation should record the value and return; it must not
+block. A collector written against only the two methods keeps receiving the
+counters and histograms and is skipped for gauges. `InMemoryMetrics` implements
+both, and stores the latest gauge value in its `gauges` mapping, which
+`reset()` clears.
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is
@@ -3724,10 +3817,11 @@ unlabelled. The `reason` label on the decline counter retains the bounded
 cardinality described below.
 
 The `outcome` label on `cuprum_rust_pump_handoff_total` is closed to exactly
-`submitted`, `blocking_setup_failed`, `executor_submission_rejected`,
-`native_load_failed`, `buffer_validation_failed`,
-`platform_writer_transfer_failed`, `native_io_failed`,
-`duplicate_writer_failed`, `reader_preparation_failed`, and
+`submitted`, `blocking_setup_failed`, `drain_failed`, `drain_cancelled`,
+`hold_observer_shutdown`, `submission_abandoned`,
+`executor_submission_rejected`, `native_load_failed`,
+`buffer_validation_failed`, `platform_writer_transfer_failed`,
+`native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, and
 `windows_raw_handle_rejected`. The last value represents the deliberate Windows
 raw-handle rejection exposed by the Python shim. `outcome` is the only label on
 this counter. Descriptor numbers, Windows handle values, errno values,

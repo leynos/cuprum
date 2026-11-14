@@ -14,6 +14,7 @@ import pytest
 from cuprum import (
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_completion,
     _pipeline_streams,
 )
 from cuprum._pipeline_stream_fds import RUST_PUMP_TEARDOWN_FAILED_ACTION
@@ -103,7 +104,9 @@ def _run_cancelled_pump_with_captured_cleanup(
         state.worker_finished.set()
         return 0
 
-    original_await_cleanup = _pipeline_stream_native_cleanup._await_native_pump_cleanup
+    original_await_cleanup = (
+        _pipeline_stream_native_completion._await_native_pump_cleanup
+    )
     capture_state = state
 
     async def capture_cleanup_future(

@@ -55,11 +55,35 @@ class RustPumpDeclineReason(enum.StrEnum):
 
 
 class RustPumpHandoffOutcome(enum.StrEnum):
-    """A bounded result of attempting the Rust writer-resource hand-off."""
+    """A bounded result of attempting the Rust writer-resource hand-off.
+
+    The three outcomes around the buffered drain stay distinct so that an
+    operator reading `cuprum_rust_pump_handoff_total` can tell what the drain
+    did. ``DRAIN_FAILED`` is an error the drain itself raised,
+    ``DRAIN_CANCELLED`` is the caller's cancellation reaching the drain, and
+    ``HOLD_OBSERVER_SHUTDOWN`` is a shutdown signal from a hold observer raised
+    while the acquired pair was being published, before the drain began. All
+    three release the acquired pair, resume the reader, and re-raise the
+    original exception, so the hop settles without a submission. A pump
+    observer that raises a shutdown signal while one of these outcomes is
+    emitted takes precedence over that re-raise, because a shutdown signal must
+    still travel; the original error remains reachable through the raised
+    signal's exception context chain.
+
+    ``SUBMISSION_ABANDONED`` covers the same observer problem one step later:
+    the drain finished and blocking activation ran, but a hold observer raised
+    a shutdown signal before the pair was submitted. The activated pair is
+    rolled back and the signal propagates, so the hop settles without a
+    submission and without leaving an open, blocking pair behind.
+    """
 
     SUBMITTED = "submitted"
     DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
+    DRAIN_FAILED = "drain_failed"
+    DRAIN_CANCELLED = "drain_cancelled"
+    HOLD_OBSERVER_SHUTDOWN = "hold_observer_shutdown"
+    SUBMISSION_ABANDONED = "submission_abandoned"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"
     READER_PREPARATION_FAILED = "reader_preparation_failed"
@@ -72,6 +96,7 @@ class RustPumpHandoffOutcome(enum.StrEnum):
 type PumpPhase = typ.Literal[
     "declined",
     "handoff",
+    "handoff_hold",
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
@@ -85,6 +110,11 @@ type PumpPhase = typ.Literal[
 ``handoff``
     A Rust writer-resource hand-off reached one of the closed ``outcome``
     states.
+``handoff_hold``
+    The hand-off took its acquired descriptor pair into, or handed it back
+    from, the coordinator's hold around the buffered drain. ``held_delta`` is
+    ``+1`` on acquisition and ``-1`` on release, so a consumer that accumulates
+    the deltas reports the pairs currently held across pending drains.
 ``failed_after_cancel``
     A cancelled hop's Rust worker had failed, and the failure was consumed
     rather than resurfacing detached at garbage collection.
@@ -125,6 +155,9 @@ class PumpEvent:
     outcome:
         For ``handoff``, the closed outcome of the writer-resource hand-off.
         ``None`` for every other phase.
+    held_delta:
+        For ``handoff_hold``, ``+1`` when the coordinator takes the acquired
+        pair and ``-1`` when it releases it. ``0`` for every other phase.
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
@@ -156,6 +189,11 @@ class PumpEvent:
         cleanup = PumpEvent(phase="cleanup_completed", duration_s=0.25)
         assert cleanup.duration_s == 0.25
 
+    A hold reports the acquired pair as it is taken and released::
+
+        taken = PumpEvent(phase="handoff_hold", held_delta=1)
+        assert taken.held_delta == 1
+
     """
 
     phase: PumpPhase
@@ -164,6 +202,9 @@ class PumpEvent:
     duration_s: float | None = None
     elapsed_s: float | None = None
     exec_id: ExecId | None = None
+    # Appended last so adding it cannot shift the positional fields callers
+    # already passed to this public dataclass.
+    held_delta: int = 0
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]
