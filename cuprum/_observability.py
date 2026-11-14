@@ -158,7 +158,10 @@ def _warn_hook_failure(
     scheduled: list[asyncio.Task[None]],
 ) -> None:
     """Log a hook failure, except cancellation, which is not a failure."""
-    if isinstance(error, asyncio.CancelledError):
+    # Classify on the real type: ``isinstance`` falls back to ``__class__``,
+    # which a hook exception may define to raise, and such an error would then
+    # escape this handler instead of being wrapped and reported.
+    if issubclass(type(error), asyncio.CancelledError):
         return
     _LOGGER.warning(
         "observe_hook_failed phase=%s program=%s error=%s",

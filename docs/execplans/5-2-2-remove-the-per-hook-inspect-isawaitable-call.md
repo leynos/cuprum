@@ -76,6 +76,14 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   (the *scheduled prefix*). An exception raised by the awaitable check itself
   (possible today, see `Surprises & discoveries`) keeps escaping unwrapped from
   outside the `try` block; fixing that is out of scope.
+- C3a. C3 describes the per-line path. The `settled` phase takes a separate
+  terminal path that is *also* unchanged: it calls every hook, logs every
+  synchronous failure (each `observe_hook_failed` record reports the task count
+  reached at that hook), surfaces the first failure afterwards, and retains the
+  tasks scheduled by hooks on *both* sides of a failure. A failing awaitable
+  check on that path still escapes unwrapped and stops the remaining hooks.
+  V1's general property covers the per-line phases; a separate property and a
+  named test cover the settled contract, so the two are not conflated.
 - C4. The public observe-hook contract in `docs/users-guide.md` ("Awaitable
   hook results are scheduled as `asyncio.Task` instances and awaited before the
   run completes") remains true for every callable that satisfies the `ExecHook`
@@ -235,6 +243,27 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   roadmap item is marked done. Touched `docs/users-guide.md`,
   `docs/developers-guide.md`, `docs/cuprum-design.md`, `docs/roadmap.md`,
   `docs/contents.md`, and `CHANGELOG.md`.
+- [x] (2026-11-09) ExecPlan assessment follow-up, finding 1: a hook failure
+  whose `__class__` property raises is wrapped and reported instead of
+  escaping from the handler. `_warn_hook_failure` now classifies cancellation
+  with `issubclass(type(error), asyncio.CancelledError)`, which matches the
+  real type without consulting `__class__`, exactly as the `except` clause it
+  replaced did. Two named regression tests cover the per-line and settled
+  paths; the module records capture records through a non-formatting handler,
+  because formatting such an exception inside pytest re-raises it.
+- [x] (2026-11-09) ExecPlan assessment follow-up, findings 3, 4, and 5: V1's
+  assertions are complete and the growing test modules are split. The
+  comparison now proves each scheduled task wraps `_await_awaitable` around
+  the result of the hook that produced it, and compares every dispatch record
+  on level, exact `getMessage()`, structured fields, and `exc_info` type,
+  including `observe_hook_task_failed`. A second property and a named test
+  cover the settled contract under C3a, and the plan records that contract
+  explicitly. The comparison, oracle, shapes, and seeded faults each live in
+  their own module; no module exceeds 400 lines.
+- [ ] (2026-11-09) ExecPlan assessment follow-up, finding 2: re-collect the
+  V5 and V7 evidence against the final head, so the performance claim is
+  measured on the revision that is delivered rather than on the revisions the
+  assessment examined.
 
 ## Surprises & discoveries
 
@@ -685,15 +714,20 @@ Obligations:
 
 - V1. Dispatch matches its specification.
   Obligation: for every finite sequence of hooks drawn from the classes below
-  and every phase, `_emit_exec_event(hooks, event)` (a) calls hooks in order up
-  to and including the first raising hook; (b) schedules, in order, exactly
-  those earlier hooks whose result satisfies `inspect.isawaitable` (evaluated
-  by the test on an identical, separately produced result); (c) names each task
+  and every per-line phase, `_emit_exec_event(hooks, event)` (a) calls hooks in
+  order up to and including the first raising hook; (b) schedules, in order,
+  exactly those earlier hooks whose result satisfies `inspect.isawaitable`
+  (evaluated by the test on an identical, separately produced result), and each
+  task wraps `_await_awaitable` around the result of the hook that produced it,
+  not merely *some* scheduled result; (c) names each task
   `cuprum.observe.<phase>`; (d) raises `_ExecEventEmissionError` carrying
   exactly that scheduled prefix and wrapping the original exception object, or
   returns the list when nothing raises; and (e) emits the same log records as
   today, compared on logger name, level, `getMessage()`, `extra` values, and
-  `exc_info` type. Method: Hypothesis property with a specification oracle
+  `exc_info` type, covering `observe_hook_task_scheduled`,
+  `observe_hook_failed`, and the `observe_hook_task_started`,
+  `observe_hook_task_failed`, and `observe_hook_task_finished` records of every
+  scheduled task. Method: Hypothesis property with a specification oracle
   (Decision D4). Domain: sequences of length 0 to 8 drawn from: sync returning
   `None`; sync returning a non-awaitable non-`None` value; plain function
   returning a coroutine; lambda returning a coroutine; `functools.wraps` sync
@@ -704,24 +738,35 @@ Obligations:
   `asyncio.Future`; hook returning a `@types.coroutine` generator; hook
   returning an object with `__await__`; hook returning a `Mock` and a
   `MagicMock`; hook raising `Exception`; hook raising a non-`Exception`
-  `BaseException`; hook raising `CancelledError`; and hook returning an object
-  whose awaitable check raises (pinning C3's unwrapped escape). Phases are
-  sampled from `plan`, `start`, `stdout`, and `exit`. Artefacts:
-  `cuprum/unittests/test_observe_hook_dispatch_properties.py`, with hook
-  factories in `cuprum/unittests/_observe_hook_dispatch_support.py`. Evidence:
+  `BaseException`; hook raising `CancelledError`; hook returning an object
+  whose awaitable check raises (pinning C3's unwrapped escape); and an
+  `async def` hook that records its event and then raises when its task awaits
+  it (pinning C2's `observe_hook_task_failed` record). Phases are sampled from
+  `plan`, `start`, `stdout`, and `exit`. Artefacts:
+  `cuprum/unittests/test_observe_hook_dispatch_properties.py` for the property
+  and examples, `cuprum/unittests/_observe_hook_dispatch_compare.py` for the
+  comparison, `cuprum/unittests/_observe_hook_dispatch_oracle.py` for the
+  specification, and hook factories split between
+  `cuprum/unittests/_observe_hook_dispatch_support.py` and
+  `cuprum/unittests/_observe_hook_dispatch_shapes.py`. Evidence:
   `uv run pytest cuprum/unittests/test_observe_hook_dispatch_properties.py -v`
   passes both before and after EP-M2 (it is a preservation property, not a red
-  test), and fails against each seeded fault below. Non-vacuity: every class is
-  tagged with `hypothesis.event(...)`; one run with
-  `--hypothesis-show-statistics` is recorded in `Artefacts and notes` and must
-  show every class; `@example`s pin one sequence per class and one where a
-  raising hook follows two scheduling hooks. Two seeded-fault tests run the
-  property body against deliberately wrong dispatchers and must observe a
-  mismatch: `test_specification_rejects_every_non_none_scheduled` (rejected by
-  the non-awaitable-value class) and
-  `test_specification_rejects_native_coroutines_only` (rejected by the `Future`,
-  `@types.coroutine`, and `__await__` classes). Seeded faults close any
-  coroutine they drop, so no unraisable `RuntimeWarning` leaks into later tests.
+  test), and fails against each seeded fault below. A separate property,
+  `test_settled_dispatch_matches_specification`, runs the same comparison for
+  the `settled` phase under C3a. Non-vacuity: every class is tagged with
+  `hypothesis.event(...)`; one run with `--hypothesis-show-statistics` is
+  recorded in `Artefacts and notes` and must show every class; `@example`s pin
+  one sequence per class, one where a raising hook follows two scheduling
+  hooks, and settled sequences that schedule on both sides of a failure. Three
+  seeded-fault tests run the property body against deliberately wrong
+  dispatchers and must observe a mismatch:
+  `test_specification_rejects_every_non_none_scheduled` (rejected by the
+  non-awaitable-value class),
+  `test_specification_rejects_native_coroutines_only` (rejected by the
+  `Future`, `@types.coroutine`, and `__await__` classes), and
+  `test_specification_rejects_reversed_task_order` (rejected by the
+  task-to-hook identity assertion). Seeded faults close any coroutine they
+  drop, so no unraisable `RuntimeWarning` leaks into later tests.
 - V2. Known-shape results never reach awaitable detection (ROAD-5.2.2-S1).
   Obligation: for hooks returning `None` and hooks returning native coroutines,
   emitting any number of events makes zero calls to `inspect.isawaitable` from
