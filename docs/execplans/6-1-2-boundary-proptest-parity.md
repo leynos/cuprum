@@ -172,16 +172,19 @@ ownership and error contracts, stop and report the exact incompatibility.
   `/tmp/typecheck-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`,
   and
   `/tmp/lint-46e77cc1-91d6-4910-ade0-123fba58e5fe-6-1-2-boundary-proptest-parity-2.out`.
-- [ ] M3: in progress; Windows consume now uses a borrowed CRT descriptor and
-  `_read` through the shared decoder. The Python shim duplicates the validated
-  descriptor, sets only the duplicate to binary mode, and closes it after the
-  detached call. The wrapper keeps its established Windows reader-first setup;
-  the direct native entry point still validates the buffer before descriptor
-  conversion. Consume properties, Windows error/setup-cleanup cases, the large
-  subprocess-pipe BDD witness, and boundary documentation are in place. A
-  pre-rebase Windows-target `cargo check` for `cuprum-rust` passed after fixing
-  a root-module visibility error and adding the Windows-only stream re-export.
-  The refreshed target rebase onto `origin/main` at
+- [x] M3: complete. The entry below records the mid-implementation state and is
+  kept as history; the completing evidence is the "M1, M2, and M3 are
+  implemented and committed" entry, the Windows repair cycles, and the
+  2026-11-14 bundle at `1f1484a72`. Windows consume uses a borrowed CRT
+  descriptor and `_read` through the shared decoder. The Python shim duplicates
+  the validated descriptor, sets only the duplicate to binary mode, and closes
+  it after the detached call. The wrapper keeps its established Windows
+  reader-first setup; the direct native entry point still validates the buffer
+  before descriptor conversion. Consume properties, Windows error/setup-cleanup
+  cases, the large subprocess-pipe BDD witness, and boundary documentation are
+  in place. A pre-rebase Windows-target `cargo check` for `cuprum-rust` passed
+  after fixing a root-module visibility error and adding the Windows-only
+  stream re-export. The refreshed target rebase onto `origin/main` at
   `45c06213bd16cf1da1f4bc08a91e97ae58514629` then replayed all nine commits
   with no conflicts. The range-diff maps each commit; target echo code and
   tests remain byte-identical, and both target documentation additions remain
