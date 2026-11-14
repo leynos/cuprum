@@ -9,6 +9,7 @@ opened with, including the hop that has no time left at all.
 
 from __future__ import annotations
 
+import dataclasses
 import typing as typ
 from unittest import mock
 
@@ -16,6 +17,7 @@ import pytest
 
 from scripts import pypy_download as downloader
 from scripts.tests.boundary_pypy_transfer_support import (
+    connection_factory,
     fake_environment,
     manual_clock,
     redirect_response,
@@ -24,6 +26,15 @@ from scripts.tests.boundary_pypy_transfer_support import (
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
+
+
+def _budgeted_environment(
+    *connections: mock.Mock, clock: mock.Mock, budgets: list[float]
+) -> downloader.Environment:
+    """Serve `connections` in order and collect the budget each hop was opened with."""
+    connect = connection_factory(*connections, timeouts=budgets)
+    return dataclasses.replace(fake_environment(clock=clock), connect=connect)
+
 
 #: The whole deadline with five seconds still to run, so the second hop is left
 #: with a budget far below the 60 s single-hop limit.
@@ -53,7 +64,7 @@ class TestHopBudget:
         downloader._download(
             "https://example.invalid/start",
             tmp_path / "binary",
-            fake_environment(first, body, clock=clock, timeouts=timeouts),
+            _budgeted_environment(first, body, clock=clock, budgets=timeouts),
         )
         assert timeouts[0] == pytest.approx(60.0), (
             "a hop with the whole deadline ahead keeps the 60 s connect limit"
@@ -82,7 +93,7 @@ class TestHopBudget:
             downloader._download(
                 "https://example.invalid/start",
                 tmp_path / "binary",
-                fake_environment(first, clock=clock, timeouts=timeouts),
+                _budgeted_environment(first, clock=clock, budgets=timeouts),
             )
         assert timeouts == [pytest.approx(60.0)], (
             "a hop with no time left must be refused, not handed a socket"

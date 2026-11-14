@@ -104,13 +104,11 @@ def fake_environment(
     clock: cabc.Callable[[], float] = time.monotonic,
     sink: MetricsSink | None = None,
     logger: logging.Logger | None = None,
-    timeouts: list[float] | None = None,
 ) -> downloader.Environment:
     """Build an environment whose connections come from `fakes` in order.
 
     The sink and logger default to the same ones the bootstrap uses, so a case
-    that inspects log records needs to supply nothing. Passing `timeouts`
-    collects the budget each hop's connection was opened with.
+    that inspects log records needs to supply nothing.
 
     Returns
     -------
@@ -120,7 +118,7 @@ def fake_environment(
     """
     return downloader.Environment(
         clock=clock,
-        connect=connection_factory(*fakes, timeouts=timeouts),
+        connect=connection_factory(*fakes),
         metrics=LoggingMetrics() if sink is None else sink,
         logger=LOGGER if logger is None else logger,
     )
