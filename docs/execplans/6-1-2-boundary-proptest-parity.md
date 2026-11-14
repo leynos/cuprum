@@ -1,12 +1,12 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `4913a0753`; hosted review pending.
+eight commit gates green on candidate `857ab73f7`; hosted review pending.
 
-Implemented on branch `6-1-2-boundary-proptest-parity`, which sits directly on
-`origin/main` at `e170f908f2a7b4187cc321296a9029e621169b07` with no rebase
-required. Issues #90, #124, and #127 are closed; their merged work is recorded
-under [Conformance basis](#conformance-basis). The implementation adds the
+Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
+`origin/main` at `dedb39514a44211494bf34c38cdd9046d81716c1`. Issues #90, #124,
+and #127 are closed; their merged work is recorded under
+[Conformance basis](#conformance-basis). The implementation adds the
 extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
 the supporting documentation. Roadmap 6.1.2 is checked once the implementation
 is accepted; final validation and review are pending.
@@ -466,6 +466,19 @@ ownership and error contracts, stop and report the exact incompatibility.
     `modern-stable-extension` passes `$(MODERN_STABLE_CARGO_ENV)` through
     `test-extension`. The ordinary routes are byte-identical to before, which
     the added contract test pins in both directions.
+- [x] (2026-11-15) The full sequential bundle is green at
+  `857ab73f76e84eba9b4eaf0762553a4fb323efb3` against base `dedb39514`, with
+  every log naming that head and that base, diff `e1906d5e0…` identical at
+  start and end, `DIRTY_AT_END: 0`, and an `# EXIT:` footer. Results:
+  `check-fmt` 1s; `typecheck` 1s; `markdownlint` 21s; `nixie` 2s;
+  `lint-windows` 1s; `test-extension` 179s with `running 30 tests` and
+  `30 passed; 0 failed; 8 filtered out`; `test` 879s with zero `FAILED`, the
+  aggregate pytest invocation at 4,986 passed / 20 skipped / 3 deselected,
+  Nextest 189 passed with 30 skipped, and all doctests ok; `lint` 168s with
+  `interrogate` at `actual: 100.0%` and the duplication gate passing. Three
+  earlier attempts stopped at a gate against a superseded tree (`c39b4a30c` at
+  `lint-windows`, `a525edcbc` at `check-fmt`) or wrote no footer, and each was
+  followed by a full re-run from `check-fmt` rather than a resume.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -567,6 +580,17 @@ split's new *test* modules passed while the new *production* module broke the
 manifest. A branch whose only remaining risk is cross-platform or packaging
 behaviour should be gated in full before any review request, because both
 defects are cheap to fix and expensive to discover during PR review.
+
+- **"This gate already passed" describes a tree, not a commit.** Two of the
+  four bundle attempts in this segment stopped on a gate the author had run
+  green minutes earlier (`lint-windows` on `c39b4a30c`, `check-fmt` on
+  `a525edcbc`). Neither was a flake: the earlier passing run had been against a
+  different tree, and each intervening commit introduced exactly the defect the
+  gate then reported — a non-`const` constructor and an assertion Ruff would
+  join. The habit that fails here is remembering the *result* instead of the
+  head it was produced at. Recording the head in the log header is what made
+  the difference legible after the fact; without it both runs look like the
+  same gate disagreeing with itself.
 
 A percentage gate near its limit is decided by the denominator, not by the
 defect that first draws the eye. `interrogate` is configured for a 100%
@@ -946,18 +970,19 @@ The original implementation-planning baseline was fetched `origin/main` at
 commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
 repeatedly as `main` advanced. The implementation branch's current base, and
 the one this document's conformance claims are made against, is `origin/main` at
-`e170f908f2a7b4187cc321296a9029e621169b07`. The branch sits directly on it
-with no open rebase. Earlier bases — `7d56d0be8` on 2026-11-03 and `40d56d69f`
-before it — are superseded and kept only as history. Local recovery refs retain
-the pre-rebase head, base, target, and remote head. The original plan was
-drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate
-task-specific terms-of-reference document. The governing documents at the
-latest baseline are `docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust
-extension strategy), `docs/adr-002-additional-rust-components.md` (decoding and
-descriptor risks), `docs/adr-008-rust-pump-observation-channel.md` (separate
-pump observations), and `docs/tee-hotpath-profiling-baseline-2026-06-12.md`
-§§3–4. Consult `docs/developers-guide.md` for extension-required testing and CI
-ownership. Issue #90 was implemented by merged PR
+`dedb39514a44211494bf34c38cdd9046d81716c1`. The branch sits directly on it
+with no open rebase. Earlier bases — `e170f908f` and `7d56d0be8` on 2026-11-03,
+and `40d56d69f` before them — are superseded and kept only as history. Local
+recovery refs retain the pre-rebase head, base, target, and remote head. The
+original plan was drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`.
+There is no separate task-specific terms-of-reference document. The governing
+documents at the latest baseline are `docs/roadmap.md` §6.1.2,
+`docs/cuprum-design.md` (Rust extension strategy),
+`docs/adr-002-additional-rust-components.md` (decoding and descriptor risks),
+`docs/adr-008-rust-pump-observation-channel.md` (separate pump observations),
+and `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §§3–4. Consult
+`docs/developers-guide.md` for extension-required testing and CI ownership.
+Issue #90 was implemented by merged PR
 [#229](https://github.com/leynos/cuprum/pull/229) (commit
 `a1840eb2662a14f6c171b01bc3cbc68fd2752b65`), which added a buffer-size cap and
 Python/Rust boundary property tests. Issue #124 was implemented by merged PR
