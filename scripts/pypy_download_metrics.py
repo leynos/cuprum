@@ -15,6 +15,7 @@ labels or span attributes, so a hostile server cannot inflate cardinality.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import typing as typ
 
@@ -101,11 +102,20 @@ class LoggingMetrics:
         )
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class Sample:
+    """One download's measured byte count and elapsed time."""
+
+    written: int
+    seconds: float
+
+
 def report_download(
     sink: MetricsSink,
     outcome: str,
-    written: int,
-    duration: float,
+    sample: Sample,
+    *,
+    logger: logging.Logger = LOGGER,
 ) -> None:
     """Report one finished download and close its timed span.
 
@@ -121,31 +131,34 @@ def report_download(
         Backend that receives the counter and both histogram samples.
     outcome : str
         One value from the bounded outcome vocabulary defined here.
-    written : int
-        Bytes the transfer wrote, whether or not it completed.
-    duration : float
-        Seconds the transfer took, measured on a monotonic clock.
+    sample : Sample
+        Bytes the transfer wrote and the seconds it took, measured on a
+        monotonic clock.
+    logger : logging.Logger, optional
+        Destination for the span record and the backend failure warning.
+        Defaults to this module's logger, which is the collection path the
+        isolated bootstrap has.
     """
     labels = {"outcome": outcome}
     try:
         sink.inc_counter(DOWNLOADS_TOTAL, 1.0, labels)
-        sink.observe_histogram(DOWNLOAD_BYTES, float(written), labels)
-        sink.observe_histogram(DOWNLOAD_SECONDS, duration, labels)
+        sink.observe_histogram(DOWNLOAD_BYTES, float(sample.written), labels)
+        sink.observe_histogram(DOWNLOAD_SECONDS, sample.seconds, labels)
     except Exception as exc:
-        LOGGER.warning(
+        logger.warning(
             "pypy download metrics could not be recorded: %s",
             type(exc).__name__,
             exc_info=True,
         )
-    LOGGER.info(
+    logger.info(
         "pypy download finished: %s, %d bytes in %.3f s",
         outcome,
-        written,
-        duration,
+        sample.written,
+        sample.seconds,
         extra={
             "span": "pypy_download",
             "outcome": outcome,
-            "bytes": written,
-            "duration_seconds": duration,
+            "bytes": sample.written,
+            "duration_seconds": sample.seconds,
         },
     )

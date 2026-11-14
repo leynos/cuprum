@@ -5851,52 +5851,58 @@ body, cannot hold the transfer open. The watchdog captures the socket before
 the header parse, because `getresponse` hands a close-delimited response that
 socket and clears the connection's reference. It re-reads the transfer's clock
 after every wait, so a wakeup that arrives before the deadline starts another
-wait instead of shutting down a healthy read. `_download` accepts the
-watchdog's waiter beside its clock, so a test can drive a blocked read through
-the whole download boundary and advance that one clock past the deadline
-without sleeping. The deadline, the clock and waiter seam, and the watchdog
-live in `scripts/pypy_download_deadline.py`. The target needs the `openssl`
-binary to mint the throwaway certificate authority, `uv` with a Python 3.14
-interpreter for the isolated driver, network access to install the pinned
-`rust-prover-tools` revision, and a loopback socket for each scenario. The PyPy
-cases need only `openssl` and the loopback socket; they trust the test
-certificate authority through `SSL_CERT_FILE` for the duration of one test.
+wait instead of shutting down a healthy read. `_download` takes its clock from
+the injected `Environment` and accepts the watchdog's waiter beside it, so a
+test can drive a blocked read through the whole download boundary and advance
+that one clock past the deadline without sleeping. The deadline, the clock and
+waiter seam, and the watchdog live in `scripts/pypy_download_deadline.py`. The
+target needs the `openssl` binary to mint the throwaway certificate authority,
+`uv` with a Python 3.14 interpreter for the isolated driver, network access to
+install the pinned `rust-prover-tools` revision, and a loopback socket for each
+scenario. The PyPy cases need only `openssl` and the loopback socket; they
+trust the test certificate authority through `SSL_CERT_FILE` for the duration
+of one test.
 
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone.
 `scripts/pypy_download.py` owns the linter interpreter's bounded HTTPS fetch,
-including its byte ceiling, transfer deadline, and digest check, and
-`scripts/install_pypy312.py` owns the release layout and the extraction that
-turns a verified archive into the configured interpreter.
-`scripts/pypy_download_metrics.py` owns the download's observability: one
-outcome counter, byte and duration histograms, and one timed span. The outcome
-label is drawn from a fixed vocabulary (`cached`, `success`, `oversize`,
-`deadline`, `checksum_mismatch`, `transfer_error`, `refused`), so no URL,
-filename, or error text can reach a label and a hostile server cannot inflate
-cardinality. The installer runs under `uv run --no-project`, where no metrics
-backend is importable, so `LoggingMetrics` renders every sample as a structured
-log record and `install_pypy312.main()` enables INFO to surface the span
-summary. A caller with a backend passes anything that matches the local
+including its byte ceiling, transfer deadline, and digest check. Every
+dependency it cannot supply itself — the monotonic clock, the HTTPS connection
+factory, and the metric sink — enters through the `Environment` passed to
+`checked_download`, so a test injects its doubles at the public boundary rather
+than patching the module. `scripts/install_pypy312.py` owns the release layout
+and the extraction that turns a verified archive into the configured
+interpreter. `scripts/pypy_download_metrics.py` owns the download's
+observability: one outcome counter, byte and duration histograms, and one timed
+span. The outcome label is drawn from a fixed vocabulary (`cached`, `success`,
+`oversize`, `deadline`, `checksum_mismatch`, `transfer_error`, `refused`), so
+no URL, filename, or error text can reach a label and a hostile server cannot
+inflate cardinality. The installer runs under `uv run --no-project`, where no
+metrics backend is importable, so `LoggingMetrics` renders every sample as a
+structured log record and `install_pypy312.main()` enables INFO to surface the
+span summary. A caller with a backend passes anything that matches the local
 `MetricsSink` protocol, whose methods mirror cuprum's `MetricsCollector`,
-through `checked_download`'s `metrics` keyword. Reporting is diagnostic, so a
-backend that raises is logged as a warning and discarded: telemetry can neither
-fail a download whose archive was verified and published nor replace the
-transfer error on its way to the caller, and the pending file is removed even
-when the reporting path fails. `scripts/boundary_fault_invocations.py` scopes
-its runner to the four verification commands and a disposable source copy; it
-is not a general process abstraction. `scripts/check_boundary_faults.py` owns
-the fault catalogue and calls that runner rather than defining its own. The
-runner upholds the allowlisted-verifier, offline-Cargo and lockfile contract
-described below. Its progress and ownership checks have separate private
-runners; their scope is the existing four mutations, with the same controls and
-failure diagnostics. Native `cargo` checks pass `--frozen`, but a `cargo kani`
-check cannot: Cargo consumes a global `--frozen` before dispatching an external
-subcommand, and cargo-kani `0.67.0` rejects that flag itself. The Kani route
-therefore relies on the run-local home and `CARGO_NET_OFFLINE`, and compares
-the copied workspace's lockfile digest after every run so a build that rewrites
-it fails closed. The compiler-contract checker uses a named predicate requiring
-both failure and an unsafe-forbid diagnostic, so unrelated compiler failures
-cannot pass the probe.
+through the `metrics` field of that `Environment`. `report_download` takes the
+finished measurement as one `Sample` and an optional `logger`, so a caller can
+redirect the span record without touching the module logger. Reporting is
+diagnostic, so a backend that raises is logged as a warning and discarded:
+telemetry can neither fail a download whose archive was verified and published
+nor replace the transfer error on its way to the caller, and the pending file
+is removed even when the reporting path fails.
+`scripts/boundary_fault_invocations.py` scopes its runner to the four
+verification commands and a disposable source copy; it is not a general process
+abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and
+calls that runner rather than defining its own. The runner upholds the
+allowlisted-verifier, offline-Cargo and lockfile contract described below. Its
+progress and ownership checks have separate private runners; their scope is the
+existing four mutations, with the same controls and failure diagnostics. Native
+`cargo` checks pass `--frozen`, but a `cargo kani` check cannot: Cargo consumes
+a global `--frozen` before dispatching an external subcommand, and cargo-kani
+`0.67.0` rejects that flag itself. The Kani route therefore relies on the
+run-local home and `CARGO_NET_OFFLINE`, and compares the copied workspace's
+lockfile digest after every run so a build that rewrites it fails closed. The
+compiler-contract checker uses a named predicate requiring both failure and an
+unsafe-forbid diagnostic, so unrelated compiler failures cannot pass the probe.
 
 Windows borrowed I/O lives beside its handle adapter in
 `rust/cuprum-native-io/src/windows.rs`. Its private `with_file` helper retains

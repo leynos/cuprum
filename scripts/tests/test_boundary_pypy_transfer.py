@@ -23,11 +23,10 @@ from scripts import pypy_download as downloader
 from scripts import pypy_download_deadline as deadline
 from scripts.tests.boundary_pypy_transfer_support import (
     download_response,
-    download_with_clock,
+    fake_environment,
     fake_response,
     fixed_clock,
     manual_clock,
-    patch_connections,
     redirect_response,
     streaming_response,
 )
@@ -47,9 +46,7 @@ class TestBoundedBody:
     ) -> None:
         """A body inside both bounds is written unchanged."""
         destination = tmp_path / "binary"
-        download_response(
-            streaming_response(b"archive bytes"), destination, monkeypatch
-        )
+        download_response(streaming_response(b"archive bytes"), destination)
         assert destination.read_bytes() == b"archive bytes", (
             "a bounded body must be copied in full"
         )
@@ -62,7 +59,7 @@ class TestBoundedBody:
         destination = tmp_path / "binary"
         response = streaming_response(b"x" * 64, declared="9")
         with pytest.raises(ValueError, match="above the 8-byte limit"):
-            download_response(response, destination, monkeypatch)
+            download_response(response, destination)
         assert response.read1.call_count == 0, "the body must not be read"
         assert not destination.exists(), "the destination must not be created"
 
@@ -73,7 +70,7 @@ class TestBoundedBody:
         monkeypatch.setattr(downloader, "_MAX_BODY_BYTES", 8)
         destination = tmp_path / "binary"
         with pytest.raises(ValueError, match="exceeded the 8-byte limit"):
-            download_response(streaming_response(b"x" * 64), destination, monkeypatch)
+            download_response(streaming_response(b"x" * 64), destination)
         assert destination.read_bytes() == b"", (
             "an over-ceiling chunk must not be written"
         )
@@ -86,7 +83,7 @@ class TestBoundedBody:
         destination = tmp_path / "binary"
         response = fake_response(None, [b"abcd", b"abcd", b"abcd"])
         with pytest.raises(ValueError, match="exceeded the 10-byte limit"):
-            download_response(response, destination, monkeypatch)
+            download_response(response, destination)
         assert destination.read_bytes() == b"abcdabcd", (
             "only the chunks accepted before the ceiling may be written"
         )
@@ -112,7 +109,7 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            download_response(response, destination, monkeypatch, clock=clock)
+            download_response(response, destination, clock=clock)
         assert response.read1.call_count == 1, "no chunk may be read past the deadline"
         assert destination.read_bytes() == b"first", (
             "the chunk accepted before the deadline must be kept"
@@ -126,7 +123,7 @@ class TestBoundedBody:
         destination = tmp_path / "binary"
         response = streaming_response(b"x" * 64)
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            download_response(response, destination, monkeypatch)
+            download_response(response, destination)
         assert response.read1.call_count == 0, "no chunk may be read past the deadline"
 
     def test_an_expired_transfer_is_refused_before_the_headers_are_read(
@@ -136,13 +133,12 @@ class TestBoundedBody:
         monkeypatch.setattr(downloader, "_TRANSFER_DEADLINE_SECONDS", -1.0)
         destination = tmp_path / "binary"
         connection = mock.Mock()
-        monkeypatch.setattr(
-            downloader.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
-        )
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            downloader._download("https://example.invalid/asset", destination)
+            downloader._download(
+                "https://example.invalid/asset",
+                destination,
+                fake_environment(connection),
+            )
         assert connection.getresponse.call_count == 0, (
             "an expired transfer must not start reading headers"
         )
@@ -169,7 +165,7 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            download_response(response, destination, monkeypatch, clock=clock)
+            download_response(response, destination, clock=clock)
         assert destination.read_bytes() == b"tail", (
             "the bytes read before the deadline must be kept"
         )
@@ -187,14 +183,11 @@ class TestBoundedBody:
             raise http.client.BadStatusLine("HTTP/1")
 
         connection.getresponse.side_effect = getresponse
-        monkeypatch.setattr(
-            downloader.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
-        )
         with pytest.raises(TimeoutError, match="transfer deadline"):
             downloader._download(
-                "https://example.invalid/asset", tmp_path / "binary", clock=clock
+                "https://example.invalid/asset",
+                tmp_path / "binary",
+                fake_environment(connection, clock=clock),
             )
 
     def test_a_body_parse_stopped_by_the_deadline_is_a_timeout(
@@ -214,7 +207,7 @@ class TestBoundedBody:
 
         response.read1.side_effect = read1
         with pytest.raises(TimeoutError, match="transfer deadline"):
-            download_response(response, tmp_path / "binary", monkeypatch, clock=clock)
+            download_response(response, tmp_path / "binary", clock=clock)
 
     def test_a_body_parse_failure_before_the_deadline_is_propagated(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -223,7 +216,7 @@ class TestBoundedBody:
         response = streaming_response(b"x")
         response.read1.side_effect = http.client.IncompleteRead(b"partial")
         with pytest.raises(http.client.IncompleteRead):
-            download_response(response, tmp_path / "binary", monkeypatch)
+            download_response(response, tmp_path / "binary")
 
     def test_the_deadline_spans_every_redirect_hop(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -251,12 +244,14 @@ class TestBoundedBody:
         first, second = mock.Mock(), mock.Mock()
         first.getresponse.return_value = redirect
         second.getresponse.return_value = body
-        patch_connections(monkeypatch, [first, second])
-        download_with_clock(monkeypatch, clock)
+        environment = fake_environment(first, second, clock=clock)
         archive = tmp_path / "binary"
         with pytest.raises(TimeoutError, match="transfer deadline"):
             downloader.checked_download(
-                "https://example.invalid/start", archive, "0" * 64
+                "https://example.invalid/start",
+                archive,
+                "0" * 64,
+                environment=environment,
             )
         assert body.read1.call_count == 2, "the final hop must serve its body"
         assert not archive.exists(), "a timed-out transfer must publish nothing"
@@ -273,13 +268,13 @@ class TestBoundedBody:
             "https://example.invalid/asset"
         )
         second.getresponse.return_value = streaming_response(b"payload")
-        patch_connections(monkeypatch, [first, second])
-        download_with_clock(monkeypatch, manual_clock())
+        environment = fake_environment(first, second, clock=manual_clock())
         archive = tmp_path / "binary"
         downloader.checked_download(
             "https://example.invalid/start",
             archive,
             hashlib.sha256(b"payload").hexdigest(),
+            environment=environment,
         )
         assert archive.read_bytes() == b"payload", (
             "a redirected download must publish the verified body"
@@ -296,7 +291,9 @@ class TestPendingFile:
         archive = tmp_path / "binary.tar.gz"
         pending = archive.with_suffix(".download")
 
-        def fetch(_url: str, destination: Path) -> None:
+        def fetch(
+            _url: str, destination: Path, _environment: downloader.Environment
+        ) -> None:
             """Write partial bytes, then fail the way a deadline would."""
             destination.write_bytes(b"partial body")
             msg = "release download exceeded the transfer deadline"

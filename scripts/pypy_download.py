@@ -8,6 +8,10 @@ down when the deadline passes, so a server that trickles bytes, or stalls a
 close-delimited body, cannot hold the transfer open. Without these bounds a
 stalled or oversized response would fill the host disk before the digest check
 could reject it.
+
+The clock, connection factory, and metric sink all enter through
+`Environment`, so a test drives this public boundary with fakes instead of
+patching the module.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from scripts.pypy_download_metrics import (
     SUCCESS,
     TRANSFER_ERROR,
     LoggingMetrics,
+    Sample,
     report_download,
 )
 
@@ -48,6 +53,9 @@ _MAX_BODY_BYTES = 512 * 1024 * 1024
 # One deadline covers every redirect hop plus the body, so a server that
 # trickles bytes cannot extend the transfer indefinitely.
 _TRANSFER_DEADLINE_SECONDS = 900.0
+# Bounded so a redirect loop fails to download rather than following hops
+# forever; a release asset is served in one or two hops.
+_MAX_REDIRECTS = 6
 _CHUNK_BYTES = 64 * 1024
 
 
@@ -58,6 +66,34 @@ class _OversizeError(ValueError):
 class _ChecksumMismatchError(ValueError):
     """A completed body did not match the approved digest."""
 
+
+class Connect(typ.Protocol):
+    """Open the HTTPS connection one redirect hop needs."""
+
+    def __call__(
+        self,
+        host: str,
+        port: int | None,
+        *,
+        timeout: float,
+    ) -> http.client.HTTPSConnection:
+        """Open a connection to `host` on `port`, bounded by `timeout`."""
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Environment:
+    """The clock, connection factory, and metric sink one download uses.
+
+    The defaults are the real ones. A test replaces any of them at the boundary
+    it drives, so no seam is monkeypatched into this module.
+    """
+
+    clock: Clock = time.monotonic
+    connect: Connect = http.client.HTTPSConnection
+    metrics: MetricsSink = dataclasses.field(default_factory=LoggingMetrics)
+
+
+_DEFAULT_ENVIRONMENT = Environment()
 
 # Ordered so a subclass is matched before its base: `_OversizeError` and
 # `_ChecksumMismatchError` are `ValueError`s, and `TimeoutError` is an
@@ -76,7 +112,7 @@ def checked_download(
     destination: Path,
     digest: str,
     *,
-    metrics: MetricsSink | None = None,
+    environment: Environment = _DEFAULT_ENVIRONMENT,
 ) -> None:
     """Fetch an HTTPS artefact and fail closed on any checksum mismatch.
 
@@ -88,10 +124,11 @@ def checked_download(
         Local cache path; an existing file is reused only if its digest matches.
     digest : str
         Expected SHA-256 digest from the approved release manifest.
-    metrics : MetricsSink, optional
-        Backend for the outcome, byte, and duration samples. The default
-        renders them as structured log records, the collection path available
-        to the isolated bootstrap.
+    environment : Environment, optional
+        Clock, connection factory, and metric sink. The defaults use wall-clock
+        time, the standard HTTPS connection, and the logging collector, which
+        renders every sample as a structured log record — the collection path
+        available to the isolated bootstrap.
 
     Raises
     ------
@@ -107,32 +144,45 @@ def checked_download(
         If an existing cache entry cannot be inspected, or the download cannot
         be transferred into the cache.
     """  # ruff: ignore[docstring-extraneous-exception] - the transfer helpers raise every listed type.
-    sink = LoggingMetrics() if metrics is None else metrics
-    reporting = _Reporting(sink, time.monotonic())
-    _require_https(url, reporting)
-    if _cache_is_current(destination, digest):
-        reporting.report(CACHED, _size_or_zero(destination))
-        return
-    _transfer_into_cache(url, destination, digest, reporting)
+    started = environment.clock()
+    pending = _pending_path(destination)
+    try:
+        _require_https(url)
+        if _cache_is_current(destination, digest):
+            outcome, written = CACHED, _size_or_zero(destination)
+        else:
+            _download(url, pending, environment)
+            _publish(pending, destination, digest)
+            outcome, written = SUCCESS, _size_or_zero(destination)
+    except Exception as error:
+        # Measured before the cleanup below discards what the transfer wrote.
+        pending_bytes = _size_or_zero(pending)
+        _report(environment, _failure_outcome(error), pending_bytes, started)
+        raise
+    finally:
+        # Cleanup keeps its own block: even a reporting path that fails must
+        # not leave a partial `.download` file behind the failed transfer.
+        pending.unlink(missing_ok=True)
+    _report(environment, outcome, written, started)
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class _Reporting:
-    """One download's metric sink and the instant its clock started."""
-
-    sink: MetricsSink
-    started: float
-
-    def report(self, outcome: str, written: int) -> None:
-        """Publish one outcome with the bytes written and the time taken."""
-        report_download(self.sink, outcome, written, time.monotonic() - self.started)
+def _pending_path(destination: Path) -> Path:
+    """Name the file a transfer fills before it is published."""
+    return destination.with_suffix(".download")
 
 
-def _require_https(url: str, reporting: _Reporting) -> None:
-    """Refuse a non-HTTPS URL, reporting the refusal it causes."""
+def _report(
+    environment: Environment, outcome: str, written: int, started: float
+) -> None:
+    """Publish one outcome with the bytes written and the time since `started`."""
+    sample = Sample(written, environment.clock() - started)
+    report_download(environment.metrics, outcome, sample)
+
+
+def _require_https(url: str) -> None:
+    """Refuse a download or redirect whose URL is not HTTPS."""
     if url.startswith("https://"):
         return
-    reporting.report(REFUSED, 0)
     msg = "binary downloads require HTTPS"
     raise ValueError(msg)
 
@@ -145,37 +195,10 @@ def _failure_outcome(error: BaseException) -> str:
     return TRANSFER_ERROR
 
 
-def _transfer_into_cache(
-    url: str,
-    destination: Path,
-    digest: str,
-    reporting: _Reporting,
-) -> None:
-    """Transfer through a temporary file, reporting the outcome either way.
-
-    The pending file is removed in every case, so a refused or interrupted
-    transfer leaves neither a partial download nor a metric that claims one
-    succeeded.
-    """
-    pending = destination.with_suffix(".download")
-    written: int | None = None
-    outcome = SUCCESS
-    try:
-        _download(url, pending)
-        written = _size_or_zero(pending)
-        _require_digest(pending, destination, digest)
-        pending.replace(destination)
-    except Exception as error:
-        outcome = _failure_outcome(error)
-        raise
-    finally:
-        # Cleanup keeps its own block: even a reporting path that fails must
-        # not leave a partial `.download` file behind the failed transfer.
-        try:
-            measured = written if written is not None else _size_or_zero(pending)
-            reporting.report(outcome, measured)
-        finally:
-            pending.unlink(missing_ok=True)
+def _publish(pending: Path, destination: Path, digest: str) -> None:
+    """Verify the pending bytes, then move them into the cache."""
+    _require_digest(pending, destination, digest)
+    pending.replace(destination)
 
 
 def _size_or_zero(path: Path) -> int:
@@ -215,23 +238,27 @@ def _require_digest(pending: Path, destination: Path, digest: str) -> None:
 def _download(
     url: str,
     destination: Path,
+    environment: Environment = _DEFAULT_ENVIRONMENT,
     *,
-    clock: Clock = time.monotonic,
     wait: Waiter | None = None,
 ) -> None:
     """Follow bounded HTTPS-only release redirects into a temporary file.
 
-    Tests inject `clock` and `wait` together, so a deadline is reached and a
-    blocked read released without waiting for real seconds.
+    The environment supplies the clock the deadline is measured on and the
+    connection factory each hop opens. Tests inject `wait` beside a manual
+    clock, so a deadline is reached and a blocked read released without
+    waiting for real seconds.
 
     Raises
     ------
     ValueError
         If a hop is not HTTPS or the redirect limit is exceeded.
     """
-    transfer = _Transfer(clock() + _TRANSFER_DEADLINE_SECONDS, clock, wait)
-    for _ in range(6):
-        redirect = _download_once(url, destination, transfer)
+    transfer = _Transfer(
+        environment.clock() + _TRANSFER_DEADLINE_SECONDS, environment.clock, wait
+    )
+    for _ in range(_MAX_REDIRECTS):
+        redirect = _download_once(url, destination, transfer, environment.connect)
         if redirect is None:
             return
         url = redirect
@@ -239,14 +266,14 @@ def _download(
     raise ValueError(msg)
 
 
-def _connect(url: str) -> tuple[http.client.HTTPSConnection, str]:
+def _connect(url: str, connect: Connect) -> tuple[http.client.HTTPSConnection, str]:
     """Validate one hop's URL and open its HTTPS connection."""
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
         msg = "binary downloads and redirects require HTTPS"
         raise ValueError(msg)
     target = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, "")) or "/"
-    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, timeout=60)
+    connection = connect(parsed.hostname, parsed.port, timeout=60)
     return connection, target
 
 
@@ -347,9 +374,10 @@ def _download_once(
     url: str,
     destination: Path,
     transfer: _Transfer,
+    connect: Connect,
 ) -> str | None:
     """Close one HTTPS connection after saving its body or resolving a redirect."""
-    connection, target = _connect(url)
+    connection, target = _connect(url, connect)
     try:
         connection.request(
             "GET",

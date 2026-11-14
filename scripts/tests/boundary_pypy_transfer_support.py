@@ -1,22 +1,26 @@
 """Shared test doubles for the bounded PyPy download contracts.
 
 Each helper builds a fake response, clock, or connection sequence so the
-transfer tests run without a socket, a network call, or a real-time wait.
+transfer tests run without a socket, a network call, or a real-time wait. The
+download takes all three through `Environment`, so these doubles are injected
+at the public boundary rather than patched into the module.
 """
 
 from __future__ import annotations
 
 import http.client
+import time
 import typing as typ
 from unittest import mock
 
 from scripts import pypy_download as downloader
+from scripts.pypy_download_metrics import LoggingMetrics
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    import pytest
+    from scripts.pypy_download_metrics import MetricsSink
 
 
 def fake_response(declared: str | None, chunks: cabc.Iterable[bytes]) -> mock.MagicMock:
@@ -45,48 +49,54 @@ def redirect_response(location: str) -> mock.MagicMock:
     return fake
 
 
+def connection_factory(*fakes: mock.Mock) -> downloader.Connect:
+    """Return a connection factory that hands out `fakes` in order, once each."""
+    remaining = iter(fakes)
+
+    def connect(*_args: object, **_kwargs: object) -> http.client.HTTPSConnection:
+        """Hand out the next prepared connection."""
+        return typ.cast("http.client.HTTPSConnection", next(remaining))
+
+    return connect
+
+
+def fake_environment(
+    *fakes: mock.Mock,
+    clock: cabc.Callable[[], float] = time.monotonic,
+    sink: MetricsSink | None = None,
+) -> downloader.Environment:
+    """Build an environment whose connections come from `fakes` in order.
+
+    The sink defaults to the same logging collector the bootstrap uses, so a
+    case that inspects log records needs to supply nothing.
+
+    Returns
+    -------
+    downloader.Environment
+        An environment that serves each hop from the next fake in `fakes` and
+        reports through `sink`.
+    """
+    return downloader.Environment(
+        clock=clock,
+        connect=connection_factory(*fakes),
+        metrics=LoggingMetrics() if sink is None else sink,
+    )
+
+
 def download_response(
     fake: mock.MagicMock,
     destination: Path,
-    monkeypatch: pytest.MonkeyPatch,
     *,
-    clock: cabc.Callable[[], float] | None = None,
+    clock: cabc.Callable[[], float] = time.monotonic,
 ) -> None:
     """Run one download against `fake` without touching the network."""
     connection = mock.Mock()
     connection.getresponse.return_value = fake
-    monkeypatch.setattr(
-        downloader.http.client,
-        "HTTPSConnection",
-        lambda *_args, **_kwargs: connection,
+    downloader._download(
+        "https://example.invalid/asset",
+        destination,
+        fake_environment(connection, clock=clock),
     )
-    if clock is None:
-        downloader._download("https://example.invalid/asset", destination)
-    else:
-        downloader._download("https://example.invalid/asset", destination, clock=clock)
-
-
-def patch_connections(
-    monkeypatch: pytest.MonkeyPatch, connections: cabc.Iterable[mock.Mock]
-) -> None:
-    """Give each `HTTPSConnection` call the next fake connection."""
-    remaining = iter(connections)
-    monkeypatch.setattr(
-        downloader.http.client,
-        "HTTPSConnection",
-        lambda *_args, **_kwargs: next(remaining),
-    )
-
-
-def download_with_clock(monkeypatch: pytest.MonkeyPatch, clock: mock.Mock) -> None:
-    """Run `checked_download`'s internal download against `clock`."""
-    download = downloader._download
-
-    def timed_download(url: str, destination: Path) -> None:
-        """Run the real download with the shared test clock."""
-        download(url, destination, clock=clock)
-
-    monkeypatch.setattr(downloader, "_download", timed_download)
 
 
 def fixed_clock() -> float:

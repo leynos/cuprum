@@ -19,6 +19,7 @@ import pytest
 from scripts import pypy_download as downloader
 from scripts import pypy_download_deadline as deadline
 from scripts.tests.boundary_pypy_transfer_support import (
+    fake_environment,
     fake_response,
     fixed_clock,
     manual_clock,
@@ -101,7 +102,7 @@ class TestDeadlineWatchdog:
         sock.shutdown.assert_called_once_with(socket.SHUT_RDWR)
 
     def test_a_blocked_read_is_released_by_the_injected_waiter(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path
     ) -> None:
         """A read blocked past the deadline fails once the injected waiter fires."""
         clock = manual_clock()
@@ -134,16 +135,11 @@ class TestDeadlineWatchdog:
         connection = mock.Mock()
         connection.sock = sock
         connection.getresponse.return_value = response
-        monkeypatch.setattr(
-            downloader.http.client,
-            "HTTPSConnection",
-            lambda *_args, **_kwargs: connection,
-        )
         with pytest.raises(TimeoutError, match="transfer deadline"):
             downloader._download(
                 "https://example.invalid/asset",
                 tmp_path / "binary",
-                clock=clock,
+                fake_environment(connection, clock=clock),
                 wait=wait,
             )
         assert reading.is_set(), "the body read must have started"
