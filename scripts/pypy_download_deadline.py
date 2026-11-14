@@ -31,6 +31,11 @@ if typ.TYPE_CHECKING:
     type Waiter = cabc.Callable[[float], bool]
 
 
+# The most a single hop may spend opening its connection and sending its
+# request; a hop with less time left than this gets only what remains.
+_CONNECT_TIMEOUT_SECONDS = 60.0
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class _Transfer:
     """The one deadline, clock, and wait every redirect hop of a download shares.
@@ -44,8 +49,8 @@ class _Transfer:
     wait: Waiter | None = None
 
     def expired(self) -> bool:
-        """Report whether the transfer has outlived its deadline."""
-        return self.clock() > self.deadline
+        """Report whether the transfer has no time left."""
+        return self.clock() >= self.deadline
 
     def remaining(self) -> float:
         """Report the seconds left before the deadline, never below zero."""
@@ -57,6 +62,24 @@ def _require_time_left(transfer: _Transfer) -> None:
     if transfer.expired():
         msg = "release download exceeded the transfer deadline"
         raise TimeoutError(msg)
+
+
+def _hop_timeout(transfer: _Transfer) -> float:
+    """Bound one hop's connection and request by the time the transfer has left.
+
+    A hop that starts with less than `_CONNECT_TIMEOUT_SECONDS` to spare gets
+    only what remains, so opening a connection or negotiating TLS cannot carry
+    the transfer past its one shared deadline. A transfer with no time left is
+    refused before a socket is opened at all; a timeout of zero would instead
+    make the socket non-blocking, which never fails the way a spent budget must.
+
+    Returns
+    -------
+    float
+        The seconds the next hop may spend connecting and sending its request.
+    """
+    _require_time_left(transfer)
+    return min(_CONNECT_TIMEOUT_SECONDS, transfer.remaining())
 
 
 class _DeadlineWatchdog:

@@ -56,7 +56,9 @@ class TestDeadlineWatchdog:
         clock = manual_clock()
         clock.return_value = 4.0
         waits: list[float] = []
+        shut_down = threading.Event()
         sock = mock.Mock()
+        sock.shutdown.side_effect = lambda _how: shut_down.set()
         connection = mock.Mock()
         connection.sock = sock
 
@@ -70,7 +72,9 @@ class TestDeadlineWatchdog:
             connection, deadline._Transfer(9.0, clock, wait)
         )
         with watchdog:
-            pass
+            # Waiting for the shutdown keeps the exit from signalling `_stop`
+            # before the worker has run, which legitimately skips it.
+            assert shut_down.wait(5.0), "the watchdog must shut the socket down"
         assert waits == [pytest.approx(5.0)], (
             "the watchdog must wait on the transfer's own clock"
         )
@@ -81,6 +85,7 @@ class TestDeadlineWatchdog:
         clock = manual_clock()
         clock.return_value = 4.0
         waits: list[float] = []
+        shut_down = threading.Event()
 
         def wait(seconds: float) -> bool:
             """Wake early once, then reach the deadline on the next wait."""
@@ -89,13 +94,14 @@ class TestDeadlineWatchdog:
             return False
 
         sock = mock.Mock()
+        sock.shutdown.side_effect = lambda _how: shut_down.set()
         connection = mock.Mock()
         connection.sock = sock
         watchdog = deadline._DeadlineWatchdog(
             connection, deadline._Transfer(9.0, clock, wait)
         )
         with watchdog:
-            pass
+            assert shut_down.wait(5.0), "the watchdog must shut the socket down"
         assert waits == [pytest.approx(5.0), pytest.approx(3.0)], (
             "each wakeup must re-read the transfer clock before waiting again"
         )

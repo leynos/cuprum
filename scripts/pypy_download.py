@@ -25,6 +25,7 @@ import urllib.parse
 
 from scripts.pypy_download_deadline import (
     _DeadlineWatchdog,
+    _hop_timeout,
     _require_time_left,
     _Transfer,
 )
@@ -149,7 +150,7 @@ def checked_download(
         be transferred into the cache.
     """  # ruff: ignore[docstring-extraneous-exception] - the transfer helpers raise every listed type.
     started = environment.clock()
-    pending = _pending_path(destination)
+    pending = destination.with_suffix(".download")
     try:
         _require_https(url)
         if _cache_is_current(destination, digest):
@@ -168,11 +169,6 @@ def checked_download(
         # not leave a partial `.download` file behind the failed transfer.
         pending.unlink(missing_ok=True)
     _report(environment, outcome, written, started)
-
-
-def _pending_path(destination: Path) -> Path:
-    """Name the file a transfer fills before it is published."""
-    return destination.with_suffix(".download")
 
 
 def _report(
@@ -270,14 +266,16 @@ def _download(
     raise ValueError(msg)
 
 
-def _connect(url: str, connect: Connect) -> tuple[http.client.HTTPSConnection, str]:
-    """Validate one hop's URL and open its HTTPS connection."""
+def _connect(
+    url: str, connect: Connect, timeout: float
+) -> tuple[http.client.HTTPSConnection, str]:
+    """Validate one hop's URL and open its connection within `timeout`."""
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
         msg = "binary downloads and redirects require HTTPS"
         raise ValueError(msg)
     target = urllib.parse.urlunsplit(("", "", parsed.path, parsed.query, "")) or "/"
-    connection = connect(parsed.hostname, parsed.port, timeout=60)
+    connection = connect(parsed.hostname, parsed.port, timeout=timeout)
     return connection, target
 
 
@@ -380,8 +378,8 @@ def _download_once(
     transfer: _Transfer,
     connect: Connect,
 ) -> str | None:
-    """Close one HTTPS connection after saving its body or resolving a redirect."""
-    connection, target = _connect(url, connect)
+    """Close one hop's connection after saving its body or resolving a redirect."""
+    connection, target = _connect(url, connect, _hop_timeout(transfer))
     try:
         connection.request(
             "GET",

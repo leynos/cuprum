@@ -50,12 +50,21 @@ def redirect_response(location: str) -> mock.MagicMock:
     return fake
 
 
-def connection_factory(*fakes: mock.Mock) -> downloader.Connect:
-    """Return a connection factory that hands out `fakes` in order, once each."""
+def connection_factory(
+    *fakes: mock.Mock, timeouts: list[float] | None = None
+) -> downloader.Connect:
+    """Return a factory that hands out `fakes` in order and records each budget."""
     remaining = iter(fakes)
+    budgets: list[float] = [] if timeouts is None else timeouts
 
-    def connect(*_args: object, **_kwargs: object) -> http.client.HTTPSConnection:
-        """Hand out the next prepared connection."""
+    # The parameter names must match `Connect.__call__`: `ty` checks that a
+    # closure is keyword-assignable to the protocol, and the call site may yet
+    # name the host or port.
+    def connect(
+        host: str, port: int | None, *, timeout: float
+    ) -> http.client.HTTPSConnection:
+        """Record the hop's budget and hand out the next prepared connection."""
+        budgets.append(timeout)
         return typ.cast("http.client.HTTPSConnection", next(remaining))
 
     return connect
@@ -95,11 +104,13 @@ def fake_environment(
     clock: cabc.Callable[[], float] = time.monotonic,
     sink: MetricsSink | None = None,
     logger: logging.Logger | None = None,
+    timeouts: list[float] | None = None,
 ) -> downloader.Environment:
     """Build an environment whose connections come from `fakes` in order.
 
     The sink and logger default to the same ones the bootstrap uses, so a case
-    that inspects log records needs to supply nothing.
+    that inspects log records needs to supply nothing. Passing `timeouts`
+    collects the budget each hop's connection was opened with.
 
     Returns
     -------
@@ -109,7 +120,7 @@ def fake_environment(
     """
     return downloader.Environment(
         clock=clock,
-        connect=connection_factory(*fakes),
+        connect=connection_factory(*fakes, timeouts=timeouts),
         metrics=LoggingMetrics() if sink is None else sink,
         logger=LOGGER if logger is None else logger,
     )

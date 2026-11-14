@@ -181,29 +181,56 @@ def test_boundary_kani_finds_the_installed_binaries() -> None:
     ), "make boundary-kani must resolve the Kani installed into .cache"
 
 
-def test_verus_cache_tracks_the_shared_installer_pin() -> None:
-    """A new shared-installer revision must invalidate the cached Verus and Z3 trees.
+#: Each job, its cache restore step, and the inputs its key must hash. Both
+#: jobs archive the Verus install and its solver, so a new shared-installer
+#: revision must invalidate both entries.
+_TOOL_CACHE_INPUTS = [
+    (
+        "verus",
+        "Restore pinned verifier, solver, and compiler objects",
+        ["tools/verus/*", "tools/prover-tools/VERSION"],
+    ),
+    (
+        "extended",
+        "Restore proof tools and Miri sysroots",
+        ["tools/kani/*", "tools/prover-tools/VERSION", "Makefile"],
+    ),
+]
 
-    The retired `scripts/install_boundary_z3.py` used to name this key. The pin
-    now lives in `tools/prover-tools/VERSION`, so hashing that file keeps the
-    archived solver and verifier from outliving the revision that produced
-    them, while an unrelated Makefile edit still restores a warm cache.
-    """
+
+def _restore_inputs(job_name: str, step_name: str) -> dict[str, object]:
+    """Return the declared inputs of one job's cache restore step."""
     restore = next(
-        step
-        for step in steps(WORKFLOW, "verus")
-        if step.get("name") == "Restore pinned verifier, solver, and compiler objects"
+        step for step in steps(WORKFLOW, job_name) if step.get("name") == step_name
     )
-    inputs = step_inputs(restore, "the verus restore must declare its inputs")
-    expected = ["tools/verus/*", "tools/prover-tools/VERSION"]
-    key = str(inputs.get("key", ""))
-    hashed = re.findall(r"'([^']*)'", key)
-    assert hashed == expected, (
-        "the verifier cache key must hash only the inputs that pick the binaries"
+    return step_inputs(restore, f"the {job_name} restore must declare its inputs")
+
+
+@pytest.mark.parametrize(("job_name", "step_name", "expected"), _TOOL_CACHE_INPUTS)
+def test_tool_caches_track_the_shared_installer_pin(
+    job_name: str, step_name: str, expected: list[str]
+) -> None:
+    """A new shared-installer revision must invalidate every archived verifier.
+
+    The retired `scripts/install_boundary_z3.py` used to name the Verus key. The
+    pin now lives in `tools/prover-tools/VERSION`, so both jobs hash that file:
+    otherwise the archived solver and verifier could outlive the revision that
+    produced them. Hashing only the pin also restores a warm cache after an
+    unrelated Makefile edit, which the extended job keeps as an input.
+    """
+    key = str(_restore_inputs(job_name, step_name).get("key", ""))
+    assert re.findall(r"'([^']*)'", key) == expected, (
+        f"the {job_name} cache key must hash only the inputs that pick the binaries"
     )
+
+
+def test_the_verus_restore_prefix_hashes_the_same_inputs() -> None:
+    """The verus restore prefix must reject the same revisions as its key."""
+    job_name, step_name, expected = _TOOL_CACHE_INPUTS[0]
     prefix = "boundary-verus-${{ hashFiles(" + ", ".join(
         f"'{path}'" for path in expected
     )
+    inputs = _restore_inputs(job_name, step_name)
     assert str(inputs.get("restore-keys", "")).startswith(prefix), (
         "the restore prefix must hash the same inputs as the key"
     )

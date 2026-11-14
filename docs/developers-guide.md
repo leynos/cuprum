@@ -5937,20 +5937,27 @@ and Z3 installation is delegated to the pinned `leynos/rust-prover-tools`
 revision. Its shared downloader accepts only HTTPS, follows a bounded number of
 redirects, rejects an oversized `Content-Length` before the destination opens,
 counts streamed bytes against a per-asset ceiling, and applies one monotonic
-deadline across redirects, header parsing, and the body. A deadline watchdog
-shuts the socket down, so a response that trickles bytes or headers cannot
-outlive the deadline. The verified archive is published atomically only after
-the SHA-256 check. Cuprum's `make install-boundary-kani` and
-`make install-verus` pass explicit repository, install, and cache paths, and
-the Kani target also names its version file and disables the shared CLI's
-compile, setup, and verification phases so `cargo kani setup` remains the
-single owner of native setup. Before each delegated call the Makefile clears
-every name listed in `PROVER_TOOLS_AMBIENT_VARS`, the fixed set of ambient
-options the shared CLI would otherwise read as flag defaults, so a stray CI
-value cannot redirect an installation away from the repository cache. To adopt
-a new shared revision, replace the commit hash in `tools/prover-tools/VERSION`,
-run both install targets cold and warm, and rely on the `hashFiles` inputs for
-that file in the verifier cache key to invalidate the archived tools.
+deadline across redirects, header parsing, and the body. Every hop is bounded
+by the time that deadline leaves: opening a connection, negotiating TLS, and
+sending the request all run under the smaller of the per-hop limit and the
+remaining budget, and a hop that starts with no time left is refused before a
+socket opens. A deadline watchdog shuts the socket down, so a response that
+trickles bytes or headers cannot outlive the deadline. The verified archive is
+published atomically only after the SHA-256 check. Cuprum's
+`make install-boundary-kani` and `make install-verus` pass explicit repository,
+install, and cache paths, and the Kani target also names its version file and
+disables the shared CLI's compile, setup, and verification phases so
+`cargo kani setup` remains the single owner of native setup. Before each
+delegated call the Makefile clears every name listed in
+`PROVER_TOOLS_AMBIENT_VARS`, the fixed set of ambient options the shared CLI
+would otherwise read as flag defaults, so a stray CI value cannot redirect an
+installation away from the repository cache. To adopt a new shared revision,
+replace the commit hash in `tools/prover-tools/VERSION`, run both install
+targets cold and warm, and rely on the `hashFiles` inputs for that file in the
+verifier and extended-check cache keys to invalidate the archived tools. Both
+keys hash the pin because both jobs restore the Verus install and its solver:
+the verus job from its own archive, and the extended job inside the proof-tool
+archive it shares with Kani and Miri.
 
 The bounded-download harness lives in four modules under `scripts/tests/`.
 `boundary_download_support.py` creates a throwaway certificate authority and
