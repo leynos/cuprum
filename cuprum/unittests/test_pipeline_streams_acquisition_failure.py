@@ -30,6 +30,7 @@ from cuprum._testing import set_rust_availability_for_testing
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_HANDOFF_TOTAL,
     RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
     PumpMetricsHook,
 )
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
@@ -131,6 +132,7 @@ class _DrainFailureHarness:
         self.acquired: list[int] = []
         self.events: list[PumpEvent] = []
         self.collector = RecordingCollector()
+        self.registry = HeldPairCounterRegistry()
         self.held_during_drain: float | None = None
         self.close_worker_fd = mock.Mock(
             wraps=_pipeline_stream_native_drain._close_native_pump_worker_fd
@@ -225,7 +227,7 @@ class _DrainFailureHarness:
         with (
             owned_fds() as (reader_fd, writer_fd),
             observe_pump(self.events.append),
-            observe_pump(PumpMetricsHook(self.collector)),
+            observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
             observe_pump(self.raise_shutdown_signal),
         ):
             handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
@@ -318,6 +320,7 @@ def test_blocking_setup_failure_releases_the_hold(
 ) -> None:
     """A refused activation releases the held pair and keeps the fallback."""
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
     events: list[PumpEvent] = []
 
     def refuse_blocking(**_kwargs: int) -> typ.NoReturn:
@@ -337,7 +340,10 @@ def test_blocking_setup_failure_releases_the_hold(
             writer_fd=writer_fd,
             cleanup_grace_s=0.5,
         )
-        with observe_pump(events.append), observe_pump(PumpMetricsHook(collector)):
+        with (
+            observe_pump(events.append),
+            observe_pump(PumpMetricsHook(collector, registry=registry)),
+        ):
             handled = asyncio.run(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
@@ -360,6 +366,7 @@ def test_submission_releases_the_hold_before_native_work_starts(
 ) -> None:
     """The hold ends when activation hands the pair to the completion callback."""
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
     held_at_submission: list[float | None] = []
 
     def record_submission(
@@ -387,7 +394,7 @@ def test_submission_releases_the_hold_before_native_work_starts(
             writer_fd=writer_fd,
             cleanup_grace_s=0.5,
         )
-        with observe_pump(PumpMetricsHook(collector)):
+        with observe_pump(PumpMetricsHook(collector, registry=registry)):
             handled = asyncio.run(
                 _pipeline_streams._run_rust_pump(
                     reader=typ.cast("asyncio.StreamReader", object()),
@@ -424,6 +431,7 @@ class _HoldSignalHarness:
         self.acquired: list[int] = []
         self.events: list[PumpEvent] = []
         self.collector = RecordingCollector()
+        self.registry = HeldPairCounterRegistry()
         self._original_open = (
             _pipeline_stream_native_cleanup._open_native_pump_worker_fds
         )
@@ -518,7 +526,7 @@ class _HoldSignalHarness:
             )
             with (
                 observe_pump(self.raise_signal),
-                observe_pump(PumpMetricsHook(self.collector)),
+                observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
                 observe_pump(self.events.append),
                 pytest.raises(KeyboardInterrupt),
             ):
@@ -651,6 +659,7 @@ def test_a_state_construction_failure_rolls_back_the_activated_pair(
     failure = _UnexpectedActivationFailure()
     failure.install(monkeypatch)
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
 
     with owned_fds() as (reader_fd, writer_fd):
         handoff = _pipeline_stream_native_cleanup._RustPumpHandoff(
@@ -659,7 +668,7 @@ def test_a_state_construction_failure_rolls_back_the_activated_pair(
             cleanup_grace_s=0.5,
         )
         with (
-            observe_pump(PumpMetricsHook(collector)),
+            observe_pump(PumpMetricsHook(collector, registry=registry)),
             pytest.raises(RuntimeError) as raised,
         ):
             asyncio.run(

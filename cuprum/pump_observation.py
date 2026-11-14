@@ -14,14 +14,14 @@ See :mod:`cuprum.pump_events` for the event types this channel carries.
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import logging
-import threading
 import typing as typ
 from contextvars import ContextVar
 
 import cuprum._hook_disposal as hook_disposal
 from cuprum._scope_registration import _TokenTupleRegistration
-from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+from cuprum.pump_events import PumpEmission, PumpEvent, RustPumpHandoffOutcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -39,28 +39,6 @@ _pump_event_exec_id: ContextVar[ExecId | None] = ContextVar(
     "cuprum_pump_event_exec_id",
     default=None,
 )
-# The events this thread is delivering to hooks, innermost last. A hook may
-# emit while it is being called, and that emission nests inside the delivery
-# that caused it, so a consumer that must count one emission once needs the
-# whole nesting rather than only the most recent event.
-_delivering = threading.local()
-
-
-def _in_flight_pump_events() -> tuple[PumpEvent, ...]:
-    """Return the pump events this thread is delivering to hooks right now.
-
-    Delivery runs inline on the emitting thread, so this is empty outside an
-    emission. A hook that emits while it is being called nests: the outer
-    event stays in flight until the inner event's delivery has finished and
-    the outer loop resumes.
-
-    Returns
-    -------
-    tuple[PumpEvent, ...]
-        The events whose delivery loops are running on this thread, outermost
-        first.
-    """
-    return tuple(getattr(_delivering, "events", ()))
 
 
 @contextlib.contextmanager
@@ -141,10 +119,14 @@ def observe_pump(hook: PumpHook) -> PumpHookRegistration:
     Count declined hand-offs into a metrics collector::
 
         from cuprum.adapters.metrics_adapter import InMemoryMetrics
-        from cuprum.adapters.pump_metrics import PumpMetricsHook
+        from cuprum.adapters.pump_metrics import (
+            HeldPairCounterRegistry,
+            PumpMetricsHook,
+        )
 
         metrics = InMemoryMetrics()
-        with observe_pump(PumpMetricsHook(metrics)):
+        registry = HeldPairCounterRegistry()
+        with observe_pump(PumpMetricsHook(metrics, registry=registry)):
             pipeline.run_sync()
 
     """
@@ -183,30 +165,34 @@ def _emit_pump_event(event: PumpEvent) -> None:
     With no hooks registered this returns before touching the event, so a caller
     that has not opted in pays nothing and behaves exactly as before.
 
-    While the loop runs, the event is recorded as in flight on this thread and
-    :func:`_in_flight_pump_events` reports it. A consumer that must count one
-    emission once — an event reaches several hooks when contexts nest — can
-    therefore tell a repeat delivery from a new event, and keeps counting the
-    outer event after a hook has nested an emission of its own inside it.
+    Delivery identity
+    -----------------
+    Each delivery stamps the event with a :class:`~cuprum.pump_events.PumpEmission`
+    that is closed once every hook has seen it. An event reaches several hooks
+    when ``observe_pump`` registrations nest, and a consumer that must count one
+    emission once — the held-pair gauge shared by hooks reporting to one
+    collector — can therefore tell the remaining deliveries of the event it
+    already counted from a new emission. A hook that emits while it is being
+    called nests its own emission, with its own token, inside the delivery that
+    caused it; the outer token stays open until the outer loop finishes, so the
+    outer event keeps its identity across that nesting.
     """
     hooks = _pump_hooks.get()
     if not hooks:
         return
-    events = getattr(_delivering, "events", None)
-    if events is None:
-        events = _delivering.events = []
-    events.append(event)
+    emission = PumpEmission()
+    stamped = dc.replace(event, emission=emission)
     try:
         shutdown: BaseException | None = None
         for hook in hooks:
             # A shutdown signal is held until every hook has seen the event.
             try:
-                _invoke_pump_hook(hook, event)
+                _invoke_pump_hook(hook, stamped)
             except BaseException as signal:  # ruff: ignore[blind-except] - re-raise last.
                 if shutdown is None:
                     shutdown = signal
     finally:
-        events.pop()
+        emission.close()
     if shutdown is not None:
         raise shutdown
 

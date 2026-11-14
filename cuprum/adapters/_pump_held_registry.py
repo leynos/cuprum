@@ -1,18 +1,17 @@
-"""Share one held-pair count across the hooks reporting to a collector.
+"""Find the held-pair counter a collector's hooks share, and bound its lifetime.
 
-``cuprum_rust_pump_held_pairs`` is a level, not an event count, and it carries
-no labels. Its scope is therefore the collector every reporting hook publishes
-to: one release from one hook must not report zero while another hook still
-holds a pair. This module owns that shared count and the registry that finds it
-again from a collector, so ``PumpMetricsHook`` only has to translate pump events
-into metric calls.
+The count itself is :class:`~cuprum.adapters._pump_held_counter._HeldPairCounter`'s.
+This module answers the two questions around it: which counter a hook reporting
+to a collector must use, and how long that counter, and the collector identity it
+is keyed by, stay reachable.
 
 A registry defines the scope in which a collector's hooks share their count.
-``PumpMetricsHook`` uses one process-wide registry unless its caller supplies
-another, so hooks created independently still agree, while a test can inject a
-fresh registry to keep its collectors out of that shared state. Every hook that
-reports to one collector must use the same registry; two registries would give
-that collector two unrelated totals.
+There is deliberately no process-wide default: a hook reports the held-pair
+gauge only when its caller passes a registry, so constructing a hook cannot
+mutate process-global state, and a caller that forgets to share one registry
+reports no gauge rather than a private total that disagrees with another hook's.
+Every hook reporting to one collector must use the same registry; two registries
+would give that collector two unrelated totals.
 """
 
 from __future__ import annotations
@@ -20,59 +19,7 @@ from __future__ import annotations
 import threading
 import weakref
 
-from cuprum.pump_observation import _in_flight_pump_events
-
-
-class _HeldPairCounter:
-    """The held-pair count for one collector, shared by its reporting hooks."""
-
-    def __init__(self) -> None:
-        """Start with no held pairs under a lock that serializes publication."""
-        self.lock = threading.Lock()
-        self.pairs = 0
-        # Events this thread has already moved the count for. One emission
-        # delivers its event to every hook in the current context, inline on
-        # the thread that emitted it, and a nested ``observe_pump``
-        # registration puts several of those deliveries on the same counter, so
-        # one event must move the shared total once.
-        #
-        # A claim lasts exactly as long as the emission it was made for: an
-        # event remains claimed only while its delivery loop is still running
-        # on this thread. That covers a hook which emits an event of its own
-        # while it is being called — the nested event counts separately, while
-        # the outer event's remaining deliveries are still recognized — and it
-        # keeps the claim bounded by the nesting depth rather than growing with
-        # every event seen. The claims are per thread because another thread's
-        # event must not disturb them, and the storage retires with its thread.
-        self._claimed = threading.local()
-
-    def admit(self, event: object) -> bool:
-        """Claim ``event`` for this thread and say whether it moves the count.
-
-        Callers hold :attr:`lock`, so the claim and the update it authorizes
-        are one step. Within one thread, a delivery that repeats an event whose
-        emission is still in flight is the only repeat this refuses: re-entering
-        the emitter nests a new event, and that event counts on its own.
-
-        Returns
-        -------
-        bool
-            Whether this delivery should move the count.
-        """
-        in_flight = _in_flight_pump_events()
-        claimed: list[object] | None = getattr(self._claimed, "events", None)
-        if claimed is None:
-            claimed = self._claimed.events = []
-        # Drop the claims whose emission this thread has finished delivering.
-        # A claim can only ever be queried while its event is in flight, so
-        # discarding the rest loses nothing and keeps this list bounded.
-        claimed[:] = [
-            seen for seen in claimed if any(seen is live for live in in_flight)
-        ]
-        if any(seen is event for seen in claimed):
-            return False
-        claimed.append(event)
-        return True
+from cuprum.adapters._pump_held_counter import _HeldPairCounter
 
 
 class _CounterEntry:
@@ -124,6 +71,17 @@ class HeldPairCounterRegistry:
     keeps an injected registry alive until the hooks registered with it are
     collected. Hooks that report to one collector must share one registry; two
     registries would give that collector two unrelated totals.
+
+    The registry's lock is never nested with a counter's: no method here moves a
+    count, and the counter never calls back into the registry.
+
+    Examples
+    --------
+    ::
+
+        registry = HeldPairCounterRegistry()
+        hook = PumpMetricsHook(metrics, registry=registry)
+
     """
 
     def __init__(self) -> None:
@@ -166,7 +124,8 @@ class HeldPairCounterRegistry:
             be weak-referenceable.
         collector:
             The collector the hook publishes to. A collector need not be
-            hashable or weakly referenceable.
+            hashable or weakly referenceable, but one that can be weakly
+            referenced is preferred: its entry then retires with it.
 
         Returns
         -------
@@ -227,7 +186,16 @@ class HeldPairCounterRegistry:
         return entry
 
     def _retire(self, key: int, counter: _HeldPairCounter) -> None:
-        """Drop one hook's claim, retiring a retained entry with its last one."""
+        """Drop one hook's claim, retiring a retained entry with its last one.
+
+        Runs in a weak-reference finalizer, so it takes only :attr:`_lock` and
+        reads the counter's total without that counter's lock. The read is
+        advisory: at worst a hold in flight is missed and the entry retires one
+        release early, which costs a later release its count and never leaves a
+        collector retained for the life of the process. Taking the counter's
+        lock here would let a finalizer that ran inside a publication deadlock
+        against it.
+        """
         with self._lock:
             entry = self._entries.get(key)
             # The entry can already be gone while the interpreter shuts down,
@@ -241,7 +209,3 @@ class HeldPairCounterRegistry:
             entry.hooks -= 1
             if entry.hooks <= 0 and counter.pairs == 0:
                 del self._entries[key]
-
-
-_DEFAULT_REGISTRY = HeldPairCounterRegistry()
-"""The registry shared by hooks that do not name one."""

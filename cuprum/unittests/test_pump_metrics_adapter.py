@@ -7,6 +7,7 @@ emission site fails them instead of leaving a stub-covered assertion green.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import typing as typ
 
@@ -244,9 +245,10 @@ def test_a_cancelled_hop_whose_pump_succeeds_records_submission_and_cleanup(
 
     def succeeding_pump(reader_fd: int, writer_fd: int) -> int:
         """Return normally once the cancellation has been delivered."""
-        del reader_fd, writer_fd
+        del reader_fd
         worker_started.set()
         release.wait(timeout=5.0)
+        os.close(writer_fd)
         return 0
 
     install_fake_pump(monkeypatch, succeeding_pump)

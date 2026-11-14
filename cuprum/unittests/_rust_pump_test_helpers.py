@@ -559,7 +559,7 @@ def hand_off_successfully(monkeypatch: pytest.MonkeyPatch) -> bool:
         "engage",
         lambda **_kwargs: _NoopGuard(),
     )
-    install_fake_pump(monkeypatch, lambda _reader_fd, _writer_fd: 0)
+    install_fake_pump(monkeypatch, close_writer_and_succeed)
     return run_raw_fd_pump()
 
 
@@ -582,6 +582,25 @@ def install_fake_pump(
     fake_streams_rs = _FakeStreamsModule("cuprum._streams_rs")
     fake_streams_rs.rust_pump_stream = pump
     monkeypatch.setitem(sys.modules, "cuprum._streams_rs", fake_streams_rs)
+
+
+def close_writer_and_succeed(reader_fd: int, writer_fd: int) -> int:
+    """Complete a pump, closing the writer it adopts as the real worker does.
+
+    The native worker borrows its reader and owns its writer: the writer is
+    closed before the call returns, while Python keeps the reader and closes it
+    after the worker settles. A double that merely returns therefore leaks one
+    descriptor per successful hop — invisible in a single call, but unbounded
+    across the acts of a stateful test, and it holds a real pipe end open.
+
+    Returns
+    -------
+    int
+        The byte count a completing pump reports, which is zero here.
+    """
+    del reader_fd
+    os.close(writer_fd)
+    return 0
 
 
 async def cancel_mid_transfer(

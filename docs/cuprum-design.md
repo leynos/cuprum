@@ -1471,10 +1471,18 @@ with `held_delta=1` after the pair is acquired, and `held_delta=-1` when that
 hold ends, on every settling path. Because the metric name is unlabelled, two
 hooks publishing to one collector would otherwise report two private totals,
 and one hook's release could publish zero while the other still held a pair.
-`HeldPairCounterRegistry` in `cuprum/adapters/_pump_held_pairs.py` supplies
-that sharing: it keys one counter per collector identity, and `PumpMetricsHook`
-takes the counter from it under the same lock that guards publication, so two
-threads cannot publish the running total out of order.
+`HeldPairCounterRegistry` supplies that sharing, and it is an explicit
+dependency rather than process-wide state: `PumpMetricsHook` accepts the
+registry its composition root supplies, and a hook constructed without one
+reports no held-pair gauge and registers nowhere. The registry
+(`cuprum/adapters/_pump_held_registry.py`) keys one counter per collector
+identity, and the counter (`cuprum/adapters/_pump_held_counter.py`) holds the
+count. One lock in the counter guards the claim, the update, and the
+publication, so two threads cannot publish the running total out of order; the
+registry's lock guards only its entries, and the two are never nested. That is
+deliberate: the registry retires an entry from a weak-reference finalizer that
+can run inside publication, so a finalizer waiting on the counter's lock could
+deadlock against the callback that triggered it.
 
 The registry's lifetime rule follows whoever owns the count. A collector that
 can be weakly referenced retires its entry when the collector dies, so a hold
@@ -1482,14 +1490,15 @@ outlives the hook that reported it. A collector that cannot give that signal is
 held by its entry, which keeps the identity used as the key unique, and the
 entry retires once the last hook reporting to it is gone and nothing is still
 held — the only end of use such a collector can signal. One emission that
-reaches several hooks reporting to one collector moves the shared total once,
-because the counter claims each event for the thread delivering it only while
-that emission is still in flight, so the gauge counts held pairs rather than
-hook deliveries. Gauge publication is a separate, optional capability:
-`GaugeMetricsCollector` in `cuprum/adapters/gauge_metrics.py` is a
-runtime-checkable protocol that adds `set_gauge`, which reports an absolute
-level, and a collector implementing only the two-method `MetricsCollector`
-contract is skipped for gauges.
+reaches several hooks reporting to one collector moves the shared total once:
+the emitter stamps each delivery with a `PumpEmission` token and closes it once
+delivery ends, and the counter claims each event by that token, so the gauge
+counts held pairs rather than hook deliveries. The adapter consumes the token
+from the event and imports no private core state. Gauge publication is a
+separate, optional capability: `GaugeMetricsCollector` in
+`cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol that adds
+`set_gauge`, which reports an absolute level, and a collector implementing only
+the two-method `MetricsCollector` contract is skipped for gauges.
 
 Cleanup tracing remains an opt-in adapter on the separate synchronous pump
 observation channel, not an extension of `ExecEvent`. A caller registers the

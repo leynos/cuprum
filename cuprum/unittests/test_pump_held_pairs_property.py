@@ -10,7 +10,7 @@ emissions and return to zero once each is released.
 
 Real threads race nondeterministically, which would make a schedule-dependent
 test flaky in one direction and unconvincing in the other. The emissions
-therefore still run on real threads — the counter's claims are per thread, so
+therefore still run on real threads — the count is shared under a lock, so
 they have to — but a generated schedule decides exactly when each worker
 starts its next emission. Every generated interleaving is replayed
 deterministically, so a failure names a real defect rather than a lost race.
@@ -29,6 +29,7 @@ from hypothesis import strategies as st
 
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
     PumpMetricsHook,
 )
 from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
@@ -127,7 +128,7 @@ def _schedules(draw: DrawFn) -> _Plan:
     arbitrary permutation: a worker emits in program order, so it can never
     start its next emission before the previous one has been delivered. Another
     worker's emission may interleave anywhere between them, which is what the
-    counter's per-thread claims have to tolerate.
+    counter's claim on each emission's own token has to tolerate.
 
     Returns
     -------
@@ -284,14 +285,15 @@ def test_a_generated_schedule_moves_the_gauge_once_per_emission(plan: _Plan) -> 
     nested_count = sum(1 for _worker, nests, _pauses in emissions if nests)
     total = len(emissions) + nested_count
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
     nested = NestedHoldEmitter()
     gate = PausingHook()
 
     with (
-        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
         observe_pump(gate),
         observe_pump(nested),
-        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
     ):
         replay = _Replay(
             context=contextvars.copy_context(),

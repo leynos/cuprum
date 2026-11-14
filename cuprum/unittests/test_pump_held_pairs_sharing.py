@@ -10,9 +10,10 @@ event that called it, and the registry stops holding a collector once the hooks
 that report to it are gone.
 
 The interleaving and nesting tests deliver through ``_emit_pump_event`` rather
-than by calling a hook by hand, because the counter's claim is checked against
-the emitter's record of which events are in flight: only a real emission can
-exercise that.
+than by calling a hook by hand, because the counter's claim is keyed by the
+emission token the emitter stamps on the event: only a real emission carries
+one. Every hook here names the registry it shares explicitly, because there is
+no process-wide default to fall back on.
 """
 
 from __future__ import annotations
@@ -26,12 +27,13 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_HELD_PAIRS,
     HeldPairCounterRegistry,
     PumpMetricsHook,
     pump_metrics_hook,
 )
-from cuprum.pump_events import PumpEvent
+from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
 from cuprum.pump_observation import _emit_rust_pump_hold, observe_pump
 from cuprum.unittests._rust_pump_test_helpers import (
     NestedHoldEmitter,
@@ -204,31 +206,35 @@ def test_an_outstanding_hold_keeps_a_slotted_collectors_entry() -> None:
     )
 
 
-def test_the_default_registry_shares_hooks_created_independently() -> None:
-    """Hooks that name no registry still share their collector's total.
+def test_a_hook_without_a_registry_reports_no_gauge_and_registers_nothing() -> None:
+    """Constructing a hook without a registry has no process-global effect.
 
-    The default is process-wide so an application that creates one hook per
-    pipeline scope still reports the collector's total rather than the last
-    hook's private count.
+    The gauge's scope is a collector, and the sharing that scope implies is an
+    explicit dependency. A hook that names no registry therefore reports no
+    level at all: it neither registers itself anywhere nor publishes a private
+    total that a second hook for the same collector would contradict. Its
+    counters are unaffected, because those need no sharing.
     """
     collector = RecordingCollector()
-    first = PumpMetricsHook(collector)
-    second = PumpMetricsHook(collector)
+    hook = PumpMetricsHook(collector)
 
-    first(PumpEvent(phase="handoff_hold", held_delta=1))
-    second(PumpEvent(phase="handoff_hold", held_delta=1))
+    hook(PumpEvent(phase="handoff_hold", held_delta=1))
+    hook(PumpEvent(phase="declined", reason=RustPumpDeclineReason.RAW_FD_UNAVAILABLE))
 
-    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
-        "hooks created without a registry must still share one running total"
+    assert collector.gauge_values(RUST_PUMP_HELD_PAIRS) == [], (
+        "a hook with no registry must not report a held-pair level"
+    )
+    assert collector.counter_names() == [RUST_PUMP_DECLINED_TOTAL], (
+        "counters need no sharing, so they must still be reported"
     )
 
 
 def test_separate_registries_keep_separate_totals() -> None:
-    """An injected registry scopes the sharing it performs.
+    """A registry scopes the sharing it performs.
 
     Two hooks for one collector that name different registries hold two
-    counters, which is what lets a test keep its collector out of the default
-    registry's state. A caller must not use this to split one collector's
+    counters, which is why every hook reporting to one collector must be given
+    the same registry. A caller must not use this to split one collector's
     reporting.
     """
     collector = RecordingCollector()

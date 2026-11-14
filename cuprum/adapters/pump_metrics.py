@@ -16,12 +16,19 @@ Example
 ::
 
     from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
-    from cuprum.adapters.pump_metrics import PumpMetricsHook
+    from cuprum.adapters.pump_metrics import (
+        HeldPairCounterRegistry,
+        PumpMetricsHook,
+    )
     from cuprum.pump_observation import observe_pump
 
     metrics = InMemoryMetrics()
+    registry = HeldPairCounterRegistry()
 
-    with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
+    with (
+        sh.observe(MetricsHook(metrics)),
+        observe_pump(PumpMetricsHook(metrics, registry=registry)),
+    ):
         pipeline.run_sync()
 
     print(metrics.counters["cuprum_rust_pump_declined_total"])
@@ -33,17 +40,14 @@ from __future__ import annotations
 import types
 import typing as typ
 
-from cuprum.adapters._pump_held_pairs import (
-    _DEFAULT_REGISTRY,
-    HeldPairCounterRegistry,
-    _HeldPairCounter,
-)
+from cuprum.adapters._pump_held_registry import HeldPairCounterRegistry
 from cuprum.adapters.gauge_metrics import GaugeMetricsCollector
 from cuprum.pump_events import RustPumpDeclineReason, RustPumpHandoffOutcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.adapters._pump_held_counter import _HeldPairCounter
     from cuprum.adapters.metrics_adapter import MetricsCollector
     from cuprum.pump_events import PumpEvent, PumpHook, PumpPhase
 
@@ -72,9 +76,10 @@ RUST_PUMP_HELD_PAIRS = "cuprum_rust_pump_held_pairs"
 """Descriptor pairs currently held across a pending native-pump drain.
 
 A gauge, reported only to collectors that implement
-:class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`. It rises by one
-when a hop takes its acquired pair and falls by one on every settling path, so
-it returns to zero when no drain is pending.
+:class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector` and only for a
+hook constructed with a :class:`HeldPairCounterRegistry`. It rises by one when
+a hop takes its acquired pair and falls by one on every settling path, so it
+returns to zero when no drain is pending.
 """
 
 # The only deltas a hold event may carry. A hand-built event with any other
@@ -160,16 +165,20 @@ class PumpMetricsHook:
       including the Windows raw-handle rejection.
     - ``cuprum_rust_pump_held_pairs``: a gauge of the descriptor pairs held
       across pending drains, reported only when the collector implements
-      :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`. Hooks that
-      report to the same collector share one running total, so one hook's
-      release cannot hide another's hold, and an event delivered to more than
-      one of those hooks moves that total once. Gauges are optional so an
-      existing two-method collector keeps working.
+      :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector` *and* the
+      hook was given a :class:`HeldPairCounterRegistry`. Hooks that report to
+      the same collector share one running total, so one hook's release cannot
+      hide another's hold, and an emission delivered to more than one of those
+      hooks moves that total once. Gauges are optional so an existing
+      two-method collector keeps working.
 
-    A :class:`HeldPairCounterRegistry` scopes that sharing. Each hook uses the
-    process-wide default unless its caller injects another, so hooks created
-    independently still agree while a test can isolate its own collector. Every
-    hook reporting to one collector must use the same registry.
+    A registry is the scope of that sharing, and it is explicit: the held-pair
+    gauge is reported only for a hook whose caller passes one. Constructing a
+    hook therefore has no process-global effect, and a hook created without a
+    registry reports no gauge rather than a private total that a second hook
+    for the same collector would disagree with. Every hook reporting to one
+    collector must use the same registry; two registries give that collector
+    two unrelated totals.
 
     All labels are closed and bounded; descriptor values, exception details,
     and other event data are never labels. Unknown phases are ignored so a
@@ -182,17 +191,19 @@ class PumpMetricsHook:
         Thread-safe metrics backend receiving counters and histograms.
     registry:
         The registry that shares this hook's held-pair counter with every
-        other hook reporting to ``collector``. Defaults to the process-wide
-        registry. Pass a fresh :class:`HeldPairCounterRegistry` to give a
-        collector its own scope, such as in a test.
+        other hook reporting to ``collector``. ``None``, the default, reports
+        no held-pair gauge at all. Bind one :class:`HeldPairCounterRegistry` to
+        a caller-held name and pass it to every hook that reports to the
+        collector.
 
     Examples
     --------
     ::
 
         metrics = InMemoryMetrics()
+        registry = HeldPairCounterRegistry()
 
-        with observe_pump(PumpMetricsHook(metrics)):
+        with observe_pump(PumpMetricsHook(metrics, registry=registry)):
             pipeline.run_sync()
 
     """
@@ -203,16 +214,21 @@ class PumpMetricsHook:
         *,
         registry: HeldPairCounterRegistry | None = None,
     ) -> None:
-        """Initialize the pump metrics hook with a collector."""
+        """Initialize the pump metrics hook with a collector.
+
+        A hook created without a registry reports no held-pair gauge; it
+        registers nothing, so construction has no process-global effect.
+        """
         self._collector = collector
         self._gauge: GaugeMetricsCollector | None = (
             typ.cast("GaugeMetricsCollector", collector)
             if isinstance(collector, GaugeMetricsCollector)
             else None
         )
-        counters = _DEFAULT_REGISTRY if registry is None else registry
         self._held: _HeldPairCounter | None = (
-            counters.register(self, collector) if self._gauge is not None else None
+            registry.register(self, collector)
+            if registry is not None and self._gauge is not None
+            else None
         )
 
     def __call__(self, event: PumpEvent) -> None:
@@ -244,42 +260,28 @@ class PumpMetricsHook:
         )
 
     def _apply_held_delta(self, event: PumpEvent) -> None:
-        """Move the held-pair gauge by one balanced acquisition or release.
+        """Hand one balanced acquisition or release to the shared counter.
 
-        The count is kept per collector under a lock because hold events for
-        concurrent drains can arrive from different threads, and because
-        another hook reporting to the same collector moves the same count. A
-        collector that does not offer gauges is left alone rather than
-        required to add one.
-
-        An event that reaches several hooks sharing this collector moves the
-        count once. The gauge is a level, so counting the same hold twice
-        would report a pair that no drain is holding; the counter claims each
-        event for the thread delivering it while that event is in flight, so a
-        second thread's event in between cannot make the remaining deliveries
-        count again, and a hook that emits a nested event while it is being
-        called leaves the outer event's claim intact.
-
-        Publication happens under the same lock as the count. Publishing after
-        releasing it would let two threads publish out of order: a release that
-        computed ``0`` could reach the collector first, and the acquisition it
-        followed would then overwrite that with a stale ``1`` that no later
-        event corrects.
+        This hook validates the delta and nothing else: the count, the claim
+        that makes one emission move it once, and the publication of the new
+        total under one lock all belong to
+        :class:`~cuprum.adapters._pump_held_counter._HeldPairCounter`. A hook
+        with no counter — no registry was passed, or the collector does not
+        take gauges — reports no level at all.
         """
-        if self._gauge is None or self._held is None:
+        if self._held is None:
             return
         delta = event.held_delta
         if delta not in _HELD_DELTAS:
             return
-        with self._held.lock:
-            if not self._held.admit(event):
-                return
-            self._held.pairs += delta
-            self._gauge.set_gauge(
-                RUST_PUMP_HELD_PAIRS,
-                float(self._held.pairs),
-                {},
-            )
+        self._held.settle(event, delta=delta, publish=self._publish_held_total)
+
+    def _publish_held_total(self, pairs: int) -> None:
+        """Report the shared running total to this hook's collector."""
+        # The counter is bound only when the collector takes gauges, so this
+        # callback cannot run without one.
+        gauge = typ.cast("GaugeMetricsCollector", self._gauge)
+        gauge.set_gauge(RUST_PUMP_HELD_PAIRS, float(pairs), {})
 
 
 def pump_metrics_hook(
@@ -296,7 +298,7 @@ def pump_metrics_hook(
         implementation.
     registry:
         The registry that shares the held-pair counter with other hooks
-        reporting to ``collector``. Defaults to the process-wide registry.
+        reporting to ``collector``. ``None`` reports no held-pair gauge at all.
 
     Returns
     -------

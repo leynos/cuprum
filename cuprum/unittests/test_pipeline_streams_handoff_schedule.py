@@ -25,13 +25,18 @@ from cuprum import (
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
-from cuprum.adapters.pump_metrics import RUST_PUMP_HELD_PAIRS, PumpMetricsHook
+from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
+    PumpMetricsHook,
+)
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import clear_backend_caches
 from cuprum.unittests._rust_pump_test_helpers import (
     RecordingCollector,
     allow_pause,
+    close_writer_and_succeed,
     fail_engage,
     install_fake_pump,
     owned_fds,
@@ -82,6 +87,7 @@ class _ScheduleRunner:
     def __init__(self) -> None:
         """Start with one collector and no observations."""
         self.collector = RecordingCollector()
+        self.registry = HeldPairCounterRegistry()
         self.acquired: list[int] = []
         self.observed: list[RustPumpHandoffOutcome] = []
         self._original_open = (
@@ -147,7 +153,7 @@ class _ScheduleRunner:
             "_open_native_pump_worker_fds",
             self.record_open,
         )
-        install_fake_pump(patch, lambda _reader_fd, _writer_fd: 0)
+        install_fake_pump(patch, close_writer_and_succeed)
         if engage is not None:
             patch.setattr(_pipeline_stream_fds._BlockingModeGuard, "engage", engage)
         if guard_init is not None:
@@ -167,7 +173,7 @@ class _ScheduleRunner:
         """Run one hand-off to its settlement and report what it returned."""
         with (
             self._patched(drain, engage=engage, guard_init=guard_init),
-            observe_pump(PumpMetricsHook(self.collector)),
+            observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
             observe_pump(self.record_outcome),
             owned_fds() as (reader_fd, writer_fd),
         ):
@@ -187,7 +193,7 @@ class _ScheduleRunner:
 
         with (
             self._patched(drain),
-            observe_pump(PumpMetricsHook(self.collector)),
+            observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
             observe_pump(self.record_outcome),
             owned_fds() as (reader_fd, writer_fd),
         ):

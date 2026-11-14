@@ -463,10 +463,10 @@ reason = "Called structurally through _PipelineWaitReporter by _StageObservation
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"
 full_name = [
-    "cuprum.adapters._pump_held_pairs._HeldPairCounter.admit",
-    "cuprum.adapters._pump_held_pairs._CounterEntry.names",
+    "cuprum.adapters._pump_held_counter._HeldPairCounter.settle",
+    "cuprum.adapters._pump_held_registry._CounterEntry.names",
 ]
-reason = "admit is called by PumpMetricsHook._apply_held_delta through its optional self._held attribute, and names is called on the entry returned by _COUNTERS.get(key). The reference graph resolves a method call through neither an optional attribute nor a dict lookup, so both read as unreferenced."
+reason = "settle is called by PumpMetricsHook._apply_held_delta through its optional self._held attribute, and names is called on an entry taken from the registry's _entries dict. The reference graph resolves a method call through neither an optional attribute nor a dict lookup, so both read as unreferenced."
 
 [[tool.skylos.dead_code.entrypoints]]
 type = "method"

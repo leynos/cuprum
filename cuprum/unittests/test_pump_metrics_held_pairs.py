@@ -23,6 +23,7 @@ from cuprum.adapters.metrics_adapter import InMemoryMetrics
 from cuprum.adapters.pump_metrics import (
     RUST_PUMP_DECLINED_TOTAL,
     RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
     PumpMetricsHook,
 )
 from cuprum.pump_events import PumpEvent, RustPumpDeclineReason
@@ -36,15 +37,23 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 
+@pytest.fixture
+def registry() -> HeldPairCounterRegistry:
+    """Give each test its own held-pair counter scope."""
+    return HeldPairCounterRegistry()
+
+
 def _hold(delta: int) -> PumpEvent:
     """Build the hold transition the coordinator emits."""
     return PumpEvent(phase="handoff_hold", held_delta=delta)
 
 
-def test_a_hold_raises_and_returns_the_gauge() -> None:
+def test_a_hold_raises_and_returns_the_gauge(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """One acquisition and one release leave the gauge at zero."""
     collector = RecordingCollector()
-    hook = PumpMetricsHook(collector)
+    hook = PumpMetricsHook(collector, registry=registry)
 
     hook(_hold(1))
     hook(_hold(-1))
@@ -96,21 +105,26 @@ def test_a_collector_without_gauges_still_receives_counters() -> None:
 
 
 @pytest.mark.parametrize("delta", [0, 2, -2], ids=["zero", "double", "negative"])
-def test_a_malformed_hold_delta_is_ignored(delta: int) -> None:
+def test_a_malformed_hold_delta_is_ignored(
+    delta: int,
+    registry: HeldPairCounterRegistry,
+) -> None:
     """A hand-built event cannot move the gauge by an unbounded amount."""
     collector = RecordingCollector()
 
-    PumpMetricsHook(collector)(_hold(delta))
+    PumpMetricsHook(collector, registry=registry)(_hold(delta))
 
     assert not collector.gauges, (
         f"only a single acquisition or release may move the gauge, found {delta}"
     )
 
 
-def test_concurrent_drains_accumulate_under_one_hook() -> None:
+def test_concurrent_drains_accumulate_under_one_hook(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """Four drains held at once are reported as four held pairs."""
     collector = RecordingCollector()
-    hook = PumpMetricsHook(collector)
+    hook = PumpMetricsHook(collector, registry=registry)
     held_by_all = threading.Barrier(4)
 
     def hold_and_release() -> None:
@@ -170,10 +184,12 @@ class _GatedGaugeCollector(RecordingCollector):
         super().set_gauge(name, value, labels)
 
 
-def test_an_older_publication_cannot_overwrite_a_newer_count() -> None:
+def test_an_older_publication_cannot_overwrite_a_newer_count(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """A slow acquisition must not publish a stale count after its release."""
     collector = _GatedGaugeCollector()
-    hook = PumpMetricsHook(collector)
+    hook = PumpMetricsHook(collector, registry=registry)
     release_started = threading.Event()
 
     def acquire() -> None:
@@ -213,11 +229,13 @@ def test_an_older_publication_cannot_overwrite_a_newer_count() -> None:
     )
 
 
-def test_hooks_sharing_a_collector_publish_one_running_total() -> None:
+def test_hooks_sharing_a_collector_publish_one_running_total(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """A release through one hook must not hide another hook's hold."""
     collector = RecordingCollector()
-    first = PumpMetricsHook(collector)
-    second = PumpMetricsHook(collector)
+    first = PumpMetricsHook(collector, registry=registry)
+    second = PumpMetricsHook(collector, registry=registry)
 
     first(_hold(1))
     second(_hold(1))
@@ -229,14 +247,16 @@ def test_hooks_sharing_a_collector_publish_one_running_total() -> None:
     )
 
 
-def test_distinct_collectors_keep_separate_gauges() -> None:
-    """The count belongs to its collector, not to the process."""
+def test_distinct_collectors_keep_separate_gauges(
+    registry: HeldPairCounterRegistry,
+) -> None:
+    """The count belongs to its collector, not to the registry."""
     left = RecordingCollector()
     right = RecordingCollector()
 
-    PumpMetricsHook(left)(_hold(1))
-    PumpMetricsHook(right)(_hold(1))
-    PumpMetricsHook(left)(_hold(1))
+    PumpMetricsHook(left, registry=registry)(_hold(1))
+    PumpMetricsHook(right, registry=registry)(_hold(1))
+    PumpMetricsHook(left, registry=registry)(_hold(1))
 
     assert left.gauge_values(RUST_PUMP_HELD_PAIRS) == [1.0, 2.0], (
         "each collector must report only the pairs held through its own hooks"
@@ -246,10 +266,12 @@ def test_distinct_collectors_keep_separate_gauges() -> None:
     )
 
 
-def test_concurrent_hooks_on_one_collector_share_the_gauge() -> None:
+def test_concurrent_hooks_on_one_collector_share_the_gauge(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """Two drains held through different hooks are reported as two pairs."""
     collector = RecordingCollector()
-    hooks = [PumpMetricsHook(collector) for _ in range(2)]
+    hooks = [PumpMetricsHook(collector, registry=registry) for _ in range(2)]
     both_held = threading.Barrier(len(hooks))
 
     def hold_and_release(hook: PumpMetricsHook) -> None:
@@ -275,11 +297,13 @@ def test_concurrent_hooks_on_one_collector_share_the_gauge() -> None:
     )
 
 
-def test_a_collector_without_weakref_support_shares_one_total() -> None:
+def test_a_collector_without_weakref_support_shares_one_total(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """A slotted collector still gives every hook the same running total."""
     collector = SlottedGaugeCollector()
-    first = PumpMetricsHook(typ.cast("typ.Any", collector))
-    second = PumpMetricsHook(typ.cast("typ.Any", collector))
+    first = PumpMetricsHook(typ.cast("typ.Any", collector), registry=registry)
+    second = PumpMetricsHook(typ.cast("typ.Any", collector), registry=registry)
 
     first(_hold(1))
     second(_hold(1))
@@ -291,13 +315,15 @@ def test_a_collector_without_weakref_support_shares_one_total() -> None:
     )
 
 
-def test_nested_registrations_count_one_hold_once() -> None:
-    """One event delivered to both nested hooks moves the gauge once."""
+def test_nested_registrations_count_one_hold_once(
+    registry: HeldPairCounterRegistry,
+) -> None:
+    """One emission delivered to both nested hooks moves the gauge once."""
     collector = RecordingCollector()
 
     with (
-        observe_pump(PumpMetricsHook(collector)),
-        observe_pump(PumpMetricsHook(collector)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
+        observe_pump(PumpMetricsHook(collector, registry=registry)),
     ):
         _emit_pump_event(_hold(1))
         _emit_pump_event(_hold(-1))
@@ -307,7 +333,9 @@ def test_nested_registrations_count_one_hold_once() -> None:
     )
 
 
-def test_separate_contexts_report_their_own_holds() -> None:
+def test_separate_contexts_report_their_own_holds(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """Two registrations in private contexts hold two pairs at once."""
     collector = RecordingCollector()
     both_held = threading.Barrier(2)
@@ -317,7 +345,7 @@ def test_separate_contexts_report_their_own_holds() -> None:
 
         def work() -> None:
             """Emit a hold and its release inside ``context``."""
-            with observe_pump(PumpMetricsHook(collector)):
+            with observe_pump(PumpMetricsHook(collector, registry=registry)):
                 _emit_pump_event(_hold(1))
                 both_held.wait(timeout=5.0)
                 _emit_pump_event(_hold(-1))
@@ -357,7 +385,11 @@ class HeldPairAccountingMachine(RuleBasedStateMachine):
         """Start with one collector, three hooks, and an empty model."""
         super().__init__()
         self.collector = RecordingCollector()
-        self.hooks = [PumpMetricsHook(self.collector) for _ in range(self._HOOKS)]
+        self.registry = HeldPairCounterRegistry()
+        self.hooks = [
+            PumpMetricsHook(self.collector, registry=self.registry)
+            for _ in range(self._HOOKS)
+        ]
         self.held = [0] * self._HOOKS
 
     @rule(index=st.integers(min_value=0, max_value=_HOOKS - 1))
@@ -403,14 +435,16 @@ TestHeldPairAccountingMachine.settings = settings(
 )
 
 
-def test_the_reference_collector_reports_and_clears_gauges() -> None:
+def test_the_reference_collector_reports_and_clears_gauges(
+    registry: HeldPairCounterRegistry,
+) -> None:
     """``InMemoryMetrics`` provides the optional capability."""
     metrics = InMemoryMetrics()
 
     assert isinstance(metrics, GaugeMetricsCollector), (
         "the reference collector must offer the gauge capability"
     )
-    PumpMetricsHook(metrics)(_hold(1))
+    PumpMetricsHook(metrics, registry=registry)(_hold(1))
     assert metrics.gauges[RUST_PUMP_HELD_PAIRS] == pytest.approx(1.0)
 
     metrics.reset()

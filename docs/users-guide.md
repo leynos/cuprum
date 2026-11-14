@@ -3720,7 +3720,7 @@ import sys
 
 from cuprum import Program, ProgramCatalogue, sh
 from cuprum.adapters.metrics_adapter import InMemoryMetrics, MetricsHook
-from cuprum.adapters.pump_metrics import PumpMetricsHook
+from cuprum.adapters.pump_metrics import HeldPairCounterRegistry, PumpMetricsHook
 from cuprum.pump_observation import observe_pump
 
 catalogue = ProgramCatalogue.from_programs(sys.executable, name="pump-metrics")
@@ -3729,7 +3729,11 @@ pipeline = python("-c", "print('hello')") | python(
     "-c", "import sys; print(sys.stdin.read(), end='')"
 )
 metrics = InMemoryMetrics()
-with sh.observe(MetricsHook(metrics)), observe_pump(PumpMetricsHook(metrics)):
+registry = HeldPairCounterRegistry()
+with (
+    sh.observe(MetricsHook(metrics)),
+    observe_pump(PumpMetricsHook(metrics, registry=registry)),
+):
     result = pipeline.run_sync()
 assert result.ok
 assert metrics.counters["cuprum_executions_total"] == 2
@@ -3755,19 +3759,27 @@ _Table 8: Metrics emitted by `PumpMetricsHook`._
 the number of descriptor pairs currently held across pending buffered drains. A
 hand-off sets it one higher on acquisition and one lower on release, and the
 release lands on every settling path — submission, activation failure, drain
-failure, and cancellation. Every hook that reports to the same collector shares
-one running total, so registering a hook per pipeline scope still reports that
-collector's total held pairs. The registry that scopes that sharing can be
-injected. Import `HeldPairCounterRegistry` from `cuprum.adapters.pump_metrics`,
-bind one to a name the caller keeps, and pass it to every hook that reports to
-the collector. Binding it, rather than creating one inline at the call, keeps
-the count for as long as any hook exists: hooks that share a registry share its
-count, while a registry created afresh for each hook gives that collector an
+failure, and cancellation.
+
+Sharing that gauge is an explicit dependency, not process-wide state.
+`PumpMetricsHook` takes an optional `registry`. Construct a
+`HeldPairCounterRegistry` from `cuprum.adapters.pump_metrics` at the
+composition root and pass the same registry to every hook that reports to one
+collector: those hooks then share one running total, so a hook registered per
+pipeline scope still reports that collector's total held pairs. Passing
+`registry=None`, the default, reports no gauge at all — the hook neither
+registers itself anywhere nor publishes a private total that a second hook for
+the same collector would contradict. Counters and histograms are unaffected
+either way, because they need no sharing. Two registries give one collector two
+unrelated totals, so every hook reporting to a collector must use the same one.
+
+Keep the registry alive for as long as the count must be. Each registration
+ties the hook to the registry through a weak-reference finalizer, so the
+registry stays alive while any hook that reports to it lives, and binding it to
+a name the caller keeps holds the count even after every such hook has been
+collected. A registry created afresh for each hook gives that collector an
 unrelated total per hook, and one discarded with a hold still outstanding loses
-the hold, so a later release reports a count below zero instead of back at
-zero. A bound registry also lets a test isolate its own collector from the
-process-wide default. Every hook reporting to one collector must use the same
-registry; two registries give that collector two unrelated totals.
+the hold, so a later release reports a count below zero instead of back at zero.
 
 <!-- tested-example: pump-held-pair-registry -->
 
@@ -3800,12 +3812,12 @@ runtime-checkable protocol that adds one method to the two-method
 is the metric name, `value` is the level to report — an absolute value, not a
 delta added to whatever the collector already holds — and `labels` maps label
 names to values, which is empty for `cuprum_rust_pump_held_pairs` because that
-gauge carries no labels. The hook calls the method while it holds its own count
-lock, so an implementation should record the value and return; it must not
-block. A collector written against only the two methods keeps receiving the
-counters and histograms and is skipped for gauges. `InMemoryMetrics` implements
-both, and stores the latest gauge value in its `gauges` mapping, which
-`reset()` clears.
+gauge carries no labels. The shared counter calls the method while holding its
+own count lock, so an implementation should record the value and return; it
+must not block. A collector written against only the two methods keeps
+receiving the counters and histograms and is skipped for gauges.
+`InMemoryMetrics` implements both, and stores the latest gauge value in its
+`gauges` mapping, which `reset()` clears.
 
 The cleanup metrics are emitted only when callers register
 `observe_pump(PumpMetricsHook(metrics))`. `cuprum_rust_pump_cleanup_total` is

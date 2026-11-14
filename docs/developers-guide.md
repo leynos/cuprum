@@ -2794,33 +2794,40 @@ order reverses: the release lands first, and a native load, a descriptor
 duplication, or an executor rejection that then fails rolls the pair back
 afterwards.
 
-`PumpMetricsHook` accumulates those deltas per collector under one lock, and
-hooks reporting to the same collector share the count, so one hook's release
-cannot publish zero while another still holds a pair.
+`PumpMetricsHook` accumulates those deltas per collector, and hooks given the
+same registry share that collector's count, so one hook's release cannot
+publish zero while another still holds a pair. Sharing is an explicit
+dependency: a `HeldPairCounterRegistry` constructed at the composition root is
+passed to every hook reporting to the collector, and a hook constructed without
+one reports no gauge and registers nowhere. That keeps constructing a hook from
+mutating process-global state: a library may emit metrics and tracing, but it
+must not install a global recorder. Every hook reporting to one collector must
+use the same registry, because two registries would give that collector two
+unrelated totals.
 
 That sharing also covers a collector without weak-reference support: an entry
 for a collector that can be weakly referenced retires with the collector, and
 one whose collector cannot be weakly referenced holds it — keeping its identity
 unique — and retires once the last hook reporting to it is gone and nothing is
-held.
-
-That registry is a `HeldPairCounterRegistry`, and a caller can inject one at
-the hook boundary instead of using the process-wide default. The default keeps
-independently created hooks in agreement; an injected registry gives a test, or
-an application with more than one observer configuration, its own scope. Every
-hook reporting to one collector must use the same registry, because two
-registries would give that collector two unrelated totals.
+held. The registry retires such an entry from a weak-reference finalizer, which
+can run inside publication, so it reads the counter's total without taking the
+counter's lock. The counter's lock guards the claim, the update, and the
+publication; the registry's lock guards only its entries; the two are never
+nested.
 
 One event delivered to more than one of those hooks — a nested `observe_pump`
 registration delivers every event to both contexts — moves the shared total
-once, so the gauge counts held pairs rather than hook deliveries. The counter
-claims each event for the thread delivering it, and only while that event is
-still in flight: one emission's deliveries all run inline on the thread that
-emitted it, so a second thread's event arriving between them cannot make the
-rest count again, and a hook that emits an event of its own while it is being
-called nests a separate emission that counts on its own without releasing the
-outer event's claim. The running total is published under the same lock, so a
-release cannot reach the collector before the acquisition it followed.
+once, so the gauge counts held pairs rather than hook deliveries. The core
+emitter stamps each delivery with a `PumpEmission` token and closes it once the
+delivery ends; the counter claims each event by that token and only while the
+token is still open. One emission's deliveries all run inline on the thread
+that emitted it, so a second thread's event arriving between them cannot make
+the rest count again, and a hook that emits an event of its own while it is
+being called nests a separate emission with its own token, which counts on its
+own without releasing the outer event's claim. The adapter reads the token from
+`PumpEvent.emission` and imports no private core state. The running total is
+published under the same lock, so a release cannot reach the collector before
+the acquisition it followed.
 
 Gauges are a separate, optional capability: `GaugeMetricsCollector` in
 `cuprum/adapters/gauge_metrics.py` is a runtime-checkable protocol, and a

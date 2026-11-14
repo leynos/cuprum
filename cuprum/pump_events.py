@@ -132,6 +132,54 @@ type PumpPhase = typ.Literal[
 """
 
 
+# ``eq=False`` keeps identity comparison: two open emissions are never
+# interchangeable, and the consumer that deduplicates deliveries compares the
+# tokens with ``is``.
+@dc.dataclass(slots=True, eq=False)
+class PumpEmission:
+    """The identity of one pump event's delivery to the registered hooks.
+
+    ``_emit_pump_event`` stamps every event it delivers with one of these, and
+    closes it when every hook has seen that event. A consumer that must act
+    once per emission — the unlabelled held-pair gauge, which several hooks
+    reporting to one collector all move — can therefore recognize the other
+    deliveries of the same emission by identity, and tell them apart from a new
+    emission that merely carries the same values.
+
+    The token is the emitter's public statement about what is in flight, so a
+    consumer never has to read the emitter's own bookkeeping. It is the only
+    mutable part of a pump event: the event stays frozen, and only the emitter
+    calls :meth:`close`.
+
+    Examples
+    --------
+    An event delivered to a hook carries a token that is open until delivery
+    ends::
+
+        def record(event):
+            assert event.emission is not None
+            assert not event.emission.is_closed
+
+    """
+
+    _is_closed: bool = dc.field(default=False, init=False)
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the emitter has finished delivering this emission."""
+        return self._is_closed
+
+    def close(self) -> None:
+        """Mark the delivery finished.
+
+        Called by the emitter once every hook has seen the event. A consumer
+        reads :attr:`is_closed`; it must not close a token it was handed,
+        because the remaining deliveries of that emission would then look like
+        a new emission and move the count twice.
+        """
+        self._is_closed = True
+
+
 @dc.dataclass(frozen=True, slots=True)
 class PumpEvent:
     """A Rust-pump routing decision reported to registered pump hooks.
@@ -169,6 +217,13 @@ class PumpEvent:
         phases. Tracing observers use it only to locate an existing execution
         span; it is ``None`` for every other phase and is never a trace
         attribute or metric label.
+    emission:
+        The token the emitter stamps onto every event it delivers, or ``None``
+        for an event a caller built and handed to a hook directly. It identifies
+        one delivery to the registered hooks, which is what lets a consumer that
+        counts emissions recognize the same emission reaching several hooks. It
+        is excluded from equality and from the representation: two events with
+        the same phase are the same routing fact however they were delivered.
 
     Examples
     --------
@@ -205,6 +260,9 @@ class PumpEvent:
     # Appended last so adding it cannot shift the positional fields callers
     # already passed to this public dataclass.
     held_delta: int = 0
+    # Delivery identity rather than routing fact: excluded from comparison so
+    # that an event a hook compares against a hand-built one still matches.
+    emission: PumpEmission | None = dc.field(default=None, compare=False, repr=False)
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]
@@ -219,6 +277,7 @@ returns an awaitable is reported and discarded rather than run.
 
 
 __all__ = [
+    "PumpEmission",
     "PumpEvent",
     "PumpHook",
     "PumpPhase",

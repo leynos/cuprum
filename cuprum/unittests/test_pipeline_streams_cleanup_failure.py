@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import os
 import threading
 import typing as typ
 
@@ -98,9 +99,10 @@ def _run_cancelled_pump_with_captured_cleanup(
 
     def blocking_pump(reader_fd: int, writer_fd: int) -> int:
         """Block until cancellation releases the native-pump stand-in."""
-        del reader_fd, writer_fd
+        del reader_fd
         state.worker_started.set()
         state.release.wait(timeout=5.0)
+        os.close(writer_fd)
         state.worker_finished.set()
         return 0
 

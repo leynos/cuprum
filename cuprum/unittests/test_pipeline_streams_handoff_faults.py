@@ -21,7 +21,11 @@ from cuprum import (
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
 )
-from cuprum.adapters.pump_metrics import RUST_PUMP_HELD_PAIRS, PumpMetricsHook
+from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
+    PumpMetricsHook,
+)
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import clear_backend_caches
@@ -53,9 +57,11 @@ class _GuardConstructionFailure:
         failure: BaseException,
         *,
         collector: RecordingCollector | None = None,
+        registry: HeldPairCounterRegistry | None = None,
     ) -> None:
         """Record the failure to inject and start with empty observations."""
         self.failure = failure
+        self.registry = registry if registry is not None else HeldPairCounterRegistry()
         self.resume_calls = 0
         self.acquired: list[int] = []
         self.close_calls: dict[int, int] = {}
@@ -143,7 +149,9 @@ class _GuardConstructionFailure:
                 cleanup_grace_s=0.5,
             )
             try:
-                with observe_pump(PumpMetricsHook(self.collector)):
+                with observe_pump(
+                    PumpMetricsHook(self.collector, registry=self.registry)
+                ):
                     return asyncio.run(
                         _pipeline_streams._run_rust_pump(
                             reader=typ.cast("asyncio.StreamReader", object()),
@@ -240,9 +248,11 @@ class _FailedSettleSignalHarness:
         *,
         decline_activation: bool,
         collector: RecordingCollector | None = None,
+        registry: HeldPairCounterRegistry | None = None,
     ) -> None:
         """Choose which failed path precedes the interrupted release."""
         self.decline_activation = decline_activation
+        self.registry = registry if registry is not None else HeldPairCounterRegistry()
         self.resume_calls = 0
         self.acquired: list[int] = []
         self.events: list[PumpEvent] = []
@@ -323,7 +333,7 @@ class _FailedSettleSignalHarness:
                 cleanup_grace_s=0.5,
             )
             with (
-                observe_pump(PumpMetricsHook(self.collector)),
+                observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
                 observe_pump(self.raise_signal),
                 observe_pump(self.events.append),
                 pytest.raises(KeyboardInterrupt),
@@ -381,13 +391,18 @@ def test_a_mixed_sequence_of_failed_handoffs_settles_one_shared_gauge() -> None:
     the acts share rises and falls once per act rather than drifting.
     """
     collector = RecordingCollector()
+    registry = HeldPairCounterRegistry()
 
     for failure, is_refusal in (
         (RuntimeError("guard construction failed"), False),
         (OSError("blocking mode refused"), True),
     ):
         with pytest.MonkeyPatch.context() as patch:
-            guard = _GuardConstructionFailure(failure, collector=collector)
+            guard = _GuardConstructionFailure(
+                failure,
+                collector=collector,
+                registry=registry,
+            )
             guard.install(patch)
             if is_refusal:
                 assert guard.run() is False, "a refusal must fall back to Python"
@@ -400,6 +415,7 @@ def test_a_mixed_sequence_of_failed_handoffs_settles_one_shared_gauge() -> None:
         interrupted = _FailedSettleSignalHarness(
             decline_activation=False,
             collector=collector,
+            registry=registry,
         )
         interrupted.install(patch)
         interrupted.run()

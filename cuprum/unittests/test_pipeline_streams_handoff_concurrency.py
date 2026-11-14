@@ -33,7 +33,11 @@ from cuprum import (
     _pipeline_stream_native_drain,
     _pipeline_streams,
 )
-from cuprum.adapters.pump_metrics import RUST_PUMP_HELD_PAIRS, PumpMetricsHook
+from cuprum.adapters.pump_metrics import (
+    RUST_PUMP_HELD_PAIRS,
+    HeldPairCounterRegistry,
+    PumpMetricsHook,
+)
 from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
 from cuprum.pump_observation import observe_pump
 from cuprum.unittests._pump_stream_dispatch_support import clear_backend_caches
@@ -157,6 +161,7 @@ class ConcurrentHandoffMachine(RuleBasedStateMachine):
         super().__init__()
         self.loop = asyncio.new_event_loop()
         self.collector = RecordingCollector()
+        self.registry = HeldPairCounterRegistry()
         self.audit = _CloseAudit()
         self.acts: list[_HeldHandoff] = []
         self.pending: list[_HeldHandoff] = []
@@ -248,7 +253,7 @@ class ConcurrentHandoffMachine(RuleBasedStateMachine):
     def _run(self, operation: cabc.Coroutine[typ.Any, typ.Any, None]) -> None:
         """Run one hand-off transition with both observation hooks registered."""
         with (
-            observe_pump(PumpMetricsHook(self.collector)),
+            observe_pump(PumpMetricsHook(self.collector, registry=self.registry)),
             observe_pump(self._record_outcome),
         ):
             self.loop.run_until_complete(operation)
