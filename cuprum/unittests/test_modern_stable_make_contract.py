@@ -337,8 +337,7 @@ def test_modern_extension_selects_its_toolchain_for_the_parity_run() -> None:
 
     ordinary = dry_run("test-boundary-parity")
     assert "RUSTUP_TOOLCHAIN" not in ordinary, (
-        "the ordinary parity route must keep the caller's toolchain; got: "
-        f"{ordinary}"
+        f"the ordinary parity route must keep the caller's toolchain; got: {ordinary}"
     )
     assert "CARGO_TARGET_DIR" not in ordinary, (
         "the ordinary parity route must not redirect Cargo's target directory; "
