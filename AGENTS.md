@@ -355,9 +355,10 @@ working on the Rust portions of the project:
     cargo test --all-targets --all-features --frozen -- --test-threads=1
     ```
 
-    Rust builds inherit `RUSTFLAGS="-D warnings -C codegen-units=1"` by default.
-    On Linux, the dev-fast route also uses the dev-fast nightly and adds
-    `-Zthreads=8 -Clink-arg=-fuse-ld=mold`. The suite then runs Cargo doctests
+    The Rust suite sets `RUSTFLAGS="-D warnings -C codegen-units=1"`. On Linux,
+    the dev-fast route also uses the dev-fast nightly and adds
+    `-Zthreads=8 -Clink-arg=-fuse-ld=mold`; `make dev-build` sets no `RUSTFLAGS`
+    of its own. The suite then runs Cargo doctests
     separately with all features, because Nextest does not execute doctests:
     `cargo test --workspace --doc --all-features --frozen`, with
     `RUSTDOCFLAGS="--cfg docsrs -D warnings"` and, on Linux, the extra
@@ -412,10 +413,15 @@ working on the Rust portions of the project:
   normalize nondeterministic fields before snapshotting. Do not accept brittle
   snapshots that churn after unrelated changes; update snapshots only after
   confirming a snapshot failure identifies a real contract change.
-- Add compile-time behaviour tests using `trybuild` where macro expansion,
-  trait bounds, feature-gated APIs, or other compile-fail and compile-pass
-  contracts are relevant to the requirements. Keep compile-time fixtures free
-  of unrelated runtime work.
+- Add compile-time behaviour tests where macro expansion, trait bounds,
+  feature-gated APIs, or other compile-fail and compile-pass contracts are
+  relevant to the requirements. Do not use `trybuild`:
+  [ADR-0027](docs/adrs/adr-0027-compile-contracts-in-the-build-graph.md)
+  removed it because each case builds a scratch crate that cannot reuse the
+  workspace's build. Express compile-pass cases as ordinary doctests, and
+  compile-fail cases as `compile_fail` doctests that name an error code and
+  share their doc comment with a positive control. Keep compile-time fixtures
+  free of unrelated runtime work.
 - Add end-to-end tests where a change affects externally observable workflows,
   integration contracts, persistence, command-line behaviour, network
   boundaries, UI flows, or other system-level behaviour.
