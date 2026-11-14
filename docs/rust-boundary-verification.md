@@ -371,11 +371,33 @@ The default `make test` suite includes `tests/test_native_sdist.py` and the
 all four boundary script contracts together with the native tests. The current
 final-source result is `2 verified, 0 errors` in
 `/tmp/issue379-round24-verus.log`. The Verus archive does not contain the
-solver, so `scripts/install_boundary_z3.py` installs the required prebuilt Z3
-separately. The `leynos/rust-prover-tools` installer works for Verus, but its
-wrapper's version parser rejects the annotation
-`(overridden by environment variable RUSTUP_TOOLCHAIN)`; the Makefile uses the
-pinned binary directly rather than silently changing toolchains.
+solver, so `make install-verus` delegates both the Verus installer and
+`prover-tools z3 install` to the pinned `leynos/rust-prover-tools` revision.
+`make install-boundary-kani` delegates the Kani binary download the same way
+and retains local setup: it disables the shared CLI's compile, setup, and
+verification phases, then runs `cargo kani setup --use-local-bundle` against
+the pinned archive, so that command stays the single owner of native setup. The
+three downloads share one bounded transport: an oversized declared length is
+rejected before the destination opens, streamed bytes are counted against an
+asset ceiling, and redirects, header parsing, and the body are bounded by one
+monotonic deadline. The deadline does not cover host name resolution, which
+happens before the connection exists and is bounded only by the system
+resolver. Z3 lands at `.cache/boundary-z3/z3` for `VERUS_Z3_PATH`, and the Kani
+binary and cached archive stay under `.cache/boundary-kani`. The Makefile
+invokes the Verus binary directly for proofs rather than through the shared
+wrapper, whose version parser rejects the annotation
+`(overridden by environment variable RUSTUP_TOOLCHAIN)`.
+
+`make boundary-download-integration` exercises that shared transport against a
+controlled loopback HTTPS server instead of the public release endpoints. Each
+scenario asserts one refusal: an oversized `Content-Length` before the body is
+sent, a streamed overflow past the per-asset ceiling, and a stalled, trickling,
+or never-ending response that must fail near the configured deadline. The same
+suite checks that a short body, a digest mismatch, an insecure redirect, a
+redirect loop, and a redirect without a `Location` header never publish the
+asset. It is opt-in: installing the pinned revision needs the network and every
+scenario binds a socket, so `make test` collects the module and skips it, while
+the `verus` job runs it where the pinned revision is already installed.
 
 The pinned Z3 asset targets x86-64 Linux with glibc 2.39. Hosted execution
 assumes that GitHub's `ubuntu-latest` image currently resolves to Ubuntu 24.04
