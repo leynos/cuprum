@@ -1,10 +1,11 @@
-"""Windows raw-handle rejection at the PyO3 stream boundary.
+"""Windows CRT consume errors and synchronous-handle pump rejection.
 
-The synchronous native adapter accepts only capabilities whose non-overlapped
-mode was established at creation or in an audited Rust hand-off. A bare Python
-integer cannot establish that property, so the exported PyO3 helpers reject
-raw Windows handles before they construct the capability. The native-I/O crate
-tests the accepted ``synchronous_pipe`` path directly.
+The native pump accepts only capabilities whose non-overlapped mode was
+established at creation or in an audited Rust hand-off. A bare Python integer
+cannot establish that property, so the PyO3 pump rejects raw Windows handles.
+Consume has a separate CRT descriptor boundary and uses the synchronous CRT
+``_read`` API. The native-I/O crate tests the accepted ``synchronous_pipe``
+pump path directly.
 
 Example
 -------
@@ -15,15 +16,21 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import errno
 import os
 import sys
 import typing as typ
 
 import pytest
 
-from cuprum import _streams_rs
+from cuprum import _streams_windows
+from cuprum.unittests._rust_stream_test_support import (
+    INVALID_FD_ERRNOS,
+    INVALID_FD_MESSAGE_RE,
+)
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from types import ModuleType
 
 
@@ -31,8 +38,10 @@ _windows_only = pytest.mark.skipif(
     sys.platform != "win32",
     reason="asserts the Windows-only raw-handle rejection boundary",
 )
-_RAW_HANDLE_MESSAGE = "do not accept raw Windows handles"
 _ERROR_INVALID_HANDLE = 6
+# One past the CRT's signed 32-bit descriptor range.
+_ABOVE_I32_MAX = 1 << 31
+_RAW_HANDLE_MESSAGE = "do not accept raw Windows handles"
 
 
 def _assert_invalid_windows_handle(raw_handle: int) -> None:
@@ -62,12 +71,109 @@ def _assert_invalid_windows_handle(raw_handle: int) -> None:
 
 
 @_windows_only
-def test_consume_rejects_raw_windows_handle(rust_streams: ModuleType) -> None:
-    """The safe Python entry point cannot assert synchronous I/O from an int."""
+def test_consume_rejects_an_out_of_range_crt_descriptor(
+    rust_streams: ModuleType,
+) -> None:
+    """The Python wrapper refuses a descriptor the CRT would fast-fail on.
+
+    Passing an out-of-range descriptor to ``_read`` invokes the invalid
+    parameter handler, whose default ``_invoke_watson`` terminates the process
+    with ``STATUS_STACK_BUFFER_OVERRUN`` instead of returning ``EBADF``. The
+    rejection therefore has to happen before the CRT sees the value, so the
+    descriptor must exceed the CRT's signed 32-bit range: 1,000,000 is a
+    perfectly good ``int`` and would be duplicated and passed straight to
+    ``_read``.
+    """
+    with pytest.raises(ValueError, match="file descriptor out of range"):
+        rust_streams.rust_consume_stream(_ABOVE_I32_MAX)
+
+
+@_windows_only
+def test_consume_reports_a_buffer_error_before_a_descriptor_error(
+    rust_streams: ModuleType,
+) -> None:
+    """An invalid buffer is named even when the descriptor is also unusable.
+
+    Both arguments are invalid, so the message identifies which check ran
+    first. Reversing the order would put ``os.dup`` in front of a rejection the
+    native entry point documents as ``ValueError``.
+    """
+    with pytest.raises(ValueError, match="buffer_size"):
+        rust_streams.rust_consume_stream(_ABOVE_I32_MAX, buffer_size=0)
+
+
+@_windows_only
+def test_binary_mode_setup_failure_closes_the_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The temporary descriptor closes even when CRT mode setup fails."""
+    import msvcrt
+
+    reader_fd, writer_fd = os.pipe()
+    duplicate_fds: list[int] = []
+    original_dup = os.dup
+
+    def capture_duplicate(fd: int) -> int:
+        """Record the owned copy so cleanup remains observable."""
+        duplicate_fd = original_dup(fd)
+        duplicate_fds.append(duplicate_fd)
+        return duplicate_fd
+
+    def reject_binary_mode(_fd: int, _mode: int) -> int:
+        """Inject the CRT setup failure after duplication succeeds."""
+        raise OSError(errno.EINVAL, "injected setmode failure")
+
+    monkeypatch.setattr(_streams_windows.os, "dup", capture_duplicate)
+    monkeypatch.setattr(msvcrt, "setmode", reject_binary_mode)
+    try:
+        with (
+            pytest.raises(OSError, match="injected setmode failure"),
+            _streams_windows._duplicate_binary_reader(reader_fd),
+        ):
+            pytest.fail("binary-mode setup should fail before yielding")
+
+        assert len(duplicate_fds) == 1, "the helper must duplicate exactly once"
+        # An unusable descriptor is EBADF on POSIX and WinError 6 on Windows;
+        # the shared helper matches both by their numeric prefix, which is what
+        # CPython formats itself, rather than locale-dependent strerror text.
+        with pytest.raises(OSError, match=INVALID_FD_MESSAGE_RE) as closed_duplicate:
+            os.fstat(duplicate_fds[0])
+        assert closed_duplicate.value.errno in INVALID_FD_ERRNOS
+    finally:
+        for fd in (reader_fd, writer_fd):
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
+@_windows_only
+def test_binary_consume_preserves_crlf_and_ctrl_z(
+    rust_streams: ModuleType,
+) -> None:
+    """Windows consume keeps raw bytes and leaves the caller in text mode."""
+    import msvcrt
+
+    setmode = typ.cast(
+        "cabc.Callable[[int, int], int]",
+        getattr(msvcrt, "setmode"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+    )
+    text_mode: int = os.O_TEXT  # ty: ignore[unresolved-attribute]  # Windows-only constant.
+    binary_mode: int = os.O_BINARY  # ty: ignore[unresolved-attribute]  # Windows-only constant.
     read_fd, write_fd = os.pipe()
     try:
-        with pytest.raises(OSError, match=_RAW_HANDLE_MESSAGE):
-            rust_streams.rust_consume_stream(read_fd)
+        setmode(read_fd, text_mode)
+        setmode(write_fd, binary_mode)
+        payload = b"before\r\n\x1aafter"
+        assert os.write(write_fd, payload) == len(payload)
+        os.close(write_fd)
+
+        output = rust_streams.rust_consume_stream(read_fd)
+
+        assert output == payload.decode("utf-8", errors="replace"), (
+            "binary native consume must preserve CRLF and Ctrl-Z bytes"
+        )
+        assert setmode(read_fd, text_mode) == text_mode, (
+            "consume must not change the caller descriptor's text mode"
+        )
     finally:
         for fd in (read_fd, write_fd):
             with contextlib.suppress(OSError):
@@ -87,9 +193,9 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
         native = rust_streams._load_native()
         reader_fd, reader_writer_fd = os.pipe()
         writer_reader_fd, writer_fd = os.pipe()
-        reader_handle = _streams_rs._convert_fd_for_platform(reader_fd)
-        writer_handle = _streams_rs._duplicate_windows_handle(
-            _streams_rs._convert_fd_for_platform(writer_fd)
+        reader_handle = _streams_windows._convert_fd_for_platform(reader_fd)
+        writer_handle = _streams_windows._duplicate_windows_handle(
+            _streams_windows._convert_fd_for_platform(writer_fd)
         )
 
         # PyO3 converts both handles to i64 before Rust can adopt the writer.
@@ -111,7 +217,7 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
                     os.close(fd)
         if writer_handle is not None and not writer_transferred:
             with contextlib.suppress(OSError):
-                _streams_rs._close_windows_handle(writer_handle)
+                _streams_windows._close_windows_handle(writer_handle)
 
 
 @pytest.mark.parametrize(
@@ -137,8 +243,8 @@ def test_pump_closes_writer_after_early_validation_failure(
     try:
         native = rust_streams._load_native()
         writer_reader_fd, writer_fd = os.pipe()
-        writer_handle = _streams_rs._duplicate_windows_handle(
-            _streams_rs._convert_fd_for_platform(writer_fd)
+        writer_handle = _streams_windows._duplicate_windows_handle(
+            _streams_windows._convert_fd_for_platform(writer_fd)
         )
 
         if not 0 <= writer_handle <= (1 << 63) - 1:
@@ -156,4 +262,4 @@ def test_pump_closes_writer_after_early_validation_failure(
                     os.close(fd)
         if writer_handle is not None and not writer_transferred:
             with contextlib.suppress(OSError):
-                _streams_rs._close_windows_handle(writer_handle)
+                _streams_windows._close_windows_handle(writer_handle)

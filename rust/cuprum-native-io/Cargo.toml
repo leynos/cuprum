@@ -18,6 +18,7 @@ rstest = "0.27.0"
 workspace = true
 
 [target.'cfg(windows)'.dependencies]
+libc = "0.2.186"
 cap-std = "4.0.2"
 # `std::io::pipe` replaced the direct `CreatePipe` call, so `Win32_System_Pipes`
 # and the `Win32_Security` types its signature needed are no longer reachable

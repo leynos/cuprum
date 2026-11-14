@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import os
 import threading
 import time
@@ -17,12 +16,10 @@ from cuprum import (
     ScopeConfig,
     TimeoutExpired,
     _pipeline_collect,
-    _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
     _pipeline_streams,
     scoped,
-    sh,
 )
 from cuprum._backend import (
     _check_rust_available,
@@ -33,53 +30,25 @@ from cuprum._testing import (
     configure_pump_stream_dispatch_for_testing,
     reset_pump_stream_dispatch_for_testing,
 )
+from cuprum.unittests._native_pump_lifecycle_test_helpers import (
+    _SYNC_PIPELINE_CLEANUP_GRACE_S,
+    _SYNC_PIPELINE_TIMEOUT_S,
+    _arm_timeout_after_worker_starts,
+    _assert_sync_timeout_returned,
+    _delay_pump_dispatch,
+    _ExecutorLifecycle,
+    _make_sync_timeout_pipeline,
+    _RecordingGuard,
+    _SyncPipelineRun,
+    _wait_for_deferred_cleanup,
+)
 from cuprum.unittests._rust_pump_test_helpers import install_fake_pump
-from tests.helpers.catalogue import python_catalogue
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.program import Program
     from cuprum.sh import Pipeline
-
-
-_SYNC_PIPELINE_TIMEOUT_S = 0.05
-_SYNC_PIPELINE_CLEANUP_GRACE_S = 0.01
-_SYNC_PIPELINE_RETURN_BOUND_S = (
-    _SYNC_PIPELINE_TIMEOUT_S + _SYNC_PIPELINE_CLEANUP_GRACE_S + 0.75
-)
-
-
-class _RecordingGuard:
-    """Blocking-mode guard double that signals fallback completion."""
-
-    def __init__(self, restored: threading.Event) -> None:
-        """Retain the completion signal for the loop-closure assertion."""
-        self.restored = restored
-
-    def restore(self) -> None:
-        """Record that fallback cleanup restored descriptor state."""
-        self.restored.set()
-
-
-@dc.dataclass(slots=True)
-class _ExecutorLifecycle:
-    """Synchronization and descriptor evidence for one late worker."""
-
-    worker_started: threading.Event = dc.field(default_factory=threading.Event)
-    release_worker: threading.Event = dc.field(default_factory=threading.Event)
-    worker_finished: threading.Event = dc.field(default_factory=threading.Event)
-    restored: threading.Event = dc.field(default_factory=threading.Event)
-    native_fds: list[tuple[int, int]] = dc.field(default_factory=list)
-
-
-@dc.dataclass(slots=True)
-class _SyncPipelineRun:
-    """Capture one synchronous pipeline result from its caller thread."""
-
-    completed: threading.Event = dc.field(default_factory=threading.Event)
-    errors: list[BaseException] = dc.field(default_factory=list)
-    rust_attempts: list[None] = dc.field(default_factory=list)
 
 
 def test_sync_cancellation_returns_before_late_native_worker_settles(
@@ -150,16 +119,6 @@ def test_sync_cancellation_returns_before_late_native_worker_settles(
     assert _wait_for_deferred_cleanup(), (
         "late completion must release the retained worker future"
     )
-
-
-def _make_sync_timeout_pipeline() -> tuple[Pipeline, frozenset[Program]]:
-    """Build a two-stage pipeline that keeps its final stage alive for timeout."""
-    catalogue, python_program = python_catalogue()
-    python = sh.make(python_program, catalogue=catalogue)
-    pipeline = python("-c", "import sys; sys.stdout.write('payload')") | python(
-        "-c", "import time; time.sleep(60)"
-    )
-    return pipeline, frozenset((python_program,))
 
 
 def _install_sync_pipeline_worker(
@@ -252,27 +211,6 @@ def _run_sync_timeout_pipeline(
         sync_run.completed.set()
 
 
-def _assert_sync_timeout_returned(
-    caller: threading.Thread,
-    sync_run: _SyncPipelineRun,
-    started_at: float,
-) -> None:
-    """Assert the public caller returns before its held worker is released."""
-    caller.join(timeout=_SYNC_PIPELINE_RETURN_BOUND_S)
-    elapsed_s = time.monotonic() - started_at
-    assert not caller.is_alive(), (
-        "run_sync must return after timeout plus cleanup grace rather than "
-        f"wait for native I/O; elapsed {elapsed_s:.6f}s"
-    )
-    assert sync_run.completed.is_set(), "run_sync must publish its outcome"
-    assert len(sync_run.errors) == 1, (
-        f"run_sync must raise one public error, found {sync_run.errors!r}"
-    )
-    assert isinstance(sync_run.errors[0], TimeoutExpired), (
-        f"run_sync must raise TimeoutExpired, found {sync_run.errors!r}"
-    )
-
-
 def _assert_late_pipeline_completion(
     lifecycle: _ExecutorLifecycle,
     native_reader_close: mock.Mock,
@@ -309,8 +247,12 @@ def _assert_held_native_descriptors_are_valid(
         os.fstat(native_fd)
 
 
+@pytest.mark.parametrize(
+    "startup_delay_s", [0.0, 0.1], ids=["immediate-start", "delayed-start"]
+)
 def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
     monkeypatch: pytest.MonkeyPatch,
+    startup_delay_s: float,
 ) -> None:
     """``run_sync`` does not wait for a held native worker at loop shutdown."""
     lifecycle = _ExecutorLifecycle()
@@ -324,6 +266,8 @@ def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
     monkeypatch.setattr(_pipeline_collect, "_create_pipe_tasks", create_pipe_tasks)
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
     _enable_rust_raw_fd_path(sync_run)
+    _delay_pump_dispatch(monkeypatch, startup_delay_s)
+    _arm_timeout_after_worker_starts(monkeypatch, lifecycle.worker_started)
     caller = threading.Thread(
         target=_run_sync_timeout_pipeline,
         args=(pipeline, allowlist, sync_run),
@@ -358,8 +302,12 @@ def test_sync_pipeline_timeout_returns_before_late_native_worker_settles(
     _assert_late_pipeline_completion(lifecycle, native_reader_close, state_fd_close)
 
 
+@pytest.mark.parametrize(
+    "startup_delay_s", [0.0, 0.1], ids=["immediate-start", "delayed-start"]
+)
 def test_deferred_grace_releases_paused_reader_before_loop_closes(
     monkeypatch: pytest.MonkeyPatch,
+    startup_delay_s: float,
 ) -> None:
     """A hop deferred past its grace releases its reader transport, not just resumes it.
 
@@ -377,6 +325,8 @@ def test_deferred_grace_releases_paused_reader_before_loop_closes(
     monkeypatch.setattr(_pipeline_collect, "_create_pipe_tasks", create_pipe_tasks)
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", "rust")
     _enable_rust_raw_fd_path(sync_run)
+    _delay_pump_dispatch(monkeypatch, startup_delay_s)
+    _arm_timeout_after_worker_starts(monkeypatch, lifecycle.worker_started)
     caller = threading.Thread(
         target=_run_sync_timeout_pipeline,
         args=(pipeline, allowlist, sync_run),
@@ -436,13 +386,3 @@ def _install_blocking_pump(
 ) -> None:
     """Install the native worker double without leaking module setup details."""
     install_fake_pump(monkeypatch, pump)
-
-
-def _wait_for_deferred_cleanup() -> bool:
-    """Wait for the completion callback to discard its retained worker future."""
-    deadline = time.monotonic() + 5.0
-    while _pipeline_native_pump_runtime._DEFAULT_NATIVE_PUMP_RUNTIME.retained_futures:
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.01)
-    return True

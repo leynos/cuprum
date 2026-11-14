@@ -119,6 +119,8 @@ def test_pump_error_reports_a_branchable_errno(
         "here from CPython rather than from the exception under test; found "
         f"{excinfo.value.strerror!r}"
     )
+    with pytest.raises(OSError, match=_ERRNO_PREFIX_RE):
+        os.fstat(write_fd)
 
 
 @_posix_only
@@ -181,6 +183,7 @@ def test_the_exception_subclass_follows_the_errno(
     assert excinfo.value.errno == errno.EISDIR, (
         f"expected EISDIR, found {excinfo.value.errno!r}"
     )
+    os.fstat(directory_fd)
 
 
 @_posix_only
