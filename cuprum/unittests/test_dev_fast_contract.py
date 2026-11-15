@@ -22,7 +22,7 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-FRAGMENT_SHA256 = "6b9a70993b7d46c8a3730376b2debd4c442ec07a355aa267723bb024a76eac96"
+FRAGMENT_SHA256 = "294eb72597a3b97984cedfb14a14ee974b4af5aacedacc1771bd5f6f8f1cd989"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
 # The Clippy leaf's own arguments are identical on every host; only the Cargo
@@ -114,16 +114,18 @@ def test_make_reads_the_linker_version_from_its_pin() -> None:
     )
 
 
-def test_the_prerequisite_gate_requires_both_nightly_components() -> None:
+def test_the_prerequisite_gate_requires_clippy_not_cranelift_by_default() -> None:
     """Clippy runs through the dev-fast nightly, so the gate must require it."""
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
     assert "DEV_FAST_LINT_COMPONENT ?= clippy" in makefile, (
         "the dev-fast lint route depends on a separately installed Clippy"
     )
-    assert (
-        "DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_CRANELIFT_COMPONENT) "
-        "$(DEV_FAST_LINT_COMPONENT)" in makefile
-    ), "the prerequisite gate must enumerate every component it requires"
+    assert "DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_LINT_COMPONENT)\n" in makefile, (
+        "the default gate must require Clippy and not the Cranelift component"
+    )
+    assert "DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift" in makefile, (
+        "the opt-in Cranelift component variable must stay defined"
+    )
     assert "$(DEV_FAST_REQUIRED_COMPONENTS)" in makefile, (
         "the prerequisite gate must check every required component"
     )
@@ -156,8 +158,11 @@ def test_the_fragment_carries_the_estate_fast_flags_on_linux() -> None:
     assert "-Clink-arg=-fuse-ld=mold" in linux, (
         "the Linux flags must carry the linker flag"
     )
-    assert fragment["profile"]["dev"]["codegen-backend"] == "cranelift", (
-        "the fast path selects Cranelift for the dev profile only"
+    assert "codegen-backend" not in fragment.get("profile", {}).get("dev", {}), (
+        "the fast path must not select a backend; Cranelift is a commented opt-in"
+    )
+    assert fragment["unstable"]["codegen-backend"] is True, (
+        "the opt-in support key must stay in the fragment"
     )
 
 

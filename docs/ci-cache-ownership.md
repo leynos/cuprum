@@ -87,11 +87,11 @@ configuration and reruns when it changes, so switching `maturin build -i` from
 under 3.12 are therefore not shown to serve a 3.14 build.
 
 The build shape. An unoptimized `maturin develop` build, the same build with
-`--release`, the Cranelift-backed lint build, the instrumented `cargo llvm-cov`
-build, the `--cfg loom` model build, and the fragment-free modern-stable build
-all produce different objects from identical source. The modern-stable shape
-also carries its exact Rust version: its Rust/Cargo 1.99.1 objects are kept
-separate from the project-toolchain and dev-fast objects.
+`--release`, the dev-fast lint build (LLVM by default), the instrumented
+`cargo llvm-cov` build, the `--cfg loom` model build, and the fragment-free
+modern-stable build all produce different objects from identical source. The
+modern-stable shape also carries its exact Rust version: its Rust/Cargo 1.99.1
+objects are kept separate from the project-toolchain and dev-fast objects.
 
 This was measured rather than assumed. Until 2026-09-04 the compiler key named
 neither dimension, so every Ubicloud job read one archive that the instrumented
@@ -127,12 +127,12 @@ the family without saving it.
 | Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`          |
 | Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg |
 | Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`        |
-| Compiler, Cranelift lint              | `ci.yml` `lint-test`                |
+| Compiler, dev-fast lint               | `ci.yml` `lint-test`                |
 | Compiler, 3.13 modern stable 1.99.1   | `ci.yml` `modern-stable`            |
 | Compiler, Loom model                  | `loom.yml` `loom`                   |
 
 `lint-test` moved to the Ubicloud lane with the fork fallback, taking its
-Cranelift lint family with it, and stopped saving the Cargo registry: on its
+dev-fast lint family with it, and stopped saving the Cargo registry: on its
 owned arm it renders the same family `extension-tests` writes, and one writer
 per family is the invariant. The Loom family stays on the GitHub-hosted lane,
 because its writer is a scheduled job that stays there too.

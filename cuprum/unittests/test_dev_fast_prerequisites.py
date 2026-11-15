@@ -70,9 +70,20 @@ class _FailureCase(typ.NamedTuple):
                     "rustup": "exit 0",
                 },
                 {},
-                "install rustc-codegen-cranelift",
+                "install clippy",
             ),
             id="missing_component",
+        ),
+        pytest.param(
+            _FailureCase(
+                {
+                    "mold": "printf '%s\\n' 'mold {version}'",
+                    "rustup": _installed_components("clippy"),
+                },
+                {"DEV_FAST_REQUIRED_COMPONENTS": "rustc-codegen-cranelift clippy"},
+                "install rustc-codegen-cranelift",
+            ),
+            id="missing_opt_in_cranelift",
         ),
         pytest.param(
             _FailureCase(
@@ -117,13 +128,9 @@ def test_prerequisite_recipe_fails_closed_for_missing_dependencies(
 def test_prerequisite_recipe_accepts_the_pinned_dependencies(
     tmp_path: Path, mold_version: str
 ) -> None:
-    """The closed prerequisite gate accepts exactly the pinned linker and components."""
+    """The default gate needs the linker and Clippy, not the Cranelift component."""
     _write_program(tmp_path, "mold", f"printf '%s\\n' 'mold {mold_version}'")
-    _write_program(
-        tmp_path,
-        "rustup",
-        _installed_components("rustc-codegen-cranelift", "clippy"),
-    )
+    _write_program(tmp_path, "rustup", _installed_components("clippy"))
     make = shutil.which("make")
     assert make is not None, "the prerequisite contract requires GNU Make on PATH"
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed Make argv.

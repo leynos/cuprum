@@ -311,7 +311,8 @@ jobs:
           cache-provider: external
           use-sccache: 'false'
 
-      # Only the Linux debug route selects Cranelift and mold. The stable
+      # Only the Linux debug route selects the fast linker (and Cranelift, as
+      # an opt-in that is disabled by default). The stable
       # toolchain remains selected for Whitaker and every other lane.
       - name: Install Linux dev-fast prerequisites
         uses: ./.github/actions/setup-dev-fast

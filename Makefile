@@ -29,9 +29,14 @@ override MODERN_STABLE_RUSTFLAGS := -C codegen-units=1
 DEV_FAST_TOOLCHAIN ?= nightly-2026-08-23
 DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
 # Clippy is a separate rustup component from the backend, but `rust-lint` runs
-# it through this same nightly, so the prerequisite gate must require both.
+# it through this same nightly, so the prerequisite gate must require it.
 DEV_FAST_LINT_COMPONENT ?= clippy
-DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_CRANELIFT_COMPONENT) $(DEV_FAST_LINT_COMPONENT)
+# LLVM is the default backend (Cranelift disabled estate-wide on 14 November
+# 2026; review 14 May 2027), so the gate does not require the Cranelift
+# component. To opt in for one invocation, leaving the approved fragment
+# unchanged, run with `CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift` and
+# `DEV_FAST_REQUIRED_COMPONENTS="rustc-codegen-cranelift clippy"`.
+DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_LINT_COMPONENT)
 # The selected Cargo fragment is repository-fixed state, not a caller input.
 # `override` is load-bearing, not decoration: a plain or `?=` definition still
 # yields to an ordinary environment variable, and any non-override definition

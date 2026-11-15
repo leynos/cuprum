@@ -3,7 +3,10 @@
 ## Status
 
 Accepted on 2026-09-17. Cuprum selects the dev-fast Cargo configuration only
-for supported Linux debug work through explicit Makefile routes.
+for supported Linux debug work through explicit Makefile routes. Amended by
+[concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)
+(2026-11-14): LLVM is the default backend and Cranelift an opt-in; see
+"Amendments".
 
 ## Date
 
@@ -120,3 +123,23 @@ target at that version without the fragment. The routing decision itself is
 unchanged: the stable route still owns release, coverage, verification,
 Whitaker, MSRV checks, and macOS and Windows, and the modern-stable `1.99.1`
 route still validates separately.
+
+## Amendments
+
+### 2026-11-14: Cranelift becomes an opt-in
+
+Amended by
+[concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)
+(review 14 May 2027). The Decision above stands as the accepted history: the
+fragment selected Cranelift for the dev profile, and `dev-fast-check` required
+the `rustc-codegen-cranelift` component. The outcome now is:
+
+- the fragment's `[profile.dev]` Cranelift selection is commented out, so the
+  routes select LLVM; the linker and parallel-frontend flags, the
+  `[unstable] codegen-backend` key and the component variable stay;
+- the default `dev-fast-check` requires `clippy` and not the Cranelift
+  component;
+- opting in is per invocation and leaves the approved fragment unchanged:
+  `CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift make dev-build
+  DEV_FAST_REQUIRED_COMPONENTS="rustc-codegen-cranelift clippy"`.
+  Cranelift builds do not unwind, so panicking tests abort.
