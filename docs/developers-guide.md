@@ -417,12 +417,14 @@ No job in this repository archives `target`, `rust/target`, or
 oversight, and a contract test enforces it.
 
 sccache is the single owner of compiler output for every build shape. The
-repository produces five: the objects the lint gate's Clippy step builds
-through the dev-fast route's linker and parallel frontend, the ordinary debug
-objects the test gates build, the release objects the benchmark gate builds, the
-`-C instrument-coverage` objects the coverage gate builds, and the
-`--cfg loom` objects the model checks build. sccache hashes the compiler flags
-into its cache key, so all five coexist in one store without colliding; run
+repository produces six: the objects the lint gate's Clippy step builds through
+the dev-fast route's linker and parallel frontend, the ordinary debug objects
+the test gates build, the release objects the benchmark gate builds, the
+`-C instrument-coverage` objects the coverage gate builds, the `--cfg loom`
+objects the model checks build, and the modern-stable objects built with Rust
+1.99.1. sccache hashes the compiler flags into its cache key, so the shapes do
+not collide. They do not share one store, though: the coverage lanes use the
+`gha` backend and the other Rust lanes keep the directory backend. Run
 33677926269, from before Cranelift was disabled on 14 November 2026, recorded
 zero non-cacheable compilations with the cranelift-built Whitaker lints, and
 Whitaker's instrumented coverage build reports the same.
