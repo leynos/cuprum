@@ -16,10 +16,12 @@ entirely. Every candidate capture reports zero sampled weight on
 reports between 1,932 and 2,207.
 
 The evidence below is measured on the delivery candidate, not on an
-intermediate revision: the control is the PR base `1d9e7d37f` and the candidate
-is the PR head `0df4bbab6`. Two earlier collections are superseded — one on
-`ccc970116` and `2dd643995`, and one on `e170f908f` and `064d69405`;
-"Superseded collections" explains why.
+intermediate revision: the control is the base at measurement time,
+`1d9e7d37f`, and the candidate is the head at measurement time `0df4bbab6`. Two
+earlier collections are superseded — one on `ccc970116` and `2dd643995`, and
+one on `e170f908f` and `064d69405` — and the branch has since been rebased onto
+`ebb8c7c25`; "Superseded collections" explains why none of that displaces the
+figures below.
 
 | Quantity                                          | Control (`1d9e7d37f`) | Candidate (`0df4bbab6`)        |
 | ------------------------------------------------- | --------------------- | ------------------------------ |
@@ -71,15 +73,16 @@ from the committed generator and verified byte-identical by checksum:
 | lines        | 28,256,364                                                         |
 | SHA-256      | `51394f18e57972a681a2eb97c7c477d02d1d15b175247f518a60c331319774cc` |
 
-The control is the PR base `1d9e7d37fd289efb6fe270f06115363ec7893a88`, whose
-`_emit_exec_event` still calls `inspect.isawaitable(result)` unconditionally.
-The candidate is the PR head `0df4bbab6c5b531e59d103c8a7baee0d634ff146`, which
-carries the result-guarded dispatcher. Between the two trees the only product
-source difference is `cuprum/_observability.py`; the rest of the diff is this
-item's own benchmark group, test modules, evidence documents, plan, changelog,
-and roadmap entries. The classifier that computes the construction share
-differs only in a comment that cites a moved line number, so both arms were
-classified by the same rules.
+The control is the base at measurement time,
+`1d9e7d37fd289efb6fe270f06115363ec7893a88`, whose `_emit_exec_event` still calls
+`inspect.isawaitable(result)` unconditionally. The candidate is the head at
+measurement time, `0df4bbab6c5b531e59d103c8a7baee0d634ff146`, which carries the
+result-guarded dispatcher. Between the two trees the only product source
+difference is `cuprum/_observability.py`; the rest of the diff is this item's
+own benchmark group, test modules, evidence documents, plan, changelog, and
+roadmap entries. The classifier that computes the construction share differs
+only in a comment that cites a moved line number, so both arms were classified
+by the same rules.
 
 Each capture ran from inside its own worktree so that `python -m` imported that
 tree's `cuprum`; `variant.txt` in every capture directory records the
@@ -418,6 +421,20 @@ counterparts here (see "Reconciling the share with the 5.2.1 forecast").
 Every profiled capture, every unprofiled pair, and all sixty-four
 microbenchmark runs in this directory were collected against `1d9e7d37f` and
 `0df4bbab6`, which is why the directory's files carry those revisions.
+
+The branch was rebased onto `ebb8c7c25` after that collection. The rebase added
+two commits to the base, `3c60048af` and `ebb8c7c25`; between them they touch
+seven paths — `rust/cuprum-streams/src/lib.rs`,
+`rust/cuprum-rust/src/errors.rs`, `rust/cuprum-native-io/src/pipe_tests.rs`,
+`AGENTS.md`, `docs/adrs/adr-0012-linux-dev-fast-routing.md`,
+`docs/developers-guide.md`, and `docs/repository-layout.md` — so no file under
+`cuprum/`, `benchmarks/`, or `tests/` differs between the two bases. The three
+Rust changes are a helper extraction and a test refactorisation, and the
+measured workload runs the Python backend in any case (`auto` resolves to
+`python`, and every `worker-result.json` records it), so the figures describe
+the delivered branch unchanged. The rebase was needed because a refreshed
+Whitaker suite flags the older base's `consume_with_reader` under
+`bumpy_road_function`, and `3c60048af` is main's fix for exactly that.
 
 The first collection's records survive in `unprofiled/superseded/`: its attempt
 table (`superseded/timing-attempts.tsv`, cited above for the D9 rejections),

@@ -363,6 +363,18 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   in `unprofiled/superseded/`, the second only in branch history, and
   `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` states why neither is
   quoted as a result.
+- [x] (2026-11-15) Second rebase, onto `ebb8c7c25`, with no re-collection
+  needed. `main` advanced by `3c60048af` — a helper extraction in
+  `consume_with_reader` that clears the `bumpy_road_function` finding a
+  refreshed Whitaker suite raises on the previous base — and `ebb8c7c25`, an
+  LLVM-backend documentation record. The rebase replays all fifteen commits
+  patch-identically (`git range-diff` reports `=` for every one), and the seven
+  paths the two bases differ in are Rust sources, `AGENTS.md`, and three
+  documentation files, so no file under `cuprum/`, `benchmarks/`, or `tests/`
+  changed and the V5, V7, and microbenchmark figures above still describe the
+  delivered tree. The measured workload runs the Python backend
+  (`echo-devnull-cb-s1-python`), so the Rust refactorisation cannot reach it.
+  The rebase produced `02a178a95`.
 
 ## Surprises & discoveries
 
@@ -712,10 +724,14 @@ numbers. A rebase onto a base twelve commits ahead invalidated that trail a
 second time, because the new base refactored the per-line emission path in both
 arms; every artefact was re-collected once more, which is why the evidence
 document names the base and head revisions it belongs to and records the
-earlier collections as superseded rather than current. The second was scope:
-the CodeScene follow-ups in EP-M2 changed the dispatcher's shape but not its
-behaviour, and folding the two failure handlers into one removed a complexity
-warning without adding hot-path work.
+earlier collections as superseded rather than current. A second, smaller rebase
+onto `ebb8c7c25` followed the same day: it carried main's `bumpy_road_function`
+helper extraction for `consume_with_reader`, replayed patch-identically, and
+touched no file the measurement loads, so no third collection was needed; the
+evidence document records that check rather than assuming it. The second was
+scope: the CodeScene follow-ups in EP-M2 changed the dispatcher's shape but not
+its behaviour, and folding the two failure handlers into one removed a
+complexity warning without adding hot-path work.
 
 The change itself stayed small because the decision that made it safe was
 established before any code: `type(result) is types.CoroutineType` is the first
@@ -1388,3 +1404,10 @@ in order but smaller in scope: one production module under Option A.
 delivered head `0df4bbab6`. The Progress and Outcomes sections carry those
 figures; the two earlier collections are recorded as superseded rather than
 deleted, because each is the record of the revisions it measured.
+
+2026-11-15, revision after the second rebase: `main` moved to `ebb8c7c25`,
+which carries the `bumpy_road_function` helper extraction for
+`consume_with_reader`, so the branch was replayed onto it. The replayed series
+is patch-identical and the base delta touches no file the measurement loads, so
+V5, V7, and the microbenchmark keep the figures collected on
+`1d9e7d37f`/`0df4bbab6`; the measurement report records that check.

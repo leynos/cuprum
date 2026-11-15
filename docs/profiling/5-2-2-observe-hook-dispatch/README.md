@@ -9,12 +9,18 @@ recalculate the census rather than trust the numbers in the report.
 ## Layout
 
 ```text
-r{1,2,3}-control/         three pre-change captures of the PR base, `1d9e7d37f`
-r{1,2,3}-candidate/       three post-change captures of the PR head, `0df4bbab6`
+r{1,2,3}-control/         three pre-change captures of the base, `1d9e7d37f`
+r{1,2,3}-candidate/       three post-change captures of the head, `0df4bbab6`
 unprofiled/               six admitted ABBA `cb` pairs and their evidence
 unprofiled/attempts/      every attempt of this collection, admitted or not
 unprofiled/superseded/    what remains of the first collection's records
 ```
+
+The branch was rebased onto `ebb8c7c25` after these captures were taken. The
+delta between the two bases touches only Rust sources and documentation, so the
+captures still describe the delivered branch; the report's
+[superseded collections](../../tee-hotpath-observe-hook-dispatch-5-2-2.md#superseded-collections)
+section lists the seven paths.
 
 Each capture directory carries the same eight committed files:
 
