@@ -373,7 +373,7 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   documentation files, so no file under `cuprum/`, `benchmarks/`, or `tests/`
   changed and the V5, V7, and microbenchmark figures above still describe the
   delivered tree. The measured workload runs the Python backend
-  (`echo-devnull-cb-s1-python`), so the Rust refactorisation cannot reach it.
+  (`echo-devnull-cb-s1-python`), so the Rust refactorization cannot reach it.
   The rebase produced `02a178a95`.
 
 ## Surprises & discoveries

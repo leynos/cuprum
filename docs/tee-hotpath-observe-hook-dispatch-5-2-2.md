@@ -185,7 +185,7 @@ reaping race in py-spy's teardown: the worker had already exited and been
 reaped by the time py-spy waited for it. The capture is complete — the sample
 count is 60,266, `Errors: 0`, and the committed weights reconcile with it — so
 the exit status records the race rather than a failed capture. The status is
-committed as recorded rather than normalised, and the census does not read it.
+committed as recorded rather than normalized, and the census does not read it.
 Which capture the race reaches varies between collections, so it is a property
 of teardown timing, not of either variant: the earlier collection of this item
 saw it on the round-1 pair instead.
@@ -429,7 +429,7 @@ seven paths — `rust/cuprum-streams/src/lib.rs`,
 `AGENTS.md`, `docs/adrs/adr-0012-linux-dev-fast-routing.md`,
 `docs/developers-guide.md`, and `docs/repository-layout.md` — so no file under
 `cuprum/`, `benchmarks/`, or `tests/` differs between the two bases. The three
-Rust changes are a helper extraction and a test refactorisation, and the
+Rust changes are a helper extraction and a test refactorization, and the
 measured workload runs the Python backend in any case (`auto` resolves to
 `python`, and every `worker-result.json` records it), so the figures describe
 the delivered branch unchanged. The rebase was needed because a refreshed
