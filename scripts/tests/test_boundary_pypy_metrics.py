@@ -289,7 +289,7 @@ def test_a_failing_sink_cannot_fail_a_published_download(
     assert destination.read_bytes() == body, (
         "a failing sink must not fail a download whose archive was published"
     )
-    assert not destination.with_suffix(".download").exists(), (
+    assert not destination.with_name(f"{destination.name}.download").exists(), (
         "the pending file must not survive the finished transfer"
     )
     warned = [
@@ -322,7 +322,7 @@ def test_a_failing_sink_does_not_replace_the_transfer_error(
             "0" * 64,
             environment=fake_environment(sink=_ExplodingSink()),
         )
-    assert not destination.with_suffix(".download").exists(), (
+    assert not destination.with_name(f"{destination.name}.download").exists(), (
         "the partial download must be removed even when the sink fails"
     )
 

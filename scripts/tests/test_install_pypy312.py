@@ -209,7 +209,9 @@ class TestCheckedDownload:
         assert archive.read_bytes() == b"old cache", (
             "corrupt download replaced the cache"
         )
-        assert not archive.with_suffix(".download").exists(), "partial download leaked"
+        assert not archive.with_name(f"{archive.name}.download").exists(), (
+            "partial download leaked"
+        )
 
     def test_an_unreadable_cache_is_refused_rather_than_replaced(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -111,7 +111,7 @@ class TestControlledHttpsTransfer(_HttpsCase):
         assert destination.read_bytes() == scenarios.FIXED_BODY, (
             "the verified body must be published unchanged"
         )
-        assert not destination.with_suffix(".download").exists(), (
+        assert not destination.with_name(f"{destination.name}.download").exists(), (
             "no pending file may survive publication"
         )
         assert [request.path for request in server.requests] == ["/asset.bin"], (
@@ -152,7 +152,7 @@ class TestControlledHttpsTransfer(_HttpsCase):
             "the refusal must follow exactly the expected request path"
         )
         assert not destination.exists(), "the destination must not be created"
-        assert not destination.with_suffix(".download").exists(), (
+        assert not destination.with_name(f"{destination.name}.download").exists(), (
             "the pending file must be discarded"
         )
 
@@ -185,7 +185,7 @@ class TestControlledHttpsTransfer(_HttpsCase):
             "not wait for the server to close"
         )
         assert not destination.exists(), "the destination must not be created"
-        assert not destination.with_suffix(".download").exists(), (
+        assert not destination.with_name(f"{destination.name}.download").exists(), (
             "the pending file must be discarded"
         )
 
@@ -216,9 +216,9 @@ class TestControlledHttpsInstall(_HttpsCase):
         assert installation.python.stat().st_mode & 0o111, (
             "the extracted interpreter is not executable"
         )
-        assert not installation.archive.with_suffix(".download").exists(), (
-            "no pending file may survive a successful install"
-        )
+        assert not installation.archive.with_name(
+            f"{installation.archive.name}.download"
+        ).exists(), "no pending file may survive a successful install"
 
     @NO_DOWNLOAD_INTEGRATION
     @pytest.mark.skipif(
@@ -240,9 +240,9 @@ class TestControlledHttpsInstall(_HttpsCase):
             with pytest.raises(ValueError, match="limit"):
                 installer.install(installation)
         assert not installation.archive.exists(), "a failed install must not cache"
-        assert not installation.archive.with_suffix(".download").exists(), (
-            "a failed install must not leave a pending file"
-        )
+        assert not installation.archive.with_name(
+            f"{installation.archive.name}.download"
+        ).exists(), "a failed install must not leave a pending file"
         assert not installation.root.exists(), "a failed install must not extract"
 
 

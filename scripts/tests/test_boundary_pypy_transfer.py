@@ -255,7 +255,7 @@ class TestBoundedBody:
             )
         assert body.read1.call_count == 2, "the final hop must serve its body"
         assert not archive.exists(), "a timed-out transfer must publish nothing"
-        assert not archive.with_suffix(".download").exists(), (
+        assert not archive.with_name(f"{archive.name}.download").exists(), (
             "a timed-out transfer must leave no pending file"
         )
 
@@ -279,33 +279,6 @@ class TestBoundedBody:
         assert archive.read_bytes() == b"payload", (
             "a redirected download must publish the verified body"
         )
-
-
-class TestPendingFile:
-    """A refused transfer must not leave a partial archive behind."""
-
-    def test_a_failed_transfer_removes_the_pending_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A download that raises after writing leaves no pending or final file."""
-        archive = tmp_path / "binary.tar.gz"
-        pending = archive.with_suffix(".download")
-
-        def fetch(
-            _url: str, destination: Path, _environment: downloader.Environment
-        ) -> None:
-            """Write partial bytes, then fail the way a deadline would."""
-            destination.write_bytes(b"partial body")
-            msg = "release download exceeded the transfer deadline"
-            raise TimeoutError(msg)
-
-        monkeypatch.setattr(downloader, "_download", fetch)
-        with pytest.raises(TimeoutError, match="transfer deadline"):
-            downloader.checked_download(
-                "https://example.invalid/asset", archive, "0" * 64
-            )
-        assert not pending.exists(), "the pending file must be discarded"
-        assert not archive.exists(), "a failed transfer must not publish an archive"
 
 
 # Monkeypatch is a function-scoped fixture, but it only sets one module constant

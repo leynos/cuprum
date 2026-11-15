@@ -150,7 +150,9 @@ def checked_download(
         be transferred into the cache.
     """  # ruff: ignore[docstring-extraneous-exception] - the transfer helpers raise every listed type.
     started = environment.clock()
-    pending = destination.with_suffix(".download")
+    # Append the suffix rather than replace it: `with_suffix` would map
+    # `x.tar.gz` and `x.tar.bz2` onto the same staging path.
+    pending = destination.with_name(f"{destination.name}.download")
     try:
         _require_https(url)
         if _cache_is_current(destination, digest):
