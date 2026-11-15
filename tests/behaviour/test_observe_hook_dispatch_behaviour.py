@@ -87,6 +87,17 @@ def _async_def_hook(recorded: list[ExecEvent]) -> ExecHook:
     return hook
 
 
+def _suspending_hook(recorded: list[ExecEvent]) -> ExecHook:
+    """Return an ``async def`` hook that suspends before it records."""
+
+    async def hook(event: ExecEvent) -> None:
+        """Yield to the loop, then record a stdout line event."""
+        await asyncio.sleep(0)
+        _record_stdout(recorded, event)
+
+    return hook
+
+
 def _lambda_hook(recorded: list[ExecEvent]) -> ExecHook:
     """Return a lambda that calls a coroutine function."""
 
@@ -129,6 +140,7 @@ class _AsyncRecorder:
 _SHAPES: dict[str, cabc.Callable[[list[ExecEvent]], ExecHook]] = {
     "a synchronous function": _sync_hook,
     "an async def function": _async_def_hook,
+    "a suspending async def function": _suspending_hook,
     "a lambda returning a coroutine": _lambda_hook,
     "a functools.wraps wrapper of async def": _wraps_hook,
     "an instance with async __call__": _AsyncRecorder,
@@ -210,7 +222,11 @@ def then_records_lines(dispatch_state: _DispatchState) -> None:
 
 @then("no observe-hook task is pending when the run returns")
 def then_tasks_settled(dispatch_state: _DispatchState) -> None:
-    """Every task the hook caused is complete before ``run_sync`` returns."""
+    """Every task the hook caused ran to completion before ``run_sync`` returns.
+
+    Completion is not the whole claim: a task that was cancelled or raised is
+    done too, and either would hide a hook result the caller never saw.
+    """
     observe_tasks = [
         task
         for task in dispatch_state.tasks
@@ -220,6 +236,14 @@ def then_tasks_settled(dispatch_state: _DispatchState) -> None:
         assert observe_tasks, "an awaitable result must be scheduled"
     pending = [task for task in observe_tasks if not task.done()]
     assert not pending, f"{len(pending)} observe-hook tasks were still pending"
+    cancelled = [task for task in observe_tasks if task.cancelled()]
+    assert not cancelled, f"{len(cancelled)} observe-hook tasks were cancelled"
+    failed = [
+        (task, task.exception())
+        for task in observe_tasks
+        if task.exception() is not None
+    ]
+    assert not failed, [f"{task.get_name()} raised {error!r}" for task, error in failed]
 
 
 @then("no coroutine-never-awaited warning was emitted")

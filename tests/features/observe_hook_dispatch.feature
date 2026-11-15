@@ -14,6 +14,7 @@ Feature: Observe hook dispatch
       | shape                                  |
       | a synchronous function                 |
       | an async def function                  |
+      | a suspending async def function        |
       | a lambda returning a coroutine         |
       | a functools.wraps wrapper of async def |
       | an instance with async __call__        |
