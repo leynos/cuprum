@@ -356,11 +356,13 @@ These are hard invariants. Violating one requires escalation, not a workaround.
 - [x] (2026-11-15) Microbenchmark on the same revisions. Sixteen runs per tree
   with alternating order move the `None`-returning hook from a 433.23 µs median
   to 167.25 µs per 1,000 dispatches, a 2.59x reduction or about 266 ns per
-  event, while the `async def` hook reads 0.978 with overlapping ranges. The
-  control worktree predates the benchmark group, so the candidate's file was
-  copied into it; the file times `_emit_exec_event` and adds no production
-  code. Both earlier collections are recorded as superseded: the first survives
-  in `unprofiled/superseded/`, the second only in branch history, and
+  event, while the `async def` hook reads 0.978 with overlapping ranges; that
+  arm settles its whole batch inside the timed call, so its figure is dispatch
+  plus task execution and settlement rather than dispatch alone. The control
+  worktree predates the benchmark group, so the candidate's file was copied
+  into it; the file times `_emit_exec_event` and adds no production code. Both
+  earlier collections are recorded as superseded: the first survives in
+  `unprofiled/superseded/`, the second only in branch history, and
   `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` states why neither is
   quoted as a result.
 - [x] (2026-11-15) Second rebase, onto `ebb8c7c25`, with no re-collection
@@ -433,6 +435,27 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   remaining five pairs give 0.950351 (wall) and 0.952095 (CPU), recomputed from
   the per-pair ratios in `timing-summary.json` and both inside the 1.05
   tolerance.
+- [x] (2026-11-15) Mixed check failures covered, and the measured batch
+  described as measured. Findings 3 and 4 of CodeRabbit's ExecPlan assessment
+  `5-2-2-execplan-2026-11-15-b`. A failing awaitability check escapes
+  unwrapped, so the tasks scheduled before it never reach the caller and the
+  property domain admitted `check_raises` only as a sole hook; the comparison
+  now instruments `asyncio.create_task` for the synchronous dispatch call,
+  records each task as it is created, compares it like any other, and settles
+  it, so `async_def` may appear on either side of a check failure. Both
+  properties were widened to the full `HOOK_KINDS` domain with mixed examples,
+  and the recorder's own coverage was proved by mutating the recorded tasks to
+  an empty tuple: both properties then failed with `scheduled 0 tasks`, so the
+  new path is exercised rather than vacuous.
+  `benchmarks/test_stream_microbenchmarks.py` settles the async batch inside
+  the timed call, so its figure covers task execution and settlement as well as
+  dispatch, while the sync case schedules nothing and times dispatch alone; the
+  evidence record, the profiling README, this plan, and the acceptance table
+  now say which span each figure covers instead of implying a per-event
+  dispatch cost. `docs/developers-guide.md` gained "Classifying a hook result",
+  the oracle/comparison/seeded-fault harness section, and the
+  `observe-dispatch` group's description, which is the documentation gap the
+  assessment's own next-checks paragraph named.
 
 ## Surprises & discoveries
 
@@ -752,8 +775,10 @@ work from the per-line path; none supports a slowdown.
 call. Across sixteen runs per tree with alternating order, a hook that returns
 `None` fell from a 433.23 µs median to 167.25 µs per 1,000 dispatches, a 2.59x
 reduction or about 266 ns per event, while an `async def` hook measured 0.978
-with overlapping ranges. The async path is `asyncio.Task` creation, which this
-change does not touch (Decision D8).
+with overlapping ranges. That arm's batch settles every task it schedules
+inside the timed call, so its figure covers dispatch, task execution and
+settlement together; the path it measures is dominated by `asyncio.Task`
+creation, which this change does not touch (Decision D8).
 
 *Construction share.* The 5.2.1 classifier re-run on the same stacks moved from
 a 28.1409% control median to a 29.3436% candidate median, a rise of 1.2027

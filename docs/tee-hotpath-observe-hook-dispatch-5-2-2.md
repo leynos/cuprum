@@ -23,17 +23,17 @@ one on `e170f908f` and `064d69405` — and the branch has since been rebased ont
 `ebb8c7c25`; "Superseded collections" explains why none of that displaces the
 figures below.
 
-| Quantity                                          | Control (`1d9e7d37f`) | Candidate (`0df4bbab6`)        |
-| ------------------------------------------------- | --------------------- | ------------------------------ |
-| `isawaitable` weight under `emit_line`, 3 pairs   | 1,932 – 2,207         | **0**                          |
-| anchored weight, 3 pairs                          | 28,763 – 31,621       | 27,660 – 29,455                |
-| target share of the anchor, 3 pairs               | 6.59% – 6.98%         | 0                              |
-| construction share, median of three pairs         | 28.1409%              | 29.3436%                       |
-| wall time, geometric-mean ratio, six `cb` pairs   | 1.0 (reference)       | 0.935504                       |
-| 95% interval for that ratio, six pairs            | —                     | [0.897741, 0.974806]           |
-| CPU time, geometric mean and interval, same pairs | 1.0 (reference)       | 0.936883, [0.899205, 0.975167] |
-| sync-hook dispatch, median of 16 runs             | 433.23 µs / 1,000     | 167.25 µs / 1,000              |
-| `async def`-hook dispatch, median of 16 runs      | 4,372.03 µs / 1,000   | 4,277.00 µs / 1,000            |
+| Quantity                                                            | Control (`1d9e7d37f`) | Candidate (`0df4bbab6`)        |
+| ------------------------------------------------------------------- | --------------------- | ------------------------------ |
+| `isawaitable` weight under `emit_line`, 3 pairs                     | 1,932 – 2,207         | **0**                          |
+| anchored weight, 3 pairs                                            | 28,763 – 31,621       | 27,660 – 29,455                |
+| target share of the anchor, 3 pairs                                 | 6.59% – 6.98%         | 0                              |
+| construction share, median of three pairs                           | 28.1409%              | 29.3436%                       |
+| wall time, geometric-mean ratio, six `cb` pairs                     | 1.0 (reference)       | 0.935504                       |
+| 95% interval for that ratio, six pairs                              | —                     | [0.897741, 0.974806]           |
+| CPU time, geometric mean and interval, same pairs                   | 1.0 (reference)       | 0.936883, [0.899205, 0.975167] |
+| sync-hook dispatch, median of 16 runs                               | 433.23 µs / 1,000     | 167.25 µs / 1,000              |
+| `async def`-hook batch (dispatch and settlement), median of 16 runs | 4,372.03 µs / 1,000   | 4,277.00 µs / 1,000            |
 
 The census separates the variants cleanly. In all three control captures the
 target weights agree exactly — the location-specific and name-only counts are
@@ -55,7 +55,8 @@ geometric mean, and the 95% interval's upper bound, 0.9748, is inside the 1.05
 tolerance; the child's CPU time gives the same answer, 0.9369 with an upper
 bound of 0.9752. The in-process microbenchmark isolates the mechanism: a hook
 that returns `None` now costs about 167 ns per event instead of 433 ns, while an
-`async def` hook, whose cost is `asyncio.Task` creation, does not move.
+`async def` hook, whose measured batch is dominated by `asyncio.Task` creation
+and settlement, does not move.
 
 ## Protocol and environment
 
@@ -356,10 +357,15 @@ ratio is not evidence about the change.
 
 The `observe-dispatch` group in `benchmarks/test_stream_microbenchmarks.py`
 dispatches 1,000 events per benchmark call, so each figure below is the cost of
-1,000 dispatches and dividing by 1,000 gives the per-event cost. The control
-worktree predates the group, so the candidate's benchmark file was copied into
-it; the file imports `_emit_exec_event` and times it, and adds no production
-code, so the control run measures the control dispatcher.
+a 1,000-event batch and dividing by 1,000 gives the per-event cost. The two
+cases do not time the same span. The sync hook schedules nothing, so its figure
+is dispatch alone. The `async def` hook's batch collects every task the 1,000
+dispatches schedule and awaits them all inside the timed call, so its figure
+covers the execution and settlement of those tasks as well as dispatch; it is
+the cost of the batch the dispatcher produces, not of dispatch by itself. The
+control worktree predates the group, so the candidate's benchmark file was
+copied into it; the file imports `_emit_exec_event` and times it, and adds no
+production code, so the control run measures the control dispatcher.
 
 Sixteen runs were made in each tree: the primary pair, plus fifteen repeats
 that alternate which tree runs first. The median of each tree's sixteen runs,
@@ -380,9 +386,12 @@ that arm's mean is pulled upward by the three.
 The `async def` hook does not move. Its medians differ by 2.2% in the
 candidate's favour and the two sixteen-run ranges overlap across almost their
 whole length (4,041.63 to 7,886.48 against 3,998.02 to 5,768.41), so this is
-unchanged within the noise of a shared host. The path is dominated by
-`asyncio.Task` creation at roughly 4.3 µs per event, which is why Decision D8
-declined to profile it at full scale. `microbench-repeats.json` holds every run.
+unchanged within the noise of a shared host. Its 4.3 µs per event is dominated
+by `asyncio.Task` creation, but it is the whole measured batch divided by
+1,000: task creation, each coroutine's run, and the `asyncio.gather` that
+settles them all. That is why Decision D8 declined to profile the arm at full
+scale: the batch is dominated by task machinery this item does not change.
+`microbench-repeats.json` holds every run.
 
 These runs used the project virtual environment's CPython 3.14.7, not the
 3.14.4 interpreter the profiler and the unprofiled arms used, because
@@ -392,14 +401,14 @@ are not comparable with the profiled captures or with the `cb` pair wall times.
 
 ## Acceptance status
 
-| criterion                                             | result                                                    |
-| ----------------------------------------------------- | --------------------------------------------------------- |
-| every candidate census: both target weights 0, exit 0 | met in all three captures                                 |
-| every control census: equal non-zero weights, exit 1  | met in all three captures                                 |
-| every anchor weight at least 14,000                   | met; the smallest is 27,660 (candidate, round 1)          |
-| `cb` ratio's 95% interval upper bound at most 1.05    | met; the upper bound is 0.9748 (CPU time 0.9752)          |
-| construction share re-measured on the same stacks     | 28.1409% control median, 29.3436% candidate median        |
-| microbenchmark of the dispatched group                | sync hook 2.59x faster; `async def` hook 0.978, unchanged |
+| criterion                                             | result                                                                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| every candidate census: both target weights 0, exit 0 | met in all three captures                                                                         |
+| every control census: equal non-zero weights, exit 1  | met in all three captures                                                                         |
+| every anchor weight at least 14,000                   | met; the smallest is 27,660 (candidate, round 1)                                                  |
+| `cb` ratio's 95% interval upper bound at most 1.05    | met; the upper bound is 0.9748 (CPU time 0.9752)                                                  |
+| construction share re-measured on the same stacks     | 28.1409% control median, 29.3436% candidate median                                                |
+| microbenchmark of the dispatched group                | sync hook 2.59x faster on dispatch; `async def` hook 0.978 on dispatch plus settlement, unchanged |
 
 The construction share is reported, not judged: it is 5.2.1's gate, and a rise
 is what that metric does when work outside the counted constructor is removed

@@ -198,10 +198,13 @@ nothing here depends on it.
 fifteen alternating-order repeats — each with its tree, benchmark, mean,
 median, and round count. The group dispatches 1,000 events per benchmark call,
 so every figure is per 1,000 dispatches; divide by 1,000 for the per-event
-cost. The control worktree predates the group, so the candidate's benchmark
-file was copied into it for the measurement. The file only imports
-`_emit_exec_event` and times it, so the control run measures the control
-dispatcher.
+cost. The two cases time different spans: the sync case schedules no task, so
+its figure is dispatch alone, while the `async def` case awaits the whole
+batch's tasks inside the timed call, so its figure covers task execution and
+settlement as well as dispatch. The control worktree predates the group, so the
+candidate's benchmark file was copied into it for the measurement. The file
+only imports `_emit_exec_event` and times it, so the control run measures the
+control dispatcher.
 
 These runs used the project virtual environment's CPython 3.14.7 rather than
 the 3.14.4 interpreter the profiler and the `cb` pairs used, because

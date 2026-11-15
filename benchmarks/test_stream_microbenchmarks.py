@@ -203,7 +203,9 @@ def _dispatch_batch(
     async def _drive() -> None:
         """Dispatch one batch, then settle every scheduled task."""
         # Tasks accumulate, as they do in production, and settle once at the
-        # end, so the batch times dispatch rather than task completion.
+        # end. Settlement is inside the timed call, so the async case's figure
+        # covers scheduling and settlement as well as dispatch; the sync case
+        # schedules nothing and times dispatch alone.
         tasks: list[asyncio.Task[None]] = []
         for _ in range(_DISPATCH_BATCH):
             tasks.extend(_emit_exec_event(hooks, event))

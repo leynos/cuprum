@@ -1783,6 +1783,42 @@ combined boundary in `_pipeline_types`.
   `_WriteOutcome.CLOSED` when the downstream pipe closes early. The caller
   keeps writer ownership and closes it exactly once.
 
+`_emit_observe_hook` classifies a hook's *result*, not its hook, and the order
+of its checks is a hot-path contract rather than a detail:
+
+- `result is None` returns without scheduling. One synchronous hook runs per
+  observed line, so this identity check is the first thing dispatch does after
+  the call returns.
+- `type(result) is types.CoroutineType` schedules a native coroutine. An
+  `async def` hook always returns one, and the exact type test keeps the
+  general fallback off the common asynchronous path. The coroutine type cannot
+  be subclassed, so the check is total for native coroutines.
+- `inspect.isawaitable(result)` decides every remaining shape: objects with
+  `__await__`, generator-based coroutines, and awaitables returned through a
+  decorator, `functools.partial`, or a mock.
+
+A scheduled result is wrapped in `_await_awaitable` so a task can be created
+for any awaitable, not only a coroutine. The task is named
+`cuprum.observe.<phase>`, appended to the caller's list inside the dispatcher
+so the caller owns it before dispatch continues, and logged at `DEBUG` with the
+running count. The wrapper logs `observe_hook_task_started` and
+`observe_hook_task_finished`; a non-cancellation exception logs
+`observe_hook_task_failed` with `exc_info` and is re-raised, so the task's
+failure still reaches whoever awaits it. Cancellation is never logged as a
+failure, and is classified by asking whether `asyncio.CancelledError` is a
+superclass of `type(error)` rather than with `isinstance`: `isinstance` consults
+`__class__`, which a hook exception may define to raise, and such an error
+would escape the handler instead of being wrapped and reported.
+
+A hook that raises during an ordinary phase ends the dispatch: the exception is
+wrapped in `_ExecEventEmissionError` with the tasks scheduled so far, and raised
+`from` the original. Classification itself runs outside that handler, so an
+error raised while classifying — a result whose `__class__` or `__await__`
+access raises — escapes unwrapped, and the tasks scheduled before it never
+reach the caller. The harness described under "Verifying dispatch against a
+specification oracle" below treats that escape as part of the contract rather
+than an accident.
+
 `SafeCmd.run()` enforces the allowlist, then collects hooks from the current
 context, emits the `plan` event, runs before-hooks, and delegates subprocess
 execution to `_execute_with_hooks`. Pipeline execution follows the same
@@ -2122,6 +2158,86 @@ Only `TracingHook` has an active map, so "the active map drains correctly" is a
 claim about that hook alone; `test_tracing_span_stateful.py` asserts it
 directly by cross-checking `hook._active_spans` against a model after every
 step.
+
+### Verifying dispatch against a specification oracle
+
+`_emit_exec_event` promises something about *sequences* of hooks, not about any
+one hook: exactly the awaitable results are scheduled, in hook order, up to the
+first that raises; a settled dispatch runs every hook before it surfaces the
+first failure; and each task can be paired with the hook result that produced
+it. Per-shape assertions would pin examples of that promise without checking it
+over sequences, so these tests state the expected outcome independently of the
+implementation and compare the real dispatcher against it.
+
+Five modules under `cuprum/unittests/` split the harness by job:
+
+| Module                              | Job                                                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `_observe_hook_dispatch_shapes.py`  | edge shapes: stand-in values, mocks, failures, and awaitables whose classification raises                    |
+| `_observe_hook_dispatch_support.py` | `HOOK_KINDS` and `make_probe`: one fresh probe per shape, recording calls, raised errors, results, and trace |
+| `_observe_hook_dispatch_oracle.py`  | the specification: `expected_dispatch` returns a `DispatchExpectation`                                       |
+| `_observe_hook_dispatch_records.py` | the log specification: `expected_records` gives each record's level, message, `exc_info` type, and fields    |
+| `_observe_hook_dispatch_compare.py` | `mismatch`, which runs one dispatch and returns its first departure                                          |
+
+`DispatchExpectation` names the hooks that must run and in what order, the
+probes whose results must schedule, every raising hook, and the surfaced
+failure — or the awaitability-check error, which escapes unwrapped and takes
+precedence. `scheduled_probe_indices` pairs each scheduled task with the hook
+that produced it, which is unambiguous because every occurrence of a shape has
+the same awaitability.
+
+`mismatch(dispatch, kinds, event, records)` runs one dispatch and reports the
+first departure, in a fixed order:
+
+- calls: each probe's call count, then the shared trace, so two hooks called in
+  reverse are caught even though every count agrees;
+- failure: whether the error is wrapped, and whether the wrapped error is the
+  raising hook's own exception object — or, when the check itself failed, the
+  error type that must escape unwrapped;
+- tasks: count, order, the `cuprum.observe.<phase>` name, the
+  `_await_awaitable` wrapper, and the identity of the wrapped result;
+- logs: the scheduling and failure records in emission order, then the task
+  lifecycle records as an unordered multiset.
+
+The task view is taken before settlement, because a completed coroutine drops
+its frame and the wrapper and wrapped result are only observable at scheduling
+time. Settlement comes before the call comparison, because an async hook
+records its call only when its coroutine runs, so comparing calls first would
+report a correctly scheduled hook as never called.
+
+Lifecycle records are sorted by level, message, and the `cuprum_*` fields,
+because a suspension can interleave two tasks' records; each sorted pair is
+then compared in full, so the sort key cannot hide an `exc_info` difference it
+omits. That is how a task-failure record missing its exception information is
+caught.
+
+One shape needs its own mechanism. A failing awaitability check escapes
+unwrapped, so the tasks scheduled before it never reach the caller. The
+comparison therefore instruments `asyncio.create_task` for the synchronous
+dispatch call in `_recorded_tasks`, records each task as it is created,
+compares those tasks like any others, and settles them afterwards — so an
+example mixing `async_def` with `check_raises` neither loses evidence nor
+leaves a pending task behind.
+
+`test_observe_hook_dispatch_properties.py` runs the comparison over generated
+hook sequences: `test_dispatch_matches_specification` covers the ordinary
+phases and `test_settled_dispatch_matches_specification` covers `settled`. Named
+`@example` cases pin every `HOOK_KINDS` entry, so a change to the domain
+cannot silently drop a shape. Both properties hold before and after the
+result-guarded fast path: they are preservation properties, not a red test.
+
+`test_observe_hook_dispatch_seeded_faults.py` keeps the comparison honest by
+running it against dispatchers that misread the contract — scheduling every
+non-`None` result, scheduling only native coroutines, calling hooks in reverse,
+reversing task order, and emitting a task failure without `exc_info` — and
+requiring a mismatch for each. A property that accepts a wrong dispatcher is
+worse than no property, so a new rule in the specification needs a seeded fault
+that breaks it. `test_observe_hook_dispatch.py` pins the named shapes and
+patches `inspect.isawaitable` with a spy that attributes a call through
+`_emit_observe_hook.__code__`, which is what proves a `None` result never
+reaches the detector; `test_settled_hook_dispatch.py` covers terminal dispatch,
+and `tests/behaviour/test_observe_hook_dispatch_behaviour.py` carries the
+scenario-level contract.
 
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`. `_pump_stream` closes
@@ -4553,6 +4669,19 @@ payloads through a pipe to `cuprum._streams_rs.rust_consume_stream`, with
 what the kernel delivers. Pipe capacity and writer scheduling still decide how
 the payload is split, so this measures end-to-end throughput through the
 consumer loop rather than any single read.
+
+Its `observe-dispatch` group times `_emit_exec_event` over a batch of 1,000
+events per benchmark call, once per hook shape (`sync` and `async`), which
+keeps pytest-benchmark's own loop entry out of the per-event figure. The batch
+size also fixes what each case measures, and the two differ: the sync hook
+schedules nothing, so its figure is dispatch alone, while the async case
+collects the batch's tasks and awaits them inside the timed call, so its figure
+covers task execution and settlement as well. Because the batch is timed as a
+whole and settled once, the async case measures the cost of producing and
+completing a run's worth of tasks rather than the marginal cost of one
+dispatch. Comparing the group across trees requires the same benchmark file in
+both, which is why a measurement of an older tree copies the current file into
+it.
 
 Run the hyperfine end-to-end throughput benchmarks, which write
 `dist/benchmarks/pipeline-throughput.json`:
