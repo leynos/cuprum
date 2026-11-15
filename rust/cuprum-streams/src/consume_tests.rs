@@ -107,3 +107,29 @@ fn propagates_a_read_error_after_partial_output() {
     );
     assert_eq!(reader.calls, 2, "the loop must stop at the failing read");
 }
+
+/// The consumer's own range guard, which `ScriptedReader` cannot exercise.
+///
+/// `ScriptedReader` refuses an over-long chunk before it returns, so a scripted
+/// case would be testing the double's bounds check rather than the consumer's.
+/// This drives the loop with a bare closure that claims one byte more than the
+/// buffer it was handed: the loop must reject the count it never filled, and
+/// must not read again afterwards.
+#[test]
+fn rejects_a_read_length_beyond_the_buffer() {
+    let mut calls = 0;
+    let result = consume_with_reader(
+        |buffer: &mut [u8]| {
+            calls += 1;
+            Ok(buffer.len() + 1)
+        },
+        BufferSize(8),
+        "test",
+    );
+
+    assert!(
+        matches!(result, Err(PumpError::BufferRangeExceeded)),
+        "an impossible read length must reach the consumer's guard, got {result:?}"
+    );
+    assert_eq!(calls, 1, "the loop must not read again after a bad length");
+}
