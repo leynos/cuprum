@@ -34,7 +34,11 @@
   indefinitely. The callback's own error is re-raised unchanged — a
   `TimeoutError` it raises is never reported as the run's timeout — and the
   child and its owned group are terminated and reaped before the error reaches
-  the caller ([#551](https://github.com/leynos/cuprum/issues/551)).
+  the caller. A stdin producer that failed as well outranks it: the writer
+  publishes its failure before its own teardown runs, so the caller receives
+  the `StdinSourceError` naming the input contract that broke rather than the
+  callback failure it caused
+  ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **Awaitable observe hooks are bounded per run:** an observed run now admits
   line observation against a ceiling of 256 unfinished observe-hook tasks,
   shared by every stage of a pipeline. Line observation waits for a slot at the

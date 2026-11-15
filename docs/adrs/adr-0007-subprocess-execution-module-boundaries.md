@@ -1649,6 +1649,17 @@ more over everything that settled. Without that second read, a run whose
 `encoding` this build does not know would report the output decoder's
 `LookupError` in place of the `StdinSourceError` its input contract promises.
 
+Two reads are still not enough, because the window has two ends. A writer that
+has already raised is _still running_ while it unwinds: its producer's
+finalizer is the caller's code and is given a window of its own, so a read taken
+during that unwinding sees a task that has not failed and falls through to the
+consumer failure the writer's own failure caused. The run therefore creates a
+`_StdinWriterLog` beside its writer, the writer publishes its failure to it
+_before_ the raise and so before that unwinding, and both precedence reads
+consult the publication ahead of the task. It is one hand-off rather than shared
+state: nothing else writes it, and it is per-run. Both streaming callers hand
+the same log to the race, so the two reads cannot disagree about it.
+
 The second decision is provenance. Both callers translate a `TimeoutError`
 escaping the wait into the run's deadline, and a callback may raise a
 `TimeoutError` of its own — which is also an `OSError`, so no type check can
@@ -1657,14 +1668,21 @@ identity against each monitored task's own exception, and a match routes to the
 non-timeout branch, which reconciles without capturing and re-raises the
 original object. Without it, `_handle_stream_timeout` would be handed a
 deadline the caller never configured, and would raise its invariant failure in
-place of the callback's real error.
+place of the callback's real error. The predicate takes the same optional
+`stdin_log`, so a failure that is only published — raised, not yet settled on
+its task — is still recognized as monitored.
 
 Both entry points wired the consumers in: `_wait_for_streamed_process_exit`, in
 `cuprum/_subprocess_stream_exit.py`, for the streamed `run()`, and
 `_await_line_stream_exit` in the line-stream coordinator for `lines()`. The
 direct run wires no consumers and passes none. No public API changes.
 `cuprum/unittests/test_subprocess_rendezvous.py` pins the race and its
-precedence, `cuprum/unittests/test_consumer_failure_fail_fast.py` pins the
-end-to-end guarantee with real children that write until they are killed, and
+precedence, `cuprum/unittests/test_rendezvous_writer_handoff.py` pins the two
+ends of the writer's window without starting a child,
+`cuprum/unittests/test_consumer_failure_fail_fast.py` pins the end-to-end
+guarantee with real children that write until they are killed — including which
+failure a run with both a failed producer and a failed callback reports — and
 `cuprum/unittests/test_line_stream_reader_failure.py` pins the provenance rule
-for both entry points.
+for both entry points. The reader-failure case gates its post-exit arm on the
+exit rendezvous returning, so that arm cannot quietly exercise the rendezvous
+route instead of the collect it is named for.

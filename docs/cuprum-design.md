@@ -2524,18 +2524,21 @@ sequenceDiagram
   coordinator, and the timeout test modules keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-27.
-- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
-  failure rather than on the child's exit: `_await_exit_or_writer_failure`
-  waits on the exit wait and the stdin writer together and returns the exit
-  only once it is the sole survivor, so a producer that dies while the child
-  would still be running surfaces as `StdinSourceError` instead of being
-  reported as `TimeoutExpired`. The exit wait is passed in already constructed,
-  so each caller resolves `_wait_for_exit_code_within_timeout` from its own
-  module namespace. It was split out of `_subprocess_wait`, which re-exports
-  the name, so the single-command run, the line-stream coordinator, and the
-  timeout test modules keep one import path. See the
-  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
-  of 2026-09-27.
+- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stream
+  task's failure rather than on the child's exit.
+  `_await_exit_or_writer_failure` waits on the exit wait, the stdin writer, and
+  the observed stream consumers together, and a settled exit is its outcome
+  outright even while a monitored task is still pending. A producer that dies,
+  or a callback that raises while the child would still be running, therefore
+  surfaces as its own error instead of being reported as `TimeoutExpired`. Only
+  a failed task is an outcome; one that merely finishes leaves the exit wait
+  running. The exit wait is passed in already constructed, so each caller
+  resolves `_wait_for_exit_code_within_timeout` from its own module namespace.
+  It was split out of `_subprocess_wait`, which re-exports the name, so the
+  single-command run, the line-stream coordinator, and the timeout test modules
+  keep one import path. See the
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
+  2026-09-27 and 2026-11-15.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside

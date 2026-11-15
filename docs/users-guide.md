@@ -451,6 +451,12 @@ hooks follow a different contract: each is a delivery task whose earliest
 failure is reported when the run finalizes, so one failing hook does not by
 itself end the run.
 
+If the stdin producer failed as well, the run reports that producer's
+`StdinSourceError` instead, because the producer's failure is what stopped the
+input the child was waiting on. The writer publishes its failure before its own
+teardown runs, so a run that ends during that teardown still reports it rather
+than the callback's error; the callback's error is then not reported.
+
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
 `max_line_chars` decoded characters (64 Ki by default) for one line, and
