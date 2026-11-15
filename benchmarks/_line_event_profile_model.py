@@ -1,10 +1,13 @@
 """Shapes and parsing for the 5.2.1 construction-share classifier.
 
-This is the input half of the gate: the immutable shapes a capture and a rule
-set are parsed into, the parsers that build them, and the validation that
-rejects input too weak to support a measurement. The classifying and reporting
-half lives in :mod:`benchmarks.summarize_line_event_profile`, which re-exports
-these names so callers have one entry point.
+This is the parsing half of the gate: the parsers that build the immutable
+shapes a capture and a rule set are parsed into, and the validation that
+rejects input too weak to support a measurement. The shapes themselves live in
+:mod:`benchmarks._line_event_profile_shapes` and are imported here, so the
+parsers, their callers, and the tests that check them keep one import surface.
+The classifying and reporting half lives in
+:mod:`benchmarks.summarize_line_event_profile`, which re-exports these names so
+callers have one entry point.
 
 Definitions
 -----------
@@ -47,10 +50,19 @@ and ``docs/profiling/5-2-1-line-event-emission`` records the re-run.
 
 from __future__ import annotations
 
-import dataclasses as dc
 import json
 import typing as typ
 
+from benchmarks._line_event_profile_shapes import (
+    Capture,
+    CaptureReading,
+    ClassificationRule,
+    ClassifierRules,
+    Frame,
+    FramePattern,
+    Stack,
+    _ProfileInputError,
+)
 from benchmarks.summarize_folded import _parse_folded_line
 
 if typ.TYPE_CHECKING:
@@ -60,98 +72,6 @@ if typ.TYPE_CHECKING:
 # A rule must name at least one caller. Without one, a generated frame would
 # match on its own indistinguishable ``<string>`` identity.
 _MIN_RULE_CALLERS = 1
-
-
-class _ProfileInputError(Exception):
-    """Raised when a capture or rules file cannot support a measurement."""
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Frame:
-    """One parsed stack frame.
-
-    Attributes
-    ----------
-    function:
-        Function name as the profiler rendered it.
-    location:
-        Source file (or profile marker) the frame belongs to.
-    line:
-        Line identifier within ``location``, as a string, because generated
-        frames carry a synthetic value rather than a real line number.
-    text:
-        The frame exactly as it appeared, retained for reporting.
-
-    """
-
-    function: str
-    location: str
-    line: str
-    text: str
-
-
-@dc.dataclass(frozen=True, slots=True)
-class FramePattern:
-    """A frame matcher: any field left as ``None`` matches anything."""
-
-    function: str | None = None
-    location: str | None = None
-    line: str | None = None
-
-    def matches(self, frame: Frame) -> bool:
-        """Return whether ``frame`` satisfies every field this pattern sets."""
-        return all(
-            (
-                self.function is None or self.function == frame.function,
-                self.location is None or self.location == frame.location,
-                self.line is None or self.line == frame.line,
-            ),
-        )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ClassificationRule:
-    """One construction site: a frame pattern plus the callers reaching it.
-
-    Attributes
-    ----------
-    name:
-        Human-readable label reported with the matches.
-    frame:
-        The frame considered to be construction work.
-    callers:
-        Frame patterns for callers, at least one of which must appear earlier
-        on the same stack for ``frame`` to count.
-
-    """
-
-    name: str
-    frame: FramePattern
-    callers: tuple[FramePattern, ...]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ClassifierRules:
-    """The full rule set: what to count, and which stacks form the subtree."""
-
-    consume_frames: tuple[FramePattern, ...]
-    construction_rules: tuple[ClassificationRule, ...]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Stack:
-    """A parsed capture line: one stack of frames and its sample weight."""
-
-    frames: tuple[Frame, ...]
-    samples: int
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Capture:
-    """A parsed capture: its stacks and its total parent sample weight."""
-
-    stacks: tuple[Stack, ...]
-    parent_samples: int
 
 
 def parse_frame(text: str) -> Frame:
@@ -209,13 +129,42 @@ def _parse_stack_line(line: str) -> Stack | None:
     )
 
 
-def parse_capture(folded_path: pth.Path) -> Capture:
-    """Parse a folded-stack capture into its stacks and parent-sample total.
+def _parse_frameless_weight(line: str) -> int | None:
+    """Return the weight of a frame-less py-spy record, or ``None``.
+
+    py-spy emits a record whose stack is empty — a bare weight such as
+    ``" 34"`` — when a sample carries no resolvable frames. It is a
+    well-formed sample the summarizers deliberately drop rather than a line
+    that failed to parse, so it must not be reported as unreadable.
 
     Returns
     -------
-    Capture
-        Every parsable stack, with the sum of their sample weights.
+    int | None
+        The record's sample weight, or ``None`` when the line is not a
+        frame-less record.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    _, separator, _ = stripped.rpartition(" ")
+    if separator:
+        return None
+    try:
+        weight = int(stripped)
+    except ValueError:
+        return None
+    return weight if weight > 0 else None
+
+
+def read_capture(folded_path: pth.Path) -> CaptureReading:
+    """Read a folded-stack capture, keeping the lines nothing could parse.
+
+    Returns
+    -------
+    CaptureReading
+        Every parsable stack with the sum of their sample weights, and the
+        non-blank lines that were neither a counted stack nor py-spy's
+        frame-less record.
 
     Raises
     ------
@@ -229,14 +178,39 @@ def parse_capture(folded_path: pth.Path) -> Capture:
         raise _ProfileInputError(msg) from exc
 
     stacks: list[Stack] = []
+    unparsed: list[str] = []
     for line in text.splitlines():
         parsed = _parse_stack_line(line)
         if parsed is not None:
             stacks.append(parsed)
+        elif line.strip() and _parse_frameless_weight(line) is None:
+            unparsed.append(line.strip())
     if not stacks:
         msg = f"no parsable stack records in {folded_path}"
         raise _ProfileInputError(msg)
-    return Capture(stacks=tuple(stacks), parent_samples=sum(s.samples for s in stacks))
+    capture = Capture(
+        stacks=tuple(stacks),
+        parent_samples=sum(stack.samples for stack in stacks),
+    )
+    return CaptureReading(capture=capture, unparsed=tuple(unparsed))
+
+
+def parse_capture(folded_path: pth.Path) -> Capture:
+    """Parse a folded-stack capture into its stacks and parent-sample total.
+
+    Returns
+    -------
+    Capture
+        Every parsable stack, with the sum of their sample weights.
+
+    Notes
+    -----
+    A capture that cannot be read, or that holds no parsable stack, raises
+    ``_ProfileInputError`` from :func:`read_capture`. The discarded lines are
+    not reported here; a caller that must account for them reads the capture
+    with that function instead.
+    """
+    return read_capture(folded_path).capture
 
 
 def _pattern_from_json(raw: object, *, where: str) -> FramePattern:

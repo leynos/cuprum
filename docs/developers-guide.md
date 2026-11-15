@@ -4989,8 +4989,9 @@ python -m benchmarks.summarize_hot_path_frames <stacks.folded> \
 
 Both frame specs are exact: `FUNCTION@LOCATION` must split into exactly two
 non-empty halves, and an over- or under-specified value is rejected rather than
-silently truncated. `--min-anchor-weight` is required and must not be negative,
-so a caller cannot inherit a default floor that would weaken the claim.
+silently truncated. `--min-anchor-weight` is required and must be positive, so
+a caller can neither inherit a default floor that would weaken the claim nor
+supply a floor of zero that admits every capture.
 
 The result document reports `total_weight`, `anchor_weight`, `target_weight`,
 `target_weight_any_location`, `target_weight_outside_anchor`, and `status`.
@@ -5004,20 +5005,25 @@ the detector is reachable by another route.
 
 Exit status 0 means both target weights are zero and the anchor meets the
 floor; 1 means they agree and are non-zero; 2 means the input or the command
-line was malformed, the anchor fell below the floor, or the two target weights
-disagreed. A floor failure is reported even when the target weight is zero,
-because observing no target samples is only evidence of absence when the
-anchored region carried enough samples to have shown one. The flags come from a
-Cyclopts command, as the [scripting standards](scripting-standards.md) require,
-so `--help` documents them and a malformed command line takes the inconclusive
-status rather than a separate usage-error code.
+line was malformed, the floor was not positive or the anchor fell below it, or
+the two target weights disagreed. A floor failure is reported even when the
+target weight is zero, because observing no target samples is only evidence of
+absence when the anchored region carried enough samples to have shown one. The
+flags come from a Cyclopts command, as the
+[scripting standards](scripting-standards.md) require, so `--help` documents
+them and a malformed command line takes the inconclusive status rather than a
+separate usage-error code.
 
-The command reuses `parse_capture`, `Frame`, and `FramePattern` from
-`benchmarks/_line_event_profile_model.py`, so a capture that the 5.2.1
-classifier accepts is parsed identically here. Its arithmetic is checked
-against an independent brute-force recount in
-`cuprum/unittests/test_hot_path_frame_census.py`, whose generated inputs always
-cover the five stack shapes that decide the answer.
+The command reads the capture with `read_capture`, `Frame`, and `FramePattern`
+from `benchmarks/_line_event_profile_model.py`, so the 5.2.1 classifier parses
+the same stacks identically. It differs from the classifier in one way: a
+folded-stack line the parser cannot read makes the census inconclusive rather
+than merely absent, because weight the census did not read cannot support a
+claim about weight that is gone. The only line it tolerates without counting is
+py-spy's frame-less record, a bare sample weight such as `' 34'` for a sample
+with no resolvable frames. Its arithmetic is checked against an independent
+brute-force recount in `cuprum/unittests/test_hot_path_frame_census.py`, whose
+generated inputs always cover the five stack shapes that decide the answer.
 
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 

@@ -26,7 +26,15 @@ The anchor must also carry enough weight to support the claim: observing zero
 target samples is only evidence of absence when the anchored region was
 sampled often enough that a surviving target would very likely have been seen.
 The caller supplies that floor, derived from the control's measured target
-share, rather than inheriting a default that could silently weaken the claim.
+share, rather than inheriting a default that could silently weaken the claim,
+and the floor must be positive: a floor of zero would let any capture, however
+little it sampled, report an absence.
+
+The capture must be read whole. A folded-stack line the parser cannot read is
+absent from the counted stacks, so the census rejects such a capture instead of
+reporting weights that ignore it. The one exception is py-spy's frame-less
+record, a bare sample weight for a sample with no resolvable frames, which is
+well formed and carries no stack to count.
 
 Exit status
 -----------
@@ -35,9 +43,10 @@ Exit status
 1
     The target weights agree, are non-zero, and the anchor meets the floor.
 2
-    Malformed input or a malformed command line, an anchor below the floor, or
-    disagreeing target weights: the run is inconclusive and must not be read as
-    a passing measurement.
+    Malformed input or a malformed command line, a capture holding a line that
+    is not a folded-stack record, a floor that is not positive or that the
+    anchor does not meet, or disagreeing target weights: the run is
+    inconclusive and must not be read as a passing measurement.
 """
 
 from __future__ import annotations
@@ -59,7 +68,7 @@ from benchmarks._line_event_profile_model import (
     FramePattern,
     Stack,
     _ProfileInputError,
-    parse_capture,
+    read_capture,
 )
 
 if typ.TYPE_CHECKING:
@@ -230,6 +239,7 @@ class _CensusOptions:
         The target frame as ``FUNCTION@LOCATION``.
     min_anchor_weight:
         Samples the anchor must carry for zero target weight to be evidence.
+        Must be positive: a zero floor would admit every capture.
     output:
         Where the result JSON document is written.
 
@@ -241,16 +251,56 @@ class _CensusOptions:
     output: pth.Path
 
 
+def _read_readable_capture(folded: pth.Path) -> Capture:
+    """Read ``folded``, rejecting any line that is not a record the census reads.
+
+    A capture the parser partly skipped cannot support a claim about a zero
+    weight: the samples the skipped line carried are unaccounted for, and they
+    may be exactly the samples the claim says are gone.
+
+    Returns
+    -------
+    Capture
+        The capture's stacks and their total weight.
+
+    Raises
+    ------
+    _ProfileInputError
+        If the file cannot be read, holds no parsable stack, or holds a
+        non-blank line that is not a folded-stack record.
+    """
+    reading = read_capture(folded)
+    if reading.unparsed:
+        msg = (
+            f"{folded}: {len(reading.unparsed)} line(s) are not folded-stack "
+            f"records, first {reading.unparsed[0]!r}"
+        )
+        raise _ProfileInputError(msg)
+    return reading.capture
+
+
 def _load_inputs(
     folded: pth.Path,
     options: _CensusOptions,
 ) -> tuple[Capture, FramePattern, FramePattern]:
-    """Parse the floor, capture, anchor, and target into usable values."""
-    if options.min_anchor_weight < 0:
-        msg = f"--min-anchor-weight must not be negative: {options.min_anchor_weight}"
+    """Parse the floor, capture, anchor, and target into usable values.
+
+    Returns
+    -------
+    tuple[Capture, FramePattern, FramePattern]
+        The capture, the anchor pattern, and the target pattern.
+
+    Raises
+    ------
+    _ProfileInputError
+        If the floor is not positive, the capture holds a line the census
+        cannot read, or a spec is not ``FUNCTION@LOCATION``.
+    """
+    if options.min_anchor_weight <= 0:
+        msg = f"--min-anchor-weight must be positive: {options.min_anchor_weight}"
         raise _ProfileInputError(msg)
     return (
-        parse_capture(folded),
+        _read_readable_capture(folded),
         parse_spec(options.anchor, option="--anchor"),
         parse_spec(options.target, option="--target"),
     )

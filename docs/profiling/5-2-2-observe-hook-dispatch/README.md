@@ -73,9 +73,9 @@ python -m benchmarks.summarize_hot_path_frames \
 
 Exit 0 means both target weights are zero and the anchor met the floor, 1 that
 the target weights agree and are non-zero, and 2 that the input or the command
-line was malformed, the anchor fell below the floor, or the two target weights
-disagreed. A candidate capture is expected to exit 0 and a control capture to
-exit 1.
+line was malformed, the floor was not positive or the anchor fell below it, or
+the two target weights disagreed. A candidate capture is expected to exit 0 and
+a control capture to exit 1.
 
 ## Reproducing the classification
 
@@ -106,8 +106,9 @@ Every capture's `stacks.folded` also contains exactly one line whose stack is
 empty — a space followed by the sample weight, for example `' 34'`. py-spy
 emits it when a sample carries no resolvable frames. The census drops it, so
 the folded weight sum exceeds the census's `total_weight` by exactly that
-line's weight. The difference is the check that the census read the whole file
-and discarded nothing else.
+line's weight. Any other line the parser cannot read makes the census report
+status 2 instead of a weight, so the difference is the check that the census
+read the whole file and discarded nothing else.
 
 ## The unprofiled timing pairs
 

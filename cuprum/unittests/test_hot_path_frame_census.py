@@ -314,9 +314,41 @@ def test_malformed_anchor_spec_is_rejected(
     assert not output.exists(), "a rejected run must write no result"
 
 
-def test_negative_floor_is_rejected(tmp_path: pth.Path) -> None:
-    """A negative floor would make every capture vacuously pass."""
-    capture = _line(_ANCHOR_TEXT, samples=1)
-    status, _ = _run(tmp_path, capture, _Spec(floor=-1))
+@pytest.mark.parametrize(
+    ("floor", "reason"),
+    [
+        (-1, "a negative floor must be rejected"),
+        (0, "a zero floor must be rejected"),
+    ],
+    ids=["negative", "zero"],
+)
+def test_non_positive_floor_is_rejected(
+    tmp_path: pth.Path,
+    floor: int,
+    reason: str,
+) -> None:
+    """A floor that is not positive would make an unsampled capture pass."""
+    capture = _line(_OTHER_TEXT, samples=1)
+    status, output = _invoke(tmp_path, capture, _Spec(floor=floor))
 
-    assert status == 2, "a negative floor must be rejected"
+    assert status == 2, reason
+    assert not output.exists(), "a rejected run must write no result"
+
+
+def test_unparsable_record_is_inconclusive(tmp_path: pth.Path) -> None:
+    """A line the parser cannot read makes the capture unfit to report on."""
+    capture = _line(_ANCHOR_TEXT, samples=200) + "emit_line (unterminated\n"
+    status, output = _invoke(tmp_path, capture, _Spec(floor=200))
+
+    assert status == 2, "a partly unread capture cannot prove absence"
+    assert not output.exists(), "an unread capture must produce no result"
+
+
+def test_frameless_record_is_tolerated(tmp_path: pth.Path) -> None:
+    """py-spy's bare sample weight is dropped, not treated as unreadable."""
+    capture = _line(_ANCHOR_TEXT, samples=200) + " 34\n"
+    status, result = _run(tmp_path, capture, _Spec(floor=200))
+
+    assert result["status"] == "pass", "a frameless sample must not spoil absence"
+    assert result["total_weight"] == 200, "the frameless weight is not counted"
+    assert status == 0, "a frameless sample leaves the census readable"
