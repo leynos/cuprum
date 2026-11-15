@@ -10,8 +10,10 @@ Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
 and #127 are closed; their merged work is recorded under
 [Conformance basis](#conformance-basis). The implementation adds the
 extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
-the supporting documentation. Roadmap 6.1.2 is checked once the implementation
-is accepted; final validation and review are pending.
+the supporting documentation. Roadmap 6.1.2 is checked in
+[`docs/roadmap.md`](roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
+and the acceptance evidence is recorded under [Progress](#progress) below;
+hosted review remains pending.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -36,11 +38,12 @@ generated domain; it is not an exhaustive proof over all possible inputs.
 
 ## Constraints
 
-Implementation of this plan is approved. Roadmap 6.1.2 is checked once that
-implementation is accepted. The plan's earlier validation repairs isolate
-existing checker tests from ancestor project configuration and synchronize
-native lifecycle fixtures before their short timeout begins; they do not
-implement stream-boundary parity or change production code.
+Implementation of this plan is approved. Roadmap 6.1.2 is checked in
+[`docs/roadmap.md`](roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
+noting that hosted review remains pending. The plan's earlier validation
+repairs isolate existing checker tests from ancestor project configuration and
+synchronize native lifecycle fixtures before their short timeout begins; they
+do not implement stream-boundary parity or change production code.
 
 Keep production dispatch, public signatures, Python fallback, observation
 channels, and error policy unchanged. Preserve the completed 6.1.1 conversion
@@ -609,6 +612,23 @@ ownership and error contracts, stop and report the exact incompatibility.
   mechanism: a fifth rule set in `.codescene/code-health-rules.json` keyed to
   this one file, carrying the reasoning. `cs rules-config validate` accepts it
   and `cs review` on the file returns 10.0.
+- [x] (2026-11-15) Re-gate the corrected candidate and confirm it in hosted CI.
+  The full eight-gate bundle ran sequentially against exactly the tree commit
+  `7a3d8acba` carries: every log names candidate `87e1b9947` with `DIRTY: 3` at
+  start and end, and all three committed blobs match the pre-commit
+  `git hash-object` fingerprint one for one. Results: `check-fmt` 0 (1s);
+  `lint` 0 (233s, `interrogate` 100.0%, Skylos and duplication gates passed);
+  `typecheck` 0 (0s); `test` 0 (2804s, `5070 selected`, Nextest
+  `189 tests run: 189 passed, 30 skipped`, doctests clean, zero
+  `FAILED`/`INTERNALERROR`); `test-rust` 0 (1207s); `lint-windows` 0 (550s,
+  recompiling the changed CRT module in 9m09s rather than serving a cache);
+  `markdownlint` 0 (34s); `nixie` 0 (4s). The config-only follow-up commit
+  `34ee94f37` re-ran `check-fmt`, `markdownlint`, `nixie`, and `lint` (0 at
+  305s) because `.codescene/code-health-rules.json` is tracked. Hosted CI at
+  `34ee94f37` completed `success` on both workflows with all twelve required
+  contexts passing, including `Native contracts (windows-2022)` and
+  `Extension-gated tests (Windows Python/Rust boundary)` — the two jobs that
+  rejected `87e1b9947`.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -1402,6 +1422,11 @@ then rerun affected gates; later milestones must not depend on an unvalidated
 partial bridge.
 
 ## Concrete steps and validation
+
+The acceptance evidence for the published candidate is the
+[Progress](#progress) entry dated 2026-11-15 that records the eight-gate bundle
+and its blob-identity check, together with the hosted CI result for the same
+head. This section describes how to reproduce it.
 
 All commands run from the repository root. Use a clean Git/tool environment as
 required by `AGENTS.md`. Before code work, record explicit approval, inspect
