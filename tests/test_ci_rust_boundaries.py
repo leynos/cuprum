@@ -157,7 +157,12 @@ def test_prover_tools_selects_its_required_python() -> None:
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
         encoding="utf-8"
     )
-    arguments = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS"))
+    invocation = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS"))
+    assert "$(PROVER_TOOLS_RUN)" in invocation, (
+        "the CLI invocation must stay a named variable, so the Kani version "
+        "check can run it under its own PATH"
+    )
+    arguments = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS_RUN"))
     assert "--python" in arguments, (
         "ambient UV_PYTHON can select an incompatible runtime"
     )
@@ -175,10 +180,13 @@ def test_boundary_kani_finds_the_installed_binaries() -> None:
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
         encoding="utf-8"
     )
-    assert (
-        "boundary-kani: export PATH := "
-        "$(CURDIR)/.cache/boundary-kani/bin:$(PATH)" in makefile
-    ), "make boundary-kani must resolve the Kani installed into .cache"
+    cached_bin = _logical_assignment(makefile, "KANI_CACHED_BIN").strip()
+    assert cached_bin == "$(CURDIR)/.cache/boundary-kani/bin", (
+        "the cached frontend must be the one `install-boundary-kani` fills"
+    )
+    assert "boundary-kani: export PATH := $(KANI_CACHED_BIN):$(PATH)" in makefile, (
+        "make boundary-kani must resolve the Kani installed into .cache"
+    )
 
 
 #: Each job, its cache restore step, and the inputs its key must hash. Both
