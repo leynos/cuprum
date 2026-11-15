@@ -564,7 +564,7 @@ per compile shape and one writer for each:
 measurement that forced the split. In outline, `extension-tests` writes the
 3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
 own interpreter's, `benchmark-ratchet` writes the 3.13 release family, and
-`lint-test` writes the Cranelift lint family, which moves to the Ubicloud lane
+`lint-test` writes the dev-fast lint family, which moves to the Ubicloud lane
 with it. The instrumented coverage shape has no family: both coverage lanes use
 the `gha` backend described above, so there is no archive for a job to publish.
 The scheduled `loom.yml` job writes its separate model family only on
@@ -1158,7 +1158,7 @@ approved local extension that began as a byte-for-byte copy from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
 Concordat issue 157, and now adds the parallel frontend (`-Zthreads=8`) beside
 the linker (see "Build standard exception" below); its SHA-256 is
-`88b7dca8add237e0e6b63484150cd5cf0372804a7d6c9bd59f5727c3d8a84ba1`.
+`bc3df86603d20cd91a991952018f15e80271bc6ee25641e54aab294b8e76f998`.
 
 Run `make dev-fast-check` before the first Linux accelerated build. It requires
 the `clippy` component on the dev-fast nightly (and `rustc-codegen-cranelift`

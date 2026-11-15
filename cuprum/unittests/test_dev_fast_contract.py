@@ -22,7 +22,7 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-FRAGMENT_SHA256 = "88b7dca8add237e0e6b63484150cd5cf0372804a7d6c9bd59f5727c3d8a84ba1"
+FRAGMENT_SHA256 = "bc3df86603d20cd91a991952018f15e80271bc6ee25641e54aab294b8e76f998"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
 # The Clippy leaf's own arguments are identical on every host; only the Cargo
@@ -114,7 +114,7 @@ def test_make_reads_the_linker_version_from_its_pin() -> None:
     )
 
 
-def test_the_prerequisite_gate_requires_both_nightly_components() -> None:
+def test_the_prerequisite_gate_requires_clippy_not_cranelift_by_default() -> None:
     """Clippy runs through the dev-fast nightly, so the gate must require it."""
     makefile = (repo_root() / "Makefile").read_text(encoding="utf-8")
     assert "DEV_FAST_LINT_COMPONENT ?= clippy" in makefile, (

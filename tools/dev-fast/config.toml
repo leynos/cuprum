@@ -17,6 +17,8 @@ codegen-backend = true
 # Cranelift trades runtime performance for compile speed, so it is applied to
 # the dev profile only. `make dev-*` never builds release artefacts.
 # Cranelift disabled estate-wide on 14 November 2026 (concordat ADR; review 14 May 2027). Uncomment to opt back in.
+# Uncommenting changes the approved fragment: update the digest and contract
+# with it, or opt in per invocation with CARGO_PROFILE_DEV_CODEGEN_BACKEND.
 # [profile.dev]
 # codegen-backend = "cranelift"
 
