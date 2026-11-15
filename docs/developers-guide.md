@@ -5976,14 +5976,19 @@ so the default suite never reaches the network.
 socket, `test_boundary_pypy_watchdog.py` holds the deadline-watchdog cases,
 `test_boundary_pypy_metrics.py` holds the metric and span cases, and all three
 take their fake responses and clocks from `boundary_pypy_transfer_support.py`.
-The PyPy downloader keeps one deadline across the redirects, the header parse,
-and the body, and a watchdog shuts the socket down when that deadline passes,
-so a server that trickles header or body bytes, or stalls a close-delimited
-body, cannot hold the transfer open. The watchdog captures the socket before
-the header parse, because `getresponse` hands a close-delimited response that
-socket and clears the connection's reference. It re-reads the transfer's clock
-after every wait, so a wakeup that arrives before the deadline starts another
-wait instead of shutting down a healthy read. It re-reads its own stop signal
+The PyPy downloader keeps one deadline across the redirects, each hop's
+connection setup and request, the header parse, and the body, and a watchdog
+shuts the socket down when that deadline passes, so a server that trickles
+header or body bytes, or stalls a close-delimited body, cannot hold the
+transfer open. A socket timeout bounds one blocking call rather than a
+sequence of them, so each phase is armed with the time that remains instead of
+the budget its hop opened with; the deadline can still be exceeded by one such
+call, and it does not cover host name resolution. The watchdog starts before
+the request so a blocked send is cut short too, and it captures the socket
+before the header parse, because `getresponse` hands a close-delimited response
+that socket and clears the connection's reference. It re-reads the transfer's
+clock after every wait, so a wakeup that arrives before the deadline starts
+another wait instead of shutting down a healthy read. It re-reads its own stop signal
 after every wait as well, so a substituted waiter that never reaches the
 deadline cannot leave the watchdog spinning after the transfer has finished.
 `_download` takes its clock from the injected `Environment` and accepts the

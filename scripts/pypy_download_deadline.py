@@ -1,10 +1,17 @@
 """The one transfer deadline and the watchdog that enforces it.
 
-A deadline covers every redirect hop, the header parse, and every body read.
-A deadline checked only between reads cannot stop a server that trickles
-header bytes, because each individual read still finishes inside the socket
-timeout. The watchdog therefore shuts the connection's socket down once the
-transfer's own clock says no time remains, which makes a blocked read fail.
+A deadline covers every redirect hop, the request that opens it, the header
+parse, and every body read. A deadline checked only between reads cannot stop
+a server that trickles header bytes, because each individual read still
+finishes inside the socket timeout. The watchdog therefore shuts the
+connection's socket down once the transfer's own clock says no time remains,
+which makes a blocked read or a blocked send fail.
+
+A socket timeout bounds each blocking call, not a sequence of them, so the
+budget is recomputed between phases rather than fixed when a hop opens. Each
+TCP connect attempt and each TLS record still gets whatever timeout is set at
+the time it blocks, so the deadline can be exceeded by one such call; DNS
+resolution is outside the socket timeout altogether.
 
 The clock and the waiter are seams: a test supplies both together, so a
 deadline is reached and a blocked read released without real seconds. A
@@ -17,13 +24,13 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import http.client
 import socket
 import threading
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import http.client
 
     type Clock = cabc.Callable[[], float]
     # Takes the seconds left and returns True once the watchdog must stop, the
@@ -91,6 +98,60 @@ def _hop_timeout(transfer: _Transfer) -> float:
         msg = "release download exceeded the transfer deadline"
         raise TimeoutError(msg)
     return min(_CONNECT_TIMEOUT_SECONDS, remaining)
+
+
+def _arm_socket(connection: http.client.HTTPSConnection, transfer: _Transfer) -> None:
+    """Arm an opened connection's socket with the time the transfer has left.
+
+    Opening the connection has already spent part of the hop's budget, and a
+    socket timeout bounds one blocking call rather than a sequence of them, so
+    the request must be sent under what remains now rather than the timeout
+    the socket was opened with.
+
+    Raises
+    ------
+    OSError
+        If the connection holds no socket to arm.
+    """
+    sock = connection.sock
+    if sock is None:
+        msg = "release download opened no socket for its request"
+        raise OSError(msg)
+    sock.settimeout(_hop_timeout(transfer))
+
+
+@contextlib.contextmanager
+def _deadline_failures(transfer: _Transfer) -> cabc.Iterator[None]:
+    """Report a socket failure past the deadline as the transfer's TimeoutError.
+
+    The watchdog releases a blocked read or send by shutting its socket down,
+    so the failure that surfaces is the socket's. Past the deadline the caller
+    must see the deadline; before it the failure is the server's and surfaces
+    unchanged.
+
+    Yields
+    ------
+    None
+        Control while the bounded work runs.
+
+    Raises
+    ------
+    TimeoutError
+        If the work failed against a socket after the deadline passed.
+    OSError
+        If the work failed against a socket before the deadline passed.
+    http.client.HTTPException
+        If the work failed against a socket before the deadline passed.
+    """
+    try:
+        yield
+    except TimeoutError:
+        raise
+    except (OSError, http.client.HTTPException) as error:
+        if transfer.expired():
+            msg = "release download exceeded the transfer deadline"
+            raise TimeoutError(msg) from error
+        raise
 
 
 class _DeadlineWatchdog:

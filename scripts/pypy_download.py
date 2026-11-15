@@ -3,11 +3,11 @@
 The downloader refuses a declared length above `_MAX_BODY_BYTES`, stops once
 the streamed body passes that ceiling, and abandons a transfer that outlives
 `_TRANSFER_DEADLINE_SECONDS`. One deadline covers every redirect hop, the
-header parse, and every body read: a watchdog shuts the connection's socket
-down when the deadline passes, so a server that trickles bytes, or stalls a
-close-delimited body, cannot hold the transfer open. Without these bounds a
-stalled or oversized response would fill the host disk before the digest check
-could reject it.
+request that opens it, the header parse, and every body read: a watchdog shuts
+the connection's socket down when the deadline passes, so a server that
+trickles bytes, or stalls a close-delimited body, cannot hold the transfer
+open. Without these bounds a stalled or oversized response would fill the host
+disk before the digest check could reject it.
 
 The clock, connection factory, and metric sink all enter through
 `Environment`, so a test drives this public boundary with fakes instead of
@@ -24,6 +24,8 @@ import typing as typ
 import urllib.parse
 
 from scripts.pypy_download_deadline import (
+    _arm_socket,
+    _deadline_failures,
     _DeadlineWatchdog,
     _hop_timeout,
     _require_time_left,
@@ -53,8 +55,7 @@ if typ.TYPE_CHECKING:
 # Large enough for the pinned PyPy archive with room to spare, small enough
 # that a hostile or broken response cannot exhaust the host disk.
 _MAX_BODY_BYTES = 512 * 1024 * 1024
-# One deadline covers every redirect hop plus the body, so a server that
-# trickles bytes cannot extend the transfer indefinitely.
+# One deadline covers every hop, its request, and the body it streams.
 _TRANSFER_DEADLINE_SECONDS = 900.0
 # Bounded so a redirect loop fails to download rather than following hops
 # forever; a release asset is served in one or two hops.
@@ -302,32 +303,15 @@ def _fetch_body(
     transfer: _Transfer,
 ) -> str | None:
     """Save the response body, or resolve one redirect hop instead."""
-    # The header parse blocks inside `getresponse`, so the watchdog must start
-    # before it rather than beside the body copy.
     _require_time_left(transfer)
-    try:
-        with (
-            _DeadlineWatchdog(connection, transfer),
-            connection.getresponse() as response,
-        ):
-            redirect = _redirect_url(url, response)
-            if redirect is not None:
-                return redirect
-            _reject_oversize_declaration(response)
-            with destination.open("wb") as output:
-                _copy_body(response, output, transfer)
-            return None
-    except TimeoutError:
-        raise
-    except (OSError, http.client.HTTPException) as error:
-        # Both a shut-down socket and a parser that meets a truncated status
-        # line or chunk frame fail the transfer. Past the deadline the watchdog
-        # caused it, so report the deadline the caller waits for; before the
-        # deadline the failure is the server's and must surface unchanged.
-        if transfer.expired():
-            msg = "release download exceeded the transfer deadline"
-            raise TimeoutError(msg) from error
-        raise
+    with connection.getresponse() as response:
+        redirect = _redirect_url(url, response)
+        if redirect is not None:
+            return redirect
+        _reject_oversize_declaration(response)
+        with destination.open("wb") as output:
+            _copy_body(response, output, transfer)
+        return None
 
 
 def _reject_oversize_declaration(response: http.client.HTTPResponse) -> None:
@@ -383,14 +367,24 @@ def _download_once(
     """Close one hop's connection after saving its body or resolving a redirect."""
     connection, target = _connect(url, connect, _hop_timeout(transfer))
     try:
-        connection.request(
-            "GET",
-            target,
-            headers={"User-Agent": "cuprum-boundary-verification"},
-        )
-        return _fetch_body(connection, url, destination, transfer)
+        with _deadline_failures(transfer):
+            connection.connect()
+            _require_time_left(transfer)
+            with _DeadlineWatchdog(connection, transfer):
+                _send_request(connection, target, transfer)
+                return _fetch_body(connection, url, destination, transfer)
     finally:
         connection.close()
+
+
+def _send_request(
+    connection: http.client.HTTPSConnection, target: str, transfer: _Transfer
+) -> None:
+    """Send one GET bounded by the time the transfer has left."""
+    _arm_socket(connection, transfer)
+    connection.request(
+        "GET", target, headers={"User-Agent": "cuprum-boundary-verification"}
+    )
 
 
 def _digest(path: Path) -> str:

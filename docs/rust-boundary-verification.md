@@ -379,11 +379,14 @@ verification phases, then runs `cargo kani setup --use-local-bundle` against
 the pinned archive, so that command stays the single owner of native setup. The
 three downloads share one bounded transport: an oversized declared length is
 rejected before the destination opens, streamed bytes are counted against an
-asset ceiling, and redirects, header parsing, and the body are bounded by one
-monotonic deadline. The deadline does not cover host name resolution, which
-happens before the connection exists and is bounded only by the system
-resolver. Z3 lands at `.cache/boundary-z3/z3` for `VERUS_Z3_PATH`, and the Kani
-binary and cached archive stay under `.cache/boundary-kani`. The Makefile
+asset ceiling, and connection setup, the request, header parsing, and the body
+are bounded by one monotonic deadline. Each blocking phase is re-armed with the
+time that remains rather than the budget its hop opened with, because a socket
+timeout bounds one call rather than a sequence of them. The deadline does not
+cover host name resolution, which happens before the connection exists and is
+bounded only by the system resolver. Z3 lands at `.cache/boundary-z3/z3` for
+`VERUS_Z3_PATH`, and the Kani binary and cached archive stay under
+`.cache/boundary-kani`. The Makefile
 invokes the Verus binary directly for proofs rather than through the shared
 wrapper, whose version parser rejects the annotation
 `(overridden by environment variable RUSTUP_TOOLCHAIN)`.

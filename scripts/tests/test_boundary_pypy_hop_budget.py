@@ -41,6 +41,8 @@ def _budgeted_environment(
 #: The whole deadline with five seconds still to run, so the second hop is left
 #: with a budget far below the 60 s single-hop limit.
 _ALMOST_SPENT = 895.0
+#: Four seconds left: enough for two phases that each fit the hop's budget.
+_FOUR_LEFT = 896.0
 #: The deadline itself: past this the transfer has no time left.
 _SPENT = 900.0
 
@@ -123,6 +125,102 @@ class TestHopBudget:
         assert connection.getresponse.call_count == 0, (
             "connection setup is part of the hop's budget, so a transfer whose "
             "deadline passed while connecting must not go on to read a body"
+        )
+
+    def test_the_request_is_bounded_by_the_time_left_after_connecting(
+        self, tmp_path: Path
+    ) -> None:
+        """Connecting spends part of the hop; the request gets what remains."""
+        clock = manual_clock()
+        connection = mock.Mock()
+        sent: list[float] = []
+        connection.sock.settimeout.side_effect = sent.append
+        connection.getresponse.return_value = streaming_response(b"payload")
+
+        def connect() -> None:
+            """Spend five of the hop's sixty seconds connecting."""
+            clock.return_value = _ALMOST_SPENT
+
+        connection.connect.side_effect = connect
+        downloader._download(
+            "https://example.invalid/asset",
+            tmp_path / "binary",
+            _budgeted_environment(connection, clock=clock, budgets=[]),
+        )
+        assert sent == [pytest.approx(5.0)], (
+            "a socket timeout bounds one call, so the request must be sent "
+            "under the time left after connecting, not the hop's first budget"
+        )
+
+    def test_connection_setup_that_spends_the_deadline_sends_no_request(
+        self, tmp_path: Path
+    ) -> None:
+        """A connection that finishes after the deadline sends no request."""
+        clock = manual_clock()
+        connection = mock.Mock()
+
+        def connect() -> None:
+            """Spend the whole deadline inside the connection setup."""
+            clock.return_value = _SPENT
+
+        connection.connect.side_effect = connect
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            downloader._download(
+                "https://example.invalid/asset",
+                tmp_path / "binary",
+                _budgeted_environment(connection, clock=clock, budgets=[]),
+            )
+        assert connection.request.call_count == 0, (
+            "connecting is part of the hop's budget, so a setup that spends "
+            "the deadline must not go on to send a request"
+        )
+        assert connection.sock.settimeout.call_count == 0, (
+            "a spent transfer must not arm a socket for its request"
+        )
+
+    def test_phases_that_each_fit_the_budget_still_share_one_deadline(
+        self, tmp_path: Path
+    ) -> None:
+        """Connecting and requesting each inside the hop still meet the deadline."""
+        clock = manual_clock()
+        redirect = redirect_response("https://example.invalid/asset")
+
+        def redirect_header(name: str) -> str | None:
+            """Leave four seconds of the transfer's deadline."""
+            clock.return_value = _FOUR_LEFT
+            return "https://example.invalid/asset" if name == "Location" else None
+
+        redirect.getheader.side_effect = redirect_header
+        first, last = mock.Mock(), mock.Mock()
+        first.getresponse.return_value = redirect
+        sent: list[float] = []
+
+        def open_connection() -> None:
+            """Spend three of the four seconds the hop has left."""
+            clock.return_value = _SPENT - 1.0
+
+        def send_request(*_args: object, **_kwargs: object) -> None:
+            """Spend the rest of the deadline sending the request."""
+            clock.return_value = _SPENT + 0.5
+
+        last.connect.side_effect = open_connection
+        last.sock.settimeout.side_effect = sent.append
+        last.request.side_effect = send_request
+        # A body the transfer could have read makes the failure below the
+        # deadline's, not a mock's missing context manager.
+        last.getresponse.return_value = streaming_response(b"payload")
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            downloader._download(
+                "https://example.invalid/start",
+                tmp_path / "binary",
+                _budgeted_environment(first, last, clock=clock, budgets=[]),
+            )
+        assert sent == [pytest.approx(1.0)], (
+            "each phase fits the hop's budget, so only the recomputed time left "
+            "keeps their total inside the transfer's one deadline"
+        )
+        assert last.getresponse.call_count == 0, (
+            "the request outlived the deadline, so no body is read"
         )
 
 
