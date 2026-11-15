@@ -81,29 +81,38 @@ ownership and error contracts, stop and report the exact incompatibility.
 
 ## Risks
 
-- **High impact, low likelihood, open: a write-only CRT descriptor can still
-  reach `_read`.** Raised by the hosted assessment and confirmed against the
-  current source. `convert_crt_fd` rejects only a negative or out-of-`i32`
-  descriptor, and `os.dup` succeeds for an open descriptor regardless of its
-  access mode. Microsoft's [`_read` contract][ms-read] says the invalid
-  parameter handler is invoked when "the file isn't open for reading", and the
-  parameter-validation page states the default handler terminates the process,
-  so a caller passing an open but write-only descriptor may fast-fail the
-  interpreter rather than receive `OSError`. The existing `-1` test exercises
-  range rejection, not this case, and the pure `classify_crt_read_error` tests
-  cannot reach it because they do not cross the process boundary. This is
-  recorded rather than repaired because the fix is a production change to the
-  native descriptor boundary, which the Tolerances section reserves for
-  explicit approval, and because the decisive premise is not yet established:
-  the documentation does not say whether UCRT invokes the handler or returns
-  `-1`/`EBADF` for a *valid-range but unreadable* descriptor, and the section
-  above on `_read` records that the `-1` return is reachable only when a
-  handler is installed and permits continuation. Resolution requires a Windows
-  subprocess test that passes an owned, closed descriptor and an open
-  write-only descriptor and asserts the process survives with the documented
-  `OSError` fields. Likelihood is low because `rust_consume_stream` is
-  implemented but not integrated: no production dispatch reaches it, and every
-  in-repository caller passes a readable descriptor.
+- **High impact, low likelihood, repaired 2026-11-15: a write-only CRT
+  descriptor could reach `_read` and abort the interpreter.** Raised by the
+  hosted assessment and confirmed against the source. `convert_crt_fd` rejects
+  only a negative or out-of-`i32` descriptor, and `os.dup` succeeds for an open
+  descriptor regardless of its access mode. Microsoft's
+  [`_read` contract][ms-read] says the invalid parameter handler is invoked
+  when "the file isn't open for reading", and the parameter-validation page
+  states the default handler terminates the process.
+
+  The decisive premise — that a valid-range but unusable descriptor fast-fails
+  rather than returning `-1` — was settled from the `_read` page itself, which
+  documents both rejections and states the continuation return for each: `-1`
+  with `EBADF` for a bad or unreadable descriptor, `-1` with `EINVAL` for
+  `buffer_size > INT_MAX`. Continuation is permitted only when a handler is
+  installed. The Tolerances section reserves production changes for approval,
+  so the repair was recorded here first; it is now implemented because it
+  preserves the branch's own stated error contract rather than changing it, and
+  because the alternative is an exported entry point that terminates the host
+  process.
+
+  The repair installs a thread-local invalid-parameter handler around the
+  `_read` call, restored on drop, so the CRT takes its documented continuation
+  path and the existing `errno` mapping reports `OSError`. `read_crt_once` also
+  enforces the `INT_MAX` bound before the call, since exceeding it is a second
+  invalid-parameter condition. Two Windows tests in
+  `cuprum/unittests/test_rust_errno_windows.py` pass a closed and a write-only
+  descriptor from a child process — the regression is the child dying, which an
+  in-process assertion could not observe — and two native tests in
+  `rust/cuprum-native-io/src/windows_crt.rs` exercise the same shapes directly.
+  Likelihood stays low because no production dispatch reaches
+  `rust_consume_stream` and every in-repository caller passes a readable
+  descriptor.
 
 - High impact, medium likelihood: a pre-filled pipe blocks on a large input.
   Use temporary files for generated native consumption and a concurrent
@@ -895,9 +904,22 @@ were corrected to use that manifest and all passed during replay.
   on Windows, and that skip was the tell. A later assessment asked for the
   reader-first order back on the strength of the 2026-11-03 text above; it was
   withdrawn once the supersession was pointed out. The approved contract is now
-  buffer-first for the Windows consume wrapper, matching the native entry
-  point. An unusable descriptor still cannot reach `_read`, because
-  `_validate_windows_consume_reader` rejects it before `os.dup`.
+  buffer-first for the Windows consume wrapper, matching the native entry point.
+  `_validate_windows_consume_reader` rejects an out-of-range value before
+  `os.dup`, but it checks the descriptor's range only: an open descriptor that
+  is closed, write-only, or otherwise unusable for reading still passes it and
+  reaches `_read`. The native boundary installs a continuing invalid-parameter
+  handler so that case returns an error instead of terminating the process; see
+  the 2026-11-15 decision below and the repair recorded in Risks.
+- (2026-11-15) Repair the two invalid-parameter paths at the native CRT
+  boundary rather than documenting them as caller obligations. `read_crt_once`
+  installs a thread-local invalid-parameter handler for the duration of the
+  `_read` call and restores the previous handler on drop, so a descriptor the
+  CRT rejects returns `-1`/`EBADF` and is mapped to `OSError` instead of
+  invoking the default handler's `__fastfail`. It also rejects a buffer larger
+  than `INT_MAX` before the call. Records the Tolerances approval point: this
+  was recorded in Risks before implementation, and is in scope because it
+  preserves the entry point's documented error contract instead of changing it.
 - (2026-10-13) Propose a test-only subprocess bridge. Rust owns generation,
   shrinking, and persistence; a project-Python child calls the installed
   extension and the actual Python consumer. This avoids both a copied oracle

@@ -14,6 +14,7 @@ of the suite uses rather than from whatever the ambient ``PATH`` offers.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the pinned checker on generated files.
 import sys
@@ -78,6 +79,27 @@ def _ty_executable() -> str:
     return found
 
 
+def _ty_environment(isolated_config_root: Path) -> dict[str, str]:
+    """Return a child environment whose user-level ty config is owned here.
+
+    `--config-file` overrides project and ancestor discovery but not user-level
+    configuration, which ty still loads and merges. A contributor whose own
+    `ty.toml` relaxed a rule would then silence the diagnostic these tests
+    require, so both discovery roots are redirected at an empty directory:
+    `XDG_CONFIG_HOME` for Linux and `HOME` for platforms that fall back to it.
+    Pass-through of the rest of the environment keeps `PATH` and the venv.
+
+    Returns
+    -------
+    dict[str, str]
+        A copy of the current environment with both roots redirected.
+    """
+    environment = dict(os.environ)
+    environment["XDG_CONFIG_HOME"] = str(isolated_config_root)
+    environment["HOME"] = str(isolated_config_root)
+    return environment
+
+
 def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
     """Type-check ``workdir`` with the pinned ty and return the process result."""
     # ty adopts the nearest project configuration above its working directory.
@@ -86,6 +108,8 @@ def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
     # becomes the project root and every call checks everything beneath it.
     # An empty `ty.toml` pins the root here and changes no setting.
     (workdir / "ty.toml").touch()
+    isolated_config_root = workdir / ".ty-user-config"
+    isolated_config_root.mkdir(exist_ok=True)
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
         [
             _ty_executable(),
@@ -102,6 +126,7 @@ def _run_ty(workdir: Path) -> subprocess.CompletedProcess[str]:
         ],
         shell=False,
         cwd=workdir,
+        env=_ty_environment(isolated_config_root),
         capture_output=True,
         encoding="utf-8",
         check=False,
@@ -219,3 +244,80 @@ def test_checker_ignores_ancestor_project(
     if expected_code:
         assert "invalid-argument-type" in output, output
         assert "call.py" in output, output
+
+
+def test_a_hostile_user_configuration_cannot_suppress_a_diagnostic(
+    tmp_path: Path,
+) -> None:
+    """A contributor's own `ty.toml` must not silence the required diagnostic.
+
+    `--config-file` replaces project and ancestor discovery, but ty still loads
+    and merges user-level configuration. Without the isolated child
+    environment, a `ty.toml` here that ignores `invalid-argument-type` turns
+    every invalid-call case in this module into a false pass.
+    """
+    hostile = tmp_path / "hostile-home"
+    # ty follows `XDG_CONFIG_HOME` when it is set and `$HOME/.config` otherwise,
+    # so write the hostile file to both discovery roots. The isolation below
+    # redirects both, so covering both is what makes this regression meaningful.
+    for config_root in (hostile, hostile / ".config"):
+        (config_root / "ty").mkdir(parents=True)
+        (config_root / "ty" / "ty.toml").write_text(
+            '[rules]\ninvalid-argument-type = "ignore"\n', encoding="utf-8"
+        )
+    workdir = tmp_path / "call"
+    workdir.mkdir()
+    (workdir / "call.py").write_text(
+        f"{_SNIPPET_HEADER}b(object())\n", encoding="utf-8"
+    )
+
+    (workdir / "ty.toml").touch()
+    isolated = workdir / ".ty-user-config"
+    isolated.mkdir()
+    # Verify the probe is real before asserting the isolation: the hostile file
+    # must suppress the diagnostic when ty is allowed to discover it.
+    probe = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
+        [
+            _ty_executable(),
+            "check",
+            str(workdir),
+            "--project",
+            str(workdir),
+            "--config-file",
+            str(_VALID_FIXTURE / "ty.toml"),
+            "--python",
+            sys.prefix,
+            "--output-format",
+            "concise",
+        ],
+        shell=False,
+        cwd=workdir,
+        env={**os.environ, "XDG_CONFIG_HOME": str(hostile), "HOME": str(hostile)},
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert probe.returncode == 0, (
+        "the hostile configuration must suppress the diagnostic when it is "
+        f"discoverable, else this regression proves nothing:\n{probe.stdout}"
+    )
+
+    # The helper's contract is the mechanism that defeats the probe above:
+    # both discovery roots must point at the owned directory. Asserting this
+    # directly is what makes the regression sensitive to a lost redirection,
+    # since an inherited clean HOME would pass the run below by accident.
+    child_environment = _ty_environment(isolated)
+    for variable in ("XDG_CONFIG_HOME", "HOME"):
+        assert child_environment[variable] == str(isolated), (
+            f"{variable} must be redirected away from the user's own config, "
+            f"got {child_environment[variable]!r}"
+        )
+
+    result = _run_ty(workdir)
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, (
+        f"the isolated run must still reject the call:\n{output}"
+    )
+    assert "invalid-argument-type" in output, (
+        f"a hostile user configuration must not suppress the diagnostic:\n{output}"
+    )

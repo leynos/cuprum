@@ -7,7 +7,11 @@ import typing as typ
 import pytest
 
 from cuprum import _rust_backend, _streams_rs
-from tests.helpers.consume_boundary_oracle import _capture_python, check_payload
+from tests.helpers.consume_boundary_oracle import (
+    _capture_python,
+    _is_streamed_witness,
+    check_payload,
+)
 
 
 @pytest.fixture(name="native_extension")
@@ -171,4 +175,44 @@ def test_incomplete_mebibyte_capture_drains_a_concurrent_producer() -> None:
     )
     assert metadata.reader_open_checks == len(metadata.native_captures), (
         "native consume must borrow every reader through its complete lifetime"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "length", "tail", "is_witness"),
+    [
+        ("named witness", 1_048_577, b"\xe2\x98", True),
+        # Same length, other tail: every committed named case for this length
+        # uses a three-byte tail, so this states the guard the oracle relies on.
+        ("named length, other tail", 1_048_577, b"\xe2\x98\x83", False),
+        # Same tail, other length: the payload cannot reach the producer intact.
+        ("named tail, other length", 1_048_574, b"\xe2\x98", False),
+        # Right length and tail, wrong prefix: the producer streams a repeated
+        # pattern, so a payload built from anything else is not reconstructible.
+        ("wrong prefix", 1_048_577, b"\xe2\x98", False),
+    ],
+)
+def test_the_streamed_witness_requires_the_whole_named_shape(
+    label: str,
+    length: int,
+    tail: bytes,
+    *,
+    is_witness: bool,
+) -> None:
+    """Only a fully reconstructible payload may select the subprocess path.
+
+    A length-and-tail test admits payloads the producer cannot emit, which
+    would fail the parity run with a "named boundary pattern" error instead of
+    the guard simply declining to run. Checking the complete shape keeps the
+    witness's own precondition where the witness is selected.
+    """
+    payload = (
+        _patterned_large_payload(length, tail)
+        if label != "wrong prefix"
+        else b"x" * (length - len(tail)) + tail
+    )
+
+    assert _is_streamed_witness(payload) is is_witness, (
+        f"{label} must {'select' if is_witness else 'not select'} the streamed "
+        f"witness, got {_is_streamed_witness(payload)}"
     )

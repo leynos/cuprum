@@ -18,6 +18,7 @@ import contextlib
 import ctypes
 import errno
 import os
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed interpreter and source.
 import sys
 import typing as typ
 
@@ -27,6 +28,7 @@ from cuprum import _streams_windows
 from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
     INVALID_FD_MESSAGE_RE,
+    INVALID_FD_WINERRORS,
 )
 
 if typ.TYPE_CHECKING:
@@ -178,6 +180,74 @@ def test_binary_consume_preserves_crlf_and_ctrl_z(
         for fd in (read_fd, write_fd):
             with contextlib.suppress(OSError):
                 os.close(fd)
+
+
+_UNUSABLE_DESCRIPTOR_SOURCE = (
+    "import os, sys\n"
+    "mode = sys.argv[1]\n"
+    "reader, writer = os.pipe()\n"
+    "os.close(reader)\n"
+    "if mode == 'closed':\n"
+    " os.close(writer)\n"
+    " value = reader\n"
+    "else:\n"
+    " value = writer\n"
+    "from cuprum import _rust_backend_native as native\n"
+    "try:\n"
+    " native.rust_consume_stream(value)\n"
+    "except OSError as error:\n"
+    " print('OSError', error.errno, error.winerror)\n"
+    "else:\n"
+    " print('NO-ERROR')\n"
+)
+
+
+@_windows_only
+@pytest.mark.parametrize("mode", ["closed", "write-only"])
+def test_direct_consume_reports_an_unusable_descriptor(
+    mode: str,
+    rust_streams: ModuleType,
+) -> None:
+    """A descriptor ``_read`` rejects must return an error, not abort Python.
+
+    ``_read`` invokes the invalid parameter handler when a descriptor is closed
+    or not open for reading, and the default handler terminates the process.
+    The native boundary installs a continuing handler, so the same descriptor
+    must surface as an ``OSError``. This runs in a child process because the
+    regression it guards is the child dying: an in-process assertion could not
+    report that outcome. The descriptor is derived inside the child so the
+    number refers to that process's descriptor table, not this one's.
+    """
+    native = rust_streams._load_native()
+    assert hasattr(native, "rust_consume_stream"), (
+        "the exported native consume entry must stay reachable for direct callers"
+    )
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed interpreter and source.
+        [sys.executable, "-c", _UNUSABLE_DESCRIPTOR_SOURCE, mode],
+        shell=False,
+        capture_output=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"consume on a {mode} descriptor must not terminate the interpreter; "
+        f"exit {completed.returncode}, stdout={completed.stdout!r}, "
+        f"stderr={completed.stderr!r}"
+    )
+    reported = completed.stdout.split()
+    # Require the full field count before indexing, so a short or unexpected
+    # line reports the observed output instead of raising IndexError.
+    assert len(reported) >= 3, (
+        f"consume on a {mode} descriptor must report the error's errno and "
+        f"winerror, got {completed.stdout!r}"
+    )
+    assert reported[0] == "OSError", (
+        f"consume on a {mode} descriptor must report OSError, got {completed.stdout!r}"
+    )
+    assert {reported[1], reported[2]} & {str(code) for code in INVALID_FD_WINERRORS}, (
+        f"a {mode} descriptor must report an invalid-descriptor code, got "
+        f"errno={reported[1]!r} winerror={reported[2]!r}"
+    )
 
 
 @_windows_only

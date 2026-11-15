@@ -251,13 +251,17 @@ def rust_pump_stream(
 
 
 def _validate_windows_consume_reader(reader_fd: int) -> int:
-    """Reject a CRT descriptor the Windows consume boundary cannot accept.
+    """Reject a CRT descriptor outside the range the Windows boundary accepts.
 
     The checks mirror the native entry point's, but run before ``os.dup``:
     duplicating first would surface ``os.dup``'s ``OSError`` for a descriptor
-    the caller was promised as ``ValueError``, and the duplicate would carry an
-    invalid value into a CRT call that fast-fails the process rather than
-    raising.
+    the caller was promised as ``ValueError``.
+
+    Only the descriptor's range is established here. Whether it is open, open
+    for reading, and synchronous is not observable from an ``int``; the native
+    boundary reports those conditions as ``OSError`` rather than terminating
+    the process, because ``_read`` would otherwise invoke the invalid parameter
+    handler's default fast-fail.
 
     Parameters
     ----------

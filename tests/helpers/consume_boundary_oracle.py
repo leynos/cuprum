@@ -19,7 +19,10 @@ import cyclopts
 from cuprum._stream_config import _StreamConfig
 from cuprum._streams import _consume_stream
 from cuprum.capture_policy import FullCapture
-from tests.helpers.consume_boundary_subprocess import capture_from_producer
+from tests.helpers.consume_boundary_subprocess import (
+    capture_from_producer,
+    is_streamable_payload,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -32,6 +35,17 @@ if typ.TYPE_CHECKING:
 # for an extra child process on every case.
 _STREAMED_PAYLOAD_LENGTH = 1_048_577
 _STREAMED_PAYLOAD_TAIL = b"\xe2\x98"
+
+
+def _is_streamed_witness(payload: bytes) -> bool:
+    """Report whether ``payload`` is the exact shape the subprocess can stream."""
+    # `capture_from_producer` can only rebuild the named boundary pattern, so a
+    # length-and-tail test alone would select a payload the producer cannot emit
+    # and fail with a misleading "named boundary pattern" error. Match the whole
+    # shape so the subprocess witness runs only when it is reconstructible.
+    return len(payload) == _STREAMED_PAYLOAD_LENGTH and is_streamable_payload(
+        payload, _STREAMED_PAYLOAD_TAIL
+    )
 
 
 class _BoundaryFailure(enum.StrEnum):
@@ -341,9 +355,7 @@ def check_payload(payload: bytes, buffer_size: int) -> _OracleMetadata:
         native_captures.append(captured)
 
     reader_open_checks = len(native_captures)
-    if len(payload) == _STREAMED_PAYLOAD_LENGTH and payload.endswith(
-        _STREAMED_PAYLOAD_TAIL
-    ):
+    if _is_streamed_witness(payload):
         captured = capture_from_producer(
             payload,
             _STREAMED_PAYLOAD_TAIL,

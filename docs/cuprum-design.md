@@ -4080,8 +4080,10 @@ def rust_consume_stream(
     Notes
     -----
     The Python wrapper makes Windows reads binary and preserves the caller's
-    CRT descriptor. Direct extension calls on Windows require an open binary-
-    mode CRT descriptor for the duration of the call.
+    CRT descriptor. Direct extension calls on Windows require an open
+    binary-mode CRT descriptor, readable and suitable for synchronous ``_read``,
+    for the duration of the call. The native entry validates the descriptor's
+    range only; it does not establish access mode or synchronous suitability.
 
     """
     ...

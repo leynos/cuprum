@@ -70,6 +70,24 @@ def _expected_prefix(payload: bytes, tail: bytes) -> bytes:
     return (pattern * repetitions)[:prefix_length]
 
 
+def is_streamable_payload(payload: bytes, tail: bytes) -> bool:
+    """Report whether this helper can reproduce ``payload`` byte for byte.
+
+    The producer streams a repeated ``cuprum-boundary/`` prefix followed by
+    ``tail``, so a caller that selects this path on some other shape gets a
+    ``ValueError`` from `capture_from_producer`. Querying the precondition first
+    lets a caller decline the witness instead of tripping over it.
+
+    Returns
+    -------
+    bool
+        ``True`` when ``payload`` is the prefix pattern plus ``tail``.
+    """
+    if not payload.endswith(tail):
+        return False
+    return payload == _expected_prefix(payload, tail) + tail
+
+
 def _start_producer(payload: bytes, tail: bytes) -> subprocess.Popen[bytes]:
     """Launch the fixed Python producer of ``payload`` on its standard output."""
     return subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed interpreter and source.

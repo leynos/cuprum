@@ -316,23 +316,30 @@ def test_modern_extension_selects_its_toolchain_for_the_parity_run() -> None:
     caller's choice explicit instead of inferring it from ambient variables.
     """
     extension = dry_run("modern-stable-extension")
-    assert "PARITY_CARGO='env " in extension, (
+    # Read the assignment's own value rather than the whole expansion: the
+    # modern route emits its environment on several commands, so a search over
+    # the full output would still pass after the parity call lost an entry.
+    assigned = re.search(r"PARITY_CARGO='([^']*)'", extension)
+    assert assigned is not None, (
         "the modern route must pass its environment to the parity lane"
     )
+    parity_cargo = assigned.group(1)
     for expected in (
         f"RUSTUP_TOOLCHAIN={MODERN_STABLE_TOOLCHAIN}",
         "CARGO_BUILD_WARNINGS=deny",
     ):
-        assert expected in extension, (
-            f"the modern parity run must inherit {expected}; got: {extension}"
+        assert expected in parity_cargo, (
+            f"the modern parity run must inherit {expected}; got: {parity_cargo}"
         )
 
     # The target directory is defined against `$(CURDIR)` and expands to an
     # absolute path, so pin the distinctive suffix rather than a checkout
     # location the test cannot know.
-    assert re.search(r"CARGO_TARGET_DIR=\S*" + MODERN_STABLE_TARGET_DIR, extension), (
+    assert re.search(
+        r"CARGO_TARGET_DIR=\S*" + MODERN_STABLE_TARGET_DIR, parity_cargo
+    ), (
         "the modern parity run must use the dedicated modern-stable target "
-        f"directory; got: {extension}"
+        f"directory; got: {parity_cargo}"
     )
 
     ordinary = dry_run("test-boundary-parity")

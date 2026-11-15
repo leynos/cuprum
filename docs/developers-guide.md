@@ -5648,8 +5648,9 @@ best available and is used unchanged.
 
 `cuprum/unittests/test_rust_errno.py` covers POSIX error conversion. The
 Windows module `test_rust_errno_windows.py` checks that pump still rejects raw
-handles and that native consume preserves the CRT invalid-descriptor code as
-`OSError.winerror` and `OSError.errno`.
+handles and that consume rejects a descriptor outside the CRT's range with a
+`ValueError` before the CRT is called. Its `OSError.errno` assertion covers the
+binary-mode setup helper, not native consume.
 
 The POSIX conversion is tested natively; the Windows integration test exercises
 a different boundary, so a green run does not establish conversion coverage on
