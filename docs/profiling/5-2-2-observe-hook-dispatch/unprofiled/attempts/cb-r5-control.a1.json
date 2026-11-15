@@ -4,7 +4,7 @@
   "exit_code": 0,
   "fixture_manifest_hash": "51394f18e57972a681a2eb97c7c477d02d1d15b175247f518a60c331319774cc",
   "fixture_path": "dist/fixtures/seed12345-wrap76.b64",
-  "lock_wait_seconds": 1.7099082469940186e-06,
+  "lock_wait_seconds": 7.003545761108398e-07,
   "mode": "echo",
   "read_size": 65536,
   "reentrant_rejection_count": 0,
@@ -14,6 +14,24 @@
   "stages": 1,
   "status": "ok",
   "stdout_line_count": 28256364,
-  "wall_time_seconds": 182.28598529892042,
+  "stream_telemetry": {
+    "groups": {
+      "stream_drain": {
+        "eof": {
+          "bytes_consumed": 2175740011,
+          "duration_seconds": 505.46513178851455,
+          "operation_count": 2,
+          "read_operations": 33202
+        }
+      }
+    },
+    "totals": {
+      "bytes_consumed": 2175740011,
+      "duration_seconds": 505.46513178851455,
+      "operation_count": 2,
+      "read_operations": 33202
+    }
+  },
+  "wall_time_seconds": 252.7355702589266,
   "with_line_callbacks": true
 }

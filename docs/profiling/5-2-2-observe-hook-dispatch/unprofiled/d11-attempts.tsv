@@ -1,0 +1,11 @@
+pass	round	attempt	max_load_control	max_load_candidate	median_load_control	median_load_candidate	host_busy_control	host_busy_candidate	admitted	reason
+4	1	1	37.30	34.62	31.31	31.54	0.5433	0.5489	yes	admitted
+4	2	1	29.35	34.96	26.49	29.34	0.4583	0.5462	no	candidate burst 34.96 above 34.62
+4	2	2	30.45	38.14	26.73	31.60	0.5039	0.5057	no	candidate burst 38.14 above 36.27; arm medians differ by 4.88
+4	2	3	43.36	37.70	34.14	33.76	0.6055	0.6252	no	control burst 43.36 above 42.35
+4	2	4	39.12	30.78	31.19	28.80	0.6112	0.4828	no	arm maxima differ by 8.34; host busy shares differ by 0.128
+4	3	1	40.06	21.53	22.34	15.11	0.7027	0.5433	no	arm medians differ by 7.23; control maximum 40.06 is above 20.50 + 15; host busy shares differ by 0.159
+4	3	2	22.68	22.22	16.31	14.05	0.5187	0.4839	yes	admitted
+4	4	1	20.06	22.79	16.06	16.04	0.5781	0.5126	yes	admitted
+4	5	1	21.08	19.43	15.00	15.59	0.5112	0.5427	yes	admitted
+4	6	1	17.27	16.24	13.34	11.84	0.4785	0.3884	yes	admitted
