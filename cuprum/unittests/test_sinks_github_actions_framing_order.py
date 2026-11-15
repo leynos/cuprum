@@ -24,9 +24,22 @@ from tests.helpers.github_actions_frames import buffered_log
 if typ.TYPE_CHECKING:
     from cuprum.sinks.github_actions import GitHubActionsSession
 
+_LEASE_ID = "0123456789abcdef"
 _GROUP_OPEN = "::group::project: program\n"
+_STOP_FRAME = f"::stop-commands::{_LEASE_ID}\n"
+_RESUME = f"::{_LEASE_ID}::\n"
 _ENDGROUP = "::endgroup::\n"
 _ANNOTATION = "::error title=project%3A program::exit_nonzero\n"
+_TERMINAL = f"{_RESUME}{_ENDGROUP}"
+
+
+@pytest.fixture(autouse=True)
+def _fixed_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin every session's stop token so expected frames are exact."""
+    monkeypatch.setattr(
+        "cuprum.sinks.github_actions._new_stop_token",
+        lambda: _LEASE_ID,
+    )
 
 
 def _open_session(sink: GitHubActionsSink) -> GitHubActionsSession:
@@ -36,83 +49,48 @@ def _open_session(sink: GitHubActionsSink) -> GitHubActionsSession:
     return session
 
 
-def test_buffered_log_receives_opening_frames_before_return(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_buffered_log_receives_opening_frames_before_return() -> None:
     """Opening framing is flushed to the byte buffer, not left in the wrapper."""
-    monkeypatch.setattr(
-        "cuprum.sinks.github_actions._new_stop_token",
-        lambda: "0123456789abcdef",
-    )
     log, raw = buffered_log()
     sink = GitHubActionsSink(log, force=True)
 
     _open_session(sink)
 
-    expected = f"{_GROUP_OPEN}::stop-commands::0123456789abcdef\n".encode()
+    expected = f"{_GROUP_OPEN}{_STOP_FRAME}".encode()
     assert raw.getvalue() == expected, (
         f"opening frames must reach the byte buffer unflushed-free; "
         f"got {raw.getvalue()!r}"
     )
 
 
-def test_buffered_log_receives_successful_terminal_frames_before_return(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_buffered_log_receives_successful_terminal_frames_before_return() -> None:
     """A successful close flushes the lease release and the endgroup."""
-    monkeypatch.setattr(
-        "cuprum.sinks.github_actions._new_stop_token",
-        lambda: "0123456789abcdef",
-    )
     log, raw = buffered_log()
     session = _open_session(GitHubActionsSink(log, force=True))
 
     session.close(SessionOutcome(TerminalOutcome.EXIT_ZERO, exit_code=0))
 
-    expected = (
-        f"{_GROUP_OPEN}"
-        "::stop-commands::0123456789abcdef\n"
-        "::0123456789abcdef::\n"
-        f"{_ENDGROUP}"
-    ).encode()
+    expected = f"{_GROUP_OPEN}{_STOP_FRAME}{_TERMINAL}".encode()
     assert raw.getvalue() == expected, (
         f"terminal frames must reach the byte buffer on close; got {raw.getvalue()!r}"
     )
 
 
-def test_buffered_log_receives_failure_annotation_before_return(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_buffered_log_receives_failure_annotation_before_return() -> None:
     """A failed close flushes the annotation after the terminal frame."""
-    monkeypatch.setattr(
-        "cuprum.sinks.github_actions._new_stop_token",
-        lambda: "0123456789abcdef",
-    )
     log, raw = buffered_log()
     session = _open_session(GitHubActionsSink(log, force=True))
 
     session.close(SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1))
 
-    expected = (
-        f"{_GROUP_OPEN}"
-        "::stop-commands::0123456789abcdef\n"
-        "::0123456789abcdef::\n"
-        f"{_ENDGROUP}"
-        f"{_ANNOTATION}"
-    ).encode()
+    expected = f"{_GROUP_OPEN}{_STOP_FRAME}{_TERMINAL}{_ANNOTATION}".encode()
     assert raw.getvalue() == expected, (
         f"the annotation must reach the byte buffer on close; got {raw.getvalue()!r}"
     )
 
 
-def test_annotation_only_close_flushes_without_opening_frames(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_annotation_only_close_flushes_without_opening_frames() -> None:
     """A group-less failure writes and flushes exactly one annotation."""
-    monkeypatch.setattr(
-        "cuprum.sinks.github_actions._new_stop_token",
-        lambda: "0123456789abcdef",
-    )
     log, raw = buffered_log()
     sink = GitHubActionsSink(log, force=True, emit_group=False)
     session = _open_session(sink)
@@ -149,7 +127,7 @@ class _RecordingLog:
 
 
 _TERMINAL_EVENTS = (
-    ("write", "::0123456789abcdef::\n"),
+    ("write", _RESUME),
     ("write", _ENDGROUP),
     ("flush", ""),
 )
@@ -195,7 +173,6 @@ def test_close_flushes_every_framing_block_it_writes(
     framing: tuple[bool, bool],
     outcome: TerminalOutcome,
     expected_events: tuple[tuple[str, str], ...],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Each close path writes its frames and then flushes them once.
 
@@ -203,10 +180,6 @@ def test_close_flushes_every_framing_block_it_writes(
     per line rather than one per framing block, would not keep a multi-line
     frame atomic.
     """
-    monkeypatch.setattr(
-        "cuprum.sinks.github_actions._new_stop_token",
-        lambda: "0123456789abcdef",
-    )
     emit_group, emit_annotation = framing
     log = _RecordingLog()
     sink = GitHubActionsSink(
