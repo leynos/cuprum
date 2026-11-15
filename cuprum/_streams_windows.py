@@ -1,4 +1,31 @@
-"""Windows descriptor and handle adapters for native stream calls."""
+"""Windows descriptor and handle adapters for native stream calls.
+
+Windows is the one platform where a Python descriptor cannot be handed to the
+extension's stream entry points unchanged, so the translation lives here rather
+than in the shared wrapper:
+
+- ``cuprum/_streams_rs.py`` imports this module for its native pump call, which
+  transfers a writer handle, and for its native consume call, which transfers a
+  CRT descriptor. It also re-exports the helpers so the parity harness in
+  ``tests/helpers/consume_boundary_oracle.py`` can reach the same code path the
+  wrapper uses rather than reimplementing it.
+- ``rust_pump_stream`` receives an owned, duplicated Win32 handle;
+  ``_duplicate_windows_handle`` and ``_close_windows_handle`` are what make that
+  transfer possible, and ``_transfer_writer_fd_for_platform`` is the single
+  place a CRT descriptor is converted into one.
+- ``rust_consume_stream`` gets a duplicated binary-mode reader from
+  ``_duplicate_binary_reader``, which closes it again after the call. The
+  native boundary takes a further duplicate of its own, so a direct caller that
+  skips this wrapper is equally safe; see
+  ``rust/cuprum-native-io/src/windows_crt.rs``. Both duplicates exist for
+  different reasons — this one so the caller's translation mode is untouched
+  before the GIL is released, the native one so the detached read cannot be
+  raced by a close — and neither substitutes for the other.
+
+Everything here is Windows-only and imports its Win32 dependencies inside the
+function that needs them, so importing this module on another platform is
+harmless and the failure of a missing API names the call that wanted it.
+"""
 
 from __future__ import annotations
 

@@ -182,58 +182,92 @@ def test_binary_consume_preserves_crlf_and_ctrl_z(
                 os.close(fd)
 
 
+# The import comes first: importing the extension can itself create and close
+# CRT descriptors, so a descriptor created before the import could be silently
+# shadowed by a freed number the import reused.
 _UNUSABLE_DESCRIPTOR_SOURCE = (
     "import os, sys\n"
+    "from cuprum import _rust_backend_native as native\n"
     "mode = sys.argv[1]\n"
     "reader, writer = os.pipe()\n"
-    "os.close(reader)\n"
     "if mode == 'closed':\n"
-    " os.close(writer)\n"
+    " os.close(reader)\n"
     " value = reader\n"
     "else:\n"
     " value = writer\n"
-    "from cuprum import _rust_backend_native as native\n"
     "try:\n"
     " native.rust_consume_stream(value)\n"
     "except OSError as error:\n"
     " print('OSError', error.errno, error.winerror)\n"
     "else:\n"
     " print('NO-ERROR')\n"
+    "finally:\n"
+    " for fd in (reader, writer):\n"
+    "  try:\n"
+    "   os.close(fd)\n"
+    "  except OSError:\n"
+    "   pass\n"
 )
+
+
+def _derived_errno(winerror: int) -> int | None:
+    """Return the ``errno`` CPython derives for a ``winerror``.
+
+    Asking CPython rather than restating the mapping keeps the expected value
+    honest: if the extension ever passed its Win32 code in the ``errno`` slot
+    instead, the two fields would disagree with this and the test would fail.
+
+    Parameters
+    ----------
+    winerror : int
+        Win32 error code the native boundary reports.
+
+    Returns
+    -------
+    int | None
+        The ``errno`` CPython associates with that code.
+    """
+    return OSError(0, "probe", None, winerror, None).errno
 
 
 @_windows_only
 @pytest.mark.parametrize(
-    ("mode", "expected_code"),
+    ("mode", "expected_winerror"),
     [
-        # A closed descriptor is the CRT's `EBADF`, which the classifier
-        # rewrites to `ERROR_INVALID_HANDLE` so the Win32 reading is uniform.
-        ("closed", str(_ERROR_INVALID_HANDLE)),
-        # An open but unreadable descriptor fails inside `ReadFile` with
-        # `ERROR_ACCESS_DENIED`, so the Win32 code is the one reported. It is
-        # not an invalid-handle condition and must not be folded into the code
-        # above; nor is it the CRT's `EACCES`, which happens to be that number
-        # only on this platform's errno table and means nothing to Win32.
-        ("write-only", str(_ERROR_ACCESS_DENIED)),
+        # A closed descriptor is rejected by the CRT's `_dup`, which reports
+        # `EBADF`; the classifier rewrites that to `ERROR_INVALID_HANDLE` so
+        # the Win32 reading is uniform with every other native error.
+        ("closed", _ERROR_INVALID_HANDLE),
+        # An open but unreadable descriptor duplicates successfully and then
+        # fails inside `ReadFile` with `ERROR_ACCESS_DENIED`. It is not an
+        # invalid-handle condition and must not be folded into the code above;
+        # nor is it the CRT's `EACCES`, which shares that number only on this
+        # platform's errno table and means nothing to Win32.
+        ("write-only", _ERROR_ACCESS_DENIED),
     ],
     ids=("closed", "write-only"),
 )
 def test_direct_consume_reports_an_unusable_descriptor(
     mode: str,
-    expected_code: str,
+    expected_winerror: int,
     rust_streams: ModuleType,
 ) -> None:
-    """A descriptor ``_read`` rejects must return an error, not abort Python.
+    """An unusable descriptor must return an error, not abort Python.
 
-    ``_read`` invokes the invalid parameter handler when a descriptor is closed
-    or not open for reading, and the default handler terminates the process.
-    The native boundary installs a continuing handler, so the same descriptor
-    must surface as an ``OSError`` with the code the CRT picked for that
-    condition — the two modes are not interchangeable, which is why each names
-    its own expected code. This runs in a child process because the regression
-    it guards is the child dying: an in-process assertion could not report that
+    The CRT treats an unreadable descriptor as an invalid parameter, and its
+    default handler terminates the process. The native boundary installs a
+    continuing handler, so the same descriptor must surface as an ``OSError``
+    — the two modes are not interchangeable, which is why each names its own
+    expected code. This runs in a child process because the regression it
+    guards is the child dying: an in-process assertion could not report that
     outcome. The descriptor is derived inside the child so the number refers to
     that process's descriptor table, not this one's.
+
+    The two error fields are asserted separately. On Windows the native
+    boundary passes the Win32 code in the ``winerror`` slot and CPython derives
+    ``errno`` from it, so a check that accepted the value in either field could
+    not tell a correct hand-off from one that put a Win32 number where an
+    ``errno`` belongs.
     """
     native = rust_streams._load_native()
     assert hasattr(native, "rust_consume_stream"), (
@@ -245,6 +279,10 @@ def test_direct_consume_reports_an_unusable_descriptor(
         capture_output=True,
         encoding="utf-8",
         check=False,
+        # The child imports the extension and opens a pipe, so it should finish
+        # in well under a second. A bound keeps a wedged child from hanging the
+        # suite for pytest-timeout's whole budget and reports it as this test.
+        timeout=60,
     )
     assert completed.returncode == 0, (
         f"consume on a {mode} descriptor must not terminate the interpreter; "
@@ -261,8 +299,13 @@ def test_direct_consume_reports_an_unusable_descriptor(
     assert reported[0] == "OSError", (
         f"consume on a {mode} descriptor must report OSError, got {completed.stdout!r}"
     )
-    assert expected_code in reported[1:], (
-        f"a {mode} descriptor must report code {expected_code}, got "
+    assert reported[2] == str(expected_winerror), (
+        f"a {mode} descriptor must report WinError {expected_winerror}, got "
+        f"errno={reported[1]!r} winerror={reported[2]!r}"
+    )
+    assert reported[1] == str(_derived_errno(expected_winerror)), (
+        f"a {mode} descriptor must carry the errno CPython derives for "
+        f"winerror {expected_winerror}, not the Win32 code itself, got "
         f"errno={reported[1]!r} winerror={reported[2]!r}"
     )
 

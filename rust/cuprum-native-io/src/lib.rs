@@ -309,4 +309,9 @@ pub use windows::{
 #[cfg(all(test, windows))]
 pub(crate) use windows::{fd_is_open, handle_is_inheritable};
 #[cfg(windows)]
-pub use windows_crt::{BorrowedCrtFileDescriptor, borrow_crt_reader, read_crt_once};
+pub use windows_crt::{
+    BorrowedCrtFileDescriptor,
+    OwnedCrtFileDescriptor,
+    duplicate_crt_reader,
+    read_crt_once,
+};

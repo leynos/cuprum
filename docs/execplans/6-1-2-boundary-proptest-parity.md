@@ -629,6 +629,49 @@ ownership and error contracts, stop and report the exact incompatibility.
   contexts passing, including `Native contracts (windows-2022)` and
   `Extension-gated tests (Windows Python/Rust boundary)` — the two jobs that
   rejected `87e1b9947`.
+- [x] (2026-11-15) Replace the CRT reader's unsafe constructor with an
+  ownership-first safe one, addressing the hosted finding that a raw
+  `borrow_crt_reader` handed the caller an obligation neither caller could
+  discharge.
+  `duplicate_crt_reader(raw: i32) -> io::Result<OwnedCrtFileDescriptor>` is
+  safe: it duplicates the caller's descriptor, sets *the duplicate* to
+  `O_BINARY`, and returns an owner whose `Drop` closes it once.
+  `OwnedCrtFileDescriptor::as_borrowed` then lends a lifetime-bound
+  `BorrowedCrtFileDescriptor<'_>`, so `cuprum-streams` and the PyO3 hand-off
+  reach `read_crt_once` only through an owned duplicate. The `unsafe`
+  precondition is gone rather than documented, which also removes the
+  two-caller obligation split the verification table used to record. The Python
+  wrapper keeps its own duplicate for a different reason — leaving the caller's
+  translation mode untouched before the GIL is released — and the module
+  document says why neither duplicate substitutes for the other.
+- [x] (2026-11-15) Rebuild the closed-descriptor proof without an environment
+  channel. The first draft demultiplexed parent from child with
+  `std::env::var_os`, which `rust/clippy.toml` disallows outright;
+  `make lint-windows` rejected it at the lib-test target while the rest of the
+  cross-target build had already succeeded. The replacement splits the case
+  into an `#[ignore]`d child selected by libtest's own `--exact`/`--ignored`
+  flags, so no environment is read anywhere and no exception to the lint policy
+  is needed. The parent asserts on the child's exit status *and* on the child
+  naming the case in its result line, because a filter that matches nothing
+  also exits zero and the exit status alone would pass vacuously.
+- [x] (2026-11-15) Expand the five module documents the pre-merge check named,
+  and relocate the oracle's native-access layer to stay under the line cap. The
+  mandated docstrings pushed `tests/helpers/consume_boundary_oracle.py` from
+  394 to 416 lines, past the 400-line cap that Pylint enforces outside
+  `PYLINT_TEST_TARGETS`. Compressing the docstring would have defeated the
+  check; instead the import, protocol, and call-variant layer moved to
+  `tests/helpers/consume_boundary_native.py`, leaving the oracle to own what
+  the module document says it owns — which consumers are compared and what the
+  expected text is — while provenance validation stayed with the oracle because
+  it asks whether the comparison is trustworthy. The oracle is now 314 lines
+  and the new module 152. A traced call confirmed all three extracted entry
+  points are reached, not merely importable.
+- [x] (2026-11-15) Correct `docs/rust-boundary-verification.md`, whose crate
+  inventory and unsafe-operation table still described `borrow_crt_reader` as
+  an existing unsafe integration constructor with a two-caller obligation
+  split. Both rows now describe `duplicate_crt_reader`, the absence of an
+  unsafe constructor, and the child-process proof of the abort hazard. A grep
+  for `borrow_crt_reader` across the repository returns nothing.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -1061,6 +1104,30 @@ were corrected to use that manifest and all passed during replay.
   snapshot, because regeneration rewrites unrelated rows and hides which entry
   actually changed. The snapshot test's own redaction of generator and version
   is what makes the hand edit safe.
+
+- (2026-11-15) Establish background mode by duplication rather than by caller
+  obligation. The unsafe `borrow_crt_reader` was the wrong shape: it accepted a
+  bare current-operation integer and pushed binary mode plus liveness onto
+  whoever called it, and a direct caller of `rust_consume_stream` had no way to
+  discharge either. `duplicate_crt_reader` is safe because it *creates* the
+  state it needs — a duplicate, in binary mode, owned by the returned value —
+  so the borrow that `cuprum-streams` sees can only come from an owner that
+  keeps it valid. This is the crate's existing rule ("safe operations accept
+  resources the process already owns, and raw integers only become resources
+  here") applied to the CRT rather than to file descriptors. The Python
+  wrapper's own duplicate is retained deliberately: it protects the caller's
+  translation mode before the GIL is released, which the native duplicate
+  inside the detached call cannot do because by then the mode decision is
+  already made.
+- (2026-11-15) Prove the abort hazard with a child process, and prove the child
+  is not vacuous. A process abort cannot be observed from inside the process
+  that aborts, so the case must run in a child; but libtest exits zero when a
+  filter selects nothing, which means a renamed case would silently turn the
+  proof into a no-op. Selecting the child with `--exact`/`--ignored` avoids the
+  environment channel that `rust/clippy.toml` disallows, and asserting on the
+  child's own `... ok` result line is what distinguishes "the case passed" from
+  "the case never ran". The same reasoning applies to the Make target's
+  existing 30-test count guard.
 
 ## Outcomes & retrospective
 

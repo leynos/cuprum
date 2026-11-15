@@ -1,4 +1,20 @@
 //! Check the compiled Python extension against the independent Python consumer.
+//!
+//! The oracle side is `tests/helpers/consume_boundary_oracle.py`, run through
+//! the project interpreter; it builds its expected text with Cuprum's pure
+//! Python `_consume_stream`, so a failure here means the native path disagrees
+//! with the fallback rather than with a copy of itself.
+//!
+//! The whole file is `#[ignore]`d and runs only through `make
+//! test-boundary-parity`, which selects the three ignored tests, runs them, and
+//! fails unless the run reports exactly 30 tests. Ordinary `make test` does not
+//! execute them: each case launches a child interpreter, and the extension has
+//! to be built first. The count guard is what stops a renamed or dropped case
+//! from silently shrinking the suite while still exiting zero.
+//!
+//! Generated cases come from `support/boundary_strategies.rs`, curated seeds
+//! from `support/boundary_seeds.rs`, and the child-process launcher from
+//! `support/bounded_child.rs`.
 
 use std::{
     cell::RefCell,

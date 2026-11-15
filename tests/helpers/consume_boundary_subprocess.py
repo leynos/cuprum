@@ -1,4 +1,27 @@
-"""Exercise direct native consume against a live subprocess pipe."""
+"""Drain a bounded producer through a native consumer over a live pipe.
+
+This module supplies the producer half of the boundary parity harness. The
+oracle in ``tests/helpers/consume_boundary_oracle.py`` is its only caller: it
+passes a consumer callable that reaches ``rust_consume_stream``, and this module
+runs that consumer against a real subprocess pipe rather than an in-process one.
+
+The producer is deliberately bounded in three ways, because an unbounded
+producer turns a consumer bug into a hung test suite:
+
+- It streams a repeated ``cuprum-boundary/`` pattern, so a one-mebibyte payload
+  never has to be materialized twice. ``is_streamable_payload`` lets a caller
+  check that shape before committing to it, instead of discovering it as a
+  ``ValueError``.
+- It is a separate process reading its payload from its own standard output,
+  which is what makes the boundary under test a real pipe read.
+- Its failure diagnostics are capped at 4096 bytes. A producer that dies early
+  can say why, and a producer that floods its error stream cannot turn that
+  report into an unbounded read.
+
+Both waits are bounded: the consumer is joined with an escalating terminate and
+then kill, and the producer's exit status is read under its own short timeout.
+A stuck consumer surfaces as ``_ConsumerTimeoutError`` rather than a hang.
+"""
 
 from __future__ import annotations
 

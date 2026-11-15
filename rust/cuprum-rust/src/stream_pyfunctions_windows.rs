@@ -62,13 +62,20 @@ pub(super) fn rust_pump_stream(
 
 /// Validate the arguments for consuming a Windows CRT file descriptor.
 ///
+/// The caller's descriptor is never read directly. It is duplicated here,
+/// synchronously and before the GIL is released, so the detached read works on
+/// a descriptor number nothing else in the process holds and cannot be closed
+/// or reused while it runs. The duplicate is binary mode, so the caller's own
+/// translation mode is neither relied on nor changed; it is closed when
+/// consume returns.
+///
 /// # Parameters
-/// - `reader_fd`: borrowed Windows CRT descriptor to read from.
+/// - `reader_fd`: caller-owned Windows CRT descriptor to read from.
 /// - `buffer_size`: Size of the internal read buffer in bytes.
 ///
 /// # Errors
-/// Returns a Python `ValueError` for invalid arguments and `OSError` for CRT
-/// read failures.
+/// Returns a Python `ValueError` for invalid arguments and `OSError` for a
+/// descriptor that cannot be duplicated or read.
 #[pyfunction]
 #[pyo3(signature = (reader_fd, buffer_size = 65536))]
 pub(super) fn rust_consume_stream(
@@ -78,10 +85,16 @@ pub(super) fn rust_consume_stream(
 ) -> PyResult<String> {
     let size = validate_buffer_size(buffer_size)?;
     let raw = convert_crt_fd(reader_fd)?;
-    // SAFETY: the wrapper owns a duplicate CRT descriptor until this detached
-    // operation returns, and sets that descriptor to binary mode first.
-    let reader = unsafe { cuprum_native_io::borrow_crt_reader(raw) };
-    py.detach(move || consume_crt_stream(reader, size))
+    // The duplication is fallible and the caller must see its error, so it
+    // runs here rather than inside the closure, where it would have to become
+    // a stream error and lose the Win32 code the classifier produced.
+    let owned = cuprum_native_io::duplicate_crt_reader(raw)
+        .map_err(|err| RustStreamError::Stream(err.into()))?;
+    // The closure owns the duplicate, so the borrow it lends inside the
+    // detached call cannot outlive its owner. The lifetime obligation that
+    // would otherwise fall on the caller is discharged here, before the GIL is
+    // released, rather than assumed.
+    py.detach(move || consume_crt_stream(owned.as_borrowed(), size))
         .map_err(RustStreamError::Stream)
         .map_err(Into::into)
 }

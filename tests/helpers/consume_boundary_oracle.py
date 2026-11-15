@@ -1,4 +1,30 @@
-"""Compare the Rust consume boundary with Cuprum's Python stream consumer."""
+"""Independent Python oracle for the Rust consume boundary.
+
+Nothing here imports the Rust implementation's own policy: the expected output
+is produced by Cuprum's pure-Python ``_consume_stream``, so a parity failure
+means the native path disagrees with the fallback users already have, rather
+than with a second copy of itself.
+
+The consumers of this module are:
+
+- ``rust/cuprum-rust/tests/consume_boundary_parity.rs``, which runs it through
+  the project interpreter against the compiled extension. Every generated case
+  and every curated seed crosses that boundary; nothing in the parity suite
+  compares two Rust results.
+- ``tests/helpers/test_consume_boundary_oracle.py``, which tests this module on
+  its own, so an oracle bug shows up as a failing oracle test rather than as a
+  false parity failure.
+
+The direct native consume check needs a real pipe, which is why this module
+imports ``tests/helpers/consume_boundary_subprocess.py`` for
+``capture_from_producer``. That helper owns the bounded producer and its
+timeouts; this module owns which consumers are compared and what the expected
+text is.
+
+How a descriptor reaches the extension, and which call variants exist, live in
+``tests/helpers/consume_boundary_native.py``; this module asks it for the
+variants and judges only the text they return.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +32,6 @@ import asyncio
 import dataclasses as dc
 import enum
 import functools
-import importlib
 import io
 import os
 import sys
@@ -19,6 +44,7 @@ import cyclopts
 from cuprum._stream_config import _StreamConfig
 from cuprum._streams import _consume_stream
 from cuprum.capture_policy import FullCapture
+from tests.helpers import consume_boundary_native
 from tests.helpers.consume_boundary_subprocess import (
     capture_from_producer,
     is_streamable_payload,
@@ -26,7 +52,6 @@ from tests.helpers.consume_boundary_subprocess import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import contextlib
 
 
 # The concurrent-producer witness is defined by one exact payload shape: a
@@ -96,51 +121,6 @@ class BoundaryOracleError(RuntimeError):
                     f"first_mismatch_char={index} "
                     f"expected={expected!r} actual={actual!r}"
                 )
-
-
-class _StreamsRust(typ.Protocol):
-    """Describe the wrapper operations used by the oracle."""
-
-    def _convert_fd_for_platform(self, reader_fd: int) -> int:
-        """Convert a Python descriptor for the native extension."""
-        ...
-
-    def _duplicate_binary_reader(
-        self, reader_fd: int
-    ) -> contextlib.AbstractContextManager[int]:
-        """Duplicate a Windows CRT reader in binary mode."""
-        ...
-
-    def rust_consume_stream(
-        self,
-        reader_fd: int,
-        *,
-        buffer_size: int = 65536,
-    ) -> str:
-        """Consume bytes through the Python extension wrapper."""
-        ...
-
-
-class _NativeExtension(typ.Protocol):
-    """Describe the direct native consumer used by the oracle."""
-
-    def rust_consume_stream(
-        self,
-        reader_fd: int,
-        *,
-        buffer_size: int = 65536,
-    ) -> str:
-        """Consume bytes through the native extension API."""
-        ...
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _NativeModules:
-    """Hold the imported wrapper, extension, and resolved extension path."""
-
-    streams_rs: _StreamsRust
-    native: _NativeExtension
-    native_path: Path
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -246,84 +226,22 @@ def _assert_equal(label: str, actual: str, case: _PayloadCase) -> None:
     )
 
 
-def _load_native_modules() -> _NativeModules:
-    """Import the wrapper and extension and reject an unrelated installation."""
+def _load_native_modules() -> consume_boundary_native.NativeModules:
+    """Import the extension and reject one installed outside this project."""
+    modules = consume_boundary_native.load_native_modules()
     import cuprum
 
-    streams_rs = typ.cast(
-        "_StreamsRust",
-        importlib.import_module("cuprum._streams_rs"),
-    )
-    native_module = importlib.import_module("cuprum._rust_backend_native")
-    native_path = Path(typ.cast("str", native_module.__file__)).resolve()
-    native = typ.cast("_NativeExtension", native_module)
     package_root = Path(cuprum.__file__).resolve().parent
     virtual_environment = Path(sys.prefix).resolve()
     if not (
-        native_path.is_relative_to(package_root)
-        or native_path.is_relative_to(virtual_environment)
+        modules.native_path.is_relative_to(package_root)
+        or modules.native_path.is_relative_to(virtual_environment)
     ):
         raise BoundaryOracleError(
             _BoundaryFailure.NATIVE_MODULE_OUTSIDE_ALLOWED_ROOT,
-            native_path,
+            modules.native_path,
         )
-    return _NativeModules(streams_rs, native, native_path)
-
-
-def _consume_direct(
-    modules: _NativeModules,
-    reader_fd: int,
-    *,
-    buffer_size: int | None = None,
-) -> str:
-    """Call the extension directly with an independently owned reader copy."""
-    if os.name == "nt":
-        with modules.streams_rs._duplicate_binary_reader(reader_fd) as native_fd:
-            return _call_native_consumer(modules, native_fd, buffer_size)
-
-    native_fd = modules.streams_rs._convert_fd_for_platform(reader_fd)
-    return _call_native_consumer(modules, native_fd, buffer_size)
-
-
-def _call_native_consumer(
-    modules: _NativeModules,
-    native_fd: int,
-    buffer_size: int | None,
-) -> str:
-    """Call the direct extension method with omitted or explicit buffer size."""
-    if buffer_size is None:
-        return modules.native.rust_consume_stream(native_fd)
-    return modules.native.rust_consume_stream(native_fd, buffer_size=buffer_size)
-
-
-def _native_consumers(
-    modules: _NativeModules,
-    buffer_size: int,
-) -> tuple[tuple[str, cabc.Callable[[int], object]], ...]:
-    """Return independently callable wrapper and direct-native variants."""
-    return (
-        (
-            "wrapper omitted buffer",
-            functools.partial(modules.streams_rs.rust_consume_stream),
-        ),
-        (
-            "wrapper explicit default",
-            functools.partial(
-                modules.streams_rs.rust_consume_stream, buffer_size=65536
-            ),
-        ),
-        (
-            "wrapper generated buffer",
-            functools.partial(
-                modules.streams_rs.rust_consume_stream, buffer_size=buffer_size
-            ),
-        ),
-        ("direct native omitted buffer", functools.partial(_consume_direct, modules)),
-        (
-            "direct native explicit default",
-            functools.partial(_consume_direct, modules, buffer_size=65536),
-        ),
-    )
+    return modules
 
 
 def check_payload(payload: bytes, buffer_size: int) -> _OracleMetadata:
@@ -349,7 +267,9 @@ def check_payload(payload: bytes, buffer_size: int) -> _OracleMetadata:
     _assert_equal("Python consumer", _capture_python(payload), case)
     modules = _load_native_modules()
     native_captures: list[str] = []
-    for label, consume in _native_consumers(modules, buffer_size):
+    for label, consume in consume_boundary_native.native_consumers(
+        modules, buffer_size
+    ):
         captured = _consume_file(payload, consume)
         _assert_equal(label, captured, case)
         native_captures.append(captured)
@@ -360,7 +280,7 @@ def check_payload(payload: bytes, buffer_size: int) -> _OracleMetadata:
             payload,
             _STREAMED_PAYLOAD_TAIL,
             functools.partial(
-                _consume_direct,
+                consume_boundary_native.consume_direct,
                 modules,
                 buffer_size=buffer_size,
             ),
