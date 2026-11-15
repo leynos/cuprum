@@ -913,7 +913,8 @@ Obligations:
   `cuprum/unittests/test_observe_hook_dispatch_properties.py` for the property
   and examples, `cuprum/unittests/_observe_hook_dispatch_compare.py` for the
   comparison, `cuprum/unittests/_observe_hook_dispatch_oracle.py` for the
-  specification, and hook factories split between
+  specification and `cuprum/unittests/_observe_hook_dispatch_records.py` for
+  the records it must emit, and hook factories split between
   `cuprum/unittests/_observe_hook_dispatch_support.py` and
   `cuprum/unittests/_observe_hook_dispatch_shapes.py`. Evidence:
   `uv run pytest cuprum/unittests/test_observe_hook_dispatch_properties.py -v`

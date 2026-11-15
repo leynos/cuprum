@@ -22,14 +22,16 @@ from cuprum import ECHO
 from cuprum._observability import _await_awaitable, _ExecEventEmissionError
 from cuprum.events import ExecEvent
 from cuprum.unittests._observe_hook_dispatch_oracle import (
+    DispatchExpectation,
+    expected_dispatch,
+    scheduled_probe_indices,
+)
+from cuprum.unittests._observe_hook_dispatch_records import (
     _LIFECYCLE_PREFIXES,
     _LOGGER_NAME,
     DISPATCH_MESSAGE_PREFIXES,
-    DispatchExpectation,
     ExpectedRecord,
-    expected_dispatch,
     expected_records,
-    scheduled_probe_indices,
 )
 from cuprum.unittests._observe_hook_dispatch_support import HookProbe, make_probe
 
