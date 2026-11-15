@@ -2064,6 +2064,18 @@ close on every terminal path. The shared mechanics live in
   timeout or cancellation, and a drain that raised would skip the close
   entirely.
 
+The adapter's wire vocabulary lives apart from its framing lifecycle.
+`cuprum/sinks/_github_actions_commands.py` owns the escaping for
+workflow-command data and property positions — the runner applies different
+replacements to each — and the unpredictable stop-commands token, while
+`cuprum/sinks/github_actions.py` owns the session that writes the frames. The
+session imports the helpers by name, so
+`cuprum.sinks.github_actions._new_stop_token` stays the patch point its tests
+use; keep that seam by importing the helper rather than reaching into the
+helpers module from a test. The split also keeps the session module inside the
+400-line ceiling: a new workflow command adds its escaping and framing in
+coordination across the two modules, and neither moves back to shorten a file.
+
 `RunOutputOptions` keeps the identity of an adapter it synthesized in private
 `_synthesized_sink` metadata. The initializer compares identity so
 `dataclasses.replace` can rebuild only that options object's adapter when the

@@ -1888,9 +1888,10 @@ bounded-delivery mode, the worker and session finalizer share a per-run lock;
 finalization runs off-loop, waits behind an active write, and may leave the
 session open if that write never returns. All presentation knowledge
 (workflow-command syntax, escaping, injection shielding) stays inside the
-adapter; runs without a sink are unchanged. The single-command and pipeline
-runners share this contract and shield the bounded finalization against
-cancellation.
+adapter: `cuprum/sinks/github_actions.py` owns the framing lifecycle and
+`cuprum/sinks/_github_actions_commands.py` owns the wire vocabulary it writes.
+Runs without a sink are unchanged. The single-command and pipeline runners
+share this contract and shield the bounded finalization against cancellation.
 
 Activation policy is also adapter-local: `GitHubActionsSink` reads
 `GITHUB_ACTIONS` from the parent environment at `open_session` time and
