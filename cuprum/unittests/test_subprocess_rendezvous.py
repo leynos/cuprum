@@ -270,6 +270,60 @@ def test_stdout_failure_wins_over_a_stderr_failure() -> None:
     )
 
 
+def test_teardown_induced_reader_failure_does_not_replace_the_selected_one() -> None:
+    """A reader that fails only during termination is not the run's outcome.
+
+    Termination makes the child's pipes reach EOF, so a reader still draining
+    can fail on what that leaves behind — a strict decoder flushing a sequence
+    the termination truncated is the shape this models. stdout outranks stderr,
+    so reading the consumers again after the teardown would report that
+    artefact in place of the callback failure on stderr that ended the run.
+    """
+    callback_sentinel = CallbackError("stderr callback failed")
+
+    async def scenario() -> tuple[BaseException, BaseException | None]:
+        """Fail stderr, then fail stdout with the teardown's own artefact.
+
+        Returns
+        -------
+        tuple[BaseException, BaseException | None]
+            Whichever failure the race raised, and the failure stdout actually
+            ended on.
+        """
+        teardown_error = CallbackError("truncated sequence")
+        stdout_failed = asyncio.Event()
+        probe = ExitProbe(cancel_waits=stdout_failed)
+
+        async def fail_during_teardown() -> object:
+            """Fail as a draining reader would, once the child is torn down."""
+            await probe.cancelled.wait()
+            stdout_failed.set()
+            raise teardown_error
+
+        stdout_task = asyncio.create_task(fail_during_teardown())
+        stderr_task = failed_task(callback_sentinel)
+        try:
+            with pytest.raises(CallbackError) as caught:
+                await _await_exit_or_writer_failure(
+                    probe.wait(),
+                    None,
+                    consumers=(stdout_task, stderr_task),
+                )
+        finally:
+            await retrieve(stdout_task, stderr_task)
+        return caught.value, stdout_task.exception()
+
+    raised, teardown_failure = asyncio.run(scenario())
+    assert teardown_failure is not None, (
+        "stdout must have failed during the teardown, or this case does not "
+        "test what the second read would have replaced the callback error with"
+    )
+    assert raised is callback_sentinel, (
+        "the callback failure selected before the termination must survive it, "
+        f"got {raised!r}"
+    )
+
+
 def test_caller_cancellation_cancels_and_settles_the_exit_wait() -> None:
     """A cancellation reaching the race is forwarded to the exit wait."""
 

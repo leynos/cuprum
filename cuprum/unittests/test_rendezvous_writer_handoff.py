@@ -5,7 +5,7 @@ A writer publishes its failure before it unwinds, so a run that ends while the
 writer is still finalizing the caller's producer must still report the
 writer's error rather than the consumer failure it caused. And a writer whose
 failure surfaces only while the child is being torn down is found by the race's
-second read of the precedence. These tests pin both, without starting a child.
+second read of the writer. These tests pin both, without starting a child.
 """
 
 from __future__ import annotations

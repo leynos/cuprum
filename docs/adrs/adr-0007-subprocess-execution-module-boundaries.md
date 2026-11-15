@@ -1641,24 +1641,32 @@ over `_stdin_writer_failure` and `_consumer_failure`). This is a selection
 order rather than a report of which task failed first, and it is what makes the
 reported error stable from run to run.
 
-It is read twice. A stdin writer raises its own failure before its cleanup
-releases the pipe, so while a consumer has already failed the writer can still
-be running, and terminating the child is what lets it settle. The race stops on
-the failure it can see, cancels the exit wait, and reads the precedence once
-more over everything that settled. Without that second read, a run whose
-`encoding` this build does not know would report the output decoder's
-`LookupError` in place of the `StdinSourceError` its input contract promises.
+The writer is asked twice. A stdin writer raises its own failure before its
+cleanup releases the pipe, so while a consumer has already failed the writer
+can still be running, and terminating the child is what lets it settle. The
+race stops on the failure it can see, cancels the exit wait, and asks the
+writer again. Without that second read, a run whose `encoding` this build does
+not know would report the output decoder's `LookupError` in place of the
+`StdinSourceError` its input contract promises.
 
-Two reads are still not enough, because the window has two ends. A writer that
-has already raised is _still running_ while it unwinds: its producer's
-finalizer is the caller's code and is given a window of its own, so a read
-taken during that unwinding sees a task that has not failed and falls through
-to the consumer failure the writer's own failure caused. The run therefore
-creates a `_StdinWriterLog` beside its writer, the writer publishes its failure
-to it _before_ the raise and so before that unwinding, and both precedence
-reads consult the publication ahead of the task. It is one hand-off rather than
-shared state: nothing else writes it, and it is per-run. Both streaming callers
-hand the same log to the race, so the two reads cannot disagree about it.
+The consumers are deliberately not asked again. Terminating the child makes its
+pipes reach EOF, so a reader still draining can fail on what that leaves behind
+— a truncated sequence flushed by a strict decoder, say — and that artefact
+would replace the callback failure already selected whenever it landed on
+stdout while the callback failed on stderr. It is a consequence of cuprum
+ending the run rather than a candidate for what ended it.
+
+Two writer reads are still not enough, because that window has two ends. A
+writer that has already raised is _still running_ while it unwinds: its
+producer's finalizer is the caller's code and is given a window of its own, so
+a read taken during that unwinding sees a task that has not failed and falls
+through to the consumer failure the writer's own failure caused. The run
+therefore creates a `_StdinWriterLog` beside its writer, the writer publishes
+its failure to it _before_ the raise and so before that unwinding, and both
+writer reads consult the publication ahead of the task. It is one hand-off
+rather than shared state: nothing else writes it, and it is per-run. Both
+streaming callers hand the same log to the race, so the two reads cannot
+disagree about it.
 
 The second decision is provenance. Both callers translate a `TimeoutError`
 escaping the wait into the run's deadline, and a callback may raise a
@@ -1677,8 +1685,10 @@ Both entry points wired the consumers in: `_wait_for_streamed_process_exit`, in
 `_await_line_stream_exit` in the line-stream coordinator for `lines()`. The
 direct run wires no consumers and passes none. No public API changes.
 `cuprum/unittests/test_subprocess_rendezvous.py` pins the race and its
-precedence, `cuprum/unittests/test_rendezvous_writer_handoff.py` pins the two
-ends of the writer's window without starting a child,
+precedence, including that a reader failing only during the teardown does not
+replace the failure selected before it,
+`cuprum/unittests/test_rendezvous_writer_handoff.py` pins the two ends of the
+writer's window without starting a child,
 `cuprum/unittests/test_consumer_failure_fail_fast.py` pins the end-to-end
 guarantee with real children that write until they are killed — including which
 failure a run with both a failed producer and a failed callback reports — and

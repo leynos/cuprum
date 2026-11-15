@@ -9177,23 +9177,28 @@ The precedence between those sources is fixed rather than first-past-the-post,
 because `asyncio.wait` reports a settled *set* with no completion order. A
 settled exit wins outright; then the stdin writer; then the consumers in
 stdout-then-stderr order, selected by `_first_early_failure` over
-`_stdin_writer_failure` and `_consumer_failure`. That order is read twice: once
-to decide the run must stop, and once after the exit wait's cancellation has
-terminated the child, because a stdin writer unwinding its own cleanup settles
-on its failure only during that termination. Neither read is enough alone,
-because the window has two ends. A writer that has already raised is still
-*running* while it unwinds — its producer's finalizer is the caller's code, run
-inside a window of its own — so a read taken during that unwinding sees a task
-that has not failed. The writer therefore publishes its failure to the
-`_StdinWriterLog` the run creates for it, before the raise and so before that
-unwinding, and both reads consult the publication ahead of the task. Without
-the hand-off, a bad `encoding` would report the output decoder's `LookupError`
-in place of the `StdinSourceError` the input contract promises, because an
-unknown encoding fails the writer and both decoders, and the decoders settle
-first. Consumer tasks are never cancelled or gathered here: they belong to the
-caller, whose reconciliation on every failure route settles them, and doing it
-here as well would settle them twice and race that teardown. What the
-rendezvous does owe every caller is provenance.
+`_stdin_writer_failure` and `_consumer_failure`. That order decides once that
+the run must stop; the writer alone is then asked again after the exit wait's
+cancellation has terminated the child, because a stdin writer unwinding its own
+cleanup settles on its failure only during that termination. The consumers are
+deliberately not re-read: terminating the child makes its pipes reach EOF, so a
+reader still draining can fail on what that leaves behind — a truncated
+sequence flushed by a strict decoder, say — and that artefact would replace the
+callback failure already selected whenever it landed on stdout while the
+callback failed on stderr. Neither writer read is enough alone, because the
+window has two ends. A writer that has already raised is still *running* while
+it unwinds — its producer's finalizer is the caller's code, run inside a window
+of its own — so a read taken during that unwinding sees a task that has not
+failed. The writer therefore publishes its failure to the `_StdinWriterLog` the
+run creates for it, before the raise and so before that unwinding, and both
+writer reads consult the publication ahead of the task. Without the hand-off, a
+bad `encoding` would report the output decoder's `LookupError` in place of the
+`StdinSourceError` the input contract promises, because an unknown encoding
+fails the writer and both decoders, and the decoders settle first. Consumer
+tasks are never cancelled or gathered here: they belong to the caller, whose
+reconciliation on every failure route settles them, and doing it here as well
+would settle them twice and race that teardown. What the rendezvous does owe
+every caller is provenance.
 `_is_early_failure(error, stdin_task, consumers, *, stdin_log=None)` answers,
 by identity, whether a caught error is a monitored task's own failure — or the
 failure its writer published — and that is what lets each caller tell a

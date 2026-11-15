@@ -36,17 +36,19 @@ is the deterministic choice instead. This module only *selects* the failure.
 Settling the tasks it reports on is its callers' work, through the
 reconciliation each already performs.
 
-That precedence is read twice, not once, and the second read is what keeps a
-source failure from hiding behind the failures it caused. A stdin writer raises
-its own exception before its cleanup releases the pipe, so while a consumer has
-already failed the writer can still be running; terminating the child is what
-lets it finish. So the race stops on the failure it can see, cancels the exit
-wait, and only then reads the precedence again over everything that settled.
+The precedence is read twice, and the second read is the writer's alone. A
+stdin writer raises its own exception before its cleanup releases the pipe, so
+while a consumer has already failed the writer can still be running;
+terminating the child is what lets it finish, so the race asks it again once the
+exit wait is cancelled. The consumers are not asked again: termination makes the
+pipes reach EOF, a text run's decoder then flushes what it still holds, and a
+truncated sequence raises — an artefact that would replace the caller's callback
+failure whenever it landed on stdout while the callback failed on stderr.
 
-A second read alone is not enough, because the window has two ends. A writer
-that has already raised is *still running* while it unwinds — its producer's
-finalizer is the caller's code and is given a window of its own — so a read
-taken during that unwinding sees a task that has not failed. The writer
+A writer's second read alone is not enough, because that window has two ends. A
+writer that has already raised is *still running* while it unwinds — its
+producer's finalizer is the caller's code and is given a window of its own — so
+a read taken during that unwinding sees a task that has not failed. The writer
 therefore publishes its failure before it starts unwinding, and precedence
 reads that publication before the task.
 """
@@ -273,13 +275,20 @@ async def _await_exit_or_writer_failure(
     existing post-exit await already reports it; racing to catch that case too
     would only duplicate a check the caller must make anyway.
 
-    The precedence is applied once to decide that the run must stop and once
-    more after the exit wait's cancellation has terminated the child, because a
-    stdin writer unwinding its own cleanup can settle on its failure only
-    during that termination. Without the second read, a run whose ``encoding``
-    this build does not know would report its output decoder's
-    :class:`LookupError` instead of the :class:`~cuprum.sh.StdinSourceError` the
-    caller's input contract promises.
+    The precedence is applied once to decide that the run must stop, and the
+    *writer* is asked once more after the exit wait's cancellation has
+    terminated the child, because a stdin writer unwinding its own cleanup can
+    settle on its failure only during that termination. Without the second
+    read, a run whose ``encoding`` this build does not know would report its
+    output decoder's :class:`LookupError` instead of the
+    :class:`~cuprum.sh.StdinSourceError` the caller's input contract promises.
+
+    The consumers are deliberately not asked again. Termination makes the
+    child's pipes reach EOF, so a reader still draining can fail on what that
+    leaves behind — a truncated sequence flushed by a strict decoder, say — and
+    that artefact outranks the callback failure already selected whenever it
+    lands on stdout while the callback failed on stderr. It is a consequence of
+    cuprum ending the run, not the failure that ended it.
 
     *stdin_log* closes the other end of the same window. A writer that has
     already raised is still running while it unwinds, so a read taken then sees
@@ -351,21 +360,26 @@ async def _await_exit_or_writer_failure(
             # handler would catch this very raise, see a settled exit task, and
             # re-raise — correct, but only by accident of ordering.
             await _shielded_cleanup(_cancel_exit_wait(exit_task))
-            # The precedence is read again now that the teardown has run, and
-            # that second read is load-bearing rather than defensive. A stdin
-            # writer raises its own failure before its cleanup closes the pipe,
-            # so it can still be *running* while a consumer has already failed:
-            # an unrecognized ``encoding`` fails the writer and both decoders,
-            # and the decoders fail first. Terminating the child is what lets
-            # the writer finish, so the source failure the caller's data
-            # contract names is only visible here. Reporting the consumer's
-            # error instead would answer a bad stdin encoding with the reader
-            # failure it caused.
-            settled = _first_early_failure(
-                stdin_task,
-                monitored,
-                stdin_log=stdin_log,
-            )
+            # The writer is asked again now that the teardown has run, and that
+            # second read is load-bearing rather than defensive. A stdin writer
+            # raises its own failure before its cleanup closes the pipe, so it
+            # can still be *running* while a consumer has already failed: an
+            # unrecognized ``encoding`` fails the writer and both decoders, and
+            # the decoders fail first. Terminating the child is what lets the
+            # writer finish, so the source failure the caller's data contract
+            # names is only visible here. Reporting the consumer's error
+            # instead would answer a bad stdin encoding with the reader failure
+            # it caused.
+            #
+            # Only the writer is asked. Terminating the child can also make a
+            # *reader* fail on its own — the EOF this cancellation produced
+            # makes a strict decoder flush a truncated sequence — and such an
+            # artefact would replace the selected callback failure whenever it
+            # landed on stdout while the callback failed on stderr. The
+            # consumers were ranked above by the first read; a failure that
+            # exists only because the run is ending is not a candidate for what
+            # ended it.
+            settled = _writer_failure(stdin_task, stdin_log)
             raise settled if settled is not None else failure
         # Every task that settled did so without failing: drop the finished
         # ones so the next wait does not return on them at once, then keep
