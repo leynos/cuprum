@@ -28,6 +28,13 @@
       "rules": [
         { "name": "Code Duplication", "weight": 0.0 }
       ]
+    },
+    {
+      "matching_content_path": "rust/cuprum-native-io/src/windows_crt.rs",
+      "matching_content_path_doc": "The invalid parameter handler is a C callback whose arity belongs to the MSVC CRT, not to this code. `_invalid_parameter_handler` is documented as taking five arguments (expression, function, file, line, reserved); the CRT calls through the installed pointer with that many, so a handler declaring fewer would read the wrong registers on x86 and is not a valid argument to `_set_thread_local_invalid_parameter_handler`. The five parameters are therefore a fixed external contract this file must match, and there is no grouping or struct that can reduce them without breaking the ABI. Suppressing only this rule, only for this file, keeps the finding disabled where the code cannot comply rather than raising function_max_arguments for every Rust function in the repository.",
+      "rules": [
+        { "name": "Excess Number of Function Arguments", "weight": 0.0 }
+      ]
     }
   ]
 }

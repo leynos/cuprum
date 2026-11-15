@@ -595,6 +595,20 @@ ownership and error contracts, stop and report the exact incompatibility.
   channel is populated and wins before `errno` is consulted. The local Windows
   tests cannot reach this — they are `skipif`-guarded on this host — which is
   why the value was guessed wrong twice.
+- [x] (2026-11-15) Scope the one CodeScene finding that cannot be repaired.
+  `codescene-access` reported `Excess Number of Function Arguments` for
+  `ignore_invalid_parameter` at 5 against a limit of 4, reproduced locally by
+  `cs review` at 9.68. The arity is the MSVC CRT's documented
+  `_invalid_parameter_handler` signature — expression, function, file, line,
+  reserved — and the CRT calls through the installed pointer with exactly those
+  arguments, so a handler declaring fewer is not a valid value for
+  `_set_thread_local_invalid_parameter_handler` and would misread the call on
+  x86. No grouping can reduce it without breaking the ABI. Raising
+  `function_max_arguments` would relax every Rust function in the repository,
+  so the finding is disabled through the repository's existing narrowly scoped
+  mechanism: a fifth rule set in `.codescene/code-health-rules.json` keyed to
+  this one file, carrying the reasoning. `cs rules-config validate` accepts it
+  and `cs review` on the file returns 10.0.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
