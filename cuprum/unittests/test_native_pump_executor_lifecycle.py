@@ -20,6 +20,7 @@ from cuprum import (
     _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
     _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_completion,
     _pipeline_streams,
     scoped,
     sh,
@@ -168,10 +169,10 @@ def _install_sync_pipeline_worker(
 ) -> tuple[mock.Mock, mock.Mock]:
     """Install a held worker and record the completion callback's cleanup."""
     native_reader_close = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+        wraps=_pipeline_stream_native_completion._close_rust_reader_fd
     )
     state_fd_close = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
+        wraps=_pipeline_stream_native_completion._close_rust_state_fd
     )
     original_restore = _pipeline_stream_fds._BlockingModeGuard.restore
 
@@ -198,12 +199,12 @@ def _install_sync_pipeline_worker(
         lifecycle.restored.set()
 
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_reader_fd",
         native_reader_close,
     )
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_state_fd",
         state_fd_close,
     )

@@ -7,6 +7,8 @@ adapter demonstrates how to collect:
 - **Counters**: Total executions, failures, output lines
 - **Byte counters**: Successful stdin bytes written
 - **Histograms**: Execution duration distribution
+- **Gauges**: current values, reported by collectors that implement
+  :class:`~cuprum.adapters.gauge_metrics.GaugeMetricsCollector`
 
 The implementation uses protocol classes to remain decoupled from specific
 metrics libraries. Projects can implement the protocols with their preferred
@@ -59,8 +61,13 @@ Example with prometheus_client::
 
 from __future__ import annotations
 
-import dataclasses as dc
 import typing as typ
+
+# ``InMemoryMetrics`` stays importable from this module: callers name it
+# here, while the store itself lives in a focused module of its own.
+from cuprum.adapters._in_memory_metrics import (
+    InMemoryMetrics as InMemoryMetrics,
+)
 
 # `_metric_operations` is used directly below; the rest are re-exported only
 # for backward compatibility with call sites and tests that imported them
@@ -91,10 +98,7 @@ from cuprum.adapters._metrics_operations import (
     _UnhandledMetricsPhaseError as _UnhandledMetricsPhaseError,
 )
 from cuprum.adapters._retention_metrics import _RetentionMetricsMixin
-from cuprum.adapters._support import (
-    _LockedStore,
-    _project_tag,
-)
+from cuprum.adapters._support import _project_tag
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -148,56 +152,6 @@ class MetricsCollector(typ.Protocol):
 
         """
         raise NotImplementedError
-
-
-@dc.dataclass
-class InMemoryMetrics(_LockedStore):
-    """Reference in-memory metrics collector for testing and examples.
-
-    Storage and locking follow the shared
-    :class:`~cuprum.adapters._support._LockedStore` contract: every mutator
-    holds the lock, and ``reset()``
-    clears the store under it.
-
-    Attributes
-    ----------
-    counters:
-        Dict mapping metric names to accumulated counter values.
-    histograms:
-        Dict mapping metric names to lists of observed values.
-
-    """
-
-    counters: dict[str, float] = dc.field(default_factory=dict)
-    histograms: dict[str, list[float]] = dc.field(default_factory=dict)
-
-    def inc_counter(
-        self,
-        name: str,
-        value: float,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Increment a counter, ignoring labels for simplicity."""
-        with self._lock:
-            self.counters[name] = self.counters.get(name, 0.0) + value
-
-    def observe_histogram(
-        self,
-        name: str,
-        value: float,
-        labels: cabc.Mapping[str, str],
-    ) -> None:
-        """Record a histogram observation, ignoring labels for simplicity."""
-        with self._lock:
-            if name not in self.histograms:
-                self.histograms[name] = []
-            self.histograms[name].append(value)
-
-    @typ.override
-    def _clear(self) -> None:
-        """Clear all collected metrics; called under the store lock."""
-        self.counters.clear()
-        self.histograms.clear()
 
 
 class MetricsHook(_RetentionMetricsMixin):

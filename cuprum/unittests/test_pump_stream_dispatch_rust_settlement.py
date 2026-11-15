@@ -14,7 +14,7 @@ import pytest
 from cuprum import (
     _pipeline_native_pump_runtime,
     _pipeline_stream_fds,
-    _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_completion,
     _pipeline_streams,
 )
 from cuprum.unittests._pump_stream_dispatch_support import (
@@ -241,10 +241,10 @@ async def _cancel_before_native_worker_settles(
     native_pump = _HeldNativePump()
     cleanup = _CleanupOrder()
     close_native_reader = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_reader_fd
+        wraps=_pipeline_stream_native_completion._close_rust_reader_fd
     )
     close_state_fd = mock.Mock(
-        wraps=_pipeline_stream_native_cleanup._close_rust_state_fd
+        wraps=_pipeline_stream_native_completion._close_rust_state_fd
     )
 
     import cuprum._streams_rs as streams_rs
@@ -253,12 +253,12 @@ async def _cancel_before_native_worker_settles(
     monkeypatch.setattr(_pipeline_streams, "_pause_reader_transport", cleanup.pause)
     monkeypatch.setattr(_pipeline_streams, "_drain_reader_buffer", cleanup.drain)
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_reader_fd",
         close_native_reader,
     )
     monkeypatch.setattr(
-        _pipeline_stream_native_cleanup,
+        _pipeline_stream_native_completion,
         "_close_rust_state_fd",
         close_state_fd,
     )

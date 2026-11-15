@@ -55,11 +55,35 @@ class RustPumpDeclineReason(enum.StrEnum):
 
 
 class RustPumpHandoffOutcome(enum.StrEnum):
-    """A bounded result of attempting the Rust writer-resource hand-off."""
+    """A bounded result of attempting the Rust writer-resource hand-off.
+
+    The three outcomes around the buffered drain stay distinct so that an
+    operator reading `cuprum_rust_pump_handoff_total` can tell what the drain
+    did. ``DRAIN_FAILED`` is an error the drain itself raised,
+    ``DRAIN_CANCELLED`` is the caller's cancellation reaching the drain, and
+    ``HOLD_OBSERVER_SHUTDOWN`` is a shutdown signal from a hold observer raised
+    while the acquired pair was being published, before the drain began. All
+    three release the acquired pair, resume the reader, and re-raise the
+    original exception, so the hop settles without a submission. A pump
+    observer that raises a shutdown signal while one of these outcomes is
+    emitted takes precedence over that re-raise, because a shutdown signal must
+    still travel; the original error remains reachable through the raised
+    signal's exception context chain.
+
+    ``SUBMISSION_ABANDONED`` covers the same observer problem one step later:
+    the drain finished and blocking activation ran, but a hold observer raised
+    a shutdown signal before the pair was submitted. The activated pair is
+    rolled back and the signal propagates, so the hop settles without a
+    submission and without leaving an open, blocking pair behind.
+    """
 
     SUBMITTED = "submitted"
     DUPLICATE_WRITER_FAILED = "duplicate_writer_failed"
     BLOCKING_SETUP_FAILED = "blocking_setup_failed"
+    DRAIN_FAILED = "drain_failed"
+    DRAIN_CANCELLED = "drain_cancelled"
+    HOLD_OBSERVER_SHUTDOWN = "hold_observer_shutdown"
+    SUBMISSION_ABANDONED = "submission_abandoned"
     EXECUTOR_SUBMISSION_REJECTED = "executor_submission_rejected"
     NATIVE_LOAD_FAILED = "native_load_failed"
     READER_PREPARATION_FAILED = "reader_preparation_failed"
@@ -72,6 +96,7 @@ class RustPumpHandoffOutcome(enum.StrEnum):
 type PumpPhase = typ.Literal[
     "declined",
     "handoff",
+    "handoff_hold",
     "failed_after_cancel",
     "cleanup_started",
     "cleanup_completed",
@@ -85,6 +110,11 @@ type PumpPhase = typ.Literal[
 ``handoff``
     A Rust writer-resource hand-off reached one of the closed ``outcome``
     states.
+``handoff_hold``
+    The hand-off took its acquired descriptor pair into, or handed it back
+    from, the coordinator's hold around the buffered drain. ``held_delta`` is
+    ``+1`` on acquisition and ``-1`` on release, so a consumer that accumulates
+    the deltas reports the pairs currently held across pending drains.
 ``failed_after_cancel``
     A cancelled hop's Rust worker had failed, and the failure was consumed
     rather than resurfacing detached at garbage collection.
@@ -100,6 +130,54 @@ type PumpPhase = typ.Literal[
     A worker that outlived its caller-facing grace later completed its deferred
     descriptor cleanup.
 """
+
+
+# ``eq=False`` keeps identity comparison: two open emissions are never
+# interchangeable, and the consumer that deduplicates deliveries compares the
+# tokens with ``is``.
+@dc.dataclass(slots=True, eq=False)
+class PumpEmission:
+    """The identity of one pump event's delivery to the registered hooks.
+
+    ``_emit_pump_event`` stamps every event it delivers with one of these, and
+    closes it when every hook has seen that event. A consumer that must act
+    once per emission — the unlabelled held-pair gauge, which several hooks
+    reporting to one collector all move — can therefore recognize the other
+    deliveries of the same emission by identity, and tell them apart from a new
+    emission that merely carries the same values.
+
+    The token is the emitter's public statement about what is in flight, so a
+    consumer never has to read the emitter's own bookkeeping. It is the only
+    mutable part of a pump event: the event stays frozen, and only the emitter
+    calls :meth:`close`.
+
+    Examples
+    --------
+    An event delivered to a hook carries a token that is open until delivery
+    ends::
+
+        def record(event):
+            assert event.emission is not None
+            assert not event.emission.is_closed
+
+    """
+
+    _is_closed: bool = dc.field(default=False, init=False)
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the emitter has finished delivering this emission."""
+        return self._is_closed
+
+    def close(self) -> None:
+        """Mark the delivery finished.
+
+        Called by the emitter once every hook has seen the event. A consumer
+        reads :attr:`is_closed`; it must not close a token it was handed,
+        because the remaining deliveries of that emission would then look like
+        a new emission and move the count twice.
+        """
+        self._is_closed = True
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -125,6 +203,9 @@ class PumpEvent:
     outcome:
         For ``handoff``, the closed outcome of the writer-resource hand-off.
         ``None`` for every other phase.
+    held_delta:
+        For ``handoff_hold``, ``+1`` when the coordinator takes the acquired
+        pair and ``-1`` when it releases it. ``0`` for every other phase.
     duration_s:
         Monotonic seconds spent waiting for the native worker's cleanup when
         ``phase`` is ``cleanup_completed``. ``None`` for every other phase.
@@ -136,6 +217,13 @@ class PumpEvent:
         phases. Tracing observers use it only to locate an existing execution
         span; it is ``None`` for every other phase and is never a trace
         attribute or metric label.
+    emission:
+        The token the emitter stamps onto every event it delivers, or ``None``
+        for an event a caller built and handed to a hook directly. It identifies
+        one delivery to the registered hooks, which is what lets a consumer that
+        counts emissions recognize the same emission reaching several hooks. It
+        is excluded from equality and from the representation: two events with
+        the same phase are the same routing fact however they were delivered.
 
     Examples
     --------
@@ -156,6 +244,11 @@ class PumpEvent:
         cleanup = PumpEvent(phase="cleanup_completed", duration_s=0.25)
         assert cleanup.duration_s == 0.25
 
+    A hold reports the acquired pair as it is taken and released::
+
+        taken = PumpEvent(phase="handoff_hold", held_delta=1)
+        assert taken.held_delta == 1
+
     """
 
     phase: PumpPhase
@@ -164,6 +257,12 @@ class PumpEvent:
     duration_s: float | None = None
     elapsed_s: float | None = None
     exec_id: ExecId | None = None
+    # Appended last so adding it cannot shift the positional fields callers
+    # already passed to this public dataclass.
+    held_delta: int = 0
+    # Delivery identity rather than routing fact: excluded from comparison so
+    # that an event a hook compares against a hand-built one still matches.
+    emission: PumpEmission | None = dc.field(default=None, compare=False, repr=False)
 
 
 type PumpHook = cabc.Callable[[PumpEvent], None]
@@ -178,6 +277,7 @@ returns an awaitable is reported and discarded rather than run.
 
 
 __all__ = [
+    "PumpEmission",
     "PumpEvent",
     "PumpHook",
     "PumpPhase",

@@ -14,13 +14,14 @@ See :mod:`cuprum.pump_events` for the event types this channel carries.
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import logging
 import typing as typ
 from contextvars import ContextVar
 
 import cuprum._hook_disposal as hook_disposal
 from cuprum._scope_registration import _TokenTupleRegistration
-from cuprum.pump_events import PumpEvent, RustPumpHandoffOutcome
+from cuprum.pump_events import PumpEmission, PumpEvent, RustPumpHandoffOutcome
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -118,10 +119,14 @@ def observe_pump(hook: PumpHook) -> PumpHookRegistration:
     Count declined hand-offs into a metrics collector::
 
         from cuprum.adapters.metrics_adapter import InMemoryMetrics
-        from cuprum.adapters.pump_metrics import PumpMetricsHook
+        from cuprum.adapters.pump_metrics import (
+            HeldPairCounterRegistry,
+            PumpMetricsHook,
+        )
 
         metrics = InMemoryMetrics()
-        with observe_pump(PumpMetricsHook(metrics)):
+        registry = HeldPairCounterRegistry()
+        with observe_pump(PumpMetricsHook(metrics, registry=registry)):
             pipeline.run_sync()
 
     """
@@ -150,16 +155,46 @@ def _emit_pump_event(event: PumpEvent) -> None:
     Anything that is not an :class:`Exception` — ``SystemExit``,
     ``KeyboardInterrupt``, ``asyncio.CancelledError`` — propagates untouched, on
     the same reasoning as :func:`cuprum._pipeline_streams._await_rust_pump`: a
-    shutdown signal arriving here must still travel.
+    shutdown signal arriving here must still travel. It travels *after* every
+    registered hook has seen the event, because a signal raised by one hook
+    must not deny another the observation it was registered for. Accounting
+    hooks in particular rely on that: the held-pair gauge would be left standing
+    at one if a shutdown signal raised ahead of it skipped the release it
+    matches.
 
     With no hooks registered this returns before touching the event, so a caller
     that has not opted in pays nothing and behaves exactly as before.
+
+    Delivery identity
+    -----------------
+    Each delivery stamps the event with a :class:`~cuprum.pump_events.PumpEmission`
+    that is closed once every hook has seen it. An event reaches several hooks
+    when ``observe_pump`` registrations nest, and a consumer that must count one
+    emission once — the held-pair gauge shared by hooks reporting to one
+    collector — can therefore tell the remaining deliveries of the event it
+    already counted from a new emission. A hook that emits while it is being
+    called nests its own emission, with its own token, inside the delivery that
+    caused it; the outer token stays open until the outer loop finishes, so the
+    outer event keeps its identity across that nesting.
     """
     hooks = _pump_hooks.get()
     if not hooks:
         return
-    for hook in hooks:
-        _invoke_pump_hook(hook, event)
+    emission = PumpEmission()
+    stamped = dc.replace(event, emission=emission)
+    try:
+        shutdown: BaseException | None = None
+        for hook in hooks:
+            # A shutdown signal is held until every hook has seen the event.
+            try:
+                _invoke_pump_hook(hook, stamped)
+            except BaseException as signal:  # ruff: ignore[blind-except] - re-raise last.
+                if shutdown is None:
+                    shutdown = signal
+    finally:
+        emission.close()
+    if shutdown is not None:
+        raise shutdown
 
 
 def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
@@ -171,6 +206,51 @@ def _emit_rust_pump_handoff_outcome(outcome: RustPumpHandoffOutcome) -> None:
     so a propagating signal cannot strand one.
     """
     _emit_pump_event(PumpEvent(phase="handoff", outcome=outcome))
+
+
+def _emit_rust_pump_hold(delta: int) -> None:
+    """Publish one transition of a hand-off's acquired descriptor pair.
+
+    ``delta`` is ``+1`` when the coordinator takes the pair before the buffered
+    drain and ``-1`` when it releases it. Every ``+1`` is matched by exactly one
+    ``-1`` on each settling path — submission, activation failure, drain failure
+    and cancellation — so a consumer that accumulates the deltas reports the
+    pairs held across pending drains and returns to zero when none are.
+
+    Hook failures follow :func:`_emit_pump_event`, including its rule that every
+    hook sees the event before a shutdown signal travels. The coordinator
+    releases the last hold only once the pair is closed or its activated state
+    can be rolled back, so a propagating signal cannot strand it.
+    """
+    _emit_pump_event(PumpEvent(phase="handoff_hold", held_delta=delta))
+
+
+def _settle_hold_outcome(outcome: RustPumpHandoffOutcome) -> None:
+    """Release the hold, publishing ``outcome`` whichever way release goes.
+
+    A shutdown signal raised by a hold observer would otherwise skip the
+    outcome, leaving the hand-off counter without the settle the hop just
+    performed. Publishing from a ``finally`` keeps the outcome counted and
+    still lets the signal travel afterwards.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    finally:
+        _emit_rust_pump_handoff_outcome(outcome)
+
+
+def _release_declined_hold() -> None:
+    """Release the hold, counting the decline if release is interrupted.
+
+    The caller publishes ``BLOCKING_SETUP_FAILED`` itself when release returns,
+    so a decline keeps its existing event order; only a release interrupted by
+    a shutdown signal publishes the decline here, before that signal travels.
+    """
+    try:
+        _emit_rust_pump_hold(-1)
+    except BaseException:
+        _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BLOCKING_SETUP_FAILED)
+        raise
 
 
 def _emit_windows_raw_handle_rejected(logger: logging.Logger) -> None:

@@ -11,7 +11,7 @@ import pytest
 
 from cuprum import (
     _pipeline_stream_cleanup_observation,
-    _pipeline_stream_native_cleanup,
+    _pipeline_stream_native_completion,
     _pipeline_streams,
 )
 from cuprum.adapters.tracing_adapter import InMemoryTracer, TracingHook
@@ -32,7 +32,7 @@ async def _await_completed_native_pump_cleanup(
     """Run the cleanup boundary with an already-settled worker future."""
     cleanup_complete = asyncio.get_running_loop().create_future()
     cleanup_complete.set_result(None)
-    await _pipeline_stream_native_cleanup._await_native_pump_cleanup(
+    await _pipeline_stream_native_completion._await_native_pump_cleanup(
         cleanup_complete,
         monotonic_clock=monotonic_clock,
         cleanup_grace_s=1.0,

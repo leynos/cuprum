@@ -133,6 +133,66 @@ class _WriterWithoutPause:
         self.transport = _TransportWithoutPause(fd)
 
 
+class _FdTransport:
+    """Transport double exposing a descriptor and pause/resume hooks."""
+
+    def __init__(self, fd: int) -> None:
+        """Store the descriptor and start with no pause or resume calls."""
+        self._fd = fd
+        self.pause_calls = 0
+        self.resume_calls = 0
+
+    def get_extra_info(self, name: str) -> object | None:
+        """Return this transport as the pipe info for descriptor extraction."""
+        return self if name == "pipe" else None
+
+    def fileno(self) -> int:
+        """Return the descriptor this transport exposes."""
+        return self._fd
+
+    def is_closing(self) -> bool:
+        """Report that the transport is still open."""
+        return False
+
+    def pause_reading(self) -> None:
+        """Record a reader pause."""
+        self.pause_calls += 1
+
+    def resume_reading(self) -> None:
+        """Record a reader resume."""
+        self.resume_calls += 1
+
+
+class _RecordingWriter:
+    """Writer double that records writes, EOF, and close."""
+
+    def __init__(self, fd: int) -> None:
+        """Attach a transport exposing ``fd`` and start with no output."""
+        self.transport = _FdTransport(fd)
+        self.written = bytearray()
+        self.eof = False
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        """Record bytes written downstream."""
+        self.written.extend(data)
+
+    async def drain(self) -> None:
+        """Yield once, modelling backpressure without blocking."""
+        await asyncio.sleep(0)
+
+    def write_eof(self) -> None:
+        """Record that downstream EOF was signalled."""
+        self.eof = True
+
+    def close(self) -> None:
+        """Record that the writer was closed."""
+        self.closed = True
+
+    async def wait_closed(self) -> None:
+        """Complete immediately; the double owns no transport to wait for."""
+
+
 @pytest.fixture
 def clear_backend_caches() -> cabc.Iterator[None]:
     """Clear and restore backend-selection caches and test hooks.

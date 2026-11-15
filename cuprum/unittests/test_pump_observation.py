@@ -192,6 +192,26 @@ def test_a_cancellation_from_a_hook_still_travels() -> None:
         _emit_pump_event(_DECLINE)
 
 
+def test_a_shutdown_signal_does_not_deny_later_hooks_the_event() -> None:
+    """Every registered hook observes the event before the signal travels."""
+    seen: list[PumpEvent] = []
+
+    def raise_signal(_event: PumpEvent) -> None:
+        """Raise the shutdown signal the emitter must still deliver."""
+        raise KeyboardInterrupt
+
+    with (
+        observe_pump(raise_signal),
+        observe_pump(seen.append),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        _emit_pump_event(_DECLINE)
+
+    assert seen == [_DECLINE], (
+        "a signal raised by one hook must not skip the hooks registered after it"
+    )
+
+
 @pytest.mark.parametrize(
     "signal",
     [SystemExit(3), KeyboardInterrupt(), asyncio.CancelledError()],
