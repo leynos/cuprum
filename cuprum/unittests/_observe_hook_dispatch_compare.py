@@ -7,6 +7,10 @@ failure, the scheduled tasks — count, order, name, wrapper and wrapped result 
 and every dispatch log record with its exact message, structured fields, and
 exception information.
 
+A failing awaitability check escapes unwrapped, so the tasks scheduled before it
+are recorded as they are created, compared like any others, and settled
+afterwards.
+
 The task view is captured *before* the scheduled tasks are awaited: a completed
 coroutine drops its frame, so the wrapper identity and the wrapped result are
 only observable at scheduling time.
@@ -15,6 +19,7 @@ only observable at scheduling time.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 from itertools import starmap
@@ -38,6 +43,7 @@ from cuprum.unittests._observe_hook_dispatch_support import HookProbe, make_prob
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import contextvars
     import logging
 
     from cuprum.events import ExecHook, ExecPhase
@@ -92,20 +98,61 @@ def make_event(phase: str) -> ExecEvent:
     )
 
 
+@contextlib.contextmanager
+def _recorded_tasks(
+    created: list[asyncio.Task[None]],
+) -> cabc.Iterator[None]:
+    """Record every task the synchronously running dispatcher creates.
+
+    A failing awaitability check escapes unwrapped, so its caller never
+    receives the tasks scheduled before it. Recording creation is the only way
+    to compare those tasks and settle them afterwards; settling matters
+    because a task left pending would outlive the example.
+
+    Yields
+    ------
+    None
+        While ``asyncio.create_task`` is instrumented. The dispatcher runs
+        synchronously, so nothing else creates a task in this window.
+    """
+    real_create_task = asyncio.create_task
+
+    def record(
+        coro: cabc.Coroutine[object, object, None],
+        *,
+        name: str | None = None,
+        context: contextvars.Context | None = None,
+    ) -> asyncio.Task[None]:
+        """Create the task, record it, and return it unchanged."""
+        task = real_create_task(coro, name=name, context=context)
+        created.append(task)
+        return task
+
+    asyncio.create_task = typ.cast("typ.Any", record)
+    try:
+        yield
+    finally:
+        asyncio.create_task = real_create_task
+
+
 def _run_dispatch(
     dispatch: _Dispatch,
     hooks: tuple[ExecHook, ...],
     event: ExecEvent,
 ) -> _Outcome:
     """Run ``dispatch`` and normalize its result or failure."""
+    created: list[asyncio.Task[None]] = []
     try:
-        scheduled = dispatch(hooks, event)
+        with _recorded_tasks(created):
+            scheduled = dispatch(hooks, event)
     except _ExecEventEmissionError as exc:
         return _Outcome(error=exc.error, wrapped=True, tasks=tuple(exc.scheduled_tasks))
     # The check failure and non-``Exception`` shapes escape unwrapped by
     # design, so every remaining failure is part of what must be compared.
+    # The tasks created before the escape are compared too, rather than
+    # dropped, so a dispatcher that lost one is reported.
     except BaseException as exc:  # ruff: ignore[blind-except]
-        return _Outcome(error=exc, wrapped=False, tasks=())
+        return _Outcome(error=exc, wrapped=False, tasks=tuple(created))
     return _Outcome(error=None, wrapped=False, tasks=tuple(scheduled))
 
 

@@ -29,15 +29,11 @@ if typ.TYPE_CHECKING:
 
 _PHASES = ("plan", "start", "stdout", "exit")
 
-# ``check_raises`` escapes the dispatcher unwrapped, so any task scheduled
-# before it would be lost. It is exercised only as a sole hook, which still
-# pins the unwrapped escape without leaking a pending task.
-_NON_CHECK_KINDS = tuple(kind for kind in HOOK_KINDS if kind != "check_raises")
-
-_KINDS = st.one_of(
-    st.lists(st.sampled_from(_NON_CHECK_KINDS), min_size=0, max_size=8),
-    st.just(["check_raises"]),
-)
+# ``check_raises`` escapes the dispatcher unwrapped, so the tasks scheduled
+# before it never reach the caller. The comparison records them as they are
+# created and settles them, so a mixed sequence is exercised rather than
+# leaking a pending task.
+_KINDS = st.lists(st.sampled_from(HOOK_KINDS), min_size=0, max_size=8)
 
 
 # ``caplog`` is function-scoped, so Hypothesis cannot reset it between
@@ -67,6 +63,9 @@ _KINDS = st.one_of(
 @example(kinds=["raising_fatal"], phase="plan")
 @example(kinds=["raising_cancelled"], phase="plan")
 @example(kinds=["check_raises"], phase="exit")
+@example(kinds=["async_def", "check_raises", "async_def"], phase="plan")
+@example(kinds=["future", "check_raises"], phase="stdout")
+@example(kinds=["failing_awaitable", "check_raises", "sync_none"], phase="exit")
 @example(kinds=["async_def", "async_def", "raising"], phase="stdout")
 @given(kinds=_KINDS, phase=st.sampled_from(_PHASES))
 def test_dispatch_matches_specification(
@@ -91,16 +90,6 @@ def test_dispatch_matches_specification(
     asyncio.run(run())
 
 
-# A settled dispatch calls every hook, so ``check_raises`` is excluded: its
-# unwrapped escape would strand the tasks scheduled before it, which is a
-# property of the terminal path already covered by its own named test.
-_SETTLED_KINDS = st.lists(
-    st.sampled_from(_NON_CHECK_KINDS),
-    min_size=0,
-    max_size=8,
-)
-
-
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @example(kinds=[])
 @example(kinds=["raising"])
@@ -108,8 +97,11 @@ _SETTLED_KINDS = st.lists(
 @example(kinds=["async_def", "raising", "future"])
 @example(kinds=["raising_cancelled", "async_def"])
 @example(kinds=["failing_awaitable", "async_def"])
+@example(kinds=["check_raises"])
+@example(kinds=["async_def", "check_raises", "async_def"])
+@example(kinds=["raising", "check_raises", "future"])
 @example(kinds=["raising", "async_def", "raising_fatal", "future"])
-@given(kinds=_SETTLED_KINDS)
+@given(kinds=_KINDS)
 def test_settled_dispatch_matches_specification(
     kinds: list[str],
     caplog: pytest.LogCaptureFixture,
