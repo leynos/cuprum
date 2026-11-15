@@ -417,14 +417,15 @@ No job in this repository archives `target`, `rust/target`, or
 oversight, and a contract test enforces it.
 
 sccache is the single owner of compiler output for every build shape. The
-repository produces five: the objects the lint gate builds through its
-alternative code generator and linker, the ordinary debug objects the test
-gates build, the release objects the benchmark gate builds, the
-`-C instrument-coverage` objects the coverage gate builds, and the `--cfg loom`
-objects the model checks build. sccache hashes the compiler flags into its
-cache key, so all five coexist in one store without colliding; run 33677926269
-recorded zero non-cacheable compilations with the cranelift-built Whitaker
-lints, and Whitaker's instrumented coverage build reports the same.
+repository produces five: the objects the lint gate's Clippy step builds
+through the dev-fast route's linker and parallel frontend, the ordinary debug
+objects the test gates build, the release objects the benchmark gate builds, the
+`-C instrument-coverage` objects the coverage gate builds, and the
+`--cfg loom` objects the model checks build. sccache hashes the compiler flags
+into its cache key, so all five coexist in one store without colliding; run
+33677926269, from before Cranelift was disabled on 14 November 2026, recorded
+zero non-cacheable compilations with the cranelift-built Whitaker lints, and
+Whitaker's instrumented coverage build reports the same.
 
 A `target` tree, by contrast, is invalidated by any source change, so its
 archive is rewritten far more often than the registry it would sit beside and
@@ -950,9 +951,9 @@ Cargo target directory and xdist workers would contend on one build lock rather
 than overlap. `-n auto` is rejected outright: it reads the host's core count,
 not the two cores the job is billed for.
 
-Codegen selection stays per job. The lint gate builds its Whitaker suite with
-cranelift; the coverage gate cannot, because cranelift has no
-`-C instrument-coverage`.
+Codegen selection stays per job. Every gate uses the LLVM backend unless an
+invocation opts in to Cranelift. The coverage gate cannot use Cranelift,
+because Cranelift has no `-C instrument-coverage`.
 
 ### Tool installation
 
