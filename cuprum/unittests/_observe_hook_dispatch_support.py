@@ -248,15 +248,32 @@ class HookProbe:
     results: list[object] = dc.field(default_factory=list)
 
 
-def make_probe(kind: str) -> HookProbe:
-    """Build one fresh hook of ``kind`` with its own recorders."""
+def make_probe(kind: str, *, trace: list[str] | None = None) -> HookProbe:
+    """Build one fresh hook of ``kind`` with its own recorders.
+
+    Parameters
+    ----------
+    kind:
+        The factory name of the hook shape to build.
+    trace:
+        A list shared by every probe of one sequence. Each hook that the
+        dispatcher calls appends its kind, in call order, so the comparison can
+        see the order hooks ran in and not merely how often each ran.
+
+    Returns
+    -------
+    HookProbe
+        The hook and the recorders it fills.
+    """
     calls: list[ExecEvent] = []
     raised: list[BaseException] = []
     results: list[object] = []
     inner = _FACTORIES[kind](calls, raised)
 
     def hook(event: ExecEvent) -> object:
-        """Record the produced result, then return it unchanged."""
+        """Record the call, then the produced result, and return that result."""
+        if trace is not None:
+            trace.append(kind)
         result = inner(event)
         results.append(result)
         return result

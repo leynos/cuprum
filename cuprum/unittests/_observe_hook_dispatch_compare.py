@@ -2,9 +2,10 @@
 
 These helpers run the real dispatcher over a sequence of hooks and report the
 first way its behaviour departs from :mod:`_observe_hook_dispatch_oracle`. The
-comparison covers hook calls, the surfaced failure, the scheduled tasks — count,
-order, name, wrapper and wrapped result — and every dispatch log record with its
-exact message and structured fields.
+comparison covers which hooks were called and in what order, the surfaced
+failure, the scheduled tasks — count, order, name, wrapper and wrapped result —
+and every dispatch log record with its exact message, structured fields, and
+exception information.
 
 The task view is captured *before* the scheduled tasks are awaited: a completed
 coroutine drops its frame, so the wrapper identity and the wrapped result are
@@ -129,14 +130,27 @@ async def _settle(tasks: cabc.Sequence[asyncio.Task[None]]) -> None:
 def _call_mismatch(
     expectation: DispatchExpectation,
     probes: cabc.Sequence[HookProbe],
+    trace: cabc.Sequence[str],
 ) -> str | None:
-    """Check that each hook was called exactly when the specification says."""
+    """Check that each hook was called exactly when the specification says.
+
+    Per-hook counts name a hook that ran when it should not have. The ordered
+    trace names a dispatcher that called the right hooks in the wrong order,
+    which no count can see.
+
+    Returns
+    -------
+    str | None
+        The first way a call departs from the specification, or ``None``.
+    """
     for index, probe in enumerate(probes):
         expected = 1 if index < len(expectation.called) else 0
         if len(probe.calls) != expected:
             return (
                 f"{probe.kind} was called {len(probe.calls)} times, expected {expected}"
             )
+    if tuple(trace) != expectation.called:
+        return f"hooks ran as {tuple(trace)}, expected {expectation.called}"
     return None
 
 
@@ -287,6 +301,37 @@ def _dispatch_records(
     ]
 
 
+def _lifecycle_mismatch(
+    records: cabc.Sequence[logging.LogRecord],
+    expected: cabc.Sequence[ExpectedRecord],
+) -> str | None:
+    """Check the task lifecycle records as an unordered multiset of full records.
+
+    A task's records may interleave with another's, so their order is not part
+    of the contract; sorting pairs each record with the specification entry it
+    stands for. The sort key deliberately covers only the level, the message,
+    and the structured fields, so the pairing cannot hide a difference in what
+    the key leaves out: each pair is compared again in full, which covers the
+    exception information a failure record must carry.
+
+    Returns
+    -------
+    str | None
+        The first lifecycle record that departs from the specification, or
+        ``None``.
+    """
+    actual_keys = sorted(map(_record_key, records))
+    expected_keys = sorted(map(_expected_key, expected))
+    if actual_keys != expected_keys:
+        return "the task lifecycle records do not match the specification"
+    paired = zip(
+        sorted(records, key=_record_key),
+        sorted(expected, key=_expected_key),
+        strict=True,
+    )
+    return _first_mismatch(starmap(_record_mismatch, paired))
+
+
 def _log_mismatch(
     records: cabc.Iterable[logging.LogRecord],
     expectation: DispatchExpectation,
@@ -315,11 +360,7 @@ def _log_mismatch(
     )
     if ordered is not None:
         return ordered
-    if sorted(map(_record_key, lifecycle_actual)) != sorted(
-        map(_expected_key, lifecycle_expected)
-    ):
-        return "the task lifecycle records do not match the specification"
-    return None
+    return _lifecycle_mismatch(lifecycle_actual, lifecycle_expected)
 
 
 async def mismatch(
@@ -330,7 +371,8 @@ async def mismatch(
 ) -> str | None:
     """Return the first way ``dispatch`` departs from the specification."""
     expectation = expected_dispatch(kinds, event, settled=event.phase == "settled")
-    probes = [make_probe(kind) for kind in kinds]
+    trace: list[str] = []
+    probes = [make_probe(kind, trace=trace) for kind in kinds]
     outcome = _run_dispatch(dispatch, tuple(probe.hook for probe in probes), event)
     views = [_task_view(task) for task in outcome.tasks]
     # Settle first: an async hook records its call only when its coroutine
@@ -338,7 +380,7 @@ async def mismatch(
     # correctly scheduled hook as never called.
     await _settle(outcome.tasks)
     return (
-        _call_mismatch(expectation, probes)
+        _call_mismatch(expectation, probes, trace)
         or _error_mismatch(expectation, probes, outcome)
         or _task_mismatch(expectation, probes, views, event)
         or _log_mismatch(records, expectation, event)
