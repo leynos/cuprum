@@ -205,6 +205,7 @@ def _spawn_inputs(state: _State) -> object:
     return types.SimpleNamespace(
         discard_on_cancel=asyncio.Event(),
         relay_diagnostics=context.relay_diagnostics,
+        idle=None,
         spawn_context=context,
     )
 

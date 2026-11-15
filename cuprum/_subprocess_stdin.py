@@ -33,6 +33,7 @@ a run.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -57,6 +58,29 @@ _LOGGER = logging.getLogger("cuprum.stdin")
 # that inherited stdin and does not read it — so this has to be a bound rather
 # than a wait; see ``_close_stdin``.
 _CLOSE_GRACE_S = 0.5
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StdinWriterContext:
+    """The run-scoped settings handed to every stdin writer a run starts.
+
+    Three values bound once, when the writer is spawned, and never varied while
+    it runs: the encoder settings a streaming ``str`` chunk is written with, the
+    observation a failure is reported against, and the log a streaming failure
+    is published to before the writer unwinds.
+
+    They travel as one record so the spawn and the streaming write are handed
+    the same values: a caller cannot pair one run's log with another run's
+    encoder, and the streaming writer's helpers take the context rather than
+    re-listing its fields. A payload writer reads only ``observation``: its
+    cleanup is cuprum's own and finishes without suspending, so its task alone
+    tells the exit race it failed. Only the streaming writer's cleanup is the
+    caller's, and only that one needs a publication log.
+    """
+
+    codec: _StdinCodec
+    observation: _StageObservation
+    log: _StdinWriterLog
 
 
 def _emit_stdin_error(
@@ -275,10 +299,7 @@ def _spawn_payload_writer(
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
     plan: _StdinPlan,
-    codec: _StdinCodec,
-    observation: _StageObservation,
-    *,
-    log: _StdinWriterLog,
+    context: _StdinWriterContext,
 ) -> asyncio.Task[None] | None:
     """Start the stdin writer that a resolved plan calls for, if any.
 
@@ -293,11 +314,11 @@ def _spawn_stdin_writer(
     see exactly what an empty payload gives it, without a second code path
     expressing the same thing.
 
-    *log* belongs to the streaming writer alone. It is the one writer whose
-    failure is followed by cleanup of the caller's own code, so it is the one
-    whose failure has to be published before the task can carry it; the
-    payload writer's cleanup is cuprum's and finishes without suspending, so
-    its task is enough for a race to read.
+    *context* carries the encoder, the observation, and the publication log the
+    run bound when it resolved this writer. The log belongs to the streaming
+    writer alone: its failure is followed by cleanup of the caller's own code,
+    so it has to be published before the task can carry it, while the payload
+    writer's cuprum-owned cleanup finishes without suspending.
 
     Returns
     -------
@@ -318,16 +339,14 @@ def _spawn_stdin_writer(
             return None
         case _StreamStdin(stream=producer):
             _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
-            return asyncio.create_task(
-                _write_stdin_stream(process, producer, codec, observation, log=log)
-            )
+            return asyncio.create_task(_write_stdin_stream(process, producer, context))
         case _PipeStdin():
             # Requested a pipe, supplied no source: the child should see exactly
             # what an empty payload gives it, so the payload writer is reused
             # rather than a second code path expressing the same thing.
-            return _spawn_payload_writer(process, b"", observation)
+            return _spawn_payload_writer(process, b"", context.observation)
         case _PayloadStdin(data=payload):
-            return _spawn_payload_writer(process, payload, observation)
+            return _spawn_payload_writer(process, payload, context.observation)
 
 
 def _spawn_run_stdin_writer(
@@ -353,13 +372,12 @@ def _spawn_run_stdin_writer(
     # the streaming module imports this one back for the pipe primitives.
     from cuprum._subprocess_stdin_stream import _stdin_codec
 
-    task = _spawn_stdin_writer(
-        process,
-        execution.stdio.stdin,
-        _stdin_codec(execution.ctx),
-        execution.observation,
+    context = _StdinWriterContext(
+        codec=_stdin_codec(execution.ctx),
+        observation=execution.observation,
         log=log,
     )
+    task = _spawn_stdin_writer(process, execution.stdio.stdin, context)
     return task, log
 
 

@@ -374,11 +374,11 @@ async def _await_exit_or_writer_failure(
 
 
 __all__ = [
+    "_StdinWriterLog",
     "_await_exit_or_writer_failure",
     "_cancel_exit_wait",
     "_consumer_failure",
     "_first_early_failure",
     "_is_early_failure",
     "_stdin_writer_failure",
-    "_StdinWriterLog",
 ]

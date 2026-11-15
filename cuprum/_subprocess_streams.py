@@ -54,7 +54,6 @@ from cuprum._stream_config import (
     _resolve_stream_sink as _resolve_stream_sink,
 )
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
-from cuprum._subprocess_rendezvous import _StdinWriterLog
 from cuprum._subprocess_startup_abandon import _record_started
 from cuprum._subprocess_stdin import _spawn_run_stdin_writer
 from cuprum._subprocess_wait_types import _RunTaskOwnership
@@ -63,7 +62,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._capture_types import CaptureSink
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_wait_types import _ConsumerPair, _StreamConsumerTask
     from cuprum.lines import LineStreamName, _LineHookOutcome
 
@@ -142,14 +143,16 @@ class _StreamSpawnInputs:
     wire theirs, or the paths silently diverge on capture, echo, and sink
     selection.
 
-    ``discard_on_cancel`` and ``relay_diagnostics`` are carried alongside the
-    context because the run retains both on its ``_RunTaskOwnership``: the
-    context is a value snapshot for the spawn, not a hand-off of ownership.
+    ``discard_on_cancel``, ``relay_diagnostics``, and ``idle`` are carried
+    alongside the context because the run retains all three on its
+    ``_RunTaskOwnership``: the context is a value snapshot for the spawn, not a
+    hand-off of ownership.
     """
 
     discard_on_cancel: asyncio.Event
     spawn_context: _StreamConsumerSpawnContext
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
+    idle: _IdleMonitor | None
 
 
 def _build_run_task_ownership(
@@ -189,7 +192,6 @@ def _build_run_task_ownership(
         stdin_log=stdin_log,
         consumers=consumers,
         spawn=spawn,
-        execution=execution,
     )
 
 
@@ -199,13 +201,19 @@ def _build_task_ownership(
     stdin_log: _StdinWriterLog,
     consumers: _ConsumerPair,
     spawn: _StreamSpawnInputs,
-    execution: _SubprocessExecution,
 ) -> _RunTaskOwnership:
     """Assemble the tasks one run retains for its reconciliation point.
 
-    The latch, diagnostics, and captures come from *spawn*, because the
-    consumers were wired from it; the writer's failure log travels beside its
-    task, because it is the writer that publishes to it.
+    Everything but the tasks comes from *spawn*, because the run wired its
+    consumers from it: the latch, the diagnostics, the idle monitor, and the
+    captures. The writer's failure log travels beside its task, because it is
+    the writer that publishes to it.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The started tasks, plus the latch, collectors, and monitor the run
+        retains.
     """
     return _RunTaskOwnership(
         stdin_task=stdin_task,
@@ -213,7 +221,7 @@ def _build_task_ownership(
         consumers=consumers,
         discard_on_cancel=spawn.discard_on_cancel,
         relay_diagnostics=spawn.relay_diagnostics,
-        idle=execution.idle,
+        idle=spawn.idle,
         captures=spawn.spawn_context.captures,
     )
 
@@ -345,8 +353,8 @@ def _prepare_stream_spawn(
     Returns
     -------
     _StreamSpawnInputs
-        The latches, diagnostics collectors, and resolved stream configs for
-        the consumers this run starts.
+        The latches, diagnostics collectors, idle monitor, and resolved stream
+        configs for the consumers this run starts.
     """
     if discard_on_cancel is None:
         discard_on_cancel = asyncio.Event()
@@ -366,6 +374,7 @@ def _prepare_stream_spawn(
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
+        idle=execution.idle,
         spawn_context=_StreamConsumerSpawnContext(
             stdout_config=stdout_config,
             stderr_config=stderr_config,

@@ -40,10 +40,8 @@ if typ.TYPE_CHECKING:
 
     import pytest
 
-    from cuprum._pipeline_types import _StageObservation
-    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum._subprocess_stdin_stream import _StdinCodec
+    from cuprum._subprocess_stdin import _StdinWriterContext
     from cuprum.sh import CommandResult, SafeCmd
 
 
@@ -123,17 +121,14 @@ def _recording_writer(
     async def tracked_write(
         process: asyncio.subprocess.Process,
         stream: StdinStream,
-        codec: _StdinCodec,
-        observation: _StageObservation,
-        *,
-        log: _StdinWriterLog,
+        context: _StdinWriterContext,
     ) -> None:
         """Record the run's process and writer task, then stream as usual."""
         probe.processes.append(process)
         # The writer runs as its own task, so this is that task's handle: the
         # one cuprum created and is therefore responsible for settling.
         probe.writer_task = asyncio.current_task()
-        await real_write(process, stream, codec, observation, log=log)
+        await real_write(process, stream, context)
 
     return tracked_write
 
