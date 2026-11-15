@@ -141,53 +141,6 @@ def test_two_readers_failing_together_are_attributed_repeatably() -> None:
     )
 
 
-def test_lines_reader_timeout_is_not_reported_as_the_run_deadline(
-    python_builder: cabc.Callable[..., SafeCmd],
-) -> None:
-    """A reader's own ``TimeoutError`` reaches the caller unchanged.
-
-    The run configures no ``timeout=``, so there is no deadline that could
-    legitimately expire. Before the fix the deadline arm caught the reader's
-    exception, emitted the ``timeout`` phase, and — with no configured timeout
-    to report — replaced it with an invariant failure.
-    """
-    command = python_builder("-c", "print('reader')")
-    sentinel = _ReaderTimeoutError("reader timed out")
-    seen: list[LineStreamEvent] = []
-
-    def fail_reader(_event: LineEvent) -> None:
-        """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
-        raise sentinel
-
-    async def collect() -> None:
-        """Iterate until the reader hook fails."""
-        async for _event in command.lines(
-            output=RunOutputOptions(on_line=fail_reader),
-        ):
-            pass
-
-    with (
-        observe_line_stream(seen.append),
-        pytest.raises(_ReaderTimeoutError) as caught,
-    ):
-        asyncio.run(collect())
-
-    assert caught.value is sentinel, (
-        f"the caller must receive the reader's own exception, got {caught.value!r}"
-    )
-    phases = [event.phase for event in seen]
-    assert LineStreamPhase.TIMEOUT not in phases, (
-        f"a reader failure must not report the run's deadline, got {phases!r}"
-    )
-    assert [(event.sink, event.error_type) for event in seen if event.sink] == [
-        ("callback", "_ReaderTimeoutError"),
-    ], f"the reader failure must remain observable, got {seen!r}"
-    reconciled = {LineStreamPhase.TEARDOWN_STARTED, LineStreamPhase.TEARDOWN_COMPLETED}
-    assert reconciled <= set(phases), (
-        f"a reader failure must still reconcile the run, got {phases!r}"
-    )
-
-
 def _assert_writer_failure_survives(
     seen: cabc.Sequence[LineStreamEvent],
     caught: pytest.ExceptionInfo[_WriterTimeoutError],
@@ -291,10 +244,12 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
 
     async def _record_rendezvous(
         exit_wait: cabc.Coroutine[typ.Any, typ.Any, tuple[int, float]],
-        stdin_task: asyncio.Task[None] | None,
+        stdin_task: asyncio.Task[object] | None,
+        *,
+        consumers: cabc.Sequence[asyncio.Task[object] | None] = (),
     ) -> tuple[int, float]:
         """Delegate to the real rendezvous, then hand the run to the drain."""
-        result = await _real_rendezvous(exit_wait, stdin_task)
+        result = await _real_rendezvous(exit_wait, stdin_task, consumers=consumers)
         rendezvous_returned.set()
         return result
 
@@ -329,26 +284,72 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
     _assert_writer_failure_survives(seen, caught, sentinel)
 
 
-def test_run_reader_timeout_is_not_reported_as_the_run_deadline(
-    python_builder: cabc.Callable[..., SafeCmd],
-) -> None:
-    """The streamed ``run()`` path preserves a reader's own ``TimeoutError``.
+# The first child exits as soon as it has written, so the reader's failure
+# reaches the post-exit collect. The second writes one line and stays alive, so
+# the failure reaches the exit rendezvous while the exit wait is still pending.
+_CHILD_SCRIPTS = {
+    "after-exit": "print('reader')",
+    "before-exit": "import time; print('reader', flush=True); time.sleep(30)",
+}
+# Long enough for a cold interpreter start, short enough that a regression is
+# reported as a hang rather than as the suite's own 30-second timeout.
+_READER_WATCHDOG_S = 10.0
 
-    It reaches the same post-exit collect step through a different route, so
-    the boundary is asserted here too: without it the reader's failure is
-    translated as the run's deadline and then replaced by the invariant
-    failure a missing configured timeout produces.
+
+@pytest.mark.parametrize("entry_point", ["run", "lines"])
+@pytest.mark.parametrize("child", sorted(_CHILD_SCRIPTS))
+def test_reader_timeout_is_not_reported_as_the_run_deadline(
+    python_builder: cabc.Callable[..., SafeCmd],
+    entry_point: str,
+    child: str,
+) -> None:
+    """A reader's own ``TimeoutError`` reaches the caller unchanged.
+
+    Both routes are covered. A child that exits first exercises the post-exit
+    collect; one that stays alive exercises the exit rendezvous. The run
+    configures no ``timeout=``, so there is no deadline that could
+    legitimately expire. Before the fix either arm caught the reader's
+    exception, emitted the ``timeout`` phase, and — with no configured timeout
+    to report — replaced it with an invariant failure.
     """
-    command = python_builder("-c", "print('reader')")
+    command = python_builder("-c", _CHILD_SCRIPTS[child])
     sentinel = _ReaderTimeoutError("reader timed out")
+    seen: list[LineStreamEvent] = []
 
     def fail_reader(_event: LineEvent) -> None:
         """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
         raise sentinel
 
-    with pytest.raises(_ReaderTimeoutError) as caught:
-        asyncio.run(command.run(output=RunOutputOptions(on_line=fail_reader)))
+    async def drive() -> None:
+        """Run the command, iterating lines when that entry point is selected."""
+        output = RunOutputOptions(on_line=fail_reader)
+        if entry_point == "run":
+            await command.run(output=output)
+        else:
+            async for _event in command.lines(output=output):
+                pass
+
+    with (
+        observe_line_stream(seen.append),
+        pytest.raises(_ReaderTimeoutError) as caught,
+    ):
+        asyncio.run(asyncio.wait_for(drive(), _READER_WATCHDOG_S))
 
     assert caught.value is sentinel, (
-        f"the caller must receive the reader's own exception, got {caught.value!r}"
+        f"{entry_point} must receive the reader's own exception, got {caught.value!r}"
     )
+    phases = [event.phase for event in seen]
+    assert LineStreamPhase.TIMEOUT not in phases, (
+        f"{entry_point} must not report a reader failure as the deadline, got "
+        f"{phases!r}"
+    )
+    if entry_point == "lines":
+        assert [(event.sink, event.error_type) for event in seen if event.sink] == [
+            ("callback", "_ReaderTimeoutError"),
+        ], f"the reader failure must remain observable, got {seen!r}"
+        assert {
+            LineStreamPhase.TEARDOWN_STARTED,
+            LineStreamPhase.TEARDOWN_COMPLETED,
+        } <= set(phases), (
+            f"a reader failure must still reconcile the run, got {phases!r}"
+        )

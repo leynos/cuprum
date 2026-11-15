@@ -27,6 +27,7 @@ from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
     _drain_context,
+    _is_early_failure,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
@@ -72,26 +73,47 @@ async def _wait_for_streamed_process_exit(
     tasks: _RunTaskOwnership,
     pid: int | None,
 ) -> tuple[int, float]:
-    """Wait for the exit or a stdin failure, reconciling when that wait fails.
+    """Wait for the exit or an early task failure, reconciling when it fails.
 
-    The stdin writer runs alongside the exit wait, so a producer that fails
-    ends the run there rather than after the child's own exit — see
+    The stdin writer and the stream consumers run alongside the exit wait, so a
+    task that fails ends the run there rather than after a child exit that may
+    never come — see
     :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
-    Whatever that race raises — a deadline expiry, a producer failure, a
-    cancellation — lands in the handlers below, which already reconcile every
-    stream task before the error propagates.
+    Whatever that race raises — a deadline expiry, a producer or consumer
+    failure, a cancellation — lands in the handlers below, which already
+    reconcile every stream task before the error propagates.
 
     Returns
     -------
     tuple[int, float]
         The exit code and exit timestamp, as produced by the race.
+
+    Raises
+    ------
+    TimeoutError
+        When this run's deadline expires, or when a stdin writer or stream
+        consumer failed with a ``TimeoutError`` of its own. The second case is
+        re-raised unchanged rather than translated: it is the task's own error,
+        and identity is what tells the two apart.
     """
     try:
         return await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(process, execution),
             tasks.stdin_task,
+            consumers=tasks.consumers,
         )
     except TimeoutError as exc:
+        # A ``TimeoutError`` can arrive here two ways, and only one of them is
+        # this run's deadline. A callback or stdin producer that failed with
+        # one is a monitored task's own error, re-raised by the race unchanged;
+        # ``TimeoutError`` is an ``OSError`` subclass, so a type check alone
+        # cannot tell them apart. Identity can, and it is exact: the race
+        # raises the very object the task carries. Reconciling without
+        # capturing, then re-raising, is the route every other non-timeout
+        # failure already takes.
+        if _is_early_failure(exc, tasks.stdin_task, tasks.consumers):
+            await _reconcile_shielded(execution, tasks, pid, preserve=False)
+            raise
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.

@@ -45,7 +45,10 @@ from cuprum._subprocess_deadline import (
     _wait_for_exit_code,
     _wait_for_exit_code_within_timeout,
 )
-from cuprum._subprocess_rendezvous import _await_exit_or_writer_failure
+from cuprum._subprocess_rendezvous import (
+    _await_exit_or_writer_failure,
+    _is_early_failure,
+)
 from cuprum._subprocess_stdin_reclaim import _cancel_stdin_writer
 from cuprum._subprocess_wait_types import _ConsumerPair, _DrainContext
 
@@ -193,6 +196,11 @@ __all__ = [
     "_deadline_for_collection",
     "_drain_context",
     "_drain_stream_consumers",
+    # Re-exported from ``cuprum._subprocess_rendezvous`` beside the race it
+    # belongs to: the exit-wait callers use it to tell a monitored task's
+    # failure from the run's own deadline. Sorted into place rather than
+    # grouped, because the linter requires this list to stay isort-ordered.
+    "_is_early_failure",
     "_reconcile_run_tasks",
     "_wait_for_exit_code",
     "_wait_for_exit_code_within_timeout",
