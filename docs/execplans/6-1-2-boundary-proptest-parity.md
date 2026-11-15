@@ -1,12 +1,12 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `fdb0e4660`; hosted review pending. Every
+eight commit gates green on candidate `1779a8459`; hosted review pending. Every
 commit above that head touches documentation only, and the Markdown-scoped
 gates are re-run for each.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
-`origin/main` at `c378e2329bd606630c9dc0b5efe8c02d3da69a55`. Issues #90, #124,
+`origin/main` at `c62447d824b9d68fbf310b7e9b941fce2f54ff91`. Issues #90, #124,
 and #127 are closed; their merged work is recorded under
 [Conformance basis](#conformance-basis). The implementation adds the
 extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
@@ -469,11 +469,12 @@ ownership and error contracts, stop and report the exact incompatibility.
     `test-extension`. The ordinary routes are byte-identical to before, which
     the added contract test pins in both directions.
 - [x] (2026-11-15) The full sequential bundle is green at
-  `fdb0e466004202d89fd66dd4baa5551acaa44307` against base `c378e2329`, with
-  every log naming that head and that base, diff `fa9163ff6…` identical at
-  start and end, `DIRTY_AT_END: 0`, and an `# EXIT:` footer. Results:
-  `check-fmt` 2s; `typecheck` 1s; `markdownlint` 22s; `nixie` 1s;
-  `lint-windows` 25s; `test-extension` 175s with `running 30 tests` and
+  `fdb0e466004202d89fd66dd4baa5551acaa44307` against base `c378e2329` — a head
+  and base since superseded, kept as history rather than as evidence for the
+  current tree — with every log naming that head and that base, diff
+  `fa9163ff6…` identical at start and end, `DIRTY_AT_END: 0`, and an `# EXIT:`
+  footer. Results: `check-fmt` 2s; `typecheck` 1s; `markdownlint` 22s; `nixie`
+  1s; `lint-windows` 25s; `test-extension` 175s with `running 30 tests` and
   `30 passed; 0 failed; 8 filtered out`; `test` 1015s with zero `FAILED`, the
   aggregate pytest invocation at 4,986 passed / 20 skipped / 3 deselected,
   Nextest 189 passed with 30 skipped, and all doctests ok; `lint` 284s with
@@ -490,6 +491,25 @@ ownership and error contracts, stop and report the exact incompatibility.
   lines, and `git diff c378e2329..HEAD -- AGENTS.md` is empty. Only the entry
   above describes the current tree; the earlier bundle is kept as history of
   what was green and when, not as evidence for this head.
+- [x] (2026-11-15) Rebase onto `origin/main` `c62447d82` and re-gate. `main`
+  advanced to `#699`/`#549` — a real code change overlapping five files this
+  branch touches — which made the PR `CONFLICTING` and so suppressed CI. One
+  conflict was reported, in the ADR, and resolved by keeping both addenda in
+  date order (`2026-11-03` here, then upstream's `2026-11-07`); the other four
+  files auto-merged, and each reduces to this branch's additive delta over
+  upstream's structure with a byte-identical stripped patch. One repair was
+  needed and belongs to the rebase, not to the branch: weave's auto-resolution
+  of `test_native_pump_executor_lifecycle.py` left a duplicated module
+  docstring mid-file, the constant block above a stranded helper import, and a
+  split `TYPE_CHECKING` guard. `check-fmt` caught it in one second through an
+  unsorted import. The file was rebuilt to its intended shape — differing from
+  the pre-rebase version only by upstream's own `_pipeline_stream_completion`
+  move — and the repair was squashed into the commit that owns the file, so
+  history carries the correct content rather than a cosmetic follow-up. All
+  eight gates then passed on `1779a8459` against base `c62447d82`; every log
+  records `# DIFF_SHA256: f44c348b0...` in its header and the same value at its
+  end, with `# DIRTY_AT_END: 0`. The parity lane again refused to pass without
+  its full complement: `running 30 tests`, `30 passed; 0 failed`.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -981,11 +1001,11 @@ The original implementation-planning baseline was fetched `origin/main` at
 commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
 repeatedly as `main` advanced. The implementation branch's current base, and
 the one this document's conformance claims are made against, is `origin/main` at
-`c378e2329bd606630c9dc0b5efe8c02d3da69a55`. The branch sits directly on it
-with no open rebase. Earlier bases — `dedb39514`, `e170f908f`, and `7d56d0be8`
-on 2026-11-03, and `40d56d69f` before them — are superseded and kept only as
-history. Local recovery refs retain the pre-rebase head, base, target, and
-remote head. The original plan was drafted from
+`c62447d824b9d68fbf310b7e9b941fce2f54ff91`. The branch sits directly on it
+with no open rebase. Earlier bases — `c378e2329`, `dedb39514`, `e170f908f`, and
+`7d56d0be8` on 2026-11-03, and `40d56d69f` before them — are superseded and
+kept only as history. Local recovery refs retain the pre-rebase head, base,
+target, and remote head. The original plan was drafted from
 `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate task-specific
 terms-of-reference document. The governing documents at the latest baseline are
 `docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust extension strategy),
