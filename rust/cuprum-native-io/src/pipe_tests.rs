@@ -155,16 +155,25 @@ fn read_all(reader: &OwnedStream, chunk_len: usize) -> io::Result<Vec<u8>> {
     // zero-length chunk gets one byte instead of a false end of stream.
     let buffer_len = chunk_len.max(1);
     let mut buffer = vec![0_u8; buffer_len];
-    loop {
-        let count = read_payload(borrow(reader), &mut buffer)?;
-        if count == 0 {
-            return Ok(collected);
-        }
-        let chunk = buffer.get(..count).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "pipe read exceeded its buffer")
-        })?;
+    while let Some(chunk) = read_chunk(reader, &mut buffer)? {
         collected.extend_from_slice(chunk);
     }
+    Ok(collected)
+}
+
+/// Read once into `buffer`, returning the filled prefix, or `None` at EOF.
+fn read_chunk<'buffer>(
+    reader: &OwnedStream,
+    buffer: &'buffer mut [u8],
+) -> io::Result<Option<&'buffer [u8]>> {
+    let count = read_payload(borrow(reader), buffer)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    buffer
+        .get(..count)
+        .map(Some)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "pipe read exceeded its buffer"))
 }
 
 /// Convert a signed native count into a length, rejecting impossible values.

@@ -149,25 +149,27 @@ mod tests {
         }
     }
 
-    #[test]
-    fn only_broken_pipe_and_connection_reset_are_nonfatal() {
-        let nonfatal_kinds = [io::ErrorKind::BrokenPipe, io::ErrorKind::ConnectionReset];
-        for kind in nonfatal_kinds {
-            let err = PumpError::from(io::Error::new(kind, "closed"));
-            assert!(err.is_nonfatal_write(), "{kind:?} must be non-fatal");
-        }
+    #[rstest]
+    #[case::broken_pipe(io::ErrorKind::BrokenPipe)]
+    #[case::connection_reset(io::ErrorKind::ConnectionReset)]
+    fn broken_pipe_and_connection_reset_are_nonfatal(#[case] kind: io::ErrorKind) {
+        let err = PumpError::from(io::Error::new(kind, "closed"));
+        assert!(err.is_nonfatal_write(), "{kind:?} must be non-fatal");
+    }
 
-        let fatal_kinds = [
-            io::ErrorKind::NotFound,
-            io::ErrorKind::PermissionDenied,
-            io::ErrorKind::WriteZero,
-            io::ErrorKind::Interrupted,
-            io::ErrorKind::Other,
-        ];
-        for kind in fatal_kinds {
-            let err = PumpError::from(io::Error::new(kind, "boom"));
-            assert!(!err.is_nonfatal_write(), "{kind:?} must be fatal");
-        }
+    #[rstest]
+    #[case::not_found(io::ErrorKind::NotFound)]
+    #[case::permission_denied(io::ErrorKind::PermissionDenied)]
+    #[case::write_zero(io::ErrorKind::WriteZero)]
+    #[case::interrupted(io::ErrorKind::Interrupted)]
+    #[case::other(io::ErrorKind::Other)]
+    fn other_io_kinds_are_fatal(#[case] kind: io::ErrorKind) {
+        let err = PumpError::from(io::Error::new(kind, "boom"));
+        assert!(!err.is_nonfatal_write(), "{kind:?} must be fatal");
+    }
+
+    #[test]
+    fn overflow_variants_are_fatal() {
         assert!(!PumpError::LengthOverflow.is_nonfatal_write());
         assert!(!PumpError::BufferRangeExceeded.is_nonfatal_write());
     }
