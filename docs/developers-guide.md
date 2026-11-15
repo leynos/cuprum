@@ -1158,7 +1158,7 @@ approved local extension that began as a byte-for-byte copy from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
 Concordat issue 157, and now adds the parallel frontend (`-Zthreads=8`) beside
 the linker (see "Build standard exception" below); its SHA-256 is
-`bc3df86603d20cd91a991952018f15e80271bc6ee25641e54aab294b8e76f998`.
+`294eb72597a3b97984cedfb14a14ee974b4af5aacedacc1771bd5f6f8f1cd989`.
 
 Run `make dev-fast-check` before the first Linux accelerated build. It requires
 the `clippy` component on the dev-fast nightly (and `rustc-codegen-cranelift`

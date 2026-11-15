@@ -22,7 +22,7 @@ if typ.TYPE_CHECKING:
     from collections import abc as cabc
 
 
-FRAGMENT_SHA256 = "bc3df86603d20cd91a991952018f15e80271bc6ee25641e54aab294b8e76f998"
+FRAGMENT_SHA256 = "294eb72597a3b97984cedfb14a14ee974b4af5aacedacc1771bd5f6f8f1cd989"
 FRAGMENT = "tools/dev-fast/config.toml"
 RUST_MEMBERS = ("cuprum-rust", "cuprum-streams", "cuprum-native-io")
 # The Clippy leaf's own arguments are identical on every host; only the Cargo
