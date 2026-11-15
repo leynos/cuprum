@@ -3,7 +3,7 @@
 These cases are opt-in: the default suite needs neither a socket nor the
 `openssl` binary. `make boundary-download-integration` sets the variable they
 require. Each case asserts on both the published artefact and the absence of a
-pending or partial file, so a refused transfer is shown to fail closed.
+staging or partial file, so a refused transfer is shown to fail closed.
 
 The unit cases that drive a fake response through the same bounds live in
 `test_boundary_pypy_transfer.py`.
@@ -27,6 +27,7 @@ from scripts import install_pypy312 as installer
 from scripts import pypy_download as downloader
 from scripts.tests import boundary_download_scenarios as scenarios
 from scripts.tests import boundary_download_support as support
+from scripts.tests.boundary_pypy_transfer_support import staged_siblings
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -111,8 +112,8 @@ class TestControlledHttpsTransfer(_HttpsCase):
         assert destination.read_bytes() == scenarios.FIXED_BODY, (
             "the verified body must be published unchanged"
         )
-        assert not destination.with_name(f"{destination.name}.download").exists(), (
-            "no pending file may survive publication"
+        assert staged_siblings(destination) == [], (
+            "no staging file may survive publication"
         )
         assert [request.path for request in server.requests] == ["/asset.bin"], (
             "a verified download must make exactly one request"
@@ -152,9 +153,7 @@ class TestControlledHttpsTransfer(_HttpsCase):
             "the refusal must follow exactly the expected request path"
         )
         assert not destination.exists(), "the destination must not be created"
-        assert not destination.with_name(f"{destination.name}.download").exists(), (
-            "the pending file must be discarded"
-        )
+        assert staged_siblings(destination) == [], "the staging file must be discarded"
 
     @NO_DOWNLOAD_INTEGRATION
     @pytest.mark.parametrize(
@@ -185,9 +184,7 @@ class TestControlledHttpsTransfer(_HttpsCase):
             "not wait for the server to close"
         )
         assert not destination.exists(), "the destination must not be created"
-        assert not destination.with_name(f"{destination.name}.download").exists(), (
-            "the pending file must be discarded"
-        )
+        assert staged_siblings(destination) == [], "the staging file must be discarded"
 
 
 class TestControlledHttpsInstall(_HttpsCase):
@@ -216,9 +213,9 @@ class TestControlledHttpsInstall(_HttpsCase):
         assert installation.python.stat().st_mode & 0o111, (
             "the extracted interpreter is not executable"
         )
-        assert not installation.archive.with_name(
-            f"{installation.archive.name}.download"
-        ).exists(), "no pending file may survive a successful install"
+        assert staged_siblings(installation.archive) == [], (
+            "no staging file may survive a successful install"
+        )
 
     @NO_DOWNLOAD_INTEGRATION
     @pytest.mark.skipif(
@@ -240,9 +237,9 @@ class TestControlledHttpsInstall(_HttpsCase):
             with pytest.raises(ValueError, match="limit"):
                 installer.install(installation)
         assert not installation.archive.exists(), "a failed install must not cache"
-        assert not installation.archive.with_name(
-            f"{installation.archive.name}.download"
-        ).exists(), "a failed install must not leave a pending file"
+        assert staged_siblings(installation.archive) == [], (
+            "a failed install must not leave a staging file"
+        )
         assert not installation.root.exists(), "a failed install must not extract"
 
 

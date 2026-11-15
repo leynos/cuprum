@@ -263,6 +263,8 @@ else
 LOCAL_TOOL_PATH = $(HOME)/.local/bin:$(HOME)/.bun/bin:$(PATH)
 LOCAL_TOOL_ENV = PATH="$(LOCAL_TOOL_PATH)"
 endif
+# Windows prepends no private tool directories, so its tool path is plain PATH.
+LOCAL_TOOL_PATH ?= $(PATH)
 UV_RUN_ENV = $(LOCAL_TOOL_ENV) $(UV_ENV)
 RUFF_ENV = RAYON_NUM_THREADS=1
 # Pin Ruff so `make` invokes the same version as the `ruff==` dev dependency
@@ -805,9 +807,12 @@ help: ## Show available targets
 # older make would silently drop the pin. Fail loudly instead: an empty source
 # makes `uv` resolve `prover-tools` from a package index, not the pinned commit.
 PROVER_TOOLS_SOURCE ?= $(strip $(file < tools/prover-tools/VERSION))
-PROVER_TOOLS = $(UV_RUN_ENV) uv tool run --python 3.14 \
+# The CLI invocation on its own, without an environment prefix: a target that
+# must put a cached binary ahead of `~/.local/bin` supplies its own PATH.
+PROVER_TOOLS_RUN = uv tool run --python 3.14 \
 	--from $(or $(PROVER_TOOLS_SOURCE),$(error PROVER_TOOLS_SOURCE is empty; \
 	run make from the repository root)) prover-tools
+PROVER_TOOLS = $(UV_RUN_ENV) $(PROVER_TOOLS_RUN)
 # The shared CLI reads these ambient names as flag defaults. Every delegated
 # invocation passes its paths explicitly, so a stray CI or shell value must not
 # silently redirect an install away from the repository cache.
@@ -816,7 +821,8 @@ PROVER_TOOLS_AMBIENT_VARS = INPUT_REPO_ROOT INPUT_VERSION INPUT_VERSION_FILE \
 	INPUT_KANI_INSTALL_DIR KANI_CACHE_DIR INPUT_KANI_CACHE_DIR \
 	Z3_INSTALL_DIR INPUT_Z3_INSTALL_DIR Z3_CACHE_DIR INPUT_Z3_CACHE_DIR \
 	VERUS_INSTALL_DIR INPUT_VERUS_INSTALL_DIR VERUS_TARGET INPUT_VERUS_TARGET \
-	INPUT_VERUS_BASE_URL INPUT_CHECKSUM_FILE INPUT_VERUS_CHECKSUM_FILE
+	INPUT_VERUS_VERSION_FILE INPUT_VERUS_BASE_URL INPUT_CHECKSUM_FILE \
+	INPUT_VERUS_CHECKSUM_FILE
 PROVER_TOOLS_ENV = env $(foreach var,$(PROVER_TOOLS_AMBIENT_VARS),-u $(var))
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
@@ -843,9 +849,16 @@ boundary-verus: ## Verify actual production length/accounting kernels
 # verified binaries under `.cache` rather than somewhere already on PATH, and
 # only its own setup line exports that directory. Prepend it here so the local
 # target verifies the same Kani the install target fetched.
-boundary-kani: export PATH := $(CURDIR)/.cache/boundary-kani/bin:$(PATH)
+KANI_CACHED_BIN = $(CURDIR)/.cache/boundary-kani/bin
+# `UV_RUN_ENV` puts `~/.local/bin` ahead of the target's PATH, so running the
+# version check through `PROVER_TOOLS` would let an older `cargo-kani` installed
+# there answer for the cached frontend the proof commands below use. Name the
+# cache first and the local tool path after it instead.
+PROVER_TOOLS_CACHED_FIRST = PATH="$(KANI_CACHED_BIN):$(LOCAL_TOOL_PATH)" \
+	$(UV_ENV) $(PROVER_TOOLS_RUN)
+boundary-kani: export PATH := $(KANI_CACHED_BIN):$(PATH)
 boundary-kani: ## Check bounded native ownership and existing policy proofs
-	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS) kani check-version
+	$(PROVER_TOOLS_ENV) $(PROVER_TOOLS_CACHED_FIRST) kani check-version
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-native-io
 	cd $(RUST_DIR) && LD_LIBRARY_PATH="$(KANI_LIBRARY_PATH)" $(CARGO) kani --package cuprum-streams
 

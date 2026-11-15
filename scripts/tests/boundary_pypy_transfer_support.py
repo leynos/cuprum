@@ -140,6 +140,28 @@ def download_response(
     )
 
 
+def staged_siblings(archive: Path) -> list[Path]:
+    """Return the staging files a transfer for `archive` may have left.
+
+    Each transfer names its staging file with a random token, so a test cannot
+    name one in advance and asserts on this sweep instead. An empty result is
+    only evidence that nothing was left behind once a test has observed a
+    staging file through this helper during the transfer.
+
+    Returns
+    -------
+    list[Path]
+        Every sibling carrying the destination name, a token, and the staging
+        suffix, sorted by name.
+    """
+    prefix = f"{archive.name}."
+    return sorted(
+        sibling
+        for sibling in archive.parent.iterdir()
+        if sibling.name.startswith(prefix) and sibling.name.endswith(".download")
+    )
+
+
 def fixed_clock() -> float:
     """Return a clock that never advances, so only bytes can stop a copy."""
     return 0.0

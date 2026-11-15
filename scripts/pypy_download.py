@@ -9,6 +9,10 @@ trickles bytes, or stalls a close-delimited body, cannot hold the transfer
 open. Without these bounds a stalled or oversized response would fill the host
 disk before the digest check could reject it.
 
+Each transfer stages its bytes in a file no other transfer shares and publishes
+that file only after the digest matches, so two installers racing on one cache
+path cannot truncate or remove each other's bytes.
+
 The clock, connection factory, and metric sink all enter through
 `Environment`, so a test drives this public boundary with fakes instead of
 patching the module.
@@ -17,12 +21,17 @@ patching the module.
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import http.client
 import time
 import typing as typ
 import urllib.parse
 
+from scripts.pypy_download_cache import (
+    ChecksumMismatchError,
+    digest_of,
+    publish,
+    stage,
+)
 from scripts.pypy_download_deadline import (
     _arm_socket,
     _deadline_failures,
@@ -61,14 +70,14 @@ _TRANSFER_DEADLINE_SECONDS = 900.0
 # forever; a release asset is served in one or two hops.
 _MAX_REDIRECTS = 6
 _CHUNK_BYTES = 64 * 1024
+# A killed transfer can leave a staging file behind, so a later run removes
+# siblings older than twice the deadline: no live transfer, whose own file is
+# bounded by that deadline, can be that old.
+_STALE_STAGING_SECONDS = 2 * _TRANSFER_DEADLINE_SECONDS
 
 
 class _OversizeError(ValueError):
     """A response declared or streamed more bytes than the ceiling allows."""
-
-
-class _ChecksumMismatchError(ValueError):
-    """A completed body did not match the approved digest."""
 
 
 class Connect(typ.Protocol):
@@ -102,11 +111,11 @@ class Environment:
 _DEFAULT_ENVIRONMENT = Environment()
 
 # Ordered so a subclass is matched before its base: `_OversizeError` and
-# `_ChecksumMismatchError` are `ValueError`s, and `TimeoutError` is an
+# `ChecksumMismatchError` are `ValueError`s, and `TimeoutError` is an
 # `OSError`. A failure matching none of them is still a transfer failure.
 _FAILURE_OUTCOMES: typ.Final[tuple[tuple[type[BaseException], str], ...]] = (
     (_OversizeError, OVERSIZE),
-    (_ChecksumMismatchError, CHECKSUM_MISMATCH),
+    (ChecksumMismatchError, CHECKSUM_MISMATCH),
     (TimeoutError, DEADLINE),
     (ValueError, REFUSED),
     (OSError, TRANSFER_ERROR),
@@ -121,6 +130,10 @@ def checked_download(
     environment: Environment = _DEFAULT_ENVIRONMENT,
 ) -> None:
     """Fetch an HTTPS artefact and fail closed on any checksum mismatch.
+
+    Two calls for one destination may run at the same time: each stages into
+    its own file, verifies that file, and replaces the cache entry atomically,
+    so neither call can publish bytes it did not verify.
 
     Parameters
     ----------
@@ -142,7 +155,7 @@ def checked_download(
         If the URL is not HTTPS.
     _OversizeError
         If the response declares or streams more bytes than the ceiling allows.
-    _ChecksumMismatchError
+    ChecksumMismatchError
         If the body does not match the approved digest.
     TimeoutError
         If the transfer outlives the transfer deadline.
@@ -151,26 +164,26 @@ def checked_download(
         be transferred into the cache.
     """  # ruff: ignore[docstring-extraneous-exception] - the transfer helpers raise every listed type.
     started = environment.clock()
-    # Append the suffix rather than replace it: `with_suffix` would map
-    # `x.tar.gz` and `x.tar.bz2` onto the same staging path.
-    pending = destination.with_name(f"{destination.name}.download")
+    pending: Path | None = None
     try:
         _require_https(url)
         if _cache_is_current(destination, digest):
             outcome, written = CACHED, _size_or_zero(destination)
         else:
+            pending = stage(destination, stale_after_seconds=_STALE_STAGING_SECONDS)
             _download(url, pending, environment)
-            _publish(pending, destination, digest)
+            publish(pending, destination, digest)
             outcome, written = SUCCESS, _size_or_zero(destination)
     except Exception as error:
         # Measured before the cleanup below discards what the transfer wrote.
-        pending_bytes = _size_or_zero(pending)
+        pending_bytes = _size_or_zero(pending) if pending is not None else 0
         _report(environment, _failure_outcome(error), pending_bytes, started)
         raise
     finally:
         # Cleanup keeps its own block: even a reporting path that fails must
-        # not leave a partial `.download` file behind the failed transfer.
-        pending.unlink(missing_ok=True)
+        # not leave this transfer's staging file behind the failed transfer.
+        if pending is not None:
+            pending.unlink(missing_ok=True)
     _report(environment, outcome, written, started)
 
 
@@ -198,12 +211,6 @@ def _failure_outcome(error: BaseException) -> str:
     return TRANSFER_ERROR
 
 
-def _publish(pending: Path, destination: Path, digest: str) -> None:
-    """Verify the pending bytes, then move them into the cache."""
-    _require_digest(pending, destination, digest)
-    pending.replace(destination)
-
-
 def _size_or_zero(path: Path) -> int:
     """Report a file's size, treating an absent file as empty."""
     try:
@@ -225,17 +232,10 @@ def _cache_is_current(destination: Path, digest: str) -> bool:
         ``True`` only for a readable entry whose digest already matches.
     """
     try:
-        current = _digest(destination)
+        current = digest_of(destination)
     except FileNotFoundError:
         return False
     return current == digest
-
-
-def _require_digest(pending: Path, destination: Path, digest: str) -> None:
-    """Refuse downloaded bytes that do not match the approved digest."""
-    if _digest(pending) != digest:
-        msg = f"binary checksum mismatch: {destination.name}"
-        raise _ChecksumMismatchError(msg)
 
 
 def _download(
@@ -385,9 +385,3 @@ def _send_request(
     connection.request(
         "GET", target, headers={"User-Agent": "cuprum-boundary-verification"}
     )
-
-
-def _digest(path: Path) -> str:
-    """Hash a release artefact without loading the bundle into memory."""
-    with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()

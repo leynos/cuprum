@@ -28,6 +28,7 @@ from scripts.tests.boundary_pypy_transfer_support import (
     fixed_clock,
     manual_clock,
     redirect_response,
+    staged_siblings,
     streaming_response,
 )
 
@@ -255,8 +256,8 @@ class TestBoundedBody:
             )
         assert body.read1.call_count == 2, "the final hop must serve its body"
         assert not archive.exists(), "a timed-out transfer must publish nothing"
-        assert not archive.with_name(f"{archive.name}.download").exists(), (
-            "a timed-out transfer must leave no pending file"
+        assert staged_siblings(archive) == [], (
+            "a timed-out transfer must leave no staging file"
         )
 
     def test_a_redirected_download_inside_the_deadline_publishes_the_body(

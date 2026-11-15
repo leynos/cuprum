@@ -16,12 +16,14 @@ from unittest import mock
 import pytest
 
 from scripts import pypy_download as downloader
+from scripts import pypy_download_cache as cache
 from scripts import pypy_download_metrics as metrics
 from scripts.tests.boundary_pypy_transfer_support import (
     RecordingMetrics,
     fake_environment,
     fake_response,
     manual_clock,
+    staged_siblings,
     streaming_response,
 )
 
@@ -125,7 +127,7 @@ def test_a_cache_hit_reports_the_cached_outcome(tmp_path: Path) -> None:
     ("error", "outcome"),
     [
         (downloader._OversizeError("too large"), metrics.OVERSIZE),
-        (downloader._ChecksumMismatchError("mismatch"), metrics.CHECKSUM_MISMATCH),
+        (cache.ChecksumMismatchError("mismatch"), metrics.CHECKSUM_MISMATCH),
         (TimeoutError("late"), metrics.DEADLINE),
         (ValueError("refused"), metrics.REFUSED),
         (OSError("reset"), metrics.TRANSFER_ERROR),
@@ -289,8 +291,8 @@ def test_a_failing_sink_cannot_fail_a_published_download(
     assert destination.read_bytes() == body, (
         "a failing sink must not fail a download whose archive was published"
     )
-    assert not destination.with_name(f"{destination.name}.download").exists(), (
-        "the pending file must not survive the finished transfer"
+    assert staged_siblings(destination) == [], (
+        "the staging file must not survive the finished transfer"
     )
     warned = [
         record
@@ -322,7 +324,7 @@ def test_a_failing_sink_does_not_replace_the_transfer_error(
             "0" * 64,
             environment=fake_environment(sink=_ExplodingSink()),
         )
-    assert not destination.with_name(f"{destination.name}.download").exists(), (
+    assert staged_siblings(destination) == [], (
         "the partial download must be removed even when the sink fails"
     )
 

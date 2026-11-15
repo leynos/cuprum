@@ -380,10 +380,15 @@ the pinned archive, so that command stays the single owner of native setup. The
 three downloads share one bounded transport: an oversized declared length is
 rejected before the destination opens, streamed bytes are counted against an
 asset ceiling, and connection setup, the request, header parsing, and the body
-are bounded by one monotonic deadline. Each blocking phase is re-armed with the
-time that remains rather than the budget its hop opened with, because a socket
-timeout bounds one call rather than a sequence of them. The standard library
-applies a hop's timeout to every resolved address in turn and reuses it for TLS
+are bounded by one monotonic deadline. Each hop arms one socket timeout fixed
+at the smaller of the per-hop limit and the time the deadline leaves. Body
+reads re-arm that socket with the time remaining, because a socket timeout
+bounds one call rather than a sequence of them; connection setup, TLS
+negotiation, and the request send run under the hop's own timeout instead, so
+those phases can still consume their timeout after the deadline has passed.
+[rust-prover-tools issue 252](https://github.com/leynos/rust-prover-tools/issues/252)
+tracks arming those phases with the time left. The standard library applies a
+hop's timeout to every resolved address in turn and reuses it for TLS
 negotiation, so a multi-address host can overrun that deadline by one hop
 timeout per address. Host name resolution is bounded only by the system
 resolver, because it happens before the connection exists. Z3 lands at

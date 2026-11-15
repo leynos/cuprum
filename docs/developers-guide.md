@@ -5937,12 +5937,17 @@ and Z3 installation is delegated to the pinned `leynos/rust-prover-tools`
 revision. Its shared downloader accepts only HTTPS, follows a bounded number of
 redirects, rejects an oversized `Content-Length` before the destination opens,
 counts streamed bytes against a per-asset ceiling, and applies one monotonic
-deadline across redirects, header parsing, and the body. Every hop is bounded
-by the time that deadline leaves: opening a connection, negotiating TLS, and
-sending the request all run under the smaller of the per-hop limit and the
-remaining budget, and a hop that starts with no time left is refused before a
-socket opens. A deadline watchdog shuts the socket down, so a response that
-trickles bytes or headers cannot outlive the deadline. The verified archive is
+deadline across redirects, header parsing, and the body. A hop that starts with
+no time left is refused before a socket opens, and each hop arms one socket
+timeout fixed at the smaller of the per-hop limit and the time the deadline
+leaves. Body reads re-arm that socket with the time remaining, and once the
+request has been sent a deadline watchdog shuts it down, so a response that
+trickles bytes or headers cannot hold the transfer past the deadline.
+Connection setup, TLS negotiation, and the request send run under the hop's own
+timeout, before the watchdog exists, so they are not re-armed and can still
+consume their full timeout after the deadline has passed.
+[rust-prover-tools issue 252](https://github.com/leynos/rust-prover-tools/issues/252)
+tracks arming those phases with the time left. The verified archive is
 published atomically only after the SHA-256 check. Cuprum's
 `make install-boundary-kani` and `make install-verus` pass explicit repository,
 install, and cache paths, and the Kani target also names its version file and
@@ -6010,11 +6015,18 @@ certificate authority through `SSL_CERT_FILE` for the duration of one test.
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone.
 `scripts/pypy_download.py` owns the linter interpreter's bounded HTTPS fetch,
-including its byte ceiling, transfer deadline, and digest check. Every
-dependency it cannot supply itself — the monotonic clock, the HTTPS connection
-factory, the metric sink, and the logger its span record is written through —
-enters through the `Environment` passed to `checked_download`, so a test
-injects its doubles at the public boundary rather than patching the module.
+including its byte ceiling, transfer deadline, and digest check. Each transfer
+stages its bytes in a sibling file named for the destination plus a random
+token and publishes it only once the digest matches, so two installers sharing
+one cache path cannot truncate or unlink each other's bytes. Only staging
+siblings older than twice the transfer deadline are swept, so a later run still
+collects a killed transfer's debris without ever removing a live transfer's
+file. `scripts/pypy_download_cache.py` owns that staging name, the sweep of
+expired siblings, the digest check, and the atomic publish. Every dependency it
+cannot supply itself — the monotonic clock, the HTTPS connection factory, the
+metric sink, and the logger its span record is written through — enters through
+the `Environment` passed to `checked_download`, so a test injects its doubles
+at the public boundary rather than patching the module.
 `scripts/install_pypy312.py` owns the release layout and the extraction that
 turns a verified archive into the configured interpreter.
 `scripts/pypy_download_metrics.py` owns the download's observability: one
@@ -6033,7 +6045,7 @@ record by supplying its own logger through the `logger` field.
 logger. Reporting is diagnostic, so a backend that raises is logged as a
 warning and discarded: telemetry can neither fail a download whose archive was
 verified and published nor replace the transfer error on its way to the caller,
-and the pending file is removed even when the reporting path fails.
+and this transfer's staging file is removed even when the reporting path fails.
 `scripts/boundary_fault_invocations.py` scopes its runner to the four
 verification commands and a disposable source copy; it is not a general process
 abstraction. `scripts/check_boundary_faults.py` owns the fault catalogue and

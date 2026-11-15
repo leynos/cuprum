@@ -49,6 +49,7 @@ AMBIENT_INSTALL_VARIABLES = (
     "INPUT_VERUS_INSTALL_DIR",
     "VERUS_TARGET",
     "INPUT_VERUS_TARGET",
+    "INPUT_VERUS_VERSION_FILE",
     "INPUT_VERUS_BASE_URL",
     "INPUT_CHECKSUM_FILE",
     "INPUT_VERUS_CHECKSUM_FILE",
@@ -73,6 +74,24 @@ failure = os.environ.get("FAKE_FAIL_ARGS")
 if failure and sys.argv[1:3] == json.loads(failure):
     print("fake prover-tools failure", file=sys.stderr)
     raise SystemExit(1)
+"""
+
+# The version check runs through `uv tool run`, so a fake `uv` on PATH can
+# record which `cargo-kani` the environment it receives would select. That is
+# the frontend the proof commands that follow would run.
+_FAKE_UV = """\
+#!/bin/sh
+{
+  printf 'resolved=%s\\n' "$(command -v cargo-kani)"
+  printf 'path=%s\\n' "$PATH"
+} > "$FAKE_RESOLVE_LOG"
+"""
+
+# A competing frontend stays dormant unless something executes it, so its log
+# only ever records an identity if it was actually selected.
+_FAKE_FRONTEND = """\
+#!/bin/sh
+printf '%s\\n' "{identity}" >> "$FAKE_FRONTEND_LOG"
 """
 
 
@@ -152,8 +171,21 @@ def _run_make(
     workdir: Path,
     call: MakeCall,
     fakes: FakeTools,
+    *,
+    delegate: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run one Make target in `workdir` with the fake tools in place."""
+    """Run one Make target in `workdir` with the fake tools in place.
+
+    `delegate` supplies the fake `prover-tools`. A test that observes how the
+    recipe itself resolves the tool passes `delegate=False` instead, because a
+    `PROVER_TOOLS` assignment would replace the command whose environment is
+    under test.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str]
+        The finished Make process with its captured output.
+    """
     command = [
         shutil.which("make") or "make",
         "-C",
@@ -161,10 +193,11 @@ def _run_make(
         "-f",
         str(MAKEFILE),
         call.target,
-        f"PROVER_TOOLS={fakes.command(fakes.prover_tools)}",
         f"CARGO={fakes.command(fakes.cargo)}",
-        *call.assignments,
     ]
+    if delegate:
+        command.append(f"PROVER_TOOLS={fakes.command(fakes.prover_tools)}")
+    command.extend(call.assignments)
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
         command,
         capture_output=True,
@@ -367,6 +400,75 @@ def test_a_failed_z3_install_fails_the_make_target(
         ["verus", "install"],
         ["z3", "install"],
     ], "the verifier must install before the solver it drives"
+
+
+def _write_executable(path: Path, text: str) -> Path:
+    """Write `text` to `path` and mark the result executable."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _recorded_values(log: Path) -> dict[str, str]:
+    """Parse the fake `uv` record into its keyed values."""
+    lines = log.read_text(encoding="utf-8").splitlines()
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def test_the_version_check_resolves_the_cached_kani_frontend(
+    tmp_path: Path, fakes: FakeTools
+) -> None:
+    """A stale `cargo-kani` beside the local tools must not answer for the cache.
+
+    The version check runs through the shared CLI, whose PATH would otherwise
+    put `~/.local/bin` first, while the proof commands that follow run whatever
+    `cargo kani` resolves from the target's own PATH. A frontend that differs
+    between those two steps would verify a different Kani than the proof run.
+    """
+    workdir = tmp_path / "repo"
+    cached_bin = workdir / ".cache/boundary-kani/bin"
+    _write_executable(
+        cached_bin / "cargo-kani", _FAKE_FRONTEND.format(identity="cached")
+    )
+    home = tmp_path / "home"
+    stale = _write_executable(
+        home / ".local/bin/cargo-kani", _FAKE_FRONTEND.format(identity="stale")
+    )
+    uv_dir = tmp_path / "uv-bin"
+    _write_executable(uv_dir / "uv", _FAKE_UV)
+    resolve_log = tmp_path / "resolve.log"
+    frontend_log = tmp_path / "frontend.log"
+
+    result = _run_make(
+        workdir,
+        MakeCall(
+            "boundary-kani",
+            assignments=("RUST_DIR=.", "PROVER_TOOLS_SOURCE=test-source"),
+            environment={
+                "HOME": str(home),
+                "PATH": f"{uv_dir}{os.pathsep}{os.environ['PATH']}",
+                "FAKE_RESOLVE_LOG": str(resolve_log),
+                "FAKE_FRONTEND_LOG": str(frontend_log),
+            },
+        ),
+        fakes,
+        delegate=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    recorded = _recorded_values(resolve_log)
+    assert recorded["resolved"] == str(cached_bin / "cargo-kani"), (
+        "the version check must resolve the frontend the proof commands use; "
+        f"its PATH was {recorded.get('path')!r}"
+    )
+    assert str(stale.parent) in recorded["path"].split(os.pathsep), (
+        "the local tool path must still be searched, otherwise the ordering "
+        "this case pins is not the one the recipe actually applies"
+    )
+    assert not frontend_log.exists(), (
+        "no competing frontend may be executed by the version check"
+    )
 
 
 def test_the_retired_local_installers_are_gone() -> None:

@@ -12,7 +12,10 @@ import pytest
 
 from scripts import install_pypy312 as installer
 from scripts import pypy_download as downloader
-from scripts.tests.boundary_pypy_transfer_support import connection_factory
+from scripts.tests.boundary_pypy_transfer_support import (
+    connection_factory,
+    staged_siblings,
+)
 
 #: The default suite runs these tests only while this module is named in
 #: `PYTEST_TARGETS`; the coverage job's bare `pytest` is not a substitute,
@@ -209,9 +212,7 @@ class TestCheckedDownload:
         assert archive.read_bytes() == b"old cache", (
             "corrupt download replaced the cache"
         )
-        assert not archive.with_name(f"{archive.name}.download").exists(), (
-            "partial download leaked"
-        )
+        assert staged_siblings(archive) == [], "partial download leaked"
 
     def test_an_unreadable_cache_is_refused_rather_than_replaced(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -232,7 +233,7 @@ class TestCheckedDownload:
             raise PermissionError("unreadable")
 
         monkeypatch.setattr(downloader, "_download", fetch)
-        monkeypatch.setattr(downloader, "_digest", unreadable)
+        monkeypatch.setattr(downloader, "digest_of", unreadable)
 
         with pytest.raises(PermissionError):
             installer.checked_download(
