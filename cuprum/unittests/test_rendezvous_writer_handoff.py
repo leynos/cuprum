@@ -113,8 +113,7 @@ def test_writer_failure_settled_by_the_teardown_wins_over_the_consumer() -> None
         finally:
             await retrieve(writer, consumer)
         assert caught.value is writer_failure, (
-            f"the writer's failure must win after the teardown, got "
-            f"{caught.value!r}"
+            f"the writer's failure must win after the teardown, got {caught.value!r}"
         )
         assert probe.cancelled.is_set(), (
             "the consumer's failure must cancel the exit wait, which is what "

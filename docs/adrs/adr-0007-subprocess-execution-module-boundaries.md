@@ -1651,14 +1651,14 @@ more over everything that settled. Without that second read, a run whose
 
 Two reads are still not enough, because the window has two ends. A writer that
 has already raised is _still running_ while it unwinds: its producer's
-finalizer is the caller's code and is given a window of its own, so a read taken
-during that unwinding sees a task that has not failed and falls through to the
-consumer failure the writer's own failure caused. The run therefore creates a
-`_StdinWriterLog` beside its writer, the writer publishes its failure to it
-_before_ the raise and so before that unwinding, and both precedence reads
-consult the publication ahead of the task. It is one hand-off rather than shared
-state: nothing else writes it, and it is per-run. Both streaming callers hand
-the same log to the race, so the two reads cannot disagree about it.
+finalizer is the caller's code and is given a window of its own, so a read
+taken during that unwinding sees a task that has not failed and falls through
+to the consumer failure the writer's own failure caused. The run therefore
+creates a `_StdinWriterLog` beside its writer, the writer publishes its failure
+to it _before_ the raise and so before that unwinding, and both precedence
+reads consult the publication ahead of the task. It is one hand-off rather than
+shared state: nothing else writes it, and it is per-run. Both streaming callers
+hand the same log to the race, so the two reads cannot disagree about it.
 
 The second decision is provenance. Both callers translate a `TimeoutError`
 escaping the wait into the run's deadline, and a callback may raise a

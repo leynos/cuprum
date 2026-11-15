@@ -57,7 +57,7 @@ import asyncio
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_rendezvous import _StdinWriterLog, _stdin_writer_failure
+from cuprum._subprocess_rendezvous import _stdin_writer_failure, _StdinWriterLog
 from cuprum._subprocess_startup_abandon import (
     _abandon_started_process,
     _record_started,
