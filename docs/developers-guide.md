@@ -6485,11 +6485,17 @@ with `make test-boundary-parity` after preserving the corresponding
 project `CARGO` rather than the dev-fast nightly: `make test-extension` is also
 a prerequisite of `make modern-stable`, whose lane must not provision dev-fast,
 so taking the accelerated route here would give the parity check a toolchain
-dependency the modern-stable job cannot satisfy. A focused failure should
-report the first payload mismatch, buffer size, and the producer or native
-error. For hangs, the producer helper terminates and reaps its child after 30
-seconds, then closes both pipe ends; the outer Rust boundary child retains its
-own deadline.
+dependency the modern-stable job cannot satisfy. The target itself selects no
+toolchain. It prepends whatever a caller passes in `PARITY_CARGO` — empty by
+default, so an ordinary `make test-extension` uses exactly the Cargo that built
+the extension. `make modern-stable-extension` passes
+`$(MODERN_STABLE_CARGO_ENV)`, because the lane above it built the extension
+with 1.99.1 into `rust/target/modern-stable`; running the parity cases there on
+a different toolchain would test a binary the caller never built. A focused
+failure should report the first payload mismatch, buffer size, and the producer
+or native error. For hangs, the producer helper terminates and reaps its child
+after 30 seconds, then closes both pipe ends; the outer Rust boundary child
+retains its own deadline.
 
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,

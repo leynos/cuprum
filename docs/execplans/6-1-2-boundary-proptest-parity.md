@@ -1,10 +1,10 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `857ab73f7`; hosted review pending.
+eight commit gates green on candidate `fdb0e4660`; hosted review pending.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
-`origin/main` at `dedb39514a44211494bf34c38cdd9046d81716c1`. Issues #90, #124,
+`origin/main` at `c378e2329bd606630c9dc0b5efe8c02d3da69a55`. Issues #90, #124,
 and #127 are closed; their merged work is recorded under
 [Conformance basis](#conformance-basis). The implementation adds the
 extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
@@ -80,29 +80,28 @@ ownership and error contracts, stop and report the exact incompatibility.
 ## Risks
 
 - **High impact, low likelihood, open: a write-only CRT descriptor can still
-  reach `_read`.** Raised by the hosted assessment on `3603b1e3e` and confirmed
-  against the source at `c0c8dc3e2`. `convert_crt_fd` rejects only a negative
-  or out-of-`i32` descriptor, and `os.dup` succeeds for an open descriptor
-  regardless of its access mode. Microsoft's [`_read` contract][ms-read] says
-  the invalid parameter handler is invoked when "the file isn't open for
-  reading", and the parameter-validation page states the default handler
-  terminates the process, so a caller passing an open but write-only descriptor
-  may fast-fail the interpreter rather than receive `OSError`. The existing
-  `-1` test exercises range rejection, not this case, and the pure
-  `classify_crt_read_error` tests cannot reach it because they do not cross the
-  process boundary. This is recorded rather than repaired because the fix is a
-  production change to the native descriptor boundary, which the Tolerances
-  section reserves for explicit approval, and because the decisive premise is
-  not yet established: the documentation does not say whether UCRT invokes the
-  handler or returns `-1`/`EBADF` for a *valid-range but unreadable*
-  descriptor, and the section above on `_read` records that the `-1` return is
-  reachable only when a handler is installed and permits continuation.
-  Resolution requires a Windows subprocess test that passes an owned, closed
-  descriptor and an open write-only descriptor and asserts the process survives
-  with the documented `OSError` fields. Likelihood is low because
-  `rust_consume_stream` is implemented but not integrated: no production
-  dispatch reaches it, and every in-repository caller passes a readable
-  descriptor.
+  reach `_read`.** Raised by the hosted assessment and confirmed against the
+  current source. `convert_crt_fd` rejects only a negative or out-of-`i32`
+  descriptor, and `os.dup` succeeds for an open descriptor regardless of its
+  access mode. Microsoft's [`_read` contract][ms-read] says the invalid
+  parameter handler is invoked when "the file isn't open for reading", and the
+  parameter-validation page states the default handler terminates the process,
+  so a caller passing an open but write-only descriptor may fast-fail the
+  interpreter rather than receive `OSError`. The existing `-1` test exercises
+  range rejection, not this case, and the pure `classify_crt_read_error` tests
+  cannot reach it because they do not cross the process boundary. This is
+  recorded rather than repaired because the fix is a production change to the
+  native descriptor boundary, which the Tolerances section reserves for
+  explicit approval, and because the decisive premise is not yet established:
+  the documentation does not say whether UCRT invokes the handler or returns
+  `-1`/`EBADF` for a *valid-range but unreadable* descriptor, and the section
+  above on `_read` records that the `-1` return is reachable only when a
+  handler is installed and permits continuation. Resolution requires a Windows
+  subprocess test that passes an owned, closed descriptor and an open
+  write-only descriptor and asserts the process survives with the documented
+  `OSError` fields. Likelihood is low because `rust_consume_stream` is
+  implemented but not integrated: no production dispatch reaches it, and every
+  in-repository caller passes a readable descriptor.
 
 - High impact, medium likelihood: a pre-filled pipe blocks on a large input.
   Use temporary files for generated native consumption and a concurrent
@@ -203,11 +202,12 @@ ownership and error contracts, stop and report the exact incompatibility.
   2026-11-14 bundle at `1f1484a72`. Windows consume uses a borrowed CRT
   descriptor and `_read` through the shared decoder. The Python shim duplicates
   the validated descriptor, sets only the duplicate to binary mode, and closes
-  it after the detached call. The wrapper keeps its established Windows
-  reader-first setup; the direct native entry point still validates the buffer
-  before descriptor conversion. Consume properties, Windows error/setup-cleanup
-  cases, the large subprocess-pipe BDD witness, and boundary documentation are
-  in place. A pre-rebase Windows-target `cargo check` for `cuprum-rust` passed
+  it after the detached call. The wrapper then kept its Windows reader-first
+  setup; the direct native entry point still validated the buffer before
+  descriptor conversion. **The wrapper order was reversed on 2026-11-09; see
+  the Decision log.** Consume properties, Windows error/setup-cleanup cases,
+  the large subprocess-pipe BDD witness, and boundary documentation are in
+  place. A pre-rebase Windows-target `cargo check` for `cuprum-rust` passed
   after fixing a root-module visibility error and adding the Windows-only
   stream re-export. The refreshed target rebase onto `origin/main` at
   `45c06213bd16cf1da1f4bc08a91e97ae58514629` then replayed all nine commits
@@ -467,18 +467,27 @@ ownership and error contracts, stop and report the exact incompatibility.
     `test-extension`. The ordinary routes are byte-identical to before, which
     the added contract test pins in both directions.
 - [x] (2026-11-15) The full sequential bundle is green at
-  `857ab73f76e84eba9b4eaf0762553a4fb323efb3` against base `dedb39514`, with
-  every log naming that head and that base, diff `e1906d5e0…` identical at
+  `fdb0e466004202d89fd66dd4baa5551acaa44307` against base `c378e2329`, with
+  every log naming that head and that base, diff `fa9163ff6…` identical at
   start and end, `DIRTY_AT_END: 0`, and an `# EXIT:` footer. Results:
-  `check-fmt` 1s; `typecheck` 1s; `markdownlint` 21s; `nixie` 2s;
-  `lint-windows` 1s; `test-extension` 179s with `running 30 tests` and
-  `30 passed; 0 failed; 8 filtered out`; `test` 879s with zero `FAILED`, the
+  `check-fmt` 2s; `typecheck` 1s; `markdownlint` 22s; `nixie` 1s;
+  `lint-windows` 25s; `test-extension` 175s with `running 30 tests` and
+  `30 passed; 0 failed; 8 filtered out`; `test` 1015s with zero `FAILED`, the
   aggregate pytest invocation at 4,986 passed / 20 skipped / 3 deselected,
-  Nextest 189 passed with 30 skipped, and all doctests ok; `lint` 168s with
-  `interrogate` at `actual: 100.0%` and the duplication gate passing. Three
-  earlier attempts stopped at a gate against a superseded tree (`c39b4a30c` at
-  `lint-windows`, `a525edcbc` at `check-fmt`) or wrote no footer, and each was
-  followed by a full re-run from `check-fmt` rather than a resume.
+  Nextest 189 passed with 30 skipped, and all doctests ok; `lint` 284s with
+  `interrogate` at `actual: 100.0%` and the duplication gate passing. Earlier
+  attempts stopped at a gate against a superseded tree or wrote no footer, and
+  each was followed by a full re-run from `check-fmt` rather than a resume.
+- [x] (2026-11-15) Rebase onto `origin/main` `c378e2329` and re-gate. A green
+  bundle was discarded rather than reported when `main` advanced during its
+  run: it had certified the branch against `dedb39514`, which was no longer
+  `main`, so the tested tree was not the tree CI would build and the branch
+  diff appeared to revert 231 lines of upstream's `AGENTS.md`. The
+  reapplication was verified rather than assumed — the stripped patches
+  `dedb39514..b37679bb9` and `c378e2329..fdb0e4660` are identical at 6,333 body
+  lines, and `git diff c378e2329..HEAD -- AGENTS.md` is empty. Only the entry
+  above describes the current tree; the earlier bundle is kept as history of
+  what was green and when, not as evidence for this head.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -582,15 +591,15 @@ behaviour should be gated in full before any review request, because both
 defects are cheap to fix and expensive to discover during PR review.
 
 - **"This gate already passed" describes a tree, not a commit.** Two of the
-  four bundle attempts in this segment stopped on a gate the author had run
-  green minutes earlier (`lint-windows` on `c39b4a30c`, `check-fmt` on
-  `a525edcbc`). Neither was a flake: the earlier passing run had been against a
-  different tree, and each intervening commit introduced exactly the defect the
-  gate then reported — a non-`const` constructor and an assertion Ruff would
-  join. The habit that fails here is remembering the *result* instead of the
-  head it was produced at. Recording the head in the log header is what made
-  the difference legible after the fact; without it both runs look like the
-  same gate disagreeing with itself.
+  bundle attempts in this segment stopped on a gate the author had run green
+  minutes earlier, once on `lint-windows` and once on `check-fmt`. Neither was
+  a flake: the earlier passing run had been against a different tree, and each
+  intervening commit introduced exactly the defect the gate then reported — a
+  non-`const` constructor and an assertion Ruff would join. The habit that
+  fails here is remembering the *result* instead of the head it was produced
+  at. Recording the head in the log header is what made the difference legible
+  after the fact; without it both runs look like the same gate disagreeing with
+  itself.
 
 A percentage gate near its limit is decided by the denominator, not by the
 defect that first draws the eye. `interrogate` is configured for a 100%
@@ -970,14 +979,14 @@ The original implementation-planning baseline was fetched `origin/main` at
 commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
 repeatedly as `main` advanced. The implementation branch's current base, and
 the one this document's conformance claims are made against, is `origin/main` at
-`dedb39514a44211494bf34c38cdd9046d81716c1`. The branch sits directly on it
-with no open rebase. Earlier bases — `e170f908f` and `7d56d0be8` on 2026-11-03,
-and `40d56d69f` before them — are superseded and kept only as history. Local
-recovery refs retain the pre-rebase head, base, target, and remote head. The
-original plan was drafted from `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`.
-There is no separate task-specific terms-of-reference document. The governing
-documents at the latest baseline are `docs/roadmap.md` §6.1.2,
-`docs/cuprum-design.md` (Rust extension strategy),
+`c378e2329bd606630c9dc0b5efe8c02d3da69a55`. The branch sits directly on it
+with no open rebase. Earlier bases — `dedb39514`, `e170f908f`, and `7d56d0be8`
+on 2026-11-03, and `40d56d69f` before them — are superseded and kept only as
+history. Local recovery refs retain the pre-rebase head, base, target, and
+remote head. The original plan was drafted from
+`32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate task-specific
+terms-of-reference document. The governing documents at the latest baseline are
+`docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust extension strategy),
 `docs/adr-002-additional-rust-components.md` (decoding and descriptor risks),
 `docs/adr-008-rust-pump-observation-channel.md` (separate pump observations),
 and `docs/tee-hotpath-profiling-baseline-2026-06-12.md` §§3–4. Consult
