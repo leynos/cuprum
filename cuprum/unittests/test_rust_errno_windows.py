@@ -28,7 +28,6 @@ from cuprum import _streams_windows
 from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
     INVALID_FD_MESSAGE_RE,
-    INVALID_FD_WINERRORS,
 )
 
 if typ.TYPE_CHECKING:
@@ -203,9 +202,22 @@ _UNUSABLE_DESCRIPTOR_SOURCE = (
 
 
 @_windows_only
-@pytest.mark.parametrize("mode", ["closed", "write-only"])
+@pytest.mark.parametrize(
+    ("mode", "expected_code"),
+    [
+        # A closed descriptor is the CRT's `EBADF`, which the classifier
+        # rewrites to `ERROR_INVALID_HANDLE` so the Win32 reading is uniform.
+        ("closed", str(_ERROR_INVALID_HANDLE)),
+        # An open but unreadable descriptor is the CRT's `EACCES`. It is not an
+        # invalid-handle condition, so it must keep its own code rather than
+        # being folded into the one above.
+        ("write-only", str(errno.EACCES)),
+    ],
+    ids=("closed", "write-only"),
+)
 def test_direct_consume_reports_an_unusable_descriptor(
     mode: str,
+    expected_code: str,
     rust_streams: ModuleType,
 ) -> None:
     """A descriptor ``_read`` rejects must return an error, not abort Python.
@@ -213,10 +225,12 @@ def test_direct_consume_reports_an_unusable_descriptor(
     ``_read`` invokes the invalid parameter handler when a descriptor is closed
     or not open for reading, and the default handler terminates the process.
     The native boundary installs a continuing handler, so the same descriptor
-    must surface as an ``OSError``. This runs in a child process because the
-    regression it guards is the child dying: an in-process assertion could not
-    report that outcome. The descriptor is derived inside the child so the
-    number refers to that process's descriptor table, not this one's.
+    must surface as an ``OSError`` with the code the CRT picked for that
+    condition — the two modes are not interchangeable, which is why each names
+    its own expected code. This runs in a child process because the regression
+    it guards is the child dying: an in-process assertion could not report that
+    outcome. The descriptor is derived inside the child so the number refers to
+    that process's descriptor table, not this one's.
     """
     native = rust_streams._load_native()
     assert hasattr(native, "rust_consume_stream"), (
@@ -244,8 +258,8 @@ def test_direct_consume_reports_an_unusable_descriptor(
     assert reported[0] == "OSError", (
         f"consume on a {mode} descriptor must report OSError, got {completed.stdout!r}"
     )
-    assert {reported[1], reported[2]} & {str(code) for code in INVALID_FD_WINERRORS}, (
-        f"a {mode} descriptor must report an invalid-descriptor code, got "
+    assert expected_code in reported[1:], (
+        f"a {mode} descriptor must report code {expected_code}, got "
         f"errno={reported[1]!r} winerror={reported[2]!r}"
     )
 

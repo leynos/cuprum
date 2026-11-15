@@ -185,7 +185,12 @@ fn classify_crt_read_error(dos_error: i32, win32_error: u32, crt_errno: i32) -> 
     } else if crt_errno == libc::EBADF {
         i32::try_from(ERROR_INVALID_HANDLE).ok()
     } else {
-        None
+        // `errno` is already a native code for the two descriptor rejections
+        // `_read` performs itself: `EBADF` for a closed descriptor, which needs
+        // the mapping above, and `EACCES` for an open but unreadable one, which
+        // is returned as reported. Leaving `EACCES` unmapped cannot hide a
+        // defect: `ERROR_INVALID_HANDLE` is 6 while `EACCES` is 13.
+        crt_errno.checked_abs().filter(|code| *code != 0)
     };
     native_error.map_or_else(
         || io::Error::other(format!("CRT read failed with errno {crt_errno}")),
@@ -286,6 +291,10 @@ mod tests {
 
     #[rstest]
     #[case::ebadf_becomes_invalid_handle(0, 0, libc::EBADF, ERROR_INVALID_HANDLE)]
+    // `_read` on an open but unreadable descriptor sets `EACCES` and leaves the
+    // other two channels clear, so this is the shape a write-only descriptor
+    // produces. It is separate from the `EBADF` mapping above.
+    #[case::eacces_is_reported_as_reported(0, 0, libc::EACCES, 13)]
     #[case::dos_error_wins_over_win32(5, 6, libc::EBADF, 5)]
     #[case::win32_error_wins_over_crt_errno(0, 6, libc::EBADF, 6)]
     fn classifies_crt_read_failure(
@@ -378,8 +387,9 @@ mod tests {
 
         assert_eq!(
             error.raw_os_error(),
-            i32::try_from(ERROR_INVALID_HANDLE).ok(),
-            "an unreadable CRT descriptor must map to the invalid-handle code, got {error}",
+            Some(libc::EACCES),
+            "an unreadable CRT descriptor must report the access-denied code the CRT sets, not \
+             the closed-descriptor mapping, got {error}",
         );
     }
 }
