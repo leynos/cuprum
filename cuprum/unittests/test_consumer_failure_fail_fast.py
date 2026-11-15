@@ -56,6 +56,7 @@ def _sync_callback(
     """Return a callback that raises *sentinel* synchronously."""
 
     def fail(_event: LineEvent) -> None:
+        """Raise *sentinel* at the point the callback is invoked."""
         raise sentinel
 
     return fail
@@ -70,6 +71,7 @@ def _async_callback(
     # of this case is that a failure raised *inside* it is still reported; the
     # raise happens before any await, so there is nothing to await.
     async def fail(_event: LineEvent) -> None:  # ruff: ignore[unused-async]
+        """Raise *sentinel* when the returned coroutine is awaited."""
         raise sentinel
 
     return fail

@@ -35,6 +35,7 @@ class _ExitProbe:
     """
 
     def __init__(self, *, exit_code: int = 0, ticks: int | None = None) -> None:
+        """Set up the probe's events and the exit it will report."""
         self.cancelled = asyncio.Event()
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -78,6 +79,13 @@ def test_exit_with_nothing_to_race_is_awaited_directly() -> None:
     """No writer and no consumer means the exit wait is awaited as it is."""
 
     async def scenario() -> tuple[int, float]:
+        """Race an exit wait that has nothing to monitor.
+
+        Returns
+        -------
+        tuple[int, float]
+            The exit code and timestamp the probe reports.
+        """
         probe = _ExitProbe(exit_code=7)
         probe.release.set()
         return await _await_exit_or_writer_failure(
@@ -95,6 +103,13 @@ def test_successful_consumer_leaves_the_exit_wait_running() -> None:
     """A consumer that merely finishes does not end the run."""
 
     async def scenario() -> tuple[tuple[int, float], bool]:
+        """Race a consumer that succeeds against the exit wait.
+
+        Returns
+        -------
+        tuple[tuple[int, float], bool]
+            The exit result, and whether the exit wait was cancelled.
+        """
         probe = _ExitProbe(exit_code=3, ticks=2)
         consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
         result = await _await_exit_or_writer_failure(
@@ -113,6 +128,13 @@ def test_cancelled_consumer_leaves_the_exit_wait_running() -> None:
     """A cancelled consumer is a teardown, not a failure, and is not re-raised."""
 
     async def scenario() -> tuple[tuple[int, float], bool]:
+        """Race a consumer that was cancelled before the race began.
+
+        Returns
+        -------
+        tuple[tuple[int, float], bool]
+            The exit result, and whether the exit wait was cancelled.
+        """
         probe = _ExitProbe(exit_code=4, ticks=1)
         consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
         consumer.cancel()
@@ -133,6 +155,7 @@ def test_none_consumer_slots_are_skipped_and_the_other_is_still_raced() -> None:
     """A stream cuprum holds no pipe for is skipped, not waited on."""
 
     async def scenario() -> None:
+        """Fail the stderr stream while the stdout slot holds no task."""
         probe = _ExitProbe()
         sentinel = _CallbackError("stderr callback failed")
         stderr_task = _failed_task(sentinel)
@@ -157,6 +180,7 @@ def test_consumer_failure_cancels_the_exit_and_raises_the_same_object() -> None:
     """A failed consumer ends the run at once, terminating a live child."""
 
     async def scenario() -> None:
+        """Fail the only consumer against a child that never exits."""
         probe = _ExitProbe()
         sentinel = _CallbackError("callback failed")
         consumer = _failed_task(sentinel)
@@ -182,6 +206,7 @@ def test_stdin_failure_cancels_the_exit_wait_and_raises_the_same_object() -> Non
     """The default empty consumer sequence still races the stdin writer."""
 
     async def scenario() -> None:
+        """Fail the stdin writer and leave the consumer sequence at its default."""
         probe = _ExitProbe()
         sentinel = _CallbackError("producer failed")
         stdin_task = _failed_task(sentinel)
@@ -199,6 +224,13 @@ def test_settled_exit_wins_over_a_consumer_failing_in_the_same_step() -> None:
     """An exit that settles in the same step is the run's outcome."""
 
     async def scenario() -> tuple[tuple[int, float], BaseException | None]:
+        """Race an exit that settles at once against a failing consumer.
+
+        Returns
+        -------
+        tuple[tuple[int, float], BaseException | None]
+            The race's result, and the failure the consumer still carries.
+        """
         probe = _ExitProbe(exit_code=9, ticks=0)
         sentinel = _CallbackError("callback failed")
         consumer = _failed_task(sentinel)
@@ -224,6 +256,13 @@ def test_stdin_failure_wins_over_a_consumer_failure() -> None:
     """The writer's failure is preferred when both fail in the same step."""
 
     async def scenario() -> BaseException:
+        """Fail the writer and a consumer in the same loop step.
+
+        Returns
+        -------
+        BaseException
+            Whichever failure the race chose to raise.
+        """
         probe = _ExitProbe()
         writer_sentinel = _CallbackError("producer failed")
         consumer_sentinel = _CallbackError("callback failed")
@@ -250,6 +289,13 @@ def test_stdout_failure_wins_over_a_stderr_failure() -> None:
     """The consumer pair's own order decides between two failed readers."""
 
     async def scenario() -> BaseException:
+        """Fail both stream consumers in the same loop step.
+
+        Returns
+        -------
+        BaseException
+            Whichever failure the race chose to raise.
+        """
         probe = _ExitProbe()
         stdout_sentinel = _CallbackError("stdout failed")
         stderr_sentinel = _CallbackError("stderr failed")
@@ -276,6 +322,7 @@ def test_caller_cancellation_cancels_and_settles_the_exit_wait() -> None:
     """A cancellation reaching the race is forwarded to the exit wait."""
 
     async def scenario() -> None:
+        """Cancel the racing task while the exit wait is still pending."""
         probe = _ExitProbe()
         consumer = asyncio.create_task(asyncio.Event().wait())
         race = asyncio.create_task(
@@ -304,13 +351,14 @@ def test_provenance_predicate_matches_only_monitored_failures() -> None:
     """Identity, not type or message, decides whether a failure is monitored."""
 
     async def scenario() -> None:
+        """Ask the predicate about a monitored failure and its lookalike."""
         sentinel = _CallbackError("callback failed")
         stdin_task = _failed_task(sentinel)
         consumer = _failed_task(sentinel)
         lookalike = _CallbackError("callback failed")
         await _retrieve(stdin_task, consumer)
         assert _is_early_failure(sentinel, stdin_task, (consumer,)), (
-            "a monitored task's own failure must be recognised"
+            "a monitored task's own failure must be recognized"
         )
         assert not _is_early_failure(lookalike, stdin_task, (consumer,)), (
             "an equal-looking exception from elsewhere is not a monitored failure"
@@ -326,6 +374,7 @@ def test_consumer_failure_ignores_running_and_cancelled_tasks() -> None:
     """Only a settled, unabandoned failure counts as a consumer failure."""
 
     async def scenario() -> None:
+        """Offer a running and a cancelled task to the failure query."""
         running = asyncio.create_task(asyncio.Event().wait())
         cancelled = asyncio.create_task(asyncio.sleep(0, result=object()))
         cancelled.cancel()
