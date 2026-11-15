@@ -26,18 +26,23 @@ different configuration.
 
 ## Decision
 
-The Makefile pins a separate dev-fast nightly and requires its
-`rustc-codegen-cranelift` component. On Linux, standard debug `develop`,
+The Makefile pins a separate dev-fast nightly. Amended 14 November 2026: LLVM
+is now the default backend and Cranelift is an opt-in (see
+[concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md),
+review 14 May 2027), so the default `dev-fast-check` requires `clippy` but not
+the `rustc-codegen-cranelift` component. On Linux, standard debug `develop`,
 `test-rust`, and Rust documentation and Clippy invocations select the explicit
 `tools/dev-fast/config.toml` fragment. `dev-build` and `dev-test` expose the
 same route. The fragment stays outside Cargo's auto-discovered configuration.
 
-The fragment applies Cranelift only to the dev profile and supplies the Linux
-mold linker flag. Makefile test routes repeat that linker flag whenever they set
-`RUSTFLAGS`, because Cargo chooses that environment source instead of merging
-the fragment's target flags. `make dev-fast-check` validates the selected
-fragment, the version from `tools/mold/VERSION`, and the installed component
-before an accelerated route runs.
+The fragment's Cranelift selection for the dev profile is commented out (an
+opt-in; Cranelift builds do not unwind, so panicking tests abort) and the
+fragment supplies the Linux mold linker flag. Makefile test routes repeat that
+linker flag whenever they set `RUSTFLAGS`, because Cargo chooses that
+environment source instead of merging the fragment's target flags.
+`make dev-fast-check` validates the selected fragment, the version from
+`tools/mold/VERSION`, and the installed component before an accelerated route
+runs.
 
 The routed fragment path is internal state, not caller input. The Makefile
 derives it from one constant assigned with GNU Make's `override` directive, so

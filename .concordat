@@ -10,8 +10,8 @@ language:
           rationale: >-
             The stable MSRV pin and the published wheels, built in manylinux
             containers that carry no fast linker, must keep the platform linker and the
-            LLVM backend, so the linker, the parallel frontend and Cranelift live
-            in an explicit fragment that only the non-release Linux develop, test-rust,
+            LLVM backend, so the linker, the parallel frontend and the opt-in Cranelift
+            selection live in an explicit fragment that only the non-release Linux develop, test-rust,
             lint-clippy and dev-* routes select.
           review_trigger: >-
             Revisit when the wheel build images carry the fast linker, or when the

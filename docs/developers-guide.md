@@ -1139,19 +1139,24 @@ Cuprum's Rust `1.87.0` pin remains the compatibility, release, coverage,
 verification, and Whitaker toolchain. The floor moved from 1.85.0 only to reach
 `std::io::pipe`, stabilized in 1.87.0; see
 [Rust boundary verification](rust-boundary-verification.md). On Linux only,
-ordinary debug Rust work uses the separately pinned `nightly-2026-08-23` and the
-`rustc-codegen-cranelift` component through `tools/dev-fast/config.toml`; the
-Clippy portion of `make rust-lint` additionally requires the `clippy` component
-on that nightly. The fragment is an approved local extension that began as a
-byte-for-byte copy from
+ordinary debug Rust work uses the separately pinned `nightly-2026-08-23` through
+`tools/dev-fast/config.toml`; the Clippy portion of `make rust-lint` requires
+the `clippy` component on that nightly. LLVM is the default backend. Cranelift
+is an opt-in, not part of the estate build standard
+([concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md),
+review 14 May 2027): uncomment the selection in the fragment and install
+`rustc-codegen-cranelift`. Cranelift builds do not unwind, so panicking tests
+abort. An inherited `CARGO_PROFILE_*_CODEGEN_BACKEND` can still select it. The
+fragment is an approved local extension that began as a byte-for-byte copy from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
 Concordat issue 157, and now adds the parallel frontend (`-Zthreads=8`) beside
 the linker (see "Build standard exception" below); its SHA-256 is
-`6b9a70993b7d46c8a3730376b2debd4c442ec07a355aa267723bb024a76eac96`.
+`88b7dca8add237e0e6b63484150cd5cf0372804a7d6c9bd59f5727c3d8a84ba1`.
 
 Run `make dev-fast-check` before the first Linux accelerated build. It requires
-both the `rustc-codegen-cranelift` and `clippy` components on the dev-fast
-nightly, plus the pinned `mold` 2.41.0 linker. The approved binary route is the
+the `clippy` component on the dev-fast nightly (and `rustc-codegen-cranelift`
+only when opting in to Cranelift, by setting `DEV_FAST_REQUIRED_COMPONENTS`),
+plus the pinned `mold` 2.41.0 linker. The approved binary route is the
 checksum-verified upstream release archive; it never permits a source-build
 fallback. `make develop`, `make test-rust`, and the Cargo doc and Clippy
 portion of `make rust-lint` select the fragment on a compatible Linux host.
@@ -6644,7 +6649,7 @@ and neither is a defect to repair.
   documentation.
 - **Side nightlies.** Three tools need a nightly of their own, each independent
   of the project compiler and of the others: `RUSTFMT_TOOLCHAIN` (rustfmt),
-  `DEV_FAST_TOOLCHAIN` (the Cranelift backend and its Clippy) and
+  `DEV_FAST_TOOLCHAIN` (the optional Cranelift backend and its Clippy) and
   `MIRI_TOOLCHAIN` (Miri). Each moves on its own schedule, because a nightly
   that carries one tool's component or option may lack another's. The Makefile
   is the single source for all three. The CI literals in

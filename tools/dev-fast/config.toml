@@ -16,8 +16,9 @@ codegen-backend = true
 
 # Cranelift trades runtime performance for compile speed, so it is applied to
 # the dev profile only. `make dev-*` never builds release artefacts.
-[profile.dev]
-codegen-backend = "cranelift"
+# Cranelift disabled estate-wide on 14 November 2026 (concordat ADR; review 14 May 2027). Uncomment to opt back in.
+# [profile.dev]
+# codegen-backend = "cranelift"
 
 # mold ships for Linux only, so the flag is gated behind a target `cfg`. On
 # macOS and Windows the table simply does not apply and the platform default

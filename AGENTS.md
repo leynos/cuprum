@@ -372,14 +372,16 @@ working on the Rust portions of the project:
   formatting. Linux-only debug Rust work additionally uses the separately
   pinned dev-fast nightly through `tools/dev-fast/config.toml`. The Makefile
   runs `make dev-fast-check` as a prerequisite of those routes, and that check
-  requires both the `rustc-codegen-cranelift` and `clippy` components. The
-  fragment applies Cranelift only to the dev profile; release, coverage,
-  Whitaker, MSRV, and formal-verification builds keep the LLVM backend. The
-  stable toolchain remains mandatory for release, coverage, Whitaker, the
-  explicit `make msrv-check` verification target, and the macOS and Windows
-  platform alternatives. All Rust packages inherit Cargo's
-  `rust-version = "1.87.0"` contract, which also keeps MSRV-aware Clippy
-  findings valid when debug linting uses the dev-fast nightly.
+  requires the `clippy` component. LLVM is the default backend; Cranelift is an
+  opt-in selection in the fragment, commented out (see
+  [concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)),
+  and Cranelift builds do not unwind. Release, coverage, Whitaker, MSRV, and
+  formal-verification builds keep the LLVM backend. The stable toolchain
+  remains mandatory for release, coverage, Whitaker, the explicit
+  `make msrv-check` verification target, and the macOS and Windows platform
+  alternatives. All Rust packages inherit Cargo's `rust-version = "1.87.0"`
+  contract, which also keeps MSRV-aware Clippy findings valid when debug
+  linting uses the dev-fast nightly.
   - `make modern-stable` is a separate, explicitly selected validation route
     pinned to Rust/Cargo `1.99.1`; it does not change the Rust 1.87.0 source
     contract or MSRV check. Its check, Clippy, test, and Maturin commands use
