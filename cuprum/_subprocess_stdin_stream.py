@@ -123,6 +123,7 @@ async def _write_stdin_stream(
     stream: StdinStream,
     codec: _StdinCodec,
     observation: _StageObservation,
+    *,
     log: _StdinWriterLog,
 ) -> None:
     """Pull *stream*'s chunks and write each to the child before the next.
@@ -137,15 +138,13 @@ async def _write_stdin_stream(
     including the raising ones, so a caller who sees a failure still knows
     that nothing cuprum owns outlives the run. Both belong to
     :func:`_drain_source_into_pipe` — which is why this adds no ``finally`` of
-    its own — for the reason its docstring gives: the order of the two is part
-    of the contract rather than an incidental arrangement, and splitting them
-    across two ``finally`` blocks would leave the dependency implicit in the
-    nesting.
+    its own — for the reason its docstring gives: their order is part of the
+    contract, and splitting them across two ``finally`` blocks would leave the
+    dependency implicit in the nesting.
 
     *log* receives the failure this writer ends on, published by
-    :func:`_drain_source_into_pipe` before its cleanup runs. The run's exit
-    race reads it, because a writer that is unwinding still looks like a
-    running task to anything that only asks the task.
+    :func:`_drain_source_into_pipe` before its cleanup runs: a writer that is
+    still unwinding looks like a running task to anything that only asks it.
     """
     stdin = process.stdin
     if stdin is None:
@@ -157,7 +156,7 @@ async def _write_stdin_stream(
         codec=codec,
         observation=observation,
     )
-    await _drain_source_into_pipe(stream, sink, process, observation, log)
+    await _drain_source_into_pipe(stream, sink, process, observation, log=log)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
@@ -166,6 +165,7 @@ async def _drain_source_into_pipe(
     sink: _write._StreamSink,
     process: asyncio.subprocess.Process,
     observation: _StageObservation,
+    *,
     log: _StdinWriterLog,
 ) -> None:
     """Pump the producer into the pipe, applying the run's failure policy.

@@ -125,6 +125,7 @@ def _recording_writer(
         stream: StdinStream,
         codec: _StdinCodec,
         observation: _StageObservation,
+        *,
         log: _StdinWriterLog,
     ) -> None:
         """Record the run's process and writer task, then stream as usual."""
@@ -132,7 +133,7 @@ def _recording_writer(
         # The writer runs as its own task, so this is that task's handle: the
         # one cuprum created and is therefore responsible for settling.
         probe.writer_task = asyncio.current_task()
-        await real_write(process, stream, codec, observation, log)
+        await real_write(process, stream, codec, observation, log=log)
 
     return tracked_write
 

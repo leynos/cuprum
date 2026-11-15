@@ -22,7 +22,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_direct_run, scoped, sh
+from cuprum import ScopeConfig, _subprocess_stdin, scoped, sh
 from cuprum.sh import (
     ExecutionContext,
     ProcessGroupPolicy,
@@ -201,7 +201,7 @@ def test_direct_writer_setup_failure_reaps_the_child(
         """Refuse to create the run's stdin writer."""
         raise _SetupError
 
-    monkeypatch.setattr(_subprocess_direct_run, "_spawn_stdin_writer", fail_writer)
+    monkeypatch.setattr(_subprocess_stdin, "_spawn_stdin_writer", fail_writer)
 
     async def run_case() -> set[asyncio.Task[object]]:
         """Run the direct command and report the loop's leftovers."""

@@ -57,18 +57,17 @@ import asyncio
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_rendezvous import _stdin_writer_failure, _StdinWriterLog
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_startup_abandon import (
     _abandon_started_process,
     _record_started,
 )
-from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin import _spawn_run_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
     _await_task_to_completion,
     _cancel_stdin_writer,
     _settle_stdin_writer,
 )
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -234,15 +233,8 @@ async def _run_subprocess_without_streams(
         The process exit code and the observation's monotonic exit timestamp.
     """
     recorded: list[asyncio.Task[typ.Any]] = []
-    stdin_log = _StdinWriterLog()
     try:
-        stdin_task = _spawn_stdin_writer(
-            process,
-            execution.stdio.stdin,
-            _stdin_codec(execution.ctx),
-            execution.observation,
-            stdin_log,
-        )
+        stdin_task, stdin_log = _spawn_run_stdin_writer(process, execution)
         _record_started(recorded, stdin_task)
     except BaseException:
         await _abandon_started_process(process, execution, recorded)

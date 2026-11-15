@@ -25,6 +25,7 @@ from functools import partial
 from unittest import mock
 
 from cuprum import _subprocess_startup_abandon as reclaim
+from cuprum import _subprocess_stdin as stdin
 from cuprum import _subprocess_streams as streams
 from cuprum._subprocess_stream_run import _run_subprocess_with_streams
 
@@ -300,7 +301,7 @@ def _install(stack: contextlib.ExitStack, state: _State) -> None:
     calls: list[int] = []
     for module, name, replacement in (
         (streams, "_prepare_stream_spawn", partial(_prepare, state)),
-        (streams, "_spawn_stdin_writer", partial(_spawn_stdin_writer, state)),
+        (stdin, "_spawn_stdin_writer", partial(_spawn_stdin_writer, state)),
         (streams, "_spawn_consumer", partial(_spawn_consumer, state, calls)),
         (reclaim, "_terminate_all_shielded", partial(_terminate, state)),
         (reclaim, "_discard_outputs", partial(_discard, state)),

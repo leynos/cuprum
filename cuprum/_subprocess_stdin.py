@@ -44,9 +44,10 @@ from cuprum._stdio_plan import (
     _StdinPlan,
     _StreamStdin,
 )
+from cuprum._subprocess_rendezvous import _StdinWriterLog
 
 if typ.TYPE_CHECKING:
-    from cuprum._subprocess_rendezvous import _StdinWriterLog
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_stdin_stream import _StdinCodec
 
 _LOGGER = logging.getLogger("cuprum.stdin")
@@ -276,6 +277,7 @@ def _spawn_stdin_writer(
     plan: _StdinPlan,
     codec: _StdinCodec,
     observation: _StageObservation,
+    *,
     log: _StdinWriterLog,
 ) -> asyncio.Task[None] | None:
     """Start the stdin writer that a resolved plan calls for, if any.
@@ -317,7 +319,7 @@ def _spawn_stdin_writer(
         case _StreamStdin(stream=producer):
             _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
             return asyncio.create_task(
-                _write_stdin_stream(process, producer, codec, observation, log)
+                _write_stdin_stream(process, producer, codec, observation, log=log)
             )
         case _PipeStdin():
             # Requested a pipe, supplied no source: the child should see exactly
@@ -328,10 +330,44 @@ def _spawn_stdin_writer(
             return _spawn_payload_writer(process, payload, observation)
 
 
+def _spawn_run_stdin_writer(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> tuple[asyncio.Task[None] | None, _StdinWriterLog]:
+    """Start a run's stdin writer with the log its failure is published to.
+
+    The log is created and handed over in one step because the run cannot use
+    the writer without it: the exit race reads the publication whenever it
+    asks whether the writer failed, and a task alone answers "not yet" while a
+    failed writer is still unwinding. Both streaming run paths start their
+    writer here so the two cannot drift into creating the pair differently.
+
+    Returns
+    -------
+    tuple[asyncio.Task[None] | None, _StdinWriterLog]
+        The writer task — ``None`` for an inherited stdin, which has no pipe of
+        cuprum's — and the log its failure is published to.
+    """
+    log = _StdinWriterLog()
+    # Deferred for the same reason the dispatcher defers the writer itself:
+    # the streaming module imports this one back for the pipe primitives.
+    from cuprum._subprocess_stdin_stream import _stdin_codec
+
+    task = _spawn_stdin_writer(
+        process,
+        execution.stdio.stdin,
+        _stdin_codec(execution.ctx),
+        execution.observation,
+        log=log,
+    )
+    return task, log
+
+
 __all__ = [
     "_abort_stdin_transport",
     "_close_stdin",
     "_emit_stdin_error",
+    "_spawn_run_stdin_writer",
     "_spawn_stdin_writer",
     "_write_stdin",
 ]

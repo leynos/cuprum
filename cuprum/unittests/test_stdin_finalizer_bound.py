@@ -349,7 +349,7 @@ async def _run_with_observing_finalizer() -> _FinalizerObservingPipe:
                 StdinStream(chunks=producer),
                 _stdin_codec(ExecutionContext()),
                 _make_observation(),
-                _StdinWriterLog(),
+                log=_StdinWriterLog(),
             )
             await process.wait()
         finally:

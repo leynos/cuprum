@@ -56,8 +56,7 @@ from cuprum._stream_config import (
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._subprocess_rendezvous import _StdinWriterLog
 from cuprum._subprocess_startup_abandon import _record_started
-from cuprum._subprocess_stdin import _spawn_stdin_writer
-from cuprum._subprocess_stdin_stream import _stdin_codec
+from cuprum._subprocess_stdin import _spawn_run_stdin_writer
 from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 if typ.TYPE_CHECKING:
@@ -177,14 +176,7 @@ def _build_run_task_ownership(
     _RunTaskOwnership
         The started tasks, plus the latch and collectors the run retains.
     """
-    stdin_log = _StdinWriterLog()
-    stdin_task = _spawn_stdin_writer(
-        process,
-        execution.stdio.stdin,
-        _stdin_codec(execution.ctx),
-        execution.observation,
-        stdin_log,
-    )
+    stdin_task, stdin_log = _spawn_run_stdin_writer(process, execution)
     _record_started(recorded, stdin_task)
     consumers = _spawn_stream_consumers(
         process,
