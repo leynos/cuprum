@@ -292,7 +292,10 @@ def test_opaque_failure_is_wrapped_and_keeps_the_scheduled_prefix() -> None:
     assert len(recorded) == 1, "the prefix task must still run"
     failures = _failure_records(records)
     assert len(failures) == 1, "the failure must still be logged"
-    assert failures[0].cuprum_error_type == "_OpaqueFailureError", (
+    # ``cuprum_error_type`` is a structured extra, which ``LogRecord`` does not
+    # declare, so read it the way the comparison module reads extras.
+    failure_type = getattr(failures[0], "cuprum_error_type", None)
+    assert failure_type == "_OpaqueFailureError", (
         "the record must name the failure's real type"
     )
 

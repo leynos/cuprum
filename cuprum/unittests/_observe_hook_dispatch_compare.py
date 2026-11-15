@@ -242,8 +242,10 @@ def _record_mismatch(
         if expected.exc_type is not None:
             return f"record must carry {expected.exc_type.__name__} in exc_info"
     elif record.exc_info[0] is not expected.exc_type:
+        # ``exc_info[0]`` is optional, so name whatever type is actually there.
+        actual_name = getattr(record.exc_info[0], "__name__", None)
         return (
-            f"record exc_info {record.exc_info[0].__name__}, "
+            f"record exc_info {actual_name}, "
             f"expected {getattr(expected.exc_type, '__name__', None)!r}"
         )
     return _extra_mismatch("record", record, expected.extra)

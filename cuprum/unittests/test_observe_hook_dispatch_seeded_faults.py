@@ -70,7 +70,7 @@ def _schedule_reversed(
             continue
         scheduled.append(
             asyncio.create_task(
-                _await_awaitable(typ.cast("cabc.Awaitable[None]", result), event.phase),
+                _await_awaitable(result, event.phase),
                 name=f"cuprum.observe.{event.phase}",
             )
         )
