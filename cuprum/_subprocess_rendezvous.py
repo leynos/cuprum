@@ -35,6 +35,13 @@ because ``asyncio.wait`` reports a set rather than an order; the stream order
 is the deterministic choice instead. This module only *selects* the failure.
 Settling the tasks it reports on is its callers' work, through the
 reconciliation each already performs.
+
+That precedence is read twice, not once, and the second read is what keeps a
+source failure from hiding behind the failures it caused. A stdin writer raises
+its own exception before its cleanup releases the pipe, so while a consumer has
+already failed the writer can still be running; terminating the child is what
+lets it finish. So the race stops on the failure it can see, cancels the exit
+wait, and only then reads the precedence again over everything that settled.
 """
 
 from __future__ import annotations
@@ -215,6 +222,14 @@ async def _await_exit_or_writer_failure(
     existing post-exit await already reports it; racing to catch that case too
     would only duplicate a check the caller must make anyway.
 
+    The precedence is applied once to decide that the run must stop and once
+    more after the exit wait's cancellation has terminated the child, because a
+    stdin writer unwinding its own cleanup can settle on its failure only
+    during that termination. Without the second read, a run whose ``encoding``
+    this build does not know would report its output decoder's
+    :class:`LookupError` instead of the :class:`~cuprum.sh.StdinSourceError` the
+    caller's input contract promises.
+
     Consumer tasks are *not* cancelled or gathered here. They belong to the
     caller, whose reconciliation on every failure route settles them; doing it
     here as well would settle them twice and race the caller's own teardown.
@@ -276,7 +291,18 @@ async def _await_exit_or_writer_failure(
             # handler would catch this very raise, see a settled exit task, and
             # re-raise — correct, but only by accident of ordering.
             await _shielded_cleanup(_cancel_exit_wait(exit_task))
-            raise failure
+            # The precedence is read again now that the teardown has run, and
+            # that second read is load-bearing rather than defensive. A stdin
+            # writer raises its own failure before its cleanup closes the pipe,
+            # so it can still be *running* while a consumer has already failed:
+            # an unrecognized ``encoding`` fails the writer and both decoders,
+            # and the decoders fail first. Terminating the child is what lets
+            # the writer finish, so the source failure the caller's data
+            # contract names is only visible here. Reporting the consumer's
+            # error instead would answer a bad stdin encoding with the reader
+            # failure it caused.
+            settled = _first_early_failure(stdin_task, monitored)
+            raise settled if settled is not None else failure
         # Every task that settled did so without failing: drop the finished
         # ones so the next wait does not return on them at once, then keep
         # waiting for the exit or a failure.

@@ -9172,7 +9172,12 @@ The precedence between those sources is fixed rather than first-past-the-post,
 because `asyncio.wait` reports a settled *set* with no completion order. A
 settled exit wins outright; then the stdin writer; then the consumers in
 stdout-then-stderr order, selected by `_first_early_failure` over
-`_stdin_writer_failure` and `_consumer_failure`. Consumer tasks are never
+`_stdin_writer_failure` and `_consumer_failure`. That order is read twice: once
+to decide the run must stop, and once after the exit wait's cancellation has
+terminated the child, because a stdin writer unwinding its own cleanup settles
+on its failure only during that termination. Without the second read, a bad
+`encoding` would report the output decoder's `LookupError` in place of the
+`StdinSourceError` the input contract promises. Consumer tasks are never
 cancelled or gathered here: they belong to the caller, whose reconciliation on
 every failure route settles them, and doing it here as well would settle them
 twice and race that teardown. What the rendezvous does owe every caller is

@@ -1641,6 +1641,14 @@ over `_stdin_writer_failure` and `_consumer_failure`). This is a selection
 order rather than a report of which task failed first, and it is what makes the
 reported error stable from run to run.
 
+It is read twice. A stdin writer raises its own failure before its cleanup
+releases the pipe, so while a consumer has already failed the writer can still
+be running, and terminating the child is what lets it settle. The race stops on
+the failure it can see, cancels the exit wait, and reads the precedence once
+more over everything that settled. Without that second read, a run whose
+`encoding` this build does not know would report the output decoder's
+`LookupError` in place of the `StdinSourceError` its input contract promises.
+
 The second decision is provenance. Both callers translate a `TimeoutError`
 escaping the wait into the run's deadline, and a callback may raise a
 `TimeoutError` of its own — which is also an `OSError`, so no type check can
