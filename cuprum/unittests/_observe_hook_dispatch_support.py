@@ -248,17 +248,13 @@ class HookProbe:
     results: list[object] = dc.field(default_factory=list)
 
 
-def make_probe(kind: str, *, trace: list[str] | None = None) -> HookProbe:
+def make_probe(kind: str) -> HookProbe:
     """Build one fresh hook of ``kind`` with its own recorders.
 
-    Parameters
-    ----------
-    kind:
-        The factory name of the hook shape to build.
-    trace:
-        A list shared by every probe of one sequence. Each hook that the
-        dispatcher calls appends its kind, in call order, so the comparison can
-        see the order hooks ran in and not merely how often each ran.
+    The probe records what its hook was called with and what it produced, so a
+    test can compare both against the specification. Call order is not recorded
+    here: a probe that recorded only its kind could not tell two probes of the
+    same kind apart, so the comparison traces probe positions instead.
 
     Returns
     -------
@@ -272,8 +268,6 @@ def make_probe(kind: str, *, trace: list[str] | None = None) -> HookProbe:
 
     def hook(event: ExecEvent) -> object:
         """Record the call, then the produced result, and return that result."""
-        if trace is not None:
-            trace.append(kind)
         result = inner(event)
         results.append(result)
         return result

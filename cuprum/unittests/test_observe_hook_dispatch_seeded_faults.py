@@ -123,12 +123,13 @@ def _assert_rejected(
 
 
 def test_specification_rejects_reversed_call_order() -> None:
-    """The property rejects a dispatcher that calls the hooks out of order."""
-    _assert_rejected(
-        _call_reversed,
-        ("sync_none", "async_def"),
-        mentions="hooks ran as",
-    )
+    """The property rejects a dispatcher that calls the hooks out of order.
+
+    The repeated-kind case is the one a trace of kinds alone cannot see: both
+    probes are called exactly once, so only their positions record the order.
+    """
+    for kinds in (("sync_none", "async_def"), ("sync_none", "sync_none")):
+        _assert_rejected(_call_reversed, kinds, mentions="hooks ran as")
 
 
 def _without_exc_info(

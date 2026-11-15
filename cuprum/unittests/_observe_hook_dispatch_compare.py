@@ -3,9 +3,9 @@
 These helpers run the real dispatcher over a sequence of hooks and report the
 first way its behaviour departs from :mod:`_observe_hook_dispatch_oracle`. The
 comparison covers which hooks were called and in what order, the surfaced
-failure, the scheduled tasks — count, order, name, wrapper and wrapped result —
-and every dispatch log record with its exact message, structured fields, and
-exception information.
+failure, and the scheduled tasks — count, order, name, wrapper and wrapped
+result. The log records such a dispatch must emit are compared in
+:mod:`_observe_hook_dispatch_logs`.
 
 A failing awaitability check escapes unwrapped, so the tasks scheduled before it
 are recorded as they are created, compared like any others, and settled
@@ -27,17 +27,11 @@ from itertools import starmap
 from cuprum import ECHO
 from cuprum._observability import _await_awaitable, _ExecEventEmissionError
 from cuprum.events import ExecEvent
+from cuprum.unittests._observe_hook_dispatch_logs import _log_mismatch
 from cuprum.unittests._observe_hook_dispatch_oracle import (
     DispatchExpectation,
     expected_dispatch,
     scheduled_probe_indices,
-)
-from cuprum.unittests._observe_hook_dispatch_records import (
-    _LIFECYCLE_PREFIXES,
-    _LOGGER_NAME,
-    DISPATCH_MESSAGE_PREFIXES,
-    ExpectedRecord,
-    expected_records,
 )
 from cuprum.unittests._observe_hook_dispatch_support import HookProbe, make_probe
 
@@ -53,14 +47,8 @@ type _Dispatch = cabc.Callable[
     list[asyncio.Task[None]],
 ]
 
-# The structured fields every dispatch record may carry. Comparing them by this
-# fixed list lets lifecycle records be sorted independently of their order.
-_RECORD_FIELDS: tuple[str, ...] = (
-    "cuprum_phase",
-    "cuprum_program",
-    "cuprum_error_type",
-    "cuprum_scheduled_task_count",
-)
+# One hook call as the comparison sees it: which probe ran, and of what kind.
+type _TracedCall = tuple[int, str]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -174,16 +162,46 @@ async def _settle(tasks: cabc.Sequence[asyncio.Task[None]]) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _traced_hooks(
+    probes: cabc.Sequence[HookProbe],
+    trace: list[_TracedCall],
+) -> tuple[ExecHook, ...]:
+    """Wrap each probe's hook so ``trace`` records which probe ran, in order.
+
+    The probe's position identifies it. Its kind cannot: two probes of the same
+    kind trace identically, so a dispatcher that ran them in reverse would
+    otherwise look correct.
+
+    Returns
+    -------
+    tuple[ExecHook, ...]
+        One hook per probe, in the order the dispatcher must call them.
+    """
+
+    def traced(index: int, probe: HookProbe) -> ExecHook:
+        """Return ``probe``'s hook, recording the call before delegating."""
+
+        def hook(event: ExecEvent) -> object:
+            """Record which probe ran, then deliver the event to it."""
+            trace.append((index, probe.kind))
+            return probe.hook(event)
+
+        return typ.cast("ExecHook", hook)
+
+    return tuple(starmap(traced, enumerate(probes)))
+
+
 def _call_mismatch(
     expectation: DispatchExpectation,
     probes: cabc.Sequence[HookProbe],
-    trace: cabc.Sequence[str],
+    trace: cabc.Sequence[_TracedCall],
 ) -> str | None:
     """Check that each hook was called exactly when the specification says.
 
     Per-hook counts name a hook that ran when it should not have. The ordered
     trace names a dispatcher that called the right hooks in the wrong order,
-    which no count can see.
+    which no count can see; it records each probe's position, so two probes of
+    one kind are still told apart.
 
     Returns
     -------
@@ -196,8 +214,9 @@ def _call_mismatch(
             return (
                 f"{probe.kind} was called {len(probe.calls)} times, expected {expected}"
             )
-    if tuple(trace) != expectation.called:
-        return f"hooks ran as {tuple(trace)}, expected {expectation.called}"
+    expected_calls = tuple(enumerate(expectation.called))
+    if tuple(trace) != expected_calls:
+        return f"hooks ran as {tuple(trace)}, expected {expected_calls}"
     return None
 
 
@@ -271,145 +290,6 @@ def _task_mismatch(
     return None
 
 
-def _extra_mismatch(
-    label: str,
-    record: logging.LogRecord,
-    expected: cabc.Mapping[str, object],
-) -> str | None:
-    """Return the first structured field of ``record`` that ``expected`` rejects."""
-    for key, value in expected.items():
-        actual = getattr(record, key, None)
-        if actual != value:
-            return f"{label} {key}={actual!r}, expected {value!r}"
-    return None
-
-
-def _first_mismatch(mismatches: cabc.Iterable[str | None]) -> str | None:
-    """Return the first real mismatch, if any."""
-    return next((mismatch for mismatch in mismatches if mismatch is not None), None)
-
-
-def _record_mismatch(
-    record: logging.LogRecord,
-    expected: ExpectedRecord,
-) -> str | None:
-    """Check one record's full message, level, extras, and exception type."""
-    if record.name != _LOGGER_NAME:
-        return f"record logger {record.name!r}, expected {_LOGGER_NAME!r}"
-    if record.levelno != expected.level:
-        return f"record level {record.levelno}, expected {expected.level}"
-    message = record.getMessage()
-    if message != expected.message:
-        return f"record message {message!r}, expected {expected.message!r}"
-    if record.exc_info is None:
-        if expected.exc_type is not None:
-            return f"record must carry {expected.exc_type.__name__} in exc_info"
-    elif record.exc_info[0] is not expected.exc_type:
-        # ``exc_info[0]`` is optional, so name whatever type is actually there.
-        actual_name = getattr(record.exc_info[0], "__name__", None)
-        return (
-            f"record exc_info {actual_name}, "
-            f"expected {getattr(expected.exc_type, '__name__', None)!r}"
-        )
-    return _extra_mismatch("record", record, expected.extra)
-
-
-def _record_key(
-    record: logging.LogRecord,
-) -> tuple[int, str, tuple[tuple[str, object], ...]]:
-    """Return a canonical key, for order-insensitive comparison."""
-    return (
-        record.levelno,
-        record.getMessage(),
-        tuple((key, getattr(record, key, None)) for key in _RECORD_FIELDS),
-    )
-
-
-def _expected_key(
-    expected: ExpectedRecord,
-) -> tuple[int, str, tuple[tuple[str, object], ...]]:
-    """Return the canonical key of an expected record."""
-    return (
-        expected.level,
-        expected.message,
-        tuple((key, expected.extra.get(key)) for key in _RECORD_FIELDS),
-    )
-
-
-def _dispatch_records(
-    records: cabc.Iterable[logging.LogRecord],
-) -> list[logging.LogRecord]:
-    """Return the records the dispatcher owns, in emission order."""
-    return [
-        record
-        for record in records
-        if record.name == _LOGGER_NAME
-        and record.getMessage().startswith(DISPATCH_MESSAGE_PREFIXES)
-    ]
-
-
-def _lifecycle_mismatch(
-    records: cabc.Sequence[logging.LogRecord],
-    expected: cabc.Sequence[ExpectedRecord],
-) -> str | None:
-    """Check the task lifecycle records as an unordered multiset of full records.
-
-    A task's records may interleave with another's, so their order is not part
-    of the contract; sorting pairs each record with the specification entry it
-    stands for. The sort key deliberately covers only the level, the message,
-    and the structured fields, so the pairing cannot hide a difference in what
-    the key leaves out: each pair is compared again in full, which covers the
-    exception information a failure record must carry.
-
-    Returns
-    -------
-    str | None
-        The first lifecycle record that departs from the specification, or
-        ``None``.
-    """
-    actual_keys = sorted(map(_record_key, records))
-    expected_keys = sorted(map(_expected_key, expected))
-    if actual_keys != expected_keys:
-        return "the task lifecycle records do not match the specification"
-    paired = zip(
-        sorted(records, key=_record_key),
-        sorted(expected, key=_expected_key),
-        strict=True,
-    )
-    return _first_mismatch(starmap(_record_mismatch, paired))
-
-
-def _log_mismatch(
-    records: cabc.Iterable[logging.LogRecord],
-    expectation: DispatchExpectation,
-    event: ExecEvent,
-) -> str | None:
-    """Check every dispatch record against the specification."""
-    actual = _dispatch_records(records)
-    ordered_expected, lifecycle_expected = expected_records(expectation, event)
-    ordered_actual = [
-        record
-        for record in actual
-        if not record.getMessage().startswith(_LIFECYCLE_PREFIXES)
-    ]
-    lifecycle_actual = [
-        record
-        for record in actual
-        if record.getMessage().startswith(_LIFECYCLE_PREFIXES)
-    ]
-    if len(ordered_actual) != len(ordered_expected):
-        return (
-            f"{len(ordered_actual)} scheduling/failure records, "
-            f"expected {len(ordered_expected)}"
-        )
-    ordered = _first_mismatch(
-        starmap(_record_mismatch, zip(ordered_actual, ordered_expected, strict=True))
-    )
-    if ordered is not None:
-        return ordered
-    return _lifecycle_mismatch(lifecycle_actual, lifecycle_expected)
-
-
 async def mismatch(
     dispatch: _Dispatch,
     kinds: cabc.Sequence[str],
@@ -418,9 +298,9 @@ async def mismatch(
 ) -> str | None:
     """Return the first way ``dispatch`` departs from the specification."""
     expectation = expected_dispatch(kinds, event, settled=event.phase == "settled")
-    trace: list[str] = []
-    probes = [make_probe(kind, trace=trace) for kind in kinds]
-    outcome = _run_dispatch(dispatch, tuple(probe.hook for probe in probes), event)
+    trace: list[_TracedCall] = []
+    probes = [make_probe(kind) for kind in kinds]
+    outcome = _run_dispatch(dispatch, _traced_hooks(probes, trace), event)
     views = [_task_view(task) for task in outcome.tasks]
     # Settle first: an async hook records its call only when its coroutine
     # runs, so comparing calls before the tasks complete would report a

@@ -2169,15 +2169,16 @@ it. Per-shape assertions would pin examples of that promise without checking it
 over sequences, so these tests state the expected outcome independently of the
 implementation and compare the real dispatcher against it.
 
-Five modules under `cuprum/unittests/` split the harness by job:
+Six modules under `cuprum/unittests/` split the harness by job:
 
-| Module                              | Job                                                                                                          |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `_observe_hook_dispatch_shapes.py`  | edge shapes: stand-in values, mocks, failures, and awaitables whose classification raises                    |
-| `_observe_hook_dispatch_support.py` | `HOOK_KINDS` and `make_probe`: one fresh probe per shape, recording calls, raised errors, results, and trace |
-| `_observe_hook_dispatch_oracle.py`  | the specification: `expected_dispatch` returns a `DispatchExpectation`                                       |
-| `_observe_hook_dispatch_records.py` | the log specification: `expected_records` gives each record's level, message, `exc_info` type, and fields    |
-| `_observe_hook_dispatch_compare.py` | `mismatch`, which runs one dispatch and returns its first departure                                          |
+| Module                              | Job                                                                                                       |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `_observe_hook_dispatch_shapes.py`  | edge shapes: stand-in values, mocks, failures, and awaitables whose classification raises                 |
+| `_observe_hook_dispatch_support.py` | `HOOK_KINDS` and `make_probe`: one fresh probe per shape, recording its calls, raised errors, and results |
+| `_observe_hook_dispatch_oracle.py`  | the specification: `expected_dispatch` returns a `DispatchExpectation`                                    |
+| `_observe_hook_dispatch_records.py` | the log specification: `expected_records` gives each record's level, message, `exc_info` type, and fields |
+| `_observe_hook_dispatch_compare.py` | `mismatch`, which runs one dispatch and returns its first departure                                       |
+| `_observe_hook_dispatch_logs.py`    | the record comparison: each dispatch record's logger, level, message, fields, and `exc_info` type         |
 
 `DispatchExpectation` names the hooks that must run and in what order, the
 probes whose results must schedule, every raising hook, and the surfaced
@@ -2189,8 +2190,10 @@ the same awaitability.
 `mismatch(dispatch, kinds, event, records)` runs one dispatch and reports the
 first departure, in a fixed order:
 
-- calls: each probe's call count, then the shared trace, so two hooks called in
-  reverse are caught even though every count agrees;
+- calls: each probe's call count, then the trace of the probes that ran, so two
+  hooks called in reverse are caught even though every count agrees. The trace
+  records each probe's position, not its kind, because two probes of the same
+  kind would otherwise trace identically;
 - failure: whether the error is wrapped, and whether the wrapped error is the
   raising hook's own exception object — or, when the check itself failed, the
   error type that must escape unwrapped;
@@ -2230,10 +2233,13 @@ result-guarded fast path: they are preservation properties, not a red test.
 running it against dispatchers that misread the contract — scheduling every
 non-`None` result, scheduling only native coroutines, calling hooks in reverse,
 reversing task order, and emitting a task failure without `exc_info` — and
-requiring a mismatch for each. A property that accepts a wrong dispatcher is
-worse than no property, so a new rule in the specification needs a seeded fault
-that breaks it. `test_observe_hook_dispatch.py` pins the named shapes and
-patches `inspect.isawaitable` with a spy that attributes a call through
+requiring a mismatch for each. The reversed call order is seeded twice, once
+with two different kinds and once with two hooks of the same kind, because only
+the second case proves the trace identifies probes and not kinds. A property
+that accepts a wrong dispatcher is worse than no property, so a new rule in the
+specification needs a seeded fault that breaks it.
+`test_observe_hook_dispatch.py` pins the named shapes and patches
+`inspect.isawaitable` with a spy that attributes a call through
 `_emit_observe_hook.__code__`, which is what proves a `None` result never
 reaches the detector; `test_settled_hook_dispatch.py` covers terminal dispatch,
 and `tests/behaviour/test_observe_hook_dispatch_behaviour.py` carries the

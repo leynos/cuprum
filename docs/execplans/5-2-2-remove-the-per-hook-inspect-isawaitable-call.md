@@ -456,6 +456,26 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   the oracle/comparison/seeded-fault harness section, and the
   `observe-dispatch` group's description, which is the documentation gap the
   assessment's own next-checks paragraph named.
+- [x] (2026-11-15) Probe identities traced, and the harness split by job.
+  CodeRabbit's follow-up to the same assessment showed that finding 1 was only
+  partly addressed: the shared trace recorded each called hook's *kind*, so two
+  probes of one kind that ran in reverse produced the expected trace and the
+  expected per-probe counts, and the comparison accepted the wrong dispatcher.
+  The trace now records each probe's position, because the probe's kind cannot
+  identify it. `test_specification_rejects_reversed_call_order` seeds the
+  repeated-kind sequence as well as the distinct-kind one; reverting the
+  comparison to a kind-only trace makes the repeated-kind case fail with
+  `('sync_none', 'sync_none') must be rejected`, so the new case is the one
+  that proves the change rather than merely exercising it. The same follow-up
+  found `_observe_hook_dispatch_compare.py` at 437 lines, over the 400-line
+  limit that `AGENTS.md` applies to every code file, which no test-tree
+  exemption excuses. The record comparison moved to
+  `_observe_hook_dispatch_logs.py`, which is a move and not a rewrite: the same
+  functions compare the same fields in the same order. The comparison is now
+  315 lines and the record module 180. CodeScene's two findings on the previous
+  head are also cleared: `read_capture` no longer carries the file reading and
+  the line classification it was scored for, and the seeded-fault dispatchers
+  share the task-wrapping loop that made the module a duplication finding.
 
 ## Surprises & discoveries
 
