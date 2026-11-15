@@ -375,6 +375,19 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   delivered tree. The measured workload runs the Python backend
   (`echo-devnull-cb-s1-python`), so the Rust refactorization cannot reach it.
   The rebase produced `02a178a95`.
+- [x] (2026-11-15) Census command line moved to Cyclopts after review. A Codex
+  review of `c0bb545a3` reported that `benchmarks/summarize_hot_path_frames.py`
+  parsed its flags with `argparse`, which `docs/scripting-standards.md`
+  confines to the seven stdlib-only release modules. The command is now a
+  `cyclopts.App` default command whose four options are one `_CensusOptions`
+  record, so the documented
+  `FOLDED --anchor --target --min-anchor-weight --output` surface is unchanged
+  while the parser no longer owes a standards exception. A malformed command
+  line maps onto the inconclusive status (2) instead of Cyclopts' own
+  usage-error status (1), because a bad command line proves nothing about the
+  capture. Re-running the census over `r1-candidate` and `r1-control`
+  reproduces both committed `frame-census.json` files byte-for-byte and exits 0
+  and 1 respectively.
 
 ## Surprises & discoveries
 
@@ -1371,10 +1384,8 @@ def _emit_exec_event(
 
 New non-production artefacts:
 
-- `benchmarks/summarize_hot_path_frames.py`: a command line and a
-  `summarize(capture, *, anchor, target, min_anchor_weight) -> dict[str,
-  object]`
-  function.
+- `benchmarks/summarize_hot_path_frames.py`: a Cyclopts command line and the
+  `census(capture, anchor, target) -> Census` function it reports from.
 - `cuprum/unittests/test_observe_hook_dispatch.py`,
   `cuprum/unittests/test_observe_hook_dispatch_properties.py`,
   `cuprum/unittests/_observe_hook_dispatch_support.py`,

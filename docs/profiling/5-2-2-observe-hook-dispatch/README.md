@@ -72,9 +72,10 @@ python -m benchmarks.summarize_hot_path_frames \
 ```
 
 Exit 0 means both target weights are zero and the anchor met the floor, 1 that
-the target weights agree and are non-zero, and 2 that the input was malformed,
-the anchor fell below the floor, or the two target weights disagreed. A
-candidate capture is expected to exit 0 and a control capture to exit 1.
+the target weights agree and are non-zero, and 2 that the input or the command
+line was malformed, the anchor fell below the floor, or the two target weights
+disagreed. A candidate capture is expected to exit 0 and a control capture to
+exit 1.
 
 ## Reproducing the classification
 

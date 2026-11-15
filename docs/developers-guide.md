@@ -5003,11 +5003,14 @@ that reach the target without passing through the anchor, which shows whether
 the detector is reachable by another route.
 
 Exit status 0 means both target weights are zero and the anchor meets the
-floor; 1 means they agree and are non-zero; 2 means the input was malformed,
-the anchor fell below the floor, or the two target weights disagreed. A floor
-failure is reported even when the target weight is zero, because observing no
-target samples is only evidence of absence when the anchored region carried
-enough samples to have shown one.
+floor; 1 means they agree and are non-zero; 2 means the input or the command
+line was malformed, the anchor fell below the floor, or the two target weights
+disagreed. A floor failure is reported even when the target weight is zero,
+because observing no target samples is only evidence of absence when the
+anchored region carried enough samples to have shown one. The flags come from a
+Cyclopts command, as the [scripting standards](scripting-standards.md) require,
+so `--help` documents them and a malformed command line takes the inconclusive
+status rather than a separate usage-error code.
 
 The command reuses `parse_capture`, `Frame`, and `FramePattern` from
 `benchmarks/_line_event_profile_model.py`, so a capture that the 5.2.1

@@ -35,18 +35,24 @@ Exit status
 1
     The target weights agree, are non-zero, and the anchor meets the floor.
 2
-    Malformed input, an anchor below the floor, or disagreeing target weights:
-    the run is inconclusive and must not be read as a passing measurement.
+    Malformed input or a malformed command line, an anchor below the floor, or
+    disagreeing target weights: the run is inconclusive and must not be read as
+    a passing measurement.
 """
 
 from __future__ import annotations
 
-import argparse
 import dataclasses as dc
 import json
-import pathlib as pth
+
+# ``pth`` is imported at runtime (not under ``TYPE_CHECKING``) so Cyclopts can
+# resolve the command's ``pth.Path`` annotations when it builds the interface;
+# the TC003 suppression keeps ruff from pushing it back into that block.
+import pathlib as pth  # ruff: ignore[typing-only-standard-library-import]
 import sys
 import typing as typ
+
+from cyclopts import App, CycloptsError, Parameter
 
 from benchmarks._line_event_profile_model import (
     Capture,
@@ -212,47 +218,53 @@ def _exit_status(status: str) -> int:
     return _EXIT_INCONCLUSIVE
 
 
-def _parse_args(argv: cabc.Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse the command line."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("folded", type=pth.Path, help="py-spy raw stack capture")
-    parser.add_argument(
-        "--anchor",
-        required=True,
-        help="anchor frame as FUNCTION@LOCATION",
-    )
-    parser.add_argument(
-        "--target",
-        required=True,
-        help="target frame as FUNCTION@LOCATION",
-    )
-    parser.add_argument(
-        "--min-anchor-weight",
-        type=int,
-        required=True,
-        help="samples the anchor must carry for zero target weight to be evidence",
-    )
-    parser.add_argument(
-        "--output", type=pth.Path, required=True, help="result JSON destination"
-    )
-    return parser.parse_args(argv)
+@dc.dataclass(frozen=True, slots=True)
+class _CensusOptions:
+    """One census requested on the command line, apart from its capture.
+
+    Attributes
+    ----------
+    anchor:
+        The anchor frame as ``FUNCTION@LOCATION``.
+    target:
+        The target frame as ``FUNCTION@LOCATION``.
+    min_anchor_weight:
+        Samples the anchor must carry for zero target weight to be evidence.
+    output:
+        Where the result JSON document is written.
+
+    """
+
+    anchor: str
+    target: str
+    min_anchor_weight: int
+    output: pth.Path
 
 
 def _load_inputs(
-    args: argparse.Namespace,
+    folded: pth.Path,
+    options: _CensusOptions,
 ) -> tuple[Capture, FramePattern, FramePattern]:
     """Parse the floor, capture, anchor, and target into usable values."""
-    if args.min_anchor_weight < 0:
-        msg = f"--min-anchor-weight must not be negative: {args.min_anchor_weight}"
+    if options.min_anchor_weight < 0:
+        msg = f"--min-anchor-weight must not be negative: {options.min_anchor_weight}"
         raise _ProfileInputError(msg)
     return (
-        parse_capture(args.folded),
-        parse_spec(args.anchor, option="--anchor"),
-        parse_spec(args.target, option="--target"),
+        parse_capture(folded),
+        parse_spec(options.anchor, option="--anchor"),
+        parse_spec(options.target, option="--target"),
     )
 
 
-def main(argv: cabc.Sequence[str] | None = None) -> int:
+app = App(name="summarize_hot_path_frames", help=__doc__, exit_on_error=False)
+
+
+@app.default
+def _census_command(
+    folded: pth.Path,
+    *,
+    options: typ.Annotated[_CensusOptions, Parameter(name="*")],
+) -> int:
     """Census one capture and write the result document.
 
     Returns
@@ -261,18 +273,39 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
         The process exit status: 0 for a proven absence, 1 for a proven
         presence, and 2 when the input cannot support either verdict.
     """
-    args = _parse_args(argv)
     try:
-        capture, anchor, target = _load_inputs(args)
+        capture, anchor, target = _load_inputs(folded, options)
     except _ProfileInputError as exc:
         print(f"inconclusive: {exc}", file=sys.stderr)
         return _EXIT_INCONCLUSIVE
     result = census(capture, anchor, target)
-    status = _floor_status(result, args.min_anchor_weight)
+    status = _floor_status(result, options.min_anchor_weight)
     rendered = json.dumps(result.as_document(status), indent=2, sort_keys=True)
-    args.output.write_text(rendered + "\n")
+    options.output.write_text(rendered + "\n")
     print(rendered)
     return _exit_status(status)
+
+
+def main(argv: cabc.Sequence[str] | None = None) -> int:
+    """Run the census command line and report its exit status.
+
+    Returns
+    -------
+    int
+        The status the command reported, ``0`` when it answered a ``--help``
+        or ``--version`` request, and ``2`` when the command line itself was
+        malformed.
+    """
+    tokens = None if argv is None else list(argv)
+    try:
+        result = app(tokens, exit_on_error=False, result_action="return_value")
+    # A malformed command line proves nothing about the capture, so it takes the
+    # inconclusive status instead of the app's own failure status.
+    except CycloptsError as exc:
+        print(f"inconclusive: {exc}", file=sys.stderr)
+        return _EXIT_INCONCLUSIVE
+    # ``--help`` and ``--version`` are answered by the app without a status.
+    return _EXIT_PASS if result is None else typ.cast("int", result)
 
 
 if __name__ == "__main__":
