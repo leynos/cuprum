@@ -33,8 +33,8 @@ DEV_FAST_CRANELIFT_COMPONENT ?= rustc-codegen-cranelift
 DEV_FAST_LINT_COMPONENT ?= clippy
 # LLVM is the default backend (Cranelift disabled estate-wide on 14 November
 # 2026; review 14 May 2027), so the gate does not require the Cranelift
-# component. To opt in, uncomment the selection in `tools/dev-fast/config.toml`
-# and run with
+# component. To opt in for one invocation, leaving the approved fragment
+# unchanged, run with `CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift` and
 # `DEV_FAST_REQUIRED_COMPONENTS="$(DEV_FAST_CRANELIFT_COMPONENT) $(DEV_FAST_LINT_COMPONENT)"`.
 DEV_FAST_REQUIRED_COMPONENTS ?= $(DEV_FAST_LINT_COMPONENT)
 # The selected Cargo fragment is repository-fixed state, not a caller input.

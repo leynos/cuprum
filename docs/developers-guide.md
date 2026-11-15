@@ -1144,10 +1144,17 @@ ordinary debug Rust work uses the separately pinned `nightly-2026-08-23` through
 the `clippy` component on that nightly. LLVM is the default backend. Cranelift
 is an opt-in, not part of the estate build standard
 ([concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md),
-review 14 May 2027): uncomment the selection in the fragment and install
-`rustc-codegen-cranelift`. Cranelift builds do not unwind, so panicking tests
-abort. An inherited `CARGO_PROFILE_*_CODEGEN_BACKEND` can still select it. The
-fragment is an approved local extension that began as a byte-for-byte copy from
+review 14 May 2027). To opt in for one invocation without changing the
+approved fragment, install `rustc-codegen-cranelift` and run, for example:
+
+```bash
+CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift \
+  make dev-build DEV_FAST_REQUIRED_COMPONENTS="rustc-codegen-cranelift clippy"
+```
+
+Cranelift builds do not unwind, so panicking tests abort, and an inherited
+`CARGO_PROFILE_*_CODEGEN_BACKEND` selects it the same way. The fragment is an
+approved local extension that began as a byte-for-byte copy from
 `leynos/netsuke@924cb215d3841048dbf6649767a510d2a5dfb1b7`, recorded by
 Concordat issue 157, and now adds the parallel frontend (`-Zthreads=8`) beside
 the linker (see "Build standard exception" below); its SHA-256 is
