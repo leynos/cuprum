@@ -4,12 +4,15 @@ Opening a connection and negotiating TLS used to run on a fixed 60 s timeout,
 so a redirect chain could spend a fresh minute on each hop and outlive the one
 deadline the whole transfer shares. These cases stop the clock most of the way
 through that deadline and assert the budget each hop's connection was actually
-opened with, including the hop that has no time left at all.
+opened with, including the hop that has no time left at all. One further case
+blocks the request itself, so the watchdog's shutdown of a stalled send is
+covered and not only its shutdown of a stalled read.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import threading
 import typing as typ
 from unittest import mock
 
@@ -221,6 +224,50 @@ class TestHopBudget:
         )
         assert last.getresponse.call_count == 0, (
             "the request outlived the deadline, so no body is read"
+        )
+
+
+class TestBlockedSend:
+    """The watchdog must release a request that blocks past the deadline."""
+
+    def test_a_blocked_request_fails_at_the_deadline(self, tmp_path: Path) -> None:
+        """A send the watchdog shuts down surfaces as the transfer's timeout."""
+        clock = manual_clock()
+        released = threading.Event()
+        sending = threading.Event()
+        connection = mock.Mock()
+        connection.sock.shutdown.side_effect = lambda _how: released.set()
+
+        def send_request(*_args: object, **_kwargs: object) -> None:
+            """Block until the watchdog shuts the socket down, then fail."""
+            sending.set()
+            if not released.wait(5.0):
+                msg = "the watchdog never released the blocked send"
+                raise AssertionError(msg)
+            msg = "connection reset by peer"
+            raise OSError(msg)
+
+        def wait(_seconds: float) -> bool:
+            """Spend the deadline once the request is blocked, not before it."""
+            if not sending.wait(5.0):
+                msg = "the request was never sent"
+                raise AssertionError(msg)
+            clock.return_value = _SPENT
+            return False
+
+        connection.request.side_effect = send_request
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            downloader._download(
+                "https://example.invalid/asset",
+                tmp_path / "binary",
+                fake_environment(connection, clock=clock),
+                wait=wait,
+            )
+        assert connection.request.call_count == 1, (
+            "the request must be sent before the transfer's deadline"
+        )
+        assert connection.getresponse.call_count == 0, (
+            "a send the watchdog cut short must not go on to read a response"
         )
 
 

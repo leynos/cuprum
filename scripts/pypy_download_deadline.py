@@ -76,8 +76,11 @@ def _hop_timeout(transfer: _Transfer) -> float:
     """Bound one hop's connection and request by the time the transfer has left.
 
     A hop that starts with less than `_CONNECT_TIMEOUT_SECONDS` to spare gets
-    only what remains, so opening a connection or negotiating TLS cannot carry
-    the transfer past its one shared deadline. A transfer with no time left is
+    only what remains, so a transfer with seconds left does not hand its socket
+    a minute in which to block. The budget bounds one blocking call, not their
+    sum: the standard library applies it to every resolved address in turn and
+    the TLS handshake reuses it, so connection setup can still overrun the
+    deadline by one hop timeout per address. A transfer with no time left is
     refused before a socket is opened at all; a timeout of zero would instead
     make the socket non-blocking, which never fails the way a spent budget must.
 
