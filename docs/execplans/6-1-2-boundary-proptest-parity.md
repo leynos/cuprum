@@ -1,7 +1,9 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `fdb0e4660`; hosted review pending.
+eight commit gates green on candidate `fdb0e4660`; hosted review pending. Every
+commit above that head touches documentation only, and the Markdown-scoped
+gates are re-run for each.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
 `origin/main` at `c378e2329bd606630c9dc0b5efe8c02d3da69a55`. Issues #90, #124,
