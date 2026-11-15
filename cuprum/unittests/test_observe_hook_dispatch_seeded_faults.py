@@ -30,6 +30,36 @@ if typ.TYPE_CHECKING:
 
     from cuprum.events import ExecEvent, ExecHook
 
+type _Dispatch = cabc.Callable[
+    [tuple[ExecHook, ...], ExecEvent],
+    list[asyncio.Task[None]],
+]
+
+
+def _scheduled(
+    results: cabc.Iterable[object],
+    event: ExecEvent,
+) -> list[asyncio.Task[None]]:
+    """Schedule one task per result, whatever its awaitability."""
+    return [
+        asyncio.create_task(
+            _await_awaitable(typ.cast("cabc.Awaitable[None]", result), event.phase),
+            name=f"cuprum.observe.{event.phase}",
+        )
+        for result in results
+    ]
+
+
+def _awaitable_results(results: cabc.Iterable[object]) -> list[object]:
+    """Keep the awaitable results and close the rest."""
+    kept: list[object] = []
+    for result in results:
+        if inspect.isawaitable(result):
+            kept.append(result)
+        else:
+            _close_result(result)
+    return kept
+
 
 def _schedule_when(
     hooks: tuple[ExecHook, ...],
@@ -38,19 +68,14 @@ def _schedule_when(
     should_schedule: cabc.Callable[[object], bool],
 ) -> list[asyncio.Task[None]]:
     """Dispatch under a caller-supplied predicate, for seeded-fault tests."""
-    scheduled: list[asyncio.Task[None]] = []
+    kept: list[object] = []
     for hook in hooks:
         result = hook(event)
-        if not should_schedule(result):
+        if should_schedule(result):
+            kept.append(result)
+        else:
             _close_result(result)
-            continue
-        scheduled.append(
-            asyncio.create_task(
-                _await_awaitable(typ.cast("cabc.Awaitable[None]", result), event.phase),
-                name=f"cuprum.observe.{event.phase}",
-            )
-        )
-    return scheduled
+    return _scheduled(kept, event)
 
 
 def _is_not_none(result: object) -> bool:
@@ -68,19 +93,8 @@ def _schedule_reversed(
     event: ExecEvent,
 ) -> list[asyncio.Task[None]]:
     """Schedule every awaitable result, but in reverse hook order."""
-    produced = [hook(event) for hook in hooks]
-    scheduled: list[asyncio.Task[None]] = []
-    for result in reversed(produced):
-        if not inspect.isawaitable(result):
-            _close_result(result)
-            continue
-        scheduled.append(
-            asyncio.create_task(
-                _await_awaitable(result, event.phase),
-                name=f"cuprum.observe.{event.phase}",
-            )
-        )
-    return scheduled
+    produced = _awaitable_results(hook(event) for hook in hooks)
+    return _scheduled(reversed(produced), event)
 
 
 def _call_reversed(
@@ -88,39 +102,33 @@ def _call_reversed(
     event: ExecEvent,
 ) -> list[asyncio.Task[None]]:
     """Call every hook in reverse order, but schedule in the declared order."""
-    produced: list[object] = [hook(event) for hook in reversed(hooks)]
-    scheduled: list[asyncio.Task[None]] = []
-    for result in reversed(produced):
-        if not inspect.isawaitable(result):
-            _close_result(result)
-            continue
-        awaitable = typ.cast("cabc.Awaitable[None]", result)
-        scheduled.append(
-            asyncio.create_task(
-                _await_awaitable(awaitable, event.phase),
-                name=f"cuprum.observe.{event.phase}",
-            )
+    produced = _awaitable_results(hook(event) for hook in reversed(hooks))
+    return _scheduled(reversed(produced), event)
+
+
+def _assert_rejected(
+    dispatch: _Dispatch,
+    kinds: cabc.Sequence[str],
+    records: cabc.Iterable[logging.LogRecord] = (),
+    *,
+    mentions: str | None = None,
+) -> None:
+    """Require the comparison to reject ``dispatch``, optionally naming why."""
+    found = asyncio.run(mismatch(dispatch, kinds, make_event("plan"), records))
+    assert found is not None, f"{kinds} must be rejected"
+    if mentions is not None:
+        assert mentions in found, (
+            f"the mismatch must mention {mentions!r}, got {found!r}"
         )
-    return scheduled
 
 
 def test_specification_rejects_reversed_call_order() -> None:
     """The property rejects a dispatcher that calls the hooks out of order."""
-
-    async def run() -> None:
-        """Observe the mismatch a reversed call order must produce."""
-        found = await mismatch(
-            _call_reversed,
-            ["sync_none", "async_def"],
-            make_event("plan"),
-            (),
-        )
-        assert found is not None, "a reversed call order must be rejected"
-        assert "hooks ran as" in found, (
-            f"the mismatch must name the call order, got {found!r}"
-        )
-
-    asyncio.run(run())
+    _assert_rejected(
+        _call_reversed,
+        ("sync_none", "async_def"),
+        mentions="hooks ran as",
+    )
 
 
 def _without_exc_info(
@@ -153,73 +161,35 @@ def test_specification_rejects_a_failure_record_without_exc_info(
     """The property rejects a task failure reported without its exception."""
     caplog.clear()
     caplog.set_level(logging.DEBUG, logger="cuprum._observability")
-
-    async def run() -> None:
-        """Observe the mismatch a stripped failure record must produce."""
-        found = await mismatch(
-            _emit_exec_event,
-            ["failing_awaitable"],
-            make_event("plan"),
-            _without_exc_info(caplog.records),
-        )
-        assert found is not None, "a failure record without exc_info must be rejected"
-        assert "in exc_info" in found, (
-            f"the mismatch must name the missing exception, got {found!r}"
-        )
-
-    asyncio.run(run())
+    _assert_rejected(
+        _emit_exec_event,
+        ("failing_awaitable",),
+        _without_exc_info(caplog.records),
+        mentions="in exc_info",
+    )
 
 
 def test_specification_rejects_reversed_task_order() -> None:
     """The property rejects tasks that do not wrap their own hook's result."""
-
-    async def run() -> None:
-        """Observe the mismatch a reversed dispatcher must produce."""
-        found = await mismatch(
-            _schedule_reversed,
-            ["async_def", "future"],
-            make_event("plan"),
-            (),
-        )
-        assert found is not None, "a reversed task order must be rejected"
-        assert "not the result of the hook that scheduled it" in found, (
-            f"the mismatch must name the task order, got {found!r}"
-        )
-
-    asyncio.run(run())
+    _assert_rejected(
+        _schedule_reversed,
+        ("async_def", "future"),
+        mentions="not the result of the hook that scheduled it",
+    )
 
 
 def test_specification_rejects_every_non_none_scheduled() -> None:
     """The property rejects a dispatcher that schedules a non-awaitable value."""
-
-    async def run() -> None:
-        """Observe the mismatch the wrong dispatcher must produce."""
-        found = await mismatch(
-            functools.partial(_schedule_when, should_schedule=_is_not_none),
-            ["sync_value"],
-            make_event("plan"),
-            (),
-        )
-        assert found is not None, "a scheduled non-awaitable must be rejected"
-
-    asyncio.run(run())
+    _assert_rejected(
+        functools.partial(_schedule_when, should_schedule=_is_not_none),
+        ("sync_value",),
+    )
 
 
 def test_specification_rejects_native_coroutines_only() -> None:
     """The property rejects a dispatcher that drops non-native awaitables."""
-
-    async def run() -> None:
-        """Observe a mismatch for each awaitable the wrong dispatcher drops."""
-        for kind in ("future", "generator_coroutine", "awaitable_object"):
-            found = await mismatch(
-                functools.partial(
-                    _schedule_when,
-                    should_schedule=_is_native_coroutine,
-                ),
-                [kind],
-                make_event("plan"),
-                (),
-            )
-            assert found is not None, f"{kind} must be rejected"
-
-    asyncio.run(run())
+    for kind in ("future", "generator_coroutine", "awaitable_object"):
+        _assert_rejected(
+            functools.partial(_schedule_when, should_schedule=_is_native_coroutine),
+            (kind,),
+        )
