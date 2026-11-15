@@ -388,6 +388,51 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   capture. Re-running the census over `r1-candidate` and `r1-control`
   reproduces both committed `frame-census.json` files byte-for-byte and exits 0
   and 1 respectively.
+- [x] (2026-11-15) Census inputs made to support the claim they carry.
+  CodeRabbit review 5910857723, submitted against `c0bb545a3`, raised eight
+  inline findings; each was checked against the source and all eight were
+  valid, and none is rebutted. Two concerned the census. A floor of zero was
+  accepted, so a capture that sampled nothing under the anchor still reported a
+  proven absence; the floor must now be positive. And a folded-stack line the
+  parser could not read was silently dropped, so weight the census never read
+  could hide the very samples the claim says are gone; `read_capture` now
+  returns a `CaptureReading` holding those lines and the census reports status
+  2 when any survives. py-spy's frame-less record stays dropped, so all six
+  committed `frame-census.json` files still reproduce byte-for-byte. The
+  reading types took the model module past the 400-line limit, so the immutable
+  shapes moved to `_line_event_profile_shapes` and the model imports them; the
+  parsers, and the tests that pin their ownership, are unchanged.
+- [x] (2026-11-15) Dispatch comparison and its behavioural evidence tightened.
+  Three more of the same review's findings. The comparison counted each hook's
+  calls but never checked the order they were made in, so a dispatcher that
+  called the right hooks in the wrong sequence passed; each probe now appends
+  its kind to a trace shared by the sequence and the trace must equal the order
+  the oracle states. The task lifecycle records were compared by level,
+  message, and structured fields only, so a failure record stripped of its
+  `exc_info` compared equal; the records are still paired after an
+  order-insensitive sort, and each pair is now compared in full. The
+  behavioural step asserted only that each observe task was done, which a
+  cancelled or failed task satisfies; it now rejects both, and a suspending
+  `async def` row proves the task was driven to completion rather than merely
+  created. Two seeded faults cover the comparison: a dispatcher that calls the
+  hooks in reverse while scheduling them in order, and the real dispatcher's
+  records with their exceptions detached.
+- [x] (2026-11-15) Evidence and analysis corrected. The last three findings.
+  The V2 methodology above named `_emit_exec_event.__code__` as the spy's call
+  site, but the artefact filters on `_emit_observe_hook.__code__`; the plan now
+  names the artefact's call site. The profiling README quoted py-spy's
+  `Samples: 60266 Errors: 0` line from `pyspy.log`, which `.gitignore`
+  excludes, while claiming nothing in the analysis depends on an unobtainable
+  file; each capture now commits `pyspy-diagnostic.txt`, the redacted lines
+  that carry the sample count and any teardown error, checked line-for-line
+  against the log it came from. The round-3 paragraph argued that a control arm
+  measured on the busier host and still slower put the imbalance "against the
+  direction of the result", which is the wrong way round: the busy host
+  inflates that arm, so the pair's 0.8647 flatters the candidate. The paragraph
+  now says so, and reports the sensitivity it implies: without round 3 the
+  remaining five pairs give 0.950351 (wall) and 0.952095 (CPU), recomputed from
+  the per-pair ratios in `timing-summary.json` and both inside the 1.05
+  tolerance.
 
 ## Surprises & discoveries
 
@@ -951,10 +996,10 @@ Obligations:
 - V2. Known-shape results never reach awaitable detection (ROAD-5.2.2-S1).
   Obligation: for hooks returning `None` and hooks returning native coroutines,
   emitting any number of events makes zero calls to `inspect.isawaitable` from
-  `_emit_exec_event`. Method: named pytest examples with a counting spy
+  `_emit_observe_hook`. Method: named pytest examples with a counting spy
   installed by `monkeypatch.setattr(inspect, "isawaitable", spy)` that counts
   only calls whose immediate caller's code object is
-  `cuprum._observability._emit_exec_event.__code__`
+  `cuprum._observability._emit_observe_hook.__code__`
   (`sys._getframe(1).f_code`), so asyncio or pytest plugin calls cannot inflate
   or mask the count. Artefact:
   `cuprum/unittests/test_observe_hook_dispatch.py`, tests

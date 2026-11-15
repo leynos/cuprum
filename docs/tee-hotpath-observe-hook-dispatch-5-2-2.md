@@ -329,10 +329,18 @@ above and in the TSV, which is what the rule reads.
 
 Round 3's adopted attempt 4 is the closest call in the set: its arms differ by
 9.4 points of host busy share, just inside the 10-point tolerance, with the
-control arm the busier of the two and also the slower. It is the pair with the
-largest candidate-favouring ratio, 0.8647, so the imbalance runs against the
-direction of the result: the control arm was measured under the heavier load
-and still came out slower.
+control arm the busier of the two and also the slower. It is also the pair with
+the smallest candidate-over-control ratio, 0.8647, so the imbalance runs *in
+the direction of* the result: the control arm was measured on the busier host,
+and part of its extra time is host load and contention rather than the change,
+which flatters this pair's ratio. The pair is retained because D11 admits on
+load and exit status and never reads a ratio; even so, the verdict does not
+rest on it. With round 3 excluded, the remaining five pairs give a
+geometric-mean wall ratio of 0.950351 and a CPU ratio of 0.952095, both still
+inside the 1.05 tolerance, so the acceptance does not depend on the most
+load-confounded pair in the set. Those two figures are a sensitivity check
+recomputed from the per-pair ratios in `timing-summary.json`; they are not the
+summary's own geometric means, which cover all six pairs.
 
 One further pair was run before round 1 and discarded by protocol as the
 warm-up, to prime the fixture cache before any measurement; it is excluded

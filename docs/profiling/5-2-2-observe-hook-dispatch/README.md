@@ -22,7 +22,7 @@ captures still describe the delivered branch; the report's
 [superseded collections](../../tee-hotpath-observe-hook-dispatch-5-2-2.md#superseded-collections)
 section lists the seven paths.
 
-Each capture directory carries the same eight committed files:
+Each capture directory carries the same nine committed files:
 
 | file                      | contents                                         |
 | ------------------------- | ------------------------------------------------ |
@@ -34,13 +34,17 @@ Each capture directory carries the same eight committed files:
 | `pyspy-exit.txt`          | py-spy's exit status                             |
 | `census-exit.txt`         | the census's exit status                         |
 | `classifier-exit.txt`     | the classifier's exit status                     |
+| `pyspy-diagnostic.txt`    | py-spy's own report, redacted to what carries    |
 
 A collection run also produces `pyspy.log`, `census.log`, and `classifier.log`
 beside these, but `.gitignore` excludes `*.log` (as it does everywhere in this
 repository), so none is committed. Nothing in the analysis depends on a file a
 reader cannot obtain: `census.log` and `classifier.log` repeat the JSON that is
-committed, and `pyspy.log`'s load-bearing line — `Samples: <n> Errors: 0` —
-reports the sum of the weights in the committed `stacks.folded`.
+committed, and `pyspy-diagnostic.txt` carries py-spy's load-bearing lines from
+`pyspy.log` — `Samples: <n> Errors: 0`, which reports the sum of the weights in
+the committed `stacks.folded`, and whatever error line py-spy printed after it.
+The host path inside those lines is replaced with `<capture>`; nothing else is
+edited, so the diagnostic can be checked against the counts it explains.
 
 `variant.txt` is the provenance record. It names the variant, the interpreter
 that ran it, the `cuprum` package directory the worker imported, and the
@@ -50,13 +54,15 @@ wrong tree. Absolute host paths are replaced with `<repo:control>` and
 before and after the capture.
 
 The `r2-candidate` capture reports py-spy exit status 1 because py-spy's
-teardown lost its child during reaping
-(`Error: No child process (os error 10)`). The capture itself completed: its
-log reports `Samples: 60266 Errors: 0`, and the sum of the committed weights
-matches that count, so the exit status records a known reaping race rather than
-a failed capture. Every other capture exits 0. The race follows teardown timing
-rather than a variant — the earlier collection saw it on the round-1 pair
-instead.
+teardown lost its child during reaping. Its `pyspy-diagnostic.txt` holds both
+lines that explain the status: py-spy wrote the capture and reported
+`Samples: 60266 Errors: 0`, and then printed
+`Error: No child process (os error 10)` while reaping. The capture itself
+completed, and the sum of the weights in the committed `stacks.folded` is
+60266, so the exit status records a known reaping race rather than a failed
+capture. Every other capture exits 0 and its diagnostic holds the single
+`Samples: <n> Errors: 0` line. The race follows teardown timing rather than a
+variant — the earlier collection saw it on the round-1 pair instead.
 
 ## Reproducing the census
 
@@ -106,9 +112,10 @@ Every capture's `stacks.folded` also contains exactly one line whose stack is
 empty — a space followed by the sample weight, for example `' 34'`. py-spy
 emits it when a sample carries no resolvable frames. The census drops it, so
 the folded weight sum exceeds the census's `total_weight` by exactly that
-line's weight. Any other line the parser cannot read makes the census report
-status 2 instead of a weight, so the difference is the check that the census
-read the whole file and discarded nothing else.
+line's weight, which is between three and eight samples across these six
+captures. Any other line the parser cannot read makes the census report status
+2 instead of a weight, so the difference is the check that the census read the
+whole file and discarded nothing else.
 
 ## The unprofiled timing pairs
 
