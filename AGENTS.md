@@ -372,10 +372,12 @@ working on the Rust portions of the project:
   formatting. Linux-only debug Rust work additionally uses the separately
   pinned dev-fast nightly through `tools/dev-fast/config.toml`. The Makefile
   runs `make dev-fast-check` as a prerequisite of those routes, and that check
-  requires the `clippy` component. LLVM is the default backend; Cranelift is an
-  opt-in selection in the fragment, commented out (see
-  [concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)),
-  and Cranelift builds do not unwind. Release, coverage, Whitaker, MSRV, and
+  requires the `clippy` component. LLVM is the default backend. Cranelift is
+  disabled and opt-in only: its `[profile.dev]` selection is commented out in
+  the fragment, and one invocation can opt in with
+  `CARGO_PROFILE_DEV_CODEGEN_BACKEND=cranelift` (see
+  [concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)).
+  Cranelift builds do not unwind. Release, coverage, Whitaker, MSRV, and
   formal-verification builds keep the LLVM backend. The stable toolchain
   remains mandatory for release, coverage, Whitaker, the explicit
   `make msrv-check` verification target, and the macOS and Windows platform

@@ -130,9 +130,11 @@ route still validates separately.
 
 Amended by
 [concordat ADR-0004](https://github.com/leynos/concordat/blob/main/docs/adrs/adr-0004-cranelift-is-not-part-of-the-rust-build-standard.md)
-(review 14 May 2027). The Decision above stands as the accepted history: the
-fragment selected Cranelift for the dev profile, and `dev-fast-check` required
-the `rustc-codegen-cranelift` component. The outcome now is:
+(review 14 May 2027) and implemented by
+[PR 711](https://github.com/leynos/cuprum/pull/711). The Decision above stands
+as the accepted history: the fragment selected Cranelift for the dev profile,
+and `dev-fast-check` required the `rustc-codegen-cranelift` component. The
+outcome now is:
 
 - the fragment's `[profile.dev]` Cranelift selection is commented out, so the
   routes select LLVM; the linker and parallel-frontend flags, the
