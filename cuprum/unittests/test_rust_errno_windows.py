@@ -39,6 +39,7 @@ _windows_only = pytest.mark.skipif(
     sys.platform != "win32",
     reason="asserts the Windows-only raw-handle rejection boundary",
 )
+_ERROR_ACCESS_DENIED = 5
 _ERROR_INVALID_HANDLE = 6
 # One past the CRT's signed 32-bit descriptor range.
 _ABOVE_I32_MAX = 1 << 31
@@ -208,10 +209,12 @@ _UNUSABLE_DESCRIPTOR_SOURCE = (
         # A closed descriptor is the CRT's `EBADF`, which the classifier
         # rewrites to `ERROR_INVALID_HANDLE` so the Win32 reading is uniform.
         ("closed", str(_ERROR_INVALID_HANDLE)),
-        # An open but unreadable descriptor is the CRT's `EACCES`. It is not an
-        # invalid-handle condition, so it must keep its own code rather than
-        # being folded into the one above.
-        ("write-only", str(errno.EACCES)),
+        # An open but unreadable descriptor fails inside `ReadFile` with
+        # `ERROR_ACCESS_DENIED`, so the Win32 code is the one reported. It is
+        # not an invalid-handle condition and must not be folded into the code
+        # above; nor is it the CRT's `EACCES`, which happens to be that number
+        # only on this platform's errno table and means nothing to Win32.
+        ("write-only", str(_ERROR_ACCESS_DENIED)),
     ],
     ids=("closed", "write-only"),
 )

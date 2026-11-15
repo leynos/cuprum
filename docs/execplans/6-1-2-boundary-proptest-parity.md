@@ -582,6 +582,19 @@ ownership and error contracts, stop and report the exact incompatibility.
   was deliberately re-checked rather than trusted: a fresh-looking 1s pass
   could have meant the gate never compiled the changed file, and the
   fingerprint timestamps are what ruled that out.
+- [x] (2026-11-15) Corrected the unreadable-descriptor code contract from hosted
+  Windows CI evidence. The first `Native contracts (windows-2022)` run failed
+  the new write-only test: it expected `ERROR_INVALID_HANDLE` (6) and observed
+  5. A repair that made `classify_crt_read_error` pass `crt_errno` through then
+  failed the pre-existing `reports_unclassified_crt_failure_as_an_opaque_error`
+  case, because `EIO` is also 5. The classifier was reverted to translate
+  `EBADF` only and leave every other `errno` opaque; both the native and the
+  Python expectation now name `ERROR_ACCESS_DENIED`. The failing runs are what
+  established the contract: `_read` on an open-but-unreadable descriptor fails
+  inside `ReadFile`, which sets `ERROR_ACCESS_DENIED`, so the `win32_error`
+  channel is populated and wins before `errno` is consulted. The local Windows
+  tests cannot reach this — they are `skipif`-guarded on this host — which is
+  why the value was guessed wrong twice.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
