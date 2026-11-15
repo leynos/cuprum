@@ -247,7 +247,7 @@ class TestBlockedSend:
             msg = "connection reset by peer"
             raise OSError(msg)
 
-        def wait(_seconds: float) -> bool:
+        def wait(_seconds: float, _stop: threading.Event) -> bool:
             """Spend the deadline once the request is blocked, not before it."""
             if not sending.wait(5.0):
                 msg = "the request was never sent"

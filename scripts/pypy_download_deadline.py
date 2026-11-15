@@ -15,10 +15,11 @@ reuses it, so a multi-address host can overrun the deadline by one hop timeout
 per address. DNS resolution is outside the socket timeout altogether.
 
 The clock and the waiter are seams: a test supplies both together, so a
-deadline is reached and a blocked read released without real seconds. A
-substituted waiter returns `True` once the watchdog has been asked to stop,
-exactly as `threading.Event.wait` does, so a finished transfer never leaves the
-watchdog spinning in a loop it cannot exit.
+deadline is reached and a blocked read released without real seconds. The
+waiter is handed the watchdog's stop event, so a substituted waiter can block
+on its own condition and still be released by the same signal that ends the
+watch; it returns `True` once the watchdog has been asked to stop, exactly as
+`threading.Event.wait` does.
 """
 
 from __future__ import annotations
@@ -34,9 +35,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     type Clock = cabc.Callable[[], float]
-    # Takes the seconds left and returns True once the watchdog must stop, the
-    # same contract as `threading.Event.wait`.
-    type Waiter = cabc.Callable[[float], bool]
+    # Takes the seconds left and the watchdog's stop event, and returns True
+    # once the watchdog must stop, the same contract as `threading.Event.wait`.
+    type Waiter = cabc.Callable[[float, threading.Event], bool]
 
 
 # The most a single hop may spend opening its connection and sending its
@@ -175,14 +176,16 @@ class _DeadlineWatchdog:
         """Arm a watchdog for `connection`'s current socket.
 
         The remaining time comes from the transfer's own clock, so the wait and
-        every deadline check share one time source. A transfer that carries a
-        test's waiter advances that clock instead of blocking for the remaining
-        real seconds.
+        every deadline check share one time source. The transfer's waiter, when
+        a test supplies one, is handed the watchdog's stop event beside the
+        remaining time, so a waiter that blocks can be released when the
+        transfer ends instead of holding `__exit__` in `join`. The default is
+        that event's own `wait`, called directly by `_watch`.
         """
         self._sock = connection.sock
         self._transfer = transfer
         self._stop = threading.Event()
-        self._wait = self._stop.wait if transfer.wait is None else transfer.wait
+        self._wait = transfer.wait
         self._thread = threading.Thread(target=self._watch, daemon=True)
 
     def __enter__(self) -> _DeadlineWatchdog:
@@ -206,14 +209,20 @@ class _DeadlineWatchdog:
         The stop signal is re-read too. A substituted waiter can return before
         the deadline however often it is called, so without this check a
         transfer that finished first would leave the loop spinning and
-        `__exit__` blocked in `join` for ever.
+        `__exit__` blocked in `join` for ever. The default wait is the stop
+        event's own method, so an unstubbed watchdog is woken by `__exit__`
+        rather than sleeping out its remaining time.
         """
         while not self._stop.is_set():
             remaining = self._transfer.remaining()
             if remaining <= 0.0:
                 self._shut_down()
                 return
-            if self._wait(remaining):
+            if self._wait is None:
+                stopped = self._stop.wait(remaining)
+            else:
+                stopped = self._wait(remaining, self._stop)
+            if stopped:
                 return
         # The transfer finished first, so the socket is no longer ours to stop.
 

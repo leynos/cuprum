@@ -250,7 +250,9 @@ def _download(
     The environment supplies the clock the deadline is measured on and the
     connection factory each hop opens. Tests inject `wait` beside a manual
     clock, so a deadline is reached and a blocked read released without
-    waiting for real seconds.
+    waiting for real seconds. The waiter is also handed the watchdog's stop
+    event, so one that blocks on its own condition is released when the
+    transfer ends rather than holding the download's exit in `join`.
 
     Raises
     ------

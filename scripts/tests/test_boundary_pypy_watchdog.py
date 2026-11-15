@@ -62,7 +62,7 @@ class TestDeadlineWatchdog:
         connection = mock.Mock()
         connection.sock = sock
 
-        def wait(seconds: float) -> bool:
+        def wait(seconds: float, _stop: threading.Event) -> bool:
             """Record the remaining time and advance the clock to the deadline."""
             waits.append(seconds)
             clock.return_value = 9.0
@@ -87,7 +87,7 @@ class TestDeadlineWatchdog:
         waits: list[float] = []
         shut_down = threading.Event()
 
-        def wait(seconds: float) -> bool:
+        def wait(seconds: float, _stop: threading.Event) -> bool:
             """Wake early once, then reach the deadline on the next wait."""
             waits.append(seconds)
             clock.return_value = 6.0 if len(waits) == 1 else 9.0
@@ -119,7 +119,7 @@ class TestDeadlineWatchdog:
         """
         waited = threading.Event()
 
-        def wait(_seconds: float) -> bool:
+        def wait(_seconds: float, _stop: threading.Event) -> bool:
             """Wake early without advancing the clock, as a frozen clock does."""
             waited.set()
             return False
@@ -134,6 +134,35 @@ class TestDeadlineWatchdog:
             assert waited.wait(5.0), "the watchdog must wait before it is stopped"
         sock.shutdown.assert_not_called()
 
+    def test_the_stop_signal_releases_a_blocked_waiter(self) -> None:
+        """A waiter blocked on the stop event must not hold `__exit__` in `join`.
+
+        The default waiter blocks on the watchdog's stop event, so a
+        substituted waiter that blocks on it is released by the same signal
+        `__exit__` sets. Without that signal the exit would join a thread still
+        parked in its wait. A hang here fails the suite's own timeout.
+        """
+        waiting = threading.Event()
+        woke = threading.Event()
+
+        def wait(_seconds: float, stop: threading.Event) -> bool:
+            """Park until the transfer is stopped, as the default waiter may."""
+            waiting.set()
+            released = stop.wait(60.0)
+            woke.set()
+            return released
+
+        sock = mock.Mock()
+        connection = mock.Mock()
+        connection.sock = sock
+        watchdog = deadline._DeadlineWatchdog(
+            connection, deadline._Transfer(9.0, fixed_clock, wait)
+        )
+        with watchdog:
+            assert waiting.wait(5.0), "the watchdog must park in the injected waiter"
+        assert woke.is_set(), "the stop signal must release the parked waiter"
+        sock.shutdown.assert_not_called()
+
     def test_a_blocked_read_is_released_by_the_injected_waiter(
         self, tmp_path: Path
     ) -> None:
@@ -145,7 +174,7 @@ class TestDeadlineWatchdog:
         sock = mock.Mock()
         sock.shutdown.side_effect = lambda _how: released.set()
 
-        def wait(seconds: float) -> bool:
+        def wait(seconds: float, _stop: threading.Event) -> bool:
             """Hold the deadline until the read is blocked, then reach it."""
             if not reading.wait(5.0):
                 # Never shut down a socket whose read never began: report a
