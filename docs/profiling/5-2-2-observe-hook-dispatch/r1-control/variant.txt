@@ -1,6 +1,6 @@
 variant: control
 interpreter: 3.14.4 (main, Apr 14 2026, 14:26:14) [Clang 22.1.3 ]
 package: <repo:control>/cuprum
-revision: e170f908f2a7b4187cc321296a9029e621169b07
-load_before: 16.75 28.35 27.57
-load_after: 25.65 24.66 25.48
+revision: 1d9e7d37fd289efb6fe270f06115363ec7893a88
+load_before: 12.75 15.03 15.98
+load_after: 14.57 15.00 15.71

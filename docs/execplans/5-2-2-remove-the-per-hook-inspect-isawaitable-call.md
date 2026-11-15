@@ -232,8 +232,8 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   1,000-dispatch batch, i.e. about 116 ns and 4.7 µs per event; the async
   figure is task creation, matching the D8 estimate. That run measured the
   candidate tree alone under a much lower host load than the paired
-  measurement; the paired figures on the delivered revisions are 171.83 µs and
-  4.53 ms in the entry below, and those are the ones quoted elsewhere.
+  measurement; the paired figures on the delivered revisions are 167.25 µs and
+  4.28 ms in the final Progress entry, and those are the ones quoted elsewhere.
 - [x] (2026-11-05) EP-M5: profiler and timing evidence collected and the
   evidence document written. Six profiled captures (three pairs), their census
   results, and the classifier re-run are conformant: control target weights
@@ -270,33 +270,39 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   V5 and V7 evidence against the final head, so the performance claim is
   measured on the revision that is delivered rather than on the revisions the
   assessment examined. Complete on 2026-11-15: V5 was re-collected on the PR
-  base `e170f908` and the candidate `064d69405` (the entry below), and V7 was
-  re-collected as six load-admitted ABBA pairs with a wall-time interval whose
-  upper bound is 0.9856 (the final entry below).
-- [x] (2026-11-14) Re-measurement, V5 complete. The control is now the PR base
-  `e170f908` and the candidate `064d69405`; the only runtime difference between
-  them is `cuprum/_observability.py`, and `benchmarks/` is identical in both
-  trees. Six fresh captures on CPython 3.14.4, py-spy 0.4.2 at 100 Hz, in three
-  matched pairs under the load alternation, give control anchors of 33,602 to
-  36,547 with target weights 2,572 to 2,762 (7.40-7.65% of the anchor) and
-  candidate anchors of 30,886 to 43,268 with both target weights zero. Every
-  anchor clears the 14,000 floor, every census exit status is the expected one,
-  and the folded weight sum reconciles with py-spy's own sample count in all
-  six: the census drops exactly one empty-stack line per capture. Profiled wall
-  times are *not* used as a speed measurement this time: host load ranged from
-  9.99 to 45.45 inside the collection and the arms are not comparable.
-- [x] (2026-11-15) Re-measurement, V7 complete. The D9 ceiling of 20 was
-  unreachable — the host ran at a one-minute load average of 20-45 for hours
-  while other agents built — so Decision D11 replaced it with a comparability
-  rule that reads load and the host's measured busy share and never a result.
-  Six ABBA pairs were admitted from ten attempts, with per-round ratios 0.9409,
-  0.9611, 0.9365, 0.9182, 1.0242, and 0.9636. The wall-time geometric mean is
-  0.956848 with a 10,000-resample bootstrap 95% interval of [0.934407,
-  0.985617] (seed 20261105), so the upper bound is 0.9856 against the 1.05
-  tolerance. The child's own CPU time gives 0.958527, [0.938406, 0.985121], and
-  CPU time is 98.7% to 100.0% of wall time in every arm, so the two independent
-  quantities agree. The round-5 pair is the only one above 1 and is retained:
-  the rule never reads a ratio, so dropping it after seeing the result would be
+  base `e170f908` and the candidate `064d69405`, then again after the rebase on
+  `1d9e7d37f` and `0df4bbab6`; V7 was collected as six load-admitted ABBA pairs
+  on each occasion, with the delivered pair of collections reporting wall-time
+  interval upper bounds of 0.9856 and 0.9748. The final entry below carries the
+  measurement on the delivered revisions.
+- [x] (2026-11-14) Re-measurement, V5, collection on `e170f908`/`064d69405`
+  (superseded by the rebase; kept as the record of that collection). The
+  control was the PR base `e170f908` and the candidate `064d69405`; the only
+  runtime difference between them is `cuprum/_observability.py`, and
+  `benchmarks/` is identical in both trees. Six fresh captures on CPython
+  3.14.4, py-spy 0.4.2 at 100 Hz, in three matched pairs under the load
+  alternation, give control anchors of 33,602 to 36,547 with target weights
+  2,572 to 2,762 (7.40-7.65% of the anchor) and candidate anchors of 30,886 to
+  43,268 with both target weights zero. Every anchor clears the 14,000 floor,
+  every census exit status is the expected one, and the folded weight sum
+  reconciles with py-spy's own sample count in all six: the census drops
+  exactly one empty-stack line per capture. Profiled wall times are *not* used
+  as a speed measurement this time: host load ranged from 9.99 to 45.45 inside
+  the collection and the arms are not comparable.
+- [x] (2026-11-15) Re-measurement, V7, collection on
+  `e170f908`/`064d69405` (superseded by the rebase; kept as the record of that
+  collection). The D9 ceiling of 20 was unreachable — the host ran at a
+  one-minute load average of 20-45 for hours while other agents built — so
+  Decision D11 replaced it with a comparability rule that reads load and the
+  host's measured busy share and never a result. Six ABBA pairs were admitted
+  from ten attempts, with per-round ratios 0.9409, 0.9611, 0.9365, 0.9182,
+  1.0242, and 0.9636. The wall-time geometric mean is 0.956848 with a
+  10,000-resample bootstrap 95% interval of [0.934407, 0.985617] (seed
+  20261105), so the upper bound is 0.9856 against the 1.05 tolerance. The
+  child's own CPU time gives 0.958527, [0.938406, 0.985121], and CPU time is
+  98.7% to 100.0% of wall time in every arm, so the two independent quantities
+  agree. The round-5 pair is the only one above 1 and is retained: the rule
+  never reads a ratio, so dropping it after seeing the result would be
   selecting on the outcome. The microbenchmark repeats moved the `None`-return
   hook from a median-of-medians 434.89 µs to 171.83 µs per 1,000 dispatches, a
   2.53x reduction or about 263 ns per event, while the `async def` hook
@@ -308,6 +314,55 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   documents, and the four attempt pairs the re-collection did not overwrite —
   were moved to `unprofiled/superseded/`, and the discarded warm-up pair is
   committed under `unprofiled/warmup-<arm>.*` rather than dropped.
+- [x] (2026-11-15) Rebase, then V5 and V7 re-collected on the delivered
+  revisions. The branch was rebased onto `main` at
+  `1d9e7d37fd289efb6fe270f06115363ec7893a88`, twelve commits ahead of the
+  previous base; the new base refactored the per-line emission path into
+  `_LineEventEmitter` and moved `_consume_stream_with_lines` into its own
+  module, so both arms of the previous collection had measured code the branch
+  no longer contains. The rebased series delivers
+  `0df4bbab6c5b531e59d103c8a7baee0d634ff146`, and every artefact in
+  `docs/profiling/5-2-2-observe-hook-dispatch/` was re-collected against that
+  pair. The control is the base, which still calls `inspect.isawaitable`
+  unconditionally; the only product source difference is
+  `cuprum/_observability.py`.
+- [x] (2026-11-15) V5 on `1d9e7d37f`/`0df4bbab6`. Six captures in three matched
+  pairs, CPython 3.14.4, py-spy 0.4.2 at 100 Hz, repeat count 2: control
+  anchors 28,763 to 31,621 with target weights 1,932 to 2,207 (6.59-6.98% of
+  the anchor), candidate anchors 27,660 to 29,455 with both target weights
+  zero. Every anchor clears the 14,000 floor, every census exit is 0 for a
+  candidate and 1 for a control, the classifier's status is `pass` for all six,
+  and each capture's folded weight sum equals py-spy's sample count minus
+  exactly one empty-stack line. One capture, `r2-candidate`, records py-spy
+  exit 1 from the known teardown reaping race after writing its complete
+  capture; the other five exit 0.
+- [x] (2026-11-15) Construction share on the same stacks: control median
+  28.1409%, candidate median 29.3436%, a rise of 1.2027 points (0.68, 1.91, and
+  1.15 per pair). The rise is 0.23 points above the 5.2.1 forecast of 0.9686
+  points. Both arms read about a point and a quarter below this item's previous
+  collection, which measured the same two trees before the base's refactor
+  moved the emission path; the shift belongs to the shared base, and the paired
+  rise does not depend on it.
+- [x] (2026-11-15) V7 on the same revisions. Decision D11, unchanged and
+  applied uniformly to all thirteen attempts, admitted six ABBA pairs after
+  rejecting seven on an arm median gap, an arm burst, or both. Per-round ratios
+  are 0.9771, 1.0089, 0.8647, 0.9099, 0.9494, and 0.9103; the wall-time
+  geometric mean is 0.935504 with a 10,000-resample bootstrap 95% interval of
+  [0.897741, 0.974806] (seed 20261105), and the child's CPU time gives
+  0.936883, [0.899205, 0.975167], with CPU time 98.3% to 99.8% of wall time in
+  every arm. Round 2 is the only pair above 1 and is retained because the rule
+  never reads a ratio. The warm-up pair was excluded before its result existed
+  and fails the rule independently, at busy shares of 0.566 against 0.801.
+- [x] (2026-11-15) Microbenchmark on the same revisions. Sixteen runs per tree
+  with alternating order move the `None`-returning hook from a 433.23 µs median
+  to 167.25 µs per 1,000 dispatches, a 2.59x reduction or about 266 ns per
+  event, while the `async def` hook reads 0.978 with overlapping ranges. The
+  control worktree predates the benchmark group, so the candidate's file was
+  copied into it; the file times `_emit_exec_event` and adds no production
+  code. Both earlier collections are recorded as superseded: the first survives
+  in `unprofiled/superseded/`, the second only in branch history, and
+  `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` states why neither is
+  quoted as a result.
 
 ## Surprises & discoveries
 
@@ -559,19 +614,21 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   45 minutes per attempt for a quiet window admitted nothing. The ceiling was a
   proxy for what actually corrupts a pair — a burst inside one arm, or an
   arm-to-arm imbalance — and both are measurable directly. A pair is admitted
-  when both arms exit 0 with a result document, the pair's pooled median load
-  is at most 45, the arms' load medians differ by at most 20% of the pooled
-  median, the arms' measured host-busy shares from `/proc/stat` differ by at
-  most 10 points, and no arm's maximum load exceeds the pooled median by more
-  than 15. The rule reads `/proc/loadavg`, `/proc/stat`, and exit status only,
-  never a wall time, a CPU time, or a ratio. It was refined twice during the
+  when both arms exit 0 with a result document, the pair's pooled median load —
+  the mean of the two arm medians, as the implementation computes it — is at
+  most 45, the arms' load medians differ by at most 20% of the pooled median,
+  the arms' measured host-busy shares from `/proc/stat` differ by at most 10
+  points, and no arm's maximum load exceeds the pooled median by more than 15.
+  The rule reads `/proc/loadavg`, `/proc/stat`, and exit status only, never a
+  wall time, a CPU time, or a ratio. It was refined twice during that
   collection because its own load diagnostics showed it rejecting comparable
   pairs: maxima within 1.25x the pooled median rejected two attempts whose busy
   shares agreed to within 9 points, and maxima within 1.35x with a symmetric
   maxima bound rejected two more. The final form was then applied uniformly to
   every recorded attempt, and each round's earliest qualifying attempt is the
-  one adopted, so the accepted set cannot be chosen for a favourable ratio.
-  Date/Author: 2026-11-15, implementation agent.
+  one adopted, so the accepted set cannot be chosen for a favourable ratio. The
+  post-rebase re-collection applied that same final form, unchanged, to all
+  thirteen of its attempts. Date/Author: 2026-11-15, implementation agent.
 - Decision D12 (2026-11-15, implementation): report the child's CPU time
   beside its wall time for every unprofiled arm. Rationale: under the load
   above, an arm's wall time carries the scheduler's decisions as well as the
@@ -590,48 +647,50 @@ independent ways: the profiler no longer sees the detector, the wall clock is
 not slower, and a direct microbenchmark of the dispatch loop shows the removed
 cost.
 
-*Census.* Three matched capture pairs at repeat count 2, control `e170f908`
-against candidate `064d69405`, CPython 3.14.4, py-spy 0.4.2 at 100 Hz:
+*Census.* Three matched capture pairs at repeat count 2, control `1d9e7d37f`
+against candidate `0df4bbab6`, CPython 3.14.4, py-spy 0.4.2 at 100 Hz:
 
 | pair | control `target` / `any` | control anchor | candidate `target` / `any` | candidate anchor |
 | ---- | ------------------------ | -------------- | -------------------------- | ---------------- |
-| 1    | 2,762 / 2,762            | 36,547         | 0 / 0                      | 35,919           |
-| 2    | 2,678 / 2,678            | 36,179         | 0 / 0                      | 43,268           |
-| 3    | 2,572 / 2,572            | 33,602         | 0 / 0                      | 30,886           |
+| 1    | 2,207 / 2,207            | 31,621         | 0 / 0                      | 27,660           |
+| 2    | 1,998 / 1,998            | 30,315         | 0 / 0                      | 29,455           |
+| 3    | 1,932 / 1,932            | 28,763         | 0 / 0                      | 28,179           |
 
 In every control the location-specific and name-only weights agree and no
 target sample falls outside the anchor, so the detector is reachable only
 through `emit_line`. Every candidate reports zero on both weights while its
-anchor clears the 14,000 floor by more than 16,000 samples, so the zero is an
+anchor clears the 14,000 floor by more than 13,000 samples, so the zero is an
 observed absence. The census exits 1 for each control and 0 for each candidate.
-The only runtime difference between the two revisions is
-`cuprum/_observability.py`, and `benchmarks/` is identical in both trees, so
-the captures differ by the change under test.
+The only product source difference between the two revisions is
+`cuprum/_observability.py`; the rest of the diff is this item's own tests,
+benchmark group, and documents, so the captures differ by the change under test.
 
 *Wall time.* Six load-admitted ABBA pairs of the unprofiled `cb` scenario give
-ratios 0.9409, 0.9611, 0.9365, 0.9182, 1.0242, and 0.9636, a geometric mean of
-0.956848, and a 10,000-resample bootstrap 95% interval of [0.934407, 0.985617]
-(seed 20261105). The upper bound is 0.9856 against the 1.05 tolerance. The
+ratios 0.9771, 1.0089, 0.8647, 0.9099, 0.9494, and 0.9103, a geometric mean of
+0.935504, and a 10,000-resample bootstrap 95% interval of [0.897741, 0.974806]
+(seed 20261105). The upper bound is 0.9748 against the 1.05 tolerance. The
 child's own CPU time, measured with `getrusage(RUSAGE_CHILDREN)` because
-`/usr/bin/time` is not installed, gives a geometric mean of 0.958527 and an
-interval of [0.938406, 0.985121]; CPU time is 98.7% to 100.0% of wall time in
+`/usr/bin/time` is not installed, gives a geometric mean of 0.936883 and an
+interval of [0.899205, 0.975167]; CPU time is 98.3% to 99.8% of wall time in
 every arm, so two independent quantities agree. Profiled wall times are *not*
-used as a speed measurement: host load ranged from 9.99 to 45.45 inside the
-profiled collection and the arms are not comparable. Every reading is
-consistent with removing work from the per-line path; none supports a slowdown.
+used as a speed measurement: host load moved between 7.69 and 37.11 during the
+profiled collection, and the attempts the rule rejected sampled maxima above
+51, so the arms are not comparable. Every reading is consistent with removing
+work from the per-line path; none supports a slowdown.
 
 *Microbenchmark.* The `observe-dispatch` group dispatches 1,000 events per
-call. Across four runs with alternating order, a hook that returns `None` fell
-from a median-of-medians 434.89 µs to 171.83 µs per 1,000 dispatches, a 2.53x
-reduction or about 263 ns per event, while an `async def` hook measured 1.033
+call. Across sixteen runs per tree with alternating order, a hook that returns
+`None` fell from a 433.23 µs median to 167.25 µs per 1,000 dispatches, a 2.59x
+reduction or about 266 ns per event, while an `async def` hook measured 0.978
 with overlapping ranges. The async path is `asyncio.Task` creation, which this
 change does not touch (Decision D8).
 
 *Construction share.* The 5.2.1 classifier re-run on the same stacks moved from
-a 29.4469% control median to a 30.4699% candidate median, a rise of 1.0230
+a 28.1409% control median to a 29.3436% candidate median, a rise of 1.2027
 points. This is the metric's documented inversion when work outside the counted
-constructor is removed, and it lands within 0.05 points of 5.2.1's 0.9686-point
-forecast. 5.2.1's gate is not 5.2.2's to pass, and this plan does not claim it.
+constructor is removed, and it is 0.23 points above 5.2.1's 0.9686-point
+forecast. 5.2.1's gate is not 5.2.2's to pass, and this plan does not claim it;
+both arms happen to sit below the 30% limit in this collection.
 
 *Retrospective.* Two things dominated the effort. The first was measurement,
 not code. This host's shared load made an unprofiled pair admissible only
@@ -649,9 +708,14 @@ arm-to-arm imbalance) and reads no result, so the accepted set can be stated in
 advance and every attempt stays on the record. The lesson is that a load gate
 needs its own evidence trail, which is why `superseded/timing-attempts.tsv`,
 `d11-attempts.tsv`, and `load-samples.json` are committed beside the accepted
-numbers. The second was scope: the CodeScene follow-ups in EP-M2 changed the
-dispatcher's shape but not its behaviour, and folding the two failure handlers
-into one removed a complexity warning without adding hot-path work.
+numbers. A rebase onto a base twelve commits ahead invalidated that trail a
+second time, because the new base refactored the per-line emission path in both
+arms; every artefact was re-collected once more, which is why the evidence
+document names the base and head revisions it belongs to and records the
+earlier collections as superseded rather than current. The second was scope:
+the CodeScene follow-ups in EP-M2 changed the dispatcher's shape but not its
+behaviour, and folding the two failure handlers into one removed a complexity
+warning without adding hot-path work.
 
 The change itself stayed small because the decision that made it safe was
 established before any code: `type(result) is types.CoroutineType` is the first
@@ -1318,3 +1382,9 @@ interval in place of a raw 5% threshold. The off-by-one scheduled-count
 logging, the reachable `isawaitable` exception, the over-cap test files, and
 the red stage's collectability are also addressed. Remaining work is unchanged
 in order but smaller in scope: one production module under Option A.
+
+2026-11-15, revision after the rebase: the branch was replayed onto `main` at
+`1d9e7d37f`, and V5 and V7 were re-collected on `1d9e7d37f` against the
+delivered head `0df4bbab6`. The Progress and Outcomes sections carry those
+figures; the two earlier collections are recorded as superseded rather than
+deleted, because each is the record of the revisions it measured.

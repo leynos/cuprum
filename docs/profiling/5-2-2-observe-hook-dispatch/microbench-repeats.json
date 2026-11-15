@@ -1,136 +1,520 @@
 {
-  "note": "Eight runs of the observe-dispatch group, alternating which tree runs first; each benchmark dispatches 1000 events per call, so divide by 1000 for the per-event cost. The primary pair is committed beside this file; r1-r3 are the alternating-order repeats.",
-  "interpreter": "CPython 3.14.7 (the project virtual environment)",
-  "control_revision": "e170f908f2a7b4187cc321296a9029e621169b07",
-  "candidate_revision": "064d6940502096ebb038f146673dae8f8b750af4",
-  "runs": [
-    {
-      "run": "primary-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 485.218,
-      "median_us": 441.437,
-      "rounds": 1389
-    },
-    {
-      "run": "primary-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5622.485,
-      "median_us": 4521.393,
-      "rounds": 190
-    },
-    {
-      "run": "primary-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 186.549,
-      "median_us": 170.717,
-      "rounds": 4308
-    },
-    {
-      "run": "primary-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5561.295,
-      "median_us": 4415.462,
-      "rounds": 134
-    },
-    {
-      "run": "r1-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 174.956,
-      "median_us": 169.137,
-      "rounds": 4788
-    },
-    {
-      "run": "r1-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5798.143,
-      "median_us": 4504.333,
-      "rounds": 178
-    },
-    {
-      "run": "r1-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 499.827,
-      "median_us": 436.767,
-      "rounds": 2064
-    },
-    {
-      "run": "r1-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5452.46,
-      "median_us": 4367.976,
-      "rounds": 181
-    },
-    {
-      "run": "r2-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 451.32,
-      "median_us": 433.016,
-      "rounds": 1639
-    },
-    {
-      "run": "r2-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5180.099,
-      "median_us": 4365.386,
-      "rounds": 192
-    },
-    {
-      "run": "r2-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 189.504,
-      "median_us": 172.932,
-      "rounds": 4941
-    },
-    {
-      "run": "r2-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 6309.99,
-      "median_us": 4664.896,
-      "rounds": 126
-    },
-    {
-      "run": "r3-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 190.884,
-      "median_us": 173.743,
-      "rounds": 3506
-    },
-    {
-      "run": "r3-candidate",
-      "variant": "candidate",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5885.225,
-      "median_us": 4549.939,
-      "rounds": 191
-    },
-    {
-      "run": "r3-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[sync]",
-      "mean_us": 451.908,
-      "median_us": 429.401,
-      "rounds": 1632
-    },
-    {
-      "run": "r3-control",
-      "variant": "control",
-      "benchmark": "test_benchmark_observe_dispatch[async]",
-      "mean_us": 5398.839,
-      "median_us": 4393.966,
-      "rounds": 185
-    }
-  ]
+ "note": "Sixteen runs of the observe-dispatch group in each tree: the primary pair, committed beside this file, plus fifteen alternating-order repeats. Each benchmark dispatches 1000 events per call, so divide by 1000 for the per-event cost.",
+ "interpreter": "CPython 3.14.7 (the project virtual environment)",
+ "control_revision": "1d9e7d37fd289efb6fe270f06115363ec7893a88",
+ "candidate_revision": "0df4bbab6c5b531e59d103c8a7baee0d634ff146",
+ "runs": [
+  {
+   "run": "primary-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 654.496,
+   "median_us": 628.759,
+   "rounds": 1987
+  },
+  {
+   "run": "primary-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 7613.952,
+   "median_us": 6147.835,
+   "rounds": 204
+  },
+  {
+   "run": "primary-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 182.403,
+   "median_us": 174.823,
+   "rounds": 3429
+  },
+  {
+   "run": "primary-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5437.05,
+   "median_us": 4551.865,
+   "rounds": 184
+  },
+  {
+   "run": "r1-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 833.46,
+   "median_us": 765.797,
+   "rounds": 1140
+  },
+  {
+   "run": "r1-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 11091.563,
+   "median_us": 7886.482,
+   "rounds": 39
+  },
+  {
+   "run": "r1-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 187.103,
+   "median_us": 174.552,
+   "rounds": 4097
+  },
+  {
+   "run": "r1-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5909.251,
+   "median_us": 4515.639,
+   "rounds": 203
+  },
+  {
+   "run": "r2-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 640.176,
+   "median_us": 638.54,
+   "rounds": 1486
+  },
+  {
+   "run": "r2-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 9709.764,
+   "median_us": 6976.293,
+   "rounds": 68
+  },
+  {
+   "run": "r2-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 208.258,
+   "median_us": 198.003,
+   "rounds": 3801
+  },
+  {
+   "run": "r2-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6571.029,
+   "median_us": 5768.41,
+   "rounds": 149
+  },
+  {
+   "run": "r3-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 529.519,
+   "median_us": 476.558,
+   "rounds": 1334
+  },
+  {
+   "run": "r3-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6224.169,
+   "median_us": 5238.501,
+   "rounds": 103
+  },
+  {
+   "run": "r3-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 185.709,
+   "median_us": 172.093,
+   "rounds": 3165
+  },
+  {
+   "run": "r3-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6442.353,
+   "median_us": 5349.602,
+   "rounds": 155
+  },
+  {
+   "run": "r4-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 466.937,
+   "median_us": 442.767,
+   "rounds": 1220
+  },
+  {
+   "run": "r4-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5759.791,
+   "median_us": 4553.474,
+   "rounds": 96
+  },
+  {
+   "run": "r4-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 227.5,
+   "median_us": 231.163,
+   "rounds": 2732
+  },
+  {
+   "run": "r4-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6425.44,
+   "median_us": 4892.44,
+   "rounds": 192
+  },
+  {
+   "run": "r5-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 558.045,
+   "median_us": 497.022,
+   "rounds": 1334
+  },
+  {
+   "run": "r5-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 7037.279,
+   "median_us": 6046.128,
+   "rounds": 60
+  },
+  {
+   "run": "r5-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 194.059,
+   "median_us": 171.467,
+   "rounds": 3956
+  },
+  {
+   "run": "r5-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5387.543,
+   "median_us": 4329.297,
+   "rounds": 203
+  },
+  {
+   "run": "r6-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 514.464,
+   "median_us": 462.757,
+   "rounds": 1153
+  },
+  {
+   "run": "r6-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6226.422,
+   "median_us": 4757.853,
+   "rounds": 80
+  },
+  {
+   "run": "r6-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 192.969,
+   "median_us": 173.728,
+   "rounds": 3852
+  },
+  {
+   "run": "r6-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5925.436,
+   "median_us": 4557.17,
+   "rounds": 159
+  },
+  {
+   "run": "r7-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 509.088,
+   "median_us": 452.197,
+   "rounds": 1949
+  },
+  {
+   "run": "r7-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 6897.503,
+   "median_us": 5250.67,
+   "rounds": 73
+  },
+  {
+   "run": "r7-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 203.71,
+   "median_us": 192.463,
+   "rounds": 3575
+  },
+  {
+   "run": "r7-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5890.774,
+   "median_us": 4547.56,
+   "rounds": 123
+  },
+  {
+   "run": "r8-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 434.01,
+   "median_us": 421.176,
+   "rounds": 2017
+  },
+  {
+   "run": "r8-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5030.484,
+   "median_us": 4190.594,
+   "rounds": 129
+  },
+  {
+   "run": "r8-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 168.176,
+   "median_us": 163.042,
+   "rounds": 4150
+  },
+  {
+   "run": "r8-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 5347.49,
+   "median_us": 4224.695,
+   "rounds": 203
+  },
+  {
+   "run": "r9-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 431.593,
+   "median_us": 423.691,
+   "rounds": 2034
+  },
+  {
+   "run": "r9-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4795.925,
+   "median_us": 4180.965,
+   "rounds": 132
+  },
+  {
+   "run": "r9-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 169.2,
+   "median_us": 161.452,
+   "rounds": 4277
+  },
+  {
+   "run": "r9-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4749.863,
+   "median_us": 4038.382,
+   "rounds": 213
+  },
+  {
+   "run": "r10-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 420.691,
+   "median_us": 418.506,
+   "rounds": 1968
+  },
+  {
+   "run": "r10-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4692.361,
+   "median_us": 4106.613,
+   "rounds": 134
+  },
+  {
+   "run": "r10-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 163.331,
+   "median_us": 158.543,
+   "rounds": 4544
+  },
+  {
+   "run": "r10-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4697.554,
+   "median_us": 4044.287,
+   "rounds": 214
+  },
+  {
+   "run": "r11-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 421.963,
+   "median_us": 417.496,
+   "rounds": 2036
+  },
+  {
+   "run": "r11-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4699.832,
+   "median_us": 4080.633,
+   "rounds": 135
+  },
+  {
+   "run": "r11-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 166.571,
+   "median_us": 161.713,
+   "rounds": 4248
+  },
+  {
+   "run": "r11-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4887.093,
+   "median_us": 4116.323,
+   "rounds": 201
+  },
+  {
+   "run": "r12-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 424.541,
+   "median_us": 413.747,
+   "rounds": 2034
+  },
+  {
+   "run": "r12-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4770.008,
+   "median_us": 4070.602,
+   "rounds": 135
+  },
+  {
+   "run": "r12-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 160.162,
+   "median_us": 156.733,
+   "rounds": 4467
+  },
+  {
+   "run": "r12-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4626.543,
+   "median_us": 3998.017,
+   "rounds": 214
+  },
+  {
+   "run": "r13-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 424.989,
+   "median_us": 417.337,
+   "rounds": 2091
+  },
+  {
+   "run": "r13-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4821.281,
+   "median_us": 4107.083,
+   "rounds": 127
+  },
+  {
+   "run": "r13-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 161.129,
+   "median_us": 157.772,
+   "rounds": 4404
+  },
+  {
+   "run": "r13-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4780.384,
+   "median_us": 4053.782,
+   "rounds": 206
+  },
+  {
+   "run": "r14-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 426.979,
+   "median_us": 417.346,
+   "rounds": 2073
+  },
+  {
+   "run": "r14-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4767.043,
+   "median_us": 4092.873,
+   "rounds": 131
+  },
+  {
+   "run": "r14-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 160.866,
+   "median_us": 157.672,
+   "rounds": 4437
+  },
+  {
+   "run": "r14-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4775.265,
+   "median_us": 4023.287,
+   "rounds": 208
+  },
+  {
+   "run": "r15-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 424.79,
+   "median_us": 420.996,
+   "rounds": 2098
+  },
+  {
+   "run": "r15-control",
+   "variant": "control",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4673.169,
+   "median_us": 4041.633,
+   "rounds": 136
+  },
+  {
+   "run": "r15-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[sync]",
+   "mean_us": 160.485,
+   "median_us": 157.812,
+   "rounds": 3836
+  },
+  {
+   "run": "r15-candidate",
+   "variant": "candidate",
+   "benchmark": "test_benchmark_observe_dispatch[async]",
+   "mean_us": 4739.846,
+   "median_us": 4024.662,
+   "rounds": 211
+  }
+ ]
 }

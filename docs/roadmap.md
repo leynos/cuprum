@@ -376,7 +376,7 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
     when this gate is next re-run. Its **margin is thin** — the tightest pair
     clears by 0.0586 points — and the metric **inverts**, because removing
     pre-constructor work shrinks the denominator and so *raises* the share. In
-    particular item 5.2.2 moved the share to 30.4699% **by succeeding**, which
+    particular item 5.2.2 moved the share to 29.3436% **by succeeding**, which
     is why it must be judged on its own criterion rather than this one.
     The analysis, the rejected designs, and the full decomposition are in
     `docs/tee-hotpath-line-event-emission-5-2-1.md`.
@@ -391,11 +391,12 @@ become opt-in. See tee-hotpath-profiling-baseline-2026-06-12.md §5 (Table 4).
   - Met. A `None` result is dismissed by identity, a native coroutine is
     recognized by exact type, and only the remaining shapes reach
     `inspect.isawaitable`. Three matched control/candidate pairs put the
-    detector at 2,572–2,762 sampled frames in the control and **0** in every
-    candidate, with 30,886–43,268 anchored samples in the candidate against a
-    14,000 floor. The construction share rose from 29.4469% to 30.4699% by
-    succeeding, as 5.2.1 predicted; the unprofiled `cb` ratio and the
-    microbenchmark are in `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`.
+    detector at 1,932–2,207 sampled frames in the control and **0** in every
+    candidate, with 27,660–29,455 anchored samples in the candidate against a
+    14,000 floor. The construction share rose from a 28.1409% control median to
+    29.3436% by succeeding, as 5.2.1 predicted; the unprofiled `cb` ratio and
+    the microbenchmark are in
+    `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`.
   - Follow-up candidate: the `observe_hook_task_scheduled` debug record builds
     its message arguments and `extra` mapping for every scheduled task even
     when debug logging is disabled. Measuring that cost and, if worthwhile,

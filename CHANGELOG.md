@@ -235,14 +235,14 @@ _Applications upgrading from 0.1 should follow the
   reach the unchanged `inspect.isawaitable` test. Scheduling, ordering, failure
   propagation, and every supported hook shape (including a lambda or plain
   wrapper that returns a coroutine) are unchanged. Three matched py-spy pairs
-  put the detector at 2,572–2,762 sampled frames under the per-line emitter in
+  put the detector at 1,932–2,207 sampled frames under the per-line emitter in
   the control and **zero** in every candidate. A synchronous hook costs about
-  172 ns per event instead of 435 ns, and the line-callback workload's
-  geometric-mean wall-time ratio was 0.9568 with a 95% interval of [0.9344,
-  0.9856], so the change does not regress the scenario. The 5.2.1
-  construction-share metric rises from 29.4469% to 30.4699%, which is that
-  metric's documented inversion when work outside the counted constructor is
-  removed, not a regression. See the
+  167 ns per event instead of 433 ns, and the line-callback workload's
+  geometric-mean wall-time ratio was 0.9355 with a 95% interval of [0.8977,
+  0.9748], so the change does not regress the scenario. The 5.2.1
+  construction-share metric rises from a 28.1409% control median to 29.3436%,
+  which is that metric's documented inversion when work outside the counted
+  constructor is removed, not a regression. See the
   [evidence record](docs/tee-hotpath-observe-hook-dispatch-5-2-2.md) and the
   raw captures under
   [`docs/profiling/5-2-2-observe-hook-dispatch/`](docs/profiling/5-2-2-observe-hook-dispatch/README.md).

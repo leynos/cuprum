@@ -4,7 +4,7 @@
   "exit_code": 0,
   "fixture_manifest_hash": "51394f18e57972a681a2eb97c7c477d02d1d15b175247f518a60c331319774cc",
   "fixture_path": "dist/fixtures/seed12345-wrap76.b64",
-  "lock_wait_seconds": 6.100162863731384e-07,
+  "lock_wait_seconds": 5.201436579227448e-07,
   "mode": "echo",
   "read_size": 65536,
   "reentrant_rejection_count": 0,
@@ -19,7 +19,7 @@
       "stream_drain": {
         "eof": {
           "bytes_consumed": 2175740011,
-          "duration_seconds": 477.88968240469694,
+          "duration_seconds": 495.55584669299424,
           "operation_count": 2,
           "read_operations": 33202
         }
@@ -27,11 +27,11 @@
     },
     "totals": {
       "bytes_consumed": 2175740011,
-      "duration_seconds": 477.88968240469694,
+      "duration_seconds": 495.55584669299424,
       "operation_count": 2,
       "read_operations": 33202
     }
   },
-  "wall_time_seconds": 238.94740710314363,
+  "wall_time_seconds": 247.78084983630106,
   "with_line_callbacks": true
 }

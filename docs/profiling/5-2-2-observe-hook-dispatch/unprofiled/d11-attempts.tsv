@@ -1,11 +1,14 @@
-pass	round	attempt	max_load_control	max_load_candidate	median_load_control	median_load_candidate	host_busy_control	host_busy_candidate	admitted	reason
-4	1	1	37.30	34.62	31.31	31.54	0.5433	0.5489	yes	admitted
-4	2	1	29.35	34.96	26.49	29.34	0.4583	0.5462	no	candidate burst 34.96 above 34.62
-4	2	2	30.45	38.14	26.73	31.60	0.5039	0.5057	no	candidate burst 38.14 above 36.27; arm medians differ by 4.88
-4	2	3	43.36	37.70	34.14	33.76	0.6055	0.6252	no	control burst 43.36 above 42.35
-4	2	4	39.12	30.78	31.19	28.80	0.6112	0.4828	no	arm maxima differ by 8.34; host busy shares differ by 0.128
-4	3	1	40.06	21.53	22.34	15.11	0.7027	0.5433	no	arm medians differ by 7.23; control maximum 40.06 is above 20.50 + 15; host busy shares differ by 0.159
-4	3	2	22.68	22.22	16.31	14.05	0.5187	0.4839	yes	admitted
-4	4	1	20.06	22.79	16.06	16.04	0.5781	0.5126	yes	admitted
-4	5	1	21.08	19.43	15.00	15.59	0.5112	0.5427	yes	admitted
-4	6	1	17.27	16.24	13.34	11.84	0.4785	0.3884	yes	admitted
+round	attempt	max_load_control	max_load_candidate	median_load_control	median_load_candidate	host_busy_control	host_busy_candidate	admitted	reason
+1	1	48.90	29.04	34.22	25.60	0.7891	0.6891	no	arm medians differ by 8.62; control maximum 48.90 is above 29.91 + 15
+1	2	20.37	21.05	16.54	16.80	0.5404	0.5488	yes	admitted
+2	1	22.88	18.31	15.75	12.37	0.5405	0.4813	no	arm medians differ by 3.38
+2	2	22.27	25.87	14.97	14.81	0.5036	0.5863	yes	admitted
+3	1	51.39	26.13	30.10	21.41	0.7739	0.6209	no	arm medians differ by 8.69; host busy shares differ by 0.153; control maximum 51.39 is above 25.76 + 15
+3	2	29.94	16.08	18.41	11.57	0.5863	0.3965	no	arm medians differ by 6.84; host busy shares differ by 0.190
+3	3	15.94	47.99	12.98	28.88	0.5008	0.7606	no	arm medians differ by 15.90; host busy shares differ by 0.260; candidate maximum 47.99 is above 20.93 + 15
+3	4	25.12	22.40	20.70	17.92	0.6396	0.5459	yes	admitted
+4	1	18.26	16.94	12.87	14.39	0.4951	0.4919	yes	admitted
+5	1	21.35	16.57	17.76	15.24	0.5555	0.5375	yes	admitted
+6	1	44.05	19.45	26.10	10.98	0.7020	0.4513	no	arm medians differ by 15.12; host busy shares differ by 0.251; control maximum 44.05 is above 18.54 + 15
+6	2	13.63	20.14	9.03	14.01	0.4007	0.4623	no	arm medians differ by 4.98
+6	3	17.29	18.08	12.34	11.28	0.4100	0.4224	yes	admitted

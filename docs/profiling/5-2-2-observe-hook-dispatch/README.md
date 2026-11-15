@@ -9,11 +9,11 @@ recalculate the census rather than trust the numbers in the report.
 ## Layout
 
 ```text
-r{1,2,3}-control/         three pre-change captures of the PR base, `e170f908f`
-r{1,2,3}-candidate/       three post-change captures of the PR head, `064d69405`
+r{1,2,3}-control/         three pre-change captures of the PR base, `1d9e7d37f`
+r{1,2,3}-candidate/       three post-change captures of the PR head, `0df4bbab6`
 unprofiled/               six admitted ABBA `cb` pairs and their evidence
 unprofiled/attempts/      every attempt of this collection, admitted or not
-unprofiled/superseded/    what remains of the earlier collection's records
+unprofiled/superseded/    what remains of the first collection's records
 ```
 
 Each capture directory carries the same eight committed files:
@@ -43,11 +43,14 @@ wrong tree. Absolute host paths are replaced with `<repo:control>` and
 `<repo:candidate>`. It also records the one-minute load average immediately
 before and after the capture.
 
-The two round-1 captures report py-spy exit status 1 because py-spy's teardown
-lost its child during reaping (`Error: No child process (os error 10)`). The
-capture itself completed: its log reports `Samples: <n> Errors: 0`, and the sum
-of the committed weights matches that count, so the exit status records a known
-reaping race rather than a failed capture. Every other capture exits 0.
+The `r2-candidate` capture reports py-spy exit status 1 because py-spy's
+teardown lost its child during reaping
+(`Error: No child process (os error 10)`). The capture itself completed: its
+log reports `Samples: 60266 Errors: 0`, and the sum of the committed weights
+matches that count, so the exit status records a known reaping race rather than
+a failed capture. Every other capture exits 0. The race follows teardown timing
+rather than a variant — the earlier collection saw it on the round-1 pair
+instead.
 
 ## Reproducing the census
 
@@ -105,9 +108,9 @@ and discarded nothing else.
 one discarded warm-up, then six `cb` runs (`echo-devnull-cb-s1-python`, repeat
 count 1) in ABBA order — control first for rounds 1, 3 and 5, candidate first
 for rounds 2, 4 and 6 — so that a drift in host conditions affects both
-variants rather than one. The accepted set is the second collection; the first,
-on the earlier revisions, is described in
-[`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](../../tee-hotpath-observe-hook-dispatch-5-2-2.md).
+variants rather than one. The accepted set is the third collection; the two
+earlier ones, on revisions the branch no longer contains, are described in
+[`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](../../tee-hotpath-observe-hook-dispatch-5-2-2.md#superseded-collections).
 
 Each admitted pair contributes six files per arm under the canonical
 `cb-rN-<arm>` names: `.json` (the worker's result document, which records
@@ -127,15 +130,16 @@ the scheduler's decisions; the CPU time does not.
 ### Admission
 
 A pair is admitted under Decision D11 when both arms exit 0 and produce a
-result document, the pair's pooled median load is at most 45, the arms' load
-medians differ by at most 20% of the pooled median, the arms' measured
-host-busy shares differ by at most 10 points, and no arm's sampled maximum
-exceeds the pooled median by more than 15. The rule reads `/proc/loadavg`,
-`/proc/stat`, and exit status, and never a wall time, a CPU time, or a ratio,
-so it cannot select on the result. It was refined twice while the collection
-ran, and the final form was then applied uniformly to every attempt by
-`reeval.py`'s logic, recorded in `d11-admissions.json`; each round's earliest
-qualifying attempt is the one adopted.
+result document, the pair's pooled median load — the mean of the two arm
+medians — is at most 45, the arms' load medians differ by at most 20% of the
+pooled median, the arms' measured host-busy shares differ by at most 10 points,
+and no arm's sampled maximum exceeds the pooled median by more than 15. The
+rule reads `/proc/loadavg`, `/proc/stat`, and exit status, and never a wall
+time, a CPU time, or a ratio, so it cannot select on the result. Its final form
+was settled during the first collection and this collection applied it
+unchanged to every attempt through `reeval.py`'s logic, recorded in
+`d11-admissions.json`; each round's earliest qualifying attempt is the one
+adopted.
 
 `d11-attempts.tsv` lists every attempt of this collection with each arm's
 maximum and median sampled load, its host-busy share, and the verdict of the
@@ -153,7 +157,7 @@ adopted arms, in full in `load-samples.json`.
 `unprofiled/warmup-<arm>.*` holds the discarded warm-up pair, which ran before
 round 1 under the same protocol and is not part of the accepted set.
 
-## The superseded collection
+## The superseded collections
 
 `unprofiled/superseded/` holds what is left of the first collection, which
 measured control `ccc970116` and candidate `2dd643995` under Decision D9. It
@@ -165,16 +169,24 @@ did not overwrite). The re-collection reused every other file name in
 `unprofiled/`, so the rest of that collection's result documents survive only
 in the branch history. None of its numbers is quoted as a result.
 
+A second collection, on control `e170f908f` and candidate `064d69405`, was
+replaced when the branch was rebased onto a base twelve commits ahead. Its
+files were deleted rather than archived, because every one of them measured a
+tree the branch no longer contains; it survives only in the branch history, and
+nothing here depends on it.
+
 ## The microbenchmark
 
-`microbench-control.json` and `microbench-candidate.json` are the
-`observe-dispatch` group from `make benchmark-micro` in each tree, and
-`microbench-repeats.json` adds three alternating-order repeats plus the primary
-run in one document. The group dispatches 1,000 events per benchmark call, so
-every figure is per 1,000 dispatches; divide by 1,000 for the per-event cost.
-The control worktree predates the group, so the candidate's benchmark file was
-copied into it for the measurement. The file only imports `_emit_exec_event`
-and times it, so the control run measures the control dispatcher.
+`microbench-control.json` and `microbench-candidate.json` are the primary
+`observe-dispatch` group run from `make benchmark-micro` in each tree, and
+`microbench-repeats.json` holds all sixty-four runs — that primary pair plus
+fifteen alternating-order repeats — each with its tree, benchmark, mean,
+median, and round count. The group dispatches 1,000 events per benchmark call,
+so every figure is per 1,000 dispatches; divide by 1,000 for the per-event
+cost. The control worktree predates the group, so the candidate's benchmark
+file was copied into it for the measurement. The file only imports
+`_emit_exec_event` and times it, so the control run measures the control
+dispatcher.
 
 These runs used the project virtual environment's CPython 3.14.7 rather than
 the 3.14.4 interpreter the profiler and the `cb` pairs used, because
