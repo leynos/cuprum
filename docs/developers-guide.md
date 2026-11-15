@@ -5982,27 +5982,30 @@ shuts the socket down when that deadline passes, so a server that trickles
 header or body bytes, or stalls a close-delimited body, cannot hold the
 transfer open. A socket timeout bounds one blocking call rather than a sequence
 of them, so each phase is armed with the time that remains instead of the
-budget its hop opened with; the deadline can still be exceeded by one such
-call, and it does not cover host name resolution. The watchdog starts before
-the request so a blocked send is cut short too, and it captures the socket
-before the header parse, because `getresponse` hands a close-delimited response
-that socket and clears the connection's reference. It re-reads the transfer's
-clock after every wait, so a wakeup that arrives before the deadline starts
-another wait instead of shutting down a healthy read. It re-reads its own stop
-signal after every wait as well, so a substituted waiter that never reaches the
-deadline cannot leave the watchdog spinning after the transfer has finished.
-`_download` takes its clock from the injected `Environment` and accepts the
-watchdog's waiter beside it, so a test can drive a blocked read through the
-whole download boundary and advance that one clock past the deadline without
-sleeping. A substituted waiter returns `True` once the watchdog must stop,
-exactly as `threading.Event.wait` does. The deadline, the clock and waiter
-seam, and the watchdog live in `scripts/pypy_download_deadline.py`. The target
-needs the `openssl` binary to mint the throwaway certificate authority, `uv`
-with a Python 3.14 interpreter for the isolated driver, network access to
-install the pinned `rust-prover-tools` revision, and a loopback socket for each
-scenario. The PyPy cases need only `openssl` and the loopback socket; they
-trust the test certificate authority through `SSL_CERT_FILE` for the duration
-of one test.
+budget its hop opened with. A call already in flight cannot be re-armed, and
+the standard library applies a hop's timeout to every resolved address before
+reusing it for TLS negotiation, so a multi-address host can overrun the
+deadline by one hop timeout per address. Host name resolution is outside the
+deadline altogether, because it happens before a connection exists. The
+watchdog starts before the request so a blocked send is cut short too, and it
+captures the socket before the header parse, because `getresponse` hands a
+close-delimited response that socket and clears the connection's reference. It
+re-reads the transfer's clock after every wait, so a wakeup that arrives before
+the deadline starts another wait instead of shutting down a healthy read. It
+re-reads its own stop signal after every wait as well, so a substituted waiter
+that never reaches the deadline cannot leave the watchdog spinning after the
+transfer has finished. `_download` takes its clock from the injected
+`Environment` and accepts the watchdog's waiter beside it, so a test can drive
+a blocked read through the whole download boundary and advance that one clock
+past the deadline without sleeping. A substituted waiter returns `True` once
+the watchdog must stop, exactly as `threading.Event.wait` does. The deadline,
+the clock and waiter seam, and the watchdog live in
+`scripts/pypy_download_deadline.py`. The target needs the `openssl` binary to
+mint the throwaway certificate authority, `uv` with a Python 3.14 interpreter
+for the isolated driver, network access to install the pinned
+`rust-prover-tools` revision, and a loopback socket for each scenario. The PyPy
+cases need only `openssl` and the loopback socket; they trust the test
+certificate authority through `SSL_CERT_FILE` for the duration of one test.
 
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone.

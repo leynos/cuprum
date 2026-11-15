@@ -8,10 +8,11 @@ connection's socket down once the transfer's own clock says no time remains,
 which makes a blocked read or a blocked send fail.
 
 A socket timeout bounds each blocking call, not a sequence of them, so the
-budget is recomputed between phases rather than fixed when a hop opens. Each
-TCP connect attempt and each TLS record still gets whatever timeout is set at
-the time it blocks, so the deadline can be exceeded by one such call; DNS
-resolution is outside the socket timeout altogether.
+budget is recomputed between phases rather than fixed when a hop opens. A call
+already in flight cannot be re-armed, though, and the standard library applies
+a hop's timeout to every resolved address in turn before TLS negotiation
+reuses it, so a multi-address host can overrun the deadline by one hop timeout
+per address. DNS resolution is outside the socket timeout altogether.
 
 The clock and the waiter are seams: a test supplies both together, so a
 deadline is reached and a blocked read released without real seconds. A
