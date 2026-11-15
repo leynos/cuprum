@@ -64,6 +64,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._pipeline_internals import _StageObservation
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum.sh.execution import ExecutionContext, StdinStream
 
 _LOGGER = logging.getLogger("cuprum.stdin")
@@ -122,6 +123,7 @@ async def _write_stdin_stream(
     stream: StdinStream,
     codec: _StdinCodec,
     observation: _StageObservation,
+    log: _StdinWriterLog,
 ) -> None:
     """Pull *stream*'s chunks and write each to the child before the next.
 
@@ -139,6 +141,11 @@ async def _write_stdin_stream(
     of the contract rather than an incidental arrangement, and splitting them
     across two ``finally`` blocks would leave the dependency implicit in the
     nesting.
+
+    *log* receives the failure this writer ends on, published by
+    :func:`_drain_source_into_pipe` before its cleanup runs. The run's exit
+    race reads it, because a writer that is unwinding still looks like a
+    running task to anything that only asks the task.
     """
     stdin = process.stdin
     if stdin is None:
@@ -150,7 +157,7 @@ async def _write_stdin_stream(
         codec=codec,
         observation=observation,
     )
-    await _drain_source_into_pipe(stream, sink, process, observation)
+    await _drain_source_into_pipe(stream, sink, process, observation, log)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
 
 
@@ -159,6 +166,7 @@ async def _drain_source_into_pipe(
     sink: _write._StreamSink,
     process: asyncio.subprocess.Process,
     observation: _StageObservation,
+    log: _StdinWriterLog,
 ) -> None:
     """Pump the producer into the pipe, applying the run's failure policy.
 
@@ -168,6 +176,12 @@ async def _drain_source_into_pipe(
     its input and exits is behaving correctly — so it is recorded as an
     ``early_close`` observation and the run proceeds to its exit code. Any
     other failure is the encoder or the pipe, and is reported as itself.
+
+    Each failure is published to *log* before it is raised, rather than left
+    to the task that will carry it: the ``finally`` below runs the caller's
+    producer finalizer, so the task is still running for as long as that
+    takes. A run whose exit race asked the task during that window would see
+    no writer failure and report the consumer failure it caused instead.
 
     The producer's whole lifecycle lives inside this guarded region — building
     its iterator, pulling from it, and finalizing it. Building the iterator
@@ -212,7 +226,9 @@ async def _drain_source_into_pipe(
             category=StdioFailureCategory.PRODUCER,
             operation="produce",
         )
-        raise _stdin_source_error(exc.cause) from exc.cause
+        error = _stdin_source_error(exc.cause)
+        log.publish(error)
+        raise error from exc.cause
     except Exception as exc:
         # Blind on purpose, and reported as itself rather than as a failure to
         # write: the writer's own guard has already established that this is
@@ -223,7 +239,9 @@ async def _drain_source_into_pipe(
                 category=_write_boundary_category(sink),
                 operation="write",
             )
-            raise _stdin_source_error(exc) from exc
+            error = _stdin_source_error(exc)
+            log.publish(error)
+            raise error from exc
         _emit_stdin_error(process, observation, exc, operation="early_close")
     finally:
         # The pipe is released *before* the producer is finalized, and that

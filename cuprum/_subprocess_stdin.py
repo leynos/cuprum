@@ -46,6 +46,7 @@ from cuprum._stdio_plan import (
 )
 
 if typ.TYPE_CHECKING:
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_stdin_stream import _StdinCodec
 
 _LOGGER = logging.getLogger("cuprum.stdin")
@@ -275,6 +276,7 @@ def _spawn_stdin_writer(
     plan: _StdinPlan,
     codec: _StdinCodec,
     observation: _StageObservation,
+    log: _StdinWriterLog,
 ) -> asyncio.Task[None] | None:
     """Start the stdin writer that a resolved plan calls for, if any.
 
@@ -288,6 +290,12 @@ def _spawn_stdin_writer(
     reached by asking for a pipe and supplying no source, so the child should
     see exactly what an empty payload gives it, without a second code path
     expressing the same thing.
+
+    *log* belongs to the streaming writer alone. It is the one writer whose
+    failure is followed by cleanup of the caller's own code, so it is the one
+    whose failure has to be published before the task can carry it; the
+    payload writer's cleanup is cuprum's and finishes without suspending, so
+    its task is enough for a race to read.
 
     Returns
     -------
@@ -309,7 +317,7 @@ def _spawn_stdin_writer(
         case _StreamStdin(stream=producer):
             _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
             return asyncio.create_task(
-                _write_stdin_stream(process, producer, codec, observation)
+                _write_stdin_stream(process, producer, codec, observation, log)
             )
         case _PipeStdin():
             # Requested a pipe, supplied no source: the child should see exactly

@@ -210,6 +210,7 @@ def _failed_run(
         tasks=types.SimpleNamespace(
             discard_on_cancel=asyncio.Event(),
             stdin_task=None,
+            stdin_log=None,
             consumers=(None, None),
         ),
         settlement_started=asyncio.Event(),

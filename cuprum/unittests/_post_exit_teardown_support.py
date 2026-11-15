@@ -57,6 +57,7 @@ if typ.TYPE_CHECKING:
     from cuprum._pipeline_types import _StageObservation
     from cuprum._stdio_plan import _StdinPlan
     from cuprum._subprocess_execution import _SubprocessExecution
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_stdin_stream import _StdinCodec
     from cuprum._subprocess_wait_types import (
         _DrainContext,
@@ -262,9 +263,10 @@ class SpawnedWriter:
         plan: _StdinPlan,
         codec: _StdinCodec,
         observation: _StageObservation,
+        log: _StdinWriterLog,
     ) -> asyncio.Task[None] | None:
         """Spawn the writer unchanged, keeping a handle on the task it made."""
-        self.task = self._spawn(process, plan, codec, observation)
+        self.task = self._spawn(process, plan, codec, observation, log)
         return self.task
 
     def assert_settled_after_run(self) -> None:

@@ -54,6 +54,7 @@ from cuprum._stream_config import (
     _resolve_stream_sink as _resolve_stream_sink,
 )
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
+from cuprum._subprocess_rendezvous import _StdinWriterLog
 from cuprum._subprocess_startup_abandon import _record_started
 from cuprum._subprocess_stdin import _spawn_stdin_writer
 from cuprum._subprocess_stdin_stream import _stdin_codec
@@ -176,11 +177,13 @@ def _build_run_task_ownership(
     _RunTaskOwnership
         The started tasks, plus the latch and collectors the run retains.
     """
+    stdin_log = _StdinWriterLog()
     stdin_task = _spawn_stdin_writer(
         process,
         execution.stdio.stdin,
         _stdin_codec(execution.ctx),
         execution.observation,
+        stdin_log,
     )
     _record_started(recorded, stdin_task)
     consumers = _spawn_stream_consumers(
@@ -191,6 +194,7 @@ def _build_run_task_ownership(
     )
     return _build_task_ownership(
         stdin_task=stdin_task,
+        stdin_log=stdin_log,
         consumers=consumers,
         spawn=spawn,
         execution=execution,
@@ -200,25 +204,20 @@ def _build_run_task_ownership(
 def _build_task_ownership(
     *,
     stdin_task: asyncio.Task[None] | None,
+    stdin_log: _StdinWriterLog,
     consumers: _ConsumerPair,
     spawn: _StreamSpawnInputs,
     execution: _SubprocessExecution,
 ) -> _RunTaskOwnership:
     """Assemble the tasks one run retains for its reconciliation point.
 
-    Every caller of :func:`_build_run_task_ownership` starts the same writer
-    and the same consumers, so the record they hand back is assembled here
-    rather than once per path. The latch, diagnostics, and captures come from
-    *spawn* because the consumers were wired from it; only the idle monitor is
-    read off the execution.
-
-    Returns
-    -------
-    _RunTaskOwnership
-        The started tasks, plus the latch and collectors the run retains.
+    The latch, diagnostics, and captures come from *spawn*, because the
+    consumers were wired from it; the writer's failure log travels beside its
+    task, because it is the writer that publishes to it.
     """
     return _RunTaskOwnership(
         stdin_task=stdin_task,
+        stdin_log=stdin_log,
         consumers=consumers,
         discard_on_cancel=spawn.discard_on_cancel,
         relay_diagnostics=spawn.relay_diagnostics,

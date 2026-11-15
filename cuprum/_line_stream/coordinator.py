@@ -137,6 +137,7 @@ async def _await_line_stream_exit(
             _wait_for_exit_code_within_timeout(run.process, execution),
             run.tasks.stdin_task,
             consumers=run.tasks.consumers,
+            stdin_log=run.tasks.stdin_log,
         )
     except TimeoutError as exc:
         # A ``TimeoutError`` can arrive here two ways, and only one of them is
@@ -149,7 +150,12 @@ async def _await_line_stream_exit(
         # report a deadline the caller never configured, which
         # ``_handle_stream_timeout`` rejects as an invariant violation, so the
         # caller would lose the real error.
-        if _is_early_failure(exc, run.tasks.stdin_task, run.tasks.consumers):
+        if _is_early_failure(
+            exc,
+            run.tasks.stdin_task,
+            run.tasks.consumers,
+            stdin_log=run.tasks.stdin_log,
+        ):
             await _cleanup_failed_line_stream_run(
                 run,
                 execution,

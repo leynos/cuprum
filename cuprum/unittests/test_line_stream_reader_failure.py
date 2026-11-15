@@ -22,17 +22,15 @@ import pytest
 
 from cuprum import RunOutputOptions, StdinStream, observe_line_stream
 from cuprum._line_stream.reader_wait import _await_consumers
-from cuprum._subprocess_rendezvous import (
-    _await_exit_or_writer_failure as _real_rendezvous,
-)
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
+from cuprum.unittests._rendezvous_support import record_rendezvous
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._stream_drain_finish import _CapturedDrain
-    from cuprum.lines import LineEvent
+    from cuprum.lines import LineEvent, LineHook
     from cuprum.sh import SafeCmd
 
 
@@ -234,7 +232,6 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
     one above. The wrapper sets its flag *after* the real rendezvous returns,
     which is the earliest moment the drain owns the writer.
     """
-    rendezvous_returned = asyncio.Event()
     sentinel = _WriterTimeoutError(after_exit=True)
 
     async def _fail_after_rendezvous(*_: object, **__: object) -> None:
@@ -242,26 +239,15 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
         await rendezvous_returned.wait()
         raise sentinel
 
-    async def _record_rendezvous(
-        exit_wait: cabc.Coroutine[typ.Any, typ.Any, tuple[int, float]],
-        stdin_task: asyncio.Task[object] | None,
-        *,
-        consumers: cabc.Sequence[asyncio.Task[object] | None] = (),
-    ) -> tuple[int, float]:
-        """Delegate to the real rendezvous, then hand the run to the drain."""
-        result = await _real_rendezvous(exit_wait, stdin_task, consumers=consumers)
-        rendezvous_returned.set()
-        return result
-
     monkeypatch.setattr(
         "cuprum._subprocess_stdin_stream._write_stdin_stream",
         _fail_after_rendezvous,
     )
     # Resolved in the coordinator's globals, which is the seam the module
     # documents for tests: the drain reaches the writer through them.
-    monkeypatch.setattr(
+    rendezvous_returned = record_rendezvous(
+        monkeypatch,
         "cuprum._line_stream.coordinator._await_exit_or_writer_failure",
-        _record_rendezvous,
     )
     command = python_builder("-c", "print('reader')")
     seen: list[LineStreamEvent] = []
@@ -284,12 +270,19 @@ def test_lines_writer_timeout_after_exit_is_not_the_run_deadline(
     _assert_writer_failure_survives(seen, caught, sentinel)
 
 
-# The first child exits as soon as it has written, so the reader's failure
-# reaches the post-exit collect. The second writes one line and stays alive, so
-# the failure reaches the exit rendezvous while the exit wait is still pending.
+# The first child exits as soon as it has written, so the reader's failure can
+# reach the post-exit collect; the second writes a line and stays alive, so the
+# failure reaches the exit rendezvous with the exit still pending. Whether the
+# first arm really is post-exit is a race, so that arm gates it (see below).
 _CHILD_SCRIPTS = {
     "after-exit": "print('reader')",
     "before-exit": "import time; print('reader', flush=True); time.sleep(30)",
+}
+# The rendezvous each entry point resolves, so the after-exit arm can wait for
+# the hand-off instead of racing it. Patching the consumer module is the seam.
+_RENDEZVOUS_SEAMS = {
+    "run": "cuprum._subprocess_stream_exit._await_exit_or_writer_failure",
+    "lines": "cuprum._line_stream.coordinator._await_exit_or_writer_failure",
 }
 # Long enough for a cold interpreter start, short enough that a regression is
 # reported as a hang rather than as the suite's own 30-second timeout.
@@ -302,6 +295,7 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
     python_builder: cabc.Callable[..., SafeCmd],
     entry_point: str,
     child: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A reader's own ``TimeoutError`` reaches the caller unchanged.
 
@@ -311,18 +305,35 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
     legitimately expire. Before the fix either arm caught the reader's
     exception, emitted the ``timeout`` phase, and — with no configured timeout
     to report — replaced it with an invariant failure.
+
+    The post-exit arm is gated rather than left to scheduling. The rendezvous
+    is wrapped to set an event when it returns, and the reader waits for that
+    event before failing, so the failure is known to arrive after the exit
+    settled; an ungated hook races the exit and would sometimes exercise the
+    rendezvous arm instead, leaving the post-exit collect unproven.
     """
     command = python_builder("-c", _CHILD_SCRIPTS[child])
     sentinel = _ReaderTimeoutError("reader timed out")
     seen: list[LineStreamEvent] = []
+    gated = child == "after-exit"
+    handoff = record_rendezvous(monkeypatch, _RENDEZVOUS_SEAMS[entry_point])
 
-    def fail_reader(_event: LineEvent) -> None:
+    async def fail_reader(_event: LineEvent) -> None:
         """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
+        if gated:
+            # The hand-off is the assertion: the run's exit has settled, so
+            # this failure belongs to the post-exit collect.
+            await handoff.wait()
+        else:
+            assert not handoff.is_set(), (
+                "the before-exit arm must fail while the exit wait is still "
+                "pending, so it reaches the rendezvous rather than the collect"
+            )
         raise sentinel
 
     async def drive() -> None:
         """Run the command, iterating lines when that entry point is selected."""
-        output = RunOutputOptions(on_line=fail_reader)
+        output = RunOutputOptions(on_line=typ.cast("LineHook", fail_reader))
         if entry_point == "run":
             await command.run(output=output)
         else:
@@ -337,6 +348,10 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
 
     assert caught.value is sentinel, (
         f"{entry_point} must receive the reader's own exception, got {caught.value!r}"
+    )
+    assert not gated or handoff.is_set(), (
+        f"the {child} arm must reach the post-exit collect, or it does not test "
+        "the route its name claims"
     )
     phases = [event.phase for event in seen]
     assert LineStreamPhase.TIMEOUT not in phases, (

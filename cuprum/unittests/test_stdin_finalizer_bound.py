@@ -31,6 +31,7 @@ import pytest
 from cuprum import _subprocess_stdin as stdin_module
 from cuprum import _subprocess_stdin_finalize as finalize
 from cuprum import _subprocess_stdin_reclaim as reclaim_module
+from cuprum._subprocess_rendezvous import _StdinWriterLog
 from cuprum._subprocess_stdin_finalize import _finalize_stdin_source
 from cuprum._subprocess_stdin_stream import _stdin_codec, _write_stdin_stream
 from cuprum.sh import ExecutionContext, StdinStream
@@ -348,6 +349,7 @@ async def _run_with_observing_finalizer() -> _FinalizerObservingPipe:
                 StdinStream(chunks=producer),
                 _stdin_codec(ExecutionContext()),
                 _make_observation(),
+                _StdinWriterLog(),
             )
             await process.wait()
         finally:

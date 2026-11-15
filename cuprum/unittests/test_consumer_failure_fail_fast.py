@@ -8,6 +8,11 @@ the child, settle their siblings, and re-raise the callback's own exception.
 
 Each case is bounded by a watchdog of its own rather than by a configured
 execution timeout: the point is that no deadline is needed for the run to end.
+
+Which failure the run reports is pinned here too. A producer that fails before
+its own cleanup parks causes the callback failure that follows it, and the
+caller's input contract must be answered with the source's error rather than
+with the callback's.
 """
 
 from __future__ import annotations
@@ -20,7 +25,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, sh
+from cuprum import RunOutputOptions, StdinStream, sh
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.timeouts import (
     pending_tasks,
@@ -48,6 +53,44 @@ _CHILD_SCRIPT = (
 
 class _CallbackError(RuntimeError):
     """The exception a failing output callback raises."""
+
+
+class _SourceError(RuntimeError):
+    """The exception the stdin producer raises, and the run must report."""
+
+
+class _ParkingSource:
+    """A producer that fails at once and then parks in its own ``aclose``.
+
+    The park is what makes the precedence testable. A writer raises its failure
+    and then finalizes this, the caller's code; while that is pending the
+    writer's *task* still looks like a running task, which is precisely the
+    window a reader of that task alone gets wrong.
+    """
+
+    def __init__(
+        self,
+        failure: BaseException,
+        parked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        """Hold the failure to raise and the events its cleanup waits on."""
+        self._failure = failure
+        self._parked = parked
+        self._release = release
+
+    def __aiter__(self) -> _ParkingSource:
+        """Return this source, which is its own async iterator."""
+        return self
+
+    async def __anext__(self) -> str:
+        """Fail on the first pull, before producing any chunk."""
+        raise self._failure
+
+    async def aclose(self) -> None:
+        """Report that cleanup has started, then stay parked until released."""
+        self._parked.set()
+        await self._release.wait()
 
 
 def _sync_callback(
@@ -171,6 +214,79 @@ def test_failing_output_callback_ends_the_run(
             pids[0],
             seconds=3.0,
             context=f"{entry_point} after a {callback_kind} {stream} failure",
+        )
+    finally:
+        _kill_leftovers(events)
+
+
+def test_source_failure_outranks_the_callback_failure_it_caused() -> None:
+    """A producer's own failure is reported, not the callback's it caused.
+
+    The producer fails before its cleanup parks, and the callback fails while
+    the writer task is still running. The writer publishes its failure before
+    it unwinds, so the run must report the source's ``StdinSourceError`` with
+    the producer's exception chained — the failure the caller's input contract
+    names — rather than the callback failure that followed it.
+    """
+    source_failure = _SourceError("producer failed")
+    callback_failure = _CallbackError("callback failed")
+    events: list[ExecEvent] = []
+
+    async def drive() -> None:
+        """Fail the producer, then the callback, and report the run's error."""
+        parked = asyncio.Event()
+        release = asyncio.Event()
+        callback_raised = asyncio.Event()
+
+        async def callback(_event: LineEvent) -> None:
+            """Fail once the producer's cleanup has parked."""
+            await parked.wait()
+            callback_raised.set()
+            raise callback_failure
+
+        command = build_python_builder()(
+            "-c",
+            "import time; print('line', flush=True); time.sleep(30)",
+        )
+        source = _ParkingSource(source_failure, parked, release)
+        try:
+            with pytest.raises(sh.StdinSourceError) as caught:
+                await asyncio.wait_for(
+                    command.run(
+                        stdin=StdinStream(source),
+                        # The public alias types the hook as synchronous; the
+                        # coordinator awaits an awaitable outcome as well.
+                        output=RunOutputOptions(
+                            on_line=typ.cast("LineHook", callback),
+                        ),
+                    ),
+                    _WATCHDOG_S,
+                )
+        finally:
+            release.set()
+            await asyncio.sleep(0)
+        assert caught.value.__cause__ is source_failure, (
+            "the run must report the producer's own failure, chained as the "
+            f"cause, got {caught.value!r} caused by {caught.value.__cause__!r}"
+        )
+        assert callback_raised.is_set(), (
+            "the callback must have failed, or this case does not test the "
+            "precedence between the two failures"
+        )
+        assert not pending_tasks(), (
+            "the run must leave no unfinished owned tasks behind, got "
+            f"{sorted(task.get_name() for task in pending_tasks())!r}"
+        )
+
+    try:
+        with sh.observe(events.append):
+            asyncio.run(drive())
+        pids = started_pids(events)
+        assert len(pids) == 1, f"exactly one child must be started, got {pids!r}"
+        wait_for_process_death(
+            pids[0],
+            seconds=3.0,
+            context="after a source failure outranked the callback's",
         )
     finally:
         _kill_leftovers(events)

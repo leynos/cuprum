@@ -101,6 +101,7 @@ async def _wait_for_streamed_process_exit(
             _wait_for_exit_code_within_timeout(process, execution),
             tasks.stdin_task,
             consumers=tasks.consumers,
+            stdin_log=tasks.stdin_log,
         )
     except TimeoutError as exc:
         # A ``TimeoutError`` can arrive here two ways, and only one of them is
@@ -111,7 +112,12 @@ async def _wait_for_streamed_process_exit(
         # raises the very object the task carries. Reconciling without
         # capturing, then re-raising, is the route every other non-timeout
         # failure already takes.
-        if _is_early_failure(exc, tasks.stdin_task, tasks.consumers):
+        if _is_early_failure(
+            exc,
+            tasks.stdin_task,
+            tasks.consumers,
+            stdin_log=tasks.stdin_log,
+        ):
             await _reconcile_shielded(execution, tasks, pid, preserve=False)
             raise
         # The process has been terminated; cancel the stdin writer and drain the
