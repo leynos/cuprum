@@ -100,3 +100,26 @@ class TestPendingName:
         assert not (tmp_path / "binary.tar.gz.download").exists(), (
             "a cache hit must not stage a pending file"
         )
+
+    def test_a_cache_hit_keeps_a_destination_named_download(
+        self, tmp_path: Path
+    ) -> None:
+        """A destination already ending in `.download` is not its own staging file."""
+        archive = tmp_path / "asset.download"
+        body = b"cached body"
+        archive.write_bytes(body)
+        recorder = RecordingMetrics()
+        downloader.checked_download(
+            "https://example.invalid/asset",
+            archive,
+            hashlib.sha256(body).hexdigest(),
+            environment=fake_environment(sink=recorder),
+        )
+        assert recorder.outcomes() == [metrics.CACHED], (
+            "the entry already matched the pin, so the download is a cache hit"
+        )
+        assert archive.read_bytes() == body, (
+            "the cleanup must not delete a cache entry whose name ends in "
+            "`.download`, which a suffix-replacing staging name would have made "
+            "the destination itself"
+        )

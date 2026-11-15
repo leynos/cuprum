@@ -16,6 +16,7 @@ from unittest import mock
 import pytest
 
 from scripts import pypy_download as downloader
+from scripts import pypy_download_deadline as deadline
 from scripts.tests.boundary_pypy_transfer_support import (
     connection_factory,
     fake_environment,
@@ -25,6 +26,7 @@ from scripts.tests.boundary_pypy_transfer_support import (
 )
 
 if typ.TYPE_CHECKING:
+    import http.client
     from pathlib import Path
 
 
@@ -97,4 +99,55 @@ class TestHopBudget:
             )
         assert timeouts == [pytest.approx(60.0)], (
             "a hop with no time left must be refused, not handed a socket"
+        )
+
+    def test_connection_setup_counts_against_the_deadline(self, tmp_path: Path) -> None:
+        """A hop that spends the transfer's time connecting reads no body."""
+        clock = manual_clock()
+        connection = mock.Mock()
+
+        def connect(
+            host: str, port: int | None, *, timeout: float
+        ) -> http.client.HTTPSConnection:
+            """Spend the whole deadline inside the connection setup."""
+            clock.return_value = _SPENT
+            return typ.cast("http.client.HTTPSConnection", connection)
+
+        environment = dataclasses.replace(
+            fake_environment(clock=clock), connect=connect
+        )
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            downloader._download(
+                "https://example.invalid/asset", tmp_path / "binary", environment
+            )
+        assert connection.getresponse.call_count == 0, (
+            "connection setup is part of the hop's budget, so a transfer whose "
+            "deadline passed while connecting must not go on to read a body"
+        )
+
+
+class TestSingleClockReading:
+    """One reading both refuses a spent transfer and sizes the hop's budget."""
+
+    def test_the_budget_is_sized_from_one_clock_reading(self) -> None:
+        """A second reading could pass the guard and then budget zero seconds."""
+        clock = mock.Mock(side_effect=[100.0, 830.0])
+        transfer = deadline._Transfer(_SPENT, clock)
+        assert deadline._hop_timeout(transfer) == pytest.approx(60.0), (
+            "a hop with 800 s left keeps the 60 s connect limit"
+        )
+        assert clock.call_count == 1, (
+            "the budget must come from the same reading that refused or allowed "
+            "the hop, so a deadline passing between two readings cannot yield a "
+            "zero timeout"
+        )
+
+    def test_a_spent_transfer_is_refused_from_that_same_reading(self) -> None:
+        """A clock at the deadline is refused rather than yielding a zero timeout."""
+        clock = mock.Mock(return_value=_SPENT)
+        transfer = deadline._Transfer(_SPENT, clock)
+        with pytest.raises(TimeoutError, match="transfer deadline"):
+            deadline._hop_timeout(transfer)
+        assert clock.call_count == 1, (
+            "the refusal must come from the reading the budget would have used"
         )

@@ -77,9 +77,20 @@ def _hop_timeout(transfer: _Transfer) -> float:
     -------
     float
         The seconds the next hop may spend connecting and sending its request.
+
+    Raises
+    ------
+    TimeoutError
+        If the transfer has no time left, so no socket may be opened.
     """
-    _require_time_left(transfer)
-    return min(_CONNECT_TIMEOUT_SECONDS, transfer.remaining())
+    # One reading both refuses a spent transfer and sizes the budget. A separate
+    # guard could pass, then let the second reading return zero for a deadline
+    # that passed in between, handing the socket a non-blocking timeout.
+    remaining = transfer.remaining()
+    if remaining <= 0.0:
+        msg = "release download exceeded the transfer deadline"
+        raise TimeoutError(msg)
+    return min(_CONNECT_TIMEOUT_SECONDS, remaining)
 
 
 class _DeadlineWatchdog:
