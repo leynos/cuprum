@@ -172,6 +172,83 @@ def _probe_outcome(
     return "ok", is_awaitable, None
 
 
+@dc.dataclass(slots=True)
+class _Walk:
+    """The hooks an oracle walk has called, scheduled, and seen fail.
+
+    Attributes
+    ----------
+    settled:
+        Whether dispatch keeps calling hooks after a synchronous failure.
+    called:
+        The kinds of the hooks the walk has visited, in call order.
+    scheduled:
+        The kinds whose results the dispatcher must schedule.
+    failures:
+        The synchronous failures the dispatcher must report.
+    """
+
+    settled: bool
+    called: list[str] = dc.field(default_factory=list)
+    scheduled: list[str] = dc.field(default_factory=list)
+    failures: list[Failure] = dc.field(default_factory=list)
+
+    def run(
+        self,
+        kinds: cabc.Sequence[str],
+        event: ExecEvent,
+    ) -> DispatchExpectation:
+        """Visit each hook kind in turn, stopping where dispatch must stop."""
+        for index, kind in enumerate(kinds):
+            halted = self._visit(index, kind, event)
+            if halted is not None:
+                return halted
+        return self.freeze()
+
+    def freeze(
+        self,
+        *,
+        check_error: BaseException | None = None,
+        check_index: int | None = None,
+    ) -> DispatchExpectation:
+        """Freeze the walk so far into the expectation it implies."""
+        return DispatchExpectation(
+            called=tuple(self.called),
+            scheduled=tuple(self.scheduled),
+            failures=tuple(self.failures),
+            check_error=check_error,
+            check_index=check_index,
+        )
+
+    def _visit(
+        self,
+        index: int,
+        kind: str,
+        event: ExecEvent,
+    ) -> DispatchExpectation | None:
+        """Visit one hook, returning the expectation if the walk must halt."""
+        self.called.append(kind)
+        outcome, is_awaitable, error = _probe_outcome(kind, event)
+        if outcome == "check":
+            return self.freeze(check_error=error, check_index=index)
+        if outcome == "raise":
+            return self._halt_on_failure(index, error)
+        if is_awaitable:
+            self.scheduled.append(kind)
+        return None
+
+    def _halt_on_failure(
+        self,
+        index: int,
+        error: BaseException | None,
+    ) -> DispatchExpectation | None:
+        """Record a synchronous failure, halting unless the walk is settled."""
+        self.failures.append(
+            Failure(index=index, error=typ.cast("BaseException", error))
+        )
+        return None if self.settled else self.freeze()
+
+
 def expected_dispatch(
     kinds: cabc.Sequence[str],
     event: ExecEvent,
@@ -192,42 +269,7 @@ def expected_dispatch(
         failures that must be reported, and the failure the sequence must
         surface or escape with, if any.
     """
-    called: list[str] = []
-    scheduled: list[str] = []
-    failures: list[Failure] = []
-    for index, kind in enumerate(kinds):
-        called.append(kind)
-        outcome, is_awaitable, error = _probe_outcome(kind, event)
-        if outcome == "check":
-            return DispatchExpectation(
-                called=tuple(called),
-                scheduled=tuple(scheduled),
-                failures=tuple(failures),
-                check_error=error,
-                check_index=index,
-            )
-        if outcome == "raise":
-            failures.append(
-                Failure(index=index, error=typ.cast("BaseException", error))
-            )
-            if not settled:
-                return DispatchExpectation(
-                    called=tuple(called),
-                    scheduled=tuple(scheduled),
-                    failures=tuple(failures),
-                    check_error=None,
-                    check_index=None,
-                )
-            continue
-        if is_awaitable:
-            scheduled.append(kind)
-    return DispatchExpectation(
-        called=tuple(called),
-        scheduled=tuple(scheduled),
-        failures=tuple(failures),
-        check_error=None,
-        check_index=None,
-    )
+    return _Walk(settled=settled).run(kinds, event)
 
 
 def scheduled_probe_indices(
