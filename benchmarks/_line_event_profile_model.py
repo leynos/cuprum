@@ -66,6 +66,7 @@ from benchmarks._line_event_profile_shapes import (
 from benchmarks.summarize_folded import _parse_folded_line
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib as pth
 
 
@@ -156,6 +157,39 @@ def _parse_frameless_weight(line: str) -> int | None:
     return weight if weight > 0 else None
 
 
+def _read_folded_text(folded_path: pth.Path) -> str:
+    """Read the capture, reporting an unreadable path as an input error."""
+    try:
+        return folded_path.read_text(errors="replace")
+    except OSError as exc:
+        msg = f"cannot read folded stacks at {folded_path}: {exc}"
+        raise _ProfileInputError(msg) from exc
+
+
+def _parse_capture_lines(
+    lines: cabc.Iterable[str],
+) -> tuple[list[Stack], list[str]]:
+    """Split lines into parsable stacks and the non-blank lines nothing read.
+
+    py-spy's frame-less record carries a weight but no stack, so it is neither
+    counted nor reported as unread; blank lines carry nothing at all.
+
+    Returns
+    -------
+    tuple[list[Stack], list[str]]
+        The parsed stacks, and the stripped lines nothing could account for.
+    """
+    stacks: list[Stack] = []
+    unparsed: list[str] = []
+    for line in lines:
+        parsed = _parse_stack_line(line)
+        if parsed is not None:
+            stacks.append(parsed)
+        elif line.strip() and _parse_frameless_weight(line) is None:
+            unparsed.append(line.strip())
+    return stacks, unparsed
+
+
 def read_capture(folded_path: pth.Path) -> CaptureReading:
     """Read a folded-stack capture, keeping the lines nothing could parse.
 
@@ -171,20 +205,8 @@ def read_capture(folded_path: pth.Path) -> CaptureReading:
     _ProfileInputError
         If the file cannot be read or holds no parsable stack.
     """
-    try:
-        text = folded_path.read_text(errors="replace")
-    except OSError as exc:
-        msg = f"cannot read folded stacks at {folded_path}: {exc}"
-        raise _ProfileInputError(msg) from exc
-
-    stacks: list[Stack] = []
-    unparsed: list[str] = []
-    for line in text.splitlines():
-        parsed = _parse_stack_line(line)
-        if parsed is not None:
-            stacks.append(parsed)
-        elif line.strip() and _parse_frameless_weight(line) is None:
-            unparsed.append(line.strip())
+    text = _read_folded_text(folded_path)
+    stacks, unparsed = _parse_capture_lines(text.splitlines())
     if not stacks:
         msg = f"no parsable stack records in {folded_path}"
         raise _ProfileInputError(msg)
