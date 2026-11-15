@@ -335,6 +335,29 @@ def test_non_positive_floor_is_rejected(
     assert not output.exists(), "a rejected run must write no result"
 
 
+def test_malformed_command_line_is_inconclusive(tmp_path: pth.Path) -> None:
+    """A command line the parser rejects proves nothing about the capture."""
+    folded = _write_capture(tmp_path, _line(_ANCHOR_TEXT, samples=200))
+    output = tmp_path / "census.json"
+    status = census_module.main(
+        [
+            str(folded),
+            "--anchor",
+            _DEFAULT_SPEC.anchor,
+            "--target",
+            _DEFAULT_SPEC.target,
+            "--min-anchor-weight",
+            str(_DEFAULT_SPEC.floor),
+            "--output",
+            str(output),
+            "--not-an-option",
+        ],
+    )
+
+    assert status == 2, "a malformed command line cannot prove absence"
+    assert not output.exists(), "a rejected run must write no result"
+
+
 def test_unparsable_record_is_inconclusive(tmp_path: pth.Path) -> None:
     """A line the parser cannot read makes the capture unfit to report on."""
     capture = _line(_ANCHOR_TEXT, samples=200) + "emit_line (unterminated\n"
