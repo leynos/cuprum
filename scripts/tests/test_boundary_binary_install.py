@@ -1,211 +1,40 @@
 """The Make install targets must delegate verifier binaries safely.
 
 Kani and Z3 installation is owned by the shared `rust-prover-tools` dependency,
-so these tests run the real Make recipes with a fake `prover-tools` and a fake
-Cargo. That observes the exact command line, environment, and ordering without
-network access, and it keeps the retired local installers from creeping back.
+so these tests run the real Make recipes against a fake CLI and a fake Cargo.
+That observes the exact command line, environment, and ordering without network
+access, and it keeps the retired local installers from creeping back. The
+fakes, the runner, and the Makefile readers live in the colocated support
+module.
 """
 
 from __future__ import annotations
 
-import dataclasses as dc
 import json
 import os
-import shlex
-import shutil
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed tool argv.
-import sys
 import typing as typ
-from pathlib import Path
 
 import pytest
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MAKEFILE = REPO_ROOT / "Makefile"
-
-# The recipe must survive a checkout path that contains spaces, which is why
-# every path argument is quoted and why the fixture runs make from one.
-SPACED_ROOT_NAME = "work tree with spaces"
-
-# Ambient names the shared CLI would otherwise treat as flag defaults.
-AMBIENT_INSTALL_VARIABLES = (
-    "INPUT_REPO_ROOT",
-    "INPUT_VERSION",
-    "INPUT_VERSION_FILE",
-    "INPUT_KANI_VERSION_FILE",
-    "INPUT_KANI_COMPILE",
-    "KANI_INSTALL_DIR",
-    "INPUT_KANI_INSTALL_DIR",
-    "KANI_CACHE_DIR",
-    "INPUT_KANI_CACHE_DIR",
-    "Z3_INSTALL_DIR",
-    "INPUT_Z3_INSTALL_DIR",
-    "Z3_CACHE_DIR",
-    "INPUT_Z3_CACHE_DIR",
-    "VERUS_INSTALL_DIR",
-    "INPUT_VERUS_INSTALL_DIR",
-    "VERUS_TARGET",
-    "INPUT_VERUS_TARGET",
-    "INPUT_VERUS_VERSION_FILE",
-    "INPUT_VERUS_BASE_URL",
-    "INPUT_CHECKSUM_FILE",
-    "INPUT_VERUS_CHECKSUM_FILE",
+from scripts.tests.boundary_binary_install_support import (
+    AMBIENT_INSTALL_VARIABLES,
+    FAKE_FRONTEND,
+    FAKE_UV,
+    MAKEFILE,
+    REPO_ROOT,
+    SPACED_ROOT_NAME,
+    FakeTools,
+    MakeCall,
+    ambient_guard_names,
+    makefile_assignment,
+    recorded_argv,
+    recorded_values,
+    run_make,
+    write_executable,
 )
 
-_FAKE_TOOL = """\
-import json
-import os
-import sys
-from pathlib import Path
-
-record = {{"tool": {tool!r}, "argv": sys.argv[1:]}}
-marker = os.environ.get("FAKE_MARKER")
-if marker:
-    record["marker_exists"] = Path(marker).exists()
-watch = json.loads(os.environ.get("FAKE_WATCH", "[]"))
-record["env"] = {{name: os.environ[name] for name in watch if name in os.environ}}
-log = os.environ["FAKE_LOG"]
-with open(log, "a", encoding="utf-8") as stream:
-    stream.write(json.dumps(record) + "\\n")
-failure = os.environ.get("FAKE_FAIL_ARGS")
-if failure and sys.argv[1:3] == json.loads(failure):
-    print("fake prover-tools failure", file=sys.stderr)
-    raise SystemExit(1)
-"""
-
-# The version check runs through `uv tool run`, so a fake `uv` on PATH can
-# record which `cargo-kani` the environment it receives would select. That is
-# the frontend the proof commands that follow would run.
-_FAKE_UV = """\
-#!/bin/sh
-{
-  printf 'resolved=%s\\n' "$(command -v cargo-kani)"
-  printf 'path=%s\\n' "$PATH"
-} > "$FAKE_RESOLVE_LOG"
-"""
-
-# A competing frontend stays dormant unless something executes it, so its log
-# only ever records an identity if it was actually selected.
-_FAKE_FRONTEND = """\
-#!/bin/sh
-printf '%s\\n' "{identity}" >> "$FAKE_FRONTEND_LOG"
-"""
-
-
-@typ.final
-class FakeTools:
-    """Fake `prover-tools` and Cargo executables that record their calls."""
-
-    def __init__(self, directory: Path) -> None:
-        """Write both fakes below `directory` and prepare their log path."""
-        self.directory = directory
-        self.directory.mkdir(parents=True)
-        self.log = directory / "calls.jsonl"
-        self.prover_tools = self._write("fake_prover_tools.py", "prover-tools")
-        self.cargo = self._write("fake_cargo.py", "cargo")
-
-    def _write(self, name: str, tool: str) -> Path:
-        """Write one fake tool and return its path."""
-        path = self.directory / name
-        path.write_text(_FAKE_TOOL.format(tool=tool), encoding="utf-8")
-        return path
-
-    def command(self, script: Path) -> str:
-        """Return a shell-safe command that runs `script` with this interpreter."""
-        return shlex.join([sys.executable, str(script)])
-
-    def records(self) -> list[dict[str, object]]:
-        """Return every recorded call in execution order."""
-        if not self.log.exists():
-            return []
-        return [
-            json.loads(line)
-            for line in self.log.read_text(encoding="utf-8").splitlines()
-            if line
-        ]
-
-    def environment(self, **overrides: str) -> dict[str, str]:
-        """Return a child environment that points the fakes at their log."""
-        env = os.environ.copy()
-        env.update(
-            FAKE_LOG=str(self.log),
-            FAKE_WATCH=json.dumps(list(AMBIENT_INSTALL_VARIABLES)),
-        )
-        env.update(overrides)
-        return env
-
-
-def _makefile_assignment(name: str) -> str:
-    """Return the literal value assigned to `name` in the Makefile."""
-    prefix = f"{name} ?="
-    prefix_plain = f"{name} ="
-    for line in MAKEFILE.read_text(encoding="utf-8").splitlines():
-        if line.startswith(prefix):
-            return line[len(prefix) :].strip()
-        if line.startswith(prefix_plain):
-            return line[len(prefix_plain) :].strip()
-    msg = f"{name} is not assigned in the Makefile"
-    raise AssertionError(msg)
-
-
-def _argv(record: dict[str, object]) -> list[str]:
-    """Return one recorded argv, failing the test if the fake logged another shape."""
-    argv = record["argv"]
-    assert isinstance(argv, list), f"the fake logged a non-list argv: {argv!r}"
-    return [str(argument) for argument in argv]
-
-
-@dc.dataclass(frozen=True, slots=True)
-class MakeCall:
-    """One Make target with the assignments and environment it must receive."""
-
-    target: str
-    assignments: tuple[str, ...] = ()
-    environment: cabc.Mapping[str, str] = dc.field(default_factory=dict)
-
-
-def _run_make(
-    workdir: Path,
-    call: MakeCall,
-    fakes: FakeTools,
-    *,
-    delegate: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    """Run one Make target in `workdir` with the fake tools in place.
-
-    `delegate` supplies the fake `prover-tools`. A test that observes how the
-    recipe itself resolves the tool passes `delegate=False` instead, because a
-    `PROVER_TOOLS` assignment would replace the command whose environment is
-    under test.
-
-    Returns
-    -------
-    subprocess.CompletedProcess[str]
-        The finished Make process with its captured output.
-    """
-    command = [
-        shutil.which("make") or "make",
-        "-C",
-        str(workdir),
-        "-f",
-        str(MAKEFILE),
-        call.target,
-        f"CARGO={fakes.command(fakes.cargo)}",
-    ]
-    if delegate:
-        command.append(f"PROVER_TOOLS={fakes.command(fakes.prover_tools)}")
-    command.extend(call.assignments)
-    return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
-        command,
-        capture_output=True,
-        text=True,
-        env=fakes.environment(**dict(call.environment)),
-        timeout=120,
-        check=False,
-    )
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -226,13 +55,13 @@ def test_kani_install_delegates_download_setup_and_verification(
     workdir: Path, fakes: FakeTools
 ) -> None:
     """Kani installs through the shared CLI, then performs exactly one setup."""
-    kani_version = _makefile_assignment("KANI_VERSION")
+    kani_version = makefile_assignment("KANI_VERSION")
     pin = REPO_ROOT / "tools/kani/VERSION"
     assert pin.read_text(encoding="utf-8").strip() == kani_version, (
         "the setup bundle path must name the version the updater actually pins"
     )
 
-    result = _run_make(workdir, MakeCall("install-boundary-kani"), fakes)
+    result = run_make(workdir, MakeCall("install-boundary-kani"), fakes)
     assert result.returncode == 0, result.stderr
 
     records = fakes.records()
@@ -274,7 +103,7 @@ def test_verus_install_delegates_verus_and_z3(
 ) -> None:
     """Verus and Z3 both install through the shared CLI with explicit paths."""
     verus_dir = tmp_path / "verus install dir"
-    result = _run_make(
+    result = run_make(
         workdir,
         MakeCall("install-verus", assignments=(f"VERUS_INSTALL_DIR={verus_dir}",)),
         fakes,
@@ -320,7 +149,7 @@ def test_verus_install_clears_the_z3_marker_first(
     marker.parent.mkdir(parents=True)
     marker.write_text("4.16.0\n", encoding="utf-8")
 
-    result = _run_make(
+    result = run_make(
         workdir,
         MakeCall("install-verus", environment={"FAKE_MARKER": str(marker)}),
         fakes,
@@ -337,24 +166,9 @@ def test_verus_install_clears_the_z3_marker_first(
     assert not marker.exists(), "the retired marker must not survive the reinstall"
 
 
-def _ambient_guard_names() -> list[str]:
-    """Return the names `PROVER_TOOLS_AMBIENT_VARS` clears before delegation."""
-    lines = MAKEFILE.read_text(encoding="utf-8").splitlines()
-    index = next(
-        position
-        for position, line in enumerate(lines)
-        if line.startswith("PROVER_TOOLS_AMBIENT_VARS =")
-    )
-    value = lines[index].partition("=")[2]
-    while value.rstrip().endswith("\\"):
-        index += 1
-        value = f"{value.rstrip()[:-1]} {lines[index]}"
-    return value.split()
-
-
 def test_the_watched_environment_matches_the_makefile_guard() -> None:
     """The fake must watch every name the Makefile claims to clear."""
-    assert set(_ambient_guard_names()) == set(AMBIENT_INSTALL_VARIABLES), (
+    assert set(ambient_guard_names()) == set(AMBIENT_INSTALL_VARIABLES), (
         "the ambient-name tuple must match PROVER_TOOLS_AMBIENT_VARS"
     )
 
@@ -365,7 +179,7 @@ def test_ambient_install_options_cannot_redirect_the_targets(
 ) -> None:
     """Stray CI variables must not override the explicit repository paths."""
     ambient = dict.fromkeys(AMBIENT_INSTALL_VARIABLES, "/ambient/wrong")
-    result = _run_make(workdir, MakeCall(target, environment=ambient), fakes)
+    result = run_make(workdir, MakeCall(target, environment=ambient), fakes)
     assert result.returncode == 0, result.stderr
 
     delegated = [
@@ -374,7 +188,7 @@ def test_ambient_install_options_cannot_redirect_the_targets(
     assert delegated, "the fake prover-tools was never invoked"
     leaked = [record["env"] for record in delegated if record["env"]]
     assert not leaked, f"ambient installer options reached the shared CLI: {leaked}"
-    roots = [_argv(record) for record in delegated]
+    roots = [recorded_argv(record) for record in delegated]
     assert all(argv[argv.index("--repo-root") + 1] == str(workdir) for argv in roots), (
         f"{target} must resolve every delegated call against the checkout"
     )
@@ -384,7 +198,7 @@ def test_a_failed_z3_install_fails_the_make_target(
     workdir: Path, fakes: FakeTools
 ) -> None:
     """A delegated solver failure must stop the target and stay visible."""
-    result = _run_make(
+    result = run_make(
         workdir,
         MakeCall(
             "install-verus",
@@ -396,24 +210,10 @@ def test_a_failed_z3_install_fails_the_make_target(
     assert "fake prover-tools failure" in result.stderr, (
         "the delegated failure must reach the caller's log"
     )
-    assert [_argv(record)[:2] for record in fakes.records()] == [
+    assert [recorded_argv(record)[:2] for record in fakes.records()] == [
         ["verus", "install"],
         ["z3", "install"],
     ], "the verifier must install before the solver it drives"
-
-
-def _write_executable(path: Path, text: str) -> Path:
-    """Write `text` to `path` and mark the result executable."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    path.chmod(0o755)
-    return path
-
-
-def _recorded_values(log: Path) -> dict[str, str]:
-    """Parse the fake `uv` record into its keyed values."""
-    lines = log.read_text(encoding="utf-8").splitlines()
-    return dict(line.split("=", 1) for line in lines if "=" in line)
 
 
 def test_the_version_check_resolves_the_cached_kani_frontend(
@@ -428,19 +228,17 @@ def test_the_version_check_resolves_the_cached_kani_frontend(
     """
     workdir = tmp_path / "repo"
     cached_bin = workdir / ".cache/boundary-kani/bin"
-    _write_executable(
-        cached_bin / "cargo-kani", _FAKE_FRONTEND.format(identity="cached")
-    )
+    write_executable(cached_bin / "cargo-kani", FAKE_FRONTEND.format(identity="cached"))
     home = tmp_path / "home"
-    stale = _write_executable(
-        home / ".local/bin/cargo-kani", _FAKE_FRONTEND.format(identity="stale")
+    stale = write_executable(
+        home / ".local/bin/cargo-kani", FAKE_FRONTEND.format(identity="stale")
     )
     uv_dir = tmp_path / "uv-bin"
-    _write_executable(uv_dir / "uv", _FAKE_UV)
+    write_executable(uv_dir / "uv", FAKE_UV)
     resolve_log = tmp_path / "resolve.log"
     frontend_log = tmp_path / "frontend.log"
 
-    result = _run_make(
+    result = run_make(
         workdir,
         MakeCall(
             "boundary-kani",
@@ -457,7 +255,7 @@ def test_the_version_check_resolves_the_cached_kani_frontend(
     )
     assert result.returncode == 0, result.stderr
 
-    recorded = _recorded_values(resolve_log)
+    recorded = recorded_values(resolve_log)
     assert recorded["resolved"] == str(cached_bin / "cargo-kani"), (
         "the version check must resolve the frontend the proof commands use; "
         f"its PATH was {recorded.get('path')!r}"
