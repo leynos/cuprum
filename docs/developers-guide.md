@@ -9152,26 +9152,48 @@ a flush at the fork, and only the object can perform it. The module is small on
 purpose, and `_subprocess_spawn.py` imports from it rather than the other way
 round.
 
-`cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
-failure rather than on the child's exit.
-`_await_exit_or_writer_failure(exit_wait, stdin_task)` waits on the exit wait
-and the stdin writer together and returns the exit only once it is the sole
-survivor, so a producer that dies while the child would still be running
-surfaces as `StdinSourceError` instead of being reported as a timeout. Only a
-writer that *failed* is an outcome: a producer that merely finishes first is
-the ordinary case, and the exit wait is then cancelled — which is itself the
-termination, since the wait's own cancellation handler escalates through
-`_terminate_all_shielded`. The cancellation grace and the termination policy
-are not restated here. Its three call sites are the non-streaming
-single-command path (`_run_subprocess_without_streams` in
-`cuprum/_subprocess_direct_run.py`), the streaming path
-(`_wait_for_streamed_process_exit` in `cuprum/_subprocess_stream_run.py`), and
-line iteration (`_wait_for_line_stream_exit` in
-`cuprum/_line_stream/coordinator.py`). The exit wait is passed in already
+`cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stream
+task's failure rather than on the child's exit.
+`_await_exit_or_writer_failure(exit_wait, stdin_task, *, consumers=())` waits
+on the exit wait, the stdin writer, and the run's stream consumers together and
+returns the exit only once it is the sole survivor, so a producer that dies or
+a callback that raises while the child would still be running surfaces as its
+own error instead of being reported as a timeout. The consumer arm exists for
+the same arithmetic from the other end of the pipe: a raising `on_line`
+callback ends the task draining the child's output, nothing reads the pipe any
+more, and a child that keeps writing blocks on a full pipe rather than exiting.
+Only a task that *failed* is an outcome: one that merely finishes first is the
+ordinary case — a producer exhausted, a stream closed — and the exit wait is
+then cancelled, which is itself the termination, since the wait's own
+cancellation handler escalates through `_terminate_all_shielded`. The
+cancellation grace and the termination policy are not restated here.
+
+The precedence between those sources is fixed rather than first-past-the-post,
+because `asyncio.wait` reports a settled *set* with no completion order. A
+settled exit wins outright; then the stdin writer; then the consumers in
+stdout-then-stderr order, selected by `_first_early_failure` over
+`_stdin_writer_failure` and `_consumer_failure`. Consumer tasks are never
+cancelled or gathered here: they belong to the caller, whose reconciliation on
+every failure route settles them, and doing it here as well would settle them
+twice and race that teardown. What the rendezvous does owe every caller is
+provenance. `_is_early_failure(error, stdin_task, consumers)` answers, by
+identity, whether a caught error is a monitored task's own failure, and that is
+what lets each caller tell a callback's `TimeoutError` from its own expired
+deadline — `TimeoutError` is an `OSError` subclass, so a type check cannot. A
+task that failed *after* the exit settled is left to the caller's post-exit
+await, whose existing check already reports it.
+
+Its three call sites are the non-streaming single-command path
+(`_run_subprocess_without_streams` in `cuprum/_subprocess_direct_run.py`), the
+streaming path (`_wait_for_streamed_process_exit` in
+`cuprum/_subprocess_stream_run.py`), and line iteration
+(`_wait_for_line_stream_exit` in `cuprum/_line_stream/coordinator.py`). The
+direct run passes no consumers because it wires none, so it races the exit wait
+against the stdin writer exactly as before. The exit wait is passed in already
 constructed so each caller resolves `_wait_for_exit_code_within_timeout` from
 its own module namespace, which is where the test suite's monkeypatch seams
-replace it. `_subprocess_wait` re-exports the name for the same one-import-path
-reason its deadline names are re-exported.
+replace it. `_subprocess_wait` re-exports the name, and `_is_early_failure`
+with it, for the same one-import-path reason its deadline names are re-exported.
 
 `cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
@@ -9974,9 +9996,15 @@ executes:
    writes and `cuprum_stdin_errors_total` for failure events.
 5. In the streaming path (`_run_subprocess_with_streams` in
    `cuprum/_subprocess_stream_run.py`), the stdin writer task runs concurrently
-   with the stdout/stderr consumer tasks. On `TimeoutError` or
+   with the stdout/stderr consumer tasks, and the exit rendezvous watches all
+   three. A consumer that fails — a raising `on_line` callback, typically —
+   ends the run at once instead of waiting for a child that a full, undrained
+   pipe will never let exit. On a failure, `TimeoutError`, or
    `asyncio.CancelledError`, `_wait_for_streamed_process_exit` reconciles the
    stdin writer and stream consumers exactly once via `_reconcile_run_tasks`.
+   Only a `TimeoutError` the rendezvous did *not* raise from a monitored task
+   is the run's deadline: `_is_early_failure` decides that by identity, and a
+   task's own error takes the same `preserve=False` route as any other failure.
    The timeout reconciliation passes `preserve=True` so the bounded EOF grace
    preserves partial text before `_handle_stream_timeout` raises
    `_SubprocessTimeoutError`; cancellation passes `preserve=False` and re-raises

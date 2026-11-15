@@ -1611,3 +1611,52 @@ already said it "lives beside the config it builds rather than beside the spawn
 that asks for it". `_subprocess_streams` re-exports the name so the call path
 that reaches it there keeps working, and `_record_started` stayed with the
 reclaim module because that is the only code that consumes it.
+
+## Addendum (2026-11-15): the exit rendezvous watches stream consumers
+
+The 2026-09-27 addendum gave the rendezvous one stream task to race against the
+exit wait: the stdin writer. #551 found the same ending reached from the other
+end of the pipe. A line or output callback that raises ends the task draining
+the child's output; nothing reads that pipe any more, so a child that keeps
+writing fills it and blocks rather than exiting. Both `run()` and `lines()`
+waited for the child before observing the consumer task, so a run with no
+`timeout=` waited indefinitely: the child could not exit, and the failure was
+never read.
+
+`_await_exit_or_writer_failure` now takes an optional keyword-only
+`consumers: Sequence[Task | None]`, filtered of the `None` slots a run with an
+unobserved stream holds, and races them with the exit wait and the writer. A
+run with nothing to race — an inherited stdin and no observed stream — still
+awaits the exit coroutine directly, without creating a task for it. A consumer
+that merely succeeds or is cancelled is dropped from the monitored set and the
+race keeps waiting; only a failed one ends the run, by the rule the writer
+already followed. Consumer tasks are not cancelled or gathered in the
+rendezvous: they belong to the caller, whose reconciliation settles them on
+every failure route, and settling them in both places would race that teardown.
+
+Precedence is fixed and state-based, because `asyncio.wait` reports a settled
+set with no completion order: a settled exit wins outright, then the stdin
+writer, then the consumers in stdout-then-stderr order (`_first_early_failure`,
+over `_stdin_writer_failure` and `_consumer_failure`). This is a selection
+order rather than a report of which task failed first, and it is what makes the
+reported error stable from run to run.
+
+The second decision is provenance. Both callers translate a `TimeoutError`
+escaping the wait into the run's deadline, and a callback may raise a
+`TimeoutError` of its own — which is also an `OSError`, so no type check can
+separate them. `_is_early_failure(error, stdin_task, consumers)` compares by
+identity against each monitored task's own exception, and a match routes to the
+non-timeout branch, which reconciles without capturing and re-raises the
+original object. Without it, `_handle_stream_timeout` would be handed a
+deadline the caller never configured, and would raise its invariant failure in
+place of the callback's real error.
+
+Both entry points wired the consumers in: `_wait_for_streamed_process_exit`, in
+`cuprum/_subprocess_stream_exit.py`, for the streamed `run()`, and
+`_await_line_stream_exit` in the line-stream coordinator for `lines()`. The
+direct run wires no consumers and passes none. No public API changes.
+`cuprum/unittests/test_subprocess_rendezvous.py` pins the race and its
+precedence, `cuprum/unittests/test_consumer_failure_fail_fast.py` pins the
+end-to-end guarantee with real children that write until they are killed, and
+`cuprum/unittests/test_line_stream_reader_failure.py` pins the provenance rule
+for both entry points.

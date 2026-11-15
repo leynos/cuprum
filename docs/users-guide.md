@@ -439,6 +439,18 @@ guaranteed within each stream, not across streams. An awaitable observe hook
 observing the same lines is retained and bounded differently; see
 [Awaitable hooks and line backpressure](#awaitable-hooks-and-line-backpressure).
 
+A callback that raises ends the run at that point rather than after the child's
+exit. The error reaches the caller unchanged, and is never reported as this
+run's timeout, even when the callback raised `TimeoutError` itself. Cuprum then
+terminates and reaps the child — and its owned process group, when one was
+requested — cancels the other stream's consumer, and discards any captured
+output, because no result is returned to carry it. Output the callback was
+never given is lost, including lines `SafeCmd.lines()` had read but not yet
+yielded: iteration ends by raising the callback's error. Awaitable observe
+hooks follow a different contract: each is a delivery task whose earliest
+failure is reported when the run finalizes, so one failing hook does not by
+itself end the run.
+
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
 `max_line_chars` decoded characters (64 Ki by default) for one line, and
