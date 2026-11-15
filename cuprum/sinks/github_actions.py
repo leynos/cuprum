@@ -47,10 +47,14 @@ from __future__ import annotations
 
 import dataclasses as dc
 import os
-import secrets
 import sys
 import typing as typ
 
+from cuprum.sinks._github_actions_commands import (
+    _escape_data,
+    _escape_property,
+    _new_stop_token,
+)
 from cuprum.sinks._github_actions_options import (
     _GitHubActionsSinkOptionsKwargs,
     _normalize_github_actions_sink_options,
@@ -71,54 +75,8 @@ _GROUP_PREFIX = "::group::"
 _ENDGROUP = "::endgroup::"
 _ERROR_PREFIX = "::error "
 _STOP_PREFIX = "::stop-commands::"
-_STOP_TOKEN_LENGTH = 16
 _GITHUB_ACTIONS_ENV = "GITHUB_ACTIONS"
 _GITHUB_ACTIONS_TRUE = "true"
-
-
-def _escape_data(value: str) -> str:
-    """Escape a value used in a workflow-command data position.
-
-    GitHub Actions replaces ``%25``, ``%0D``, and ``%0A`` in the *data*
-    segment after ``::command::``; see the workflow-command reference. The
-    escaping here mirrors that contract.
-
-    Returns
-    -------
-    str
-        The escaped value safe for a workflow-command data position.
-    """
-    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-
-
-def _escape_property(value: str) -> str:
-    """Escape a value used in a workflow-command property position.
-
-    Property values (for example ``title=``) additionally escape ``:`` and
-    ``,``, which delimit the property list.
-
-    Returns
-    -------
-    str
-        The escaped value safe for a workflow-command property position.
-    """
-    return _escape_data(value).replace(":", "%3A").replace(",", "%2C")
-
-
-def _new_stop_token() -> str:
-    """Return a fresh stop-commands token.
-
-    The token must be unpredictable to the child whose output the lease
-    shields: a guessable token would let hostile child output end the lease
-    early and resume workflow-command processing. ``secrets.token_hex`` draws
-    from the operating system's CSPRNG.
-
-    Returns
-    -------
-    str
-        A fresh unpredictable hexadecimal token.
-    """
-    return secrets.token_hex(_STOP_TOKEN_LENGTH // 2)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -197,12 +155,17 @@ class GitHubActionsSession:
         self._stop_token = _new_stop_token()
         if not annotation.emit_group:
             return
-        self._log.write(f"{_GROUP_PREFIX}{_escape_data(self._label)}\n")
         # The lease opens *inside* the group, after the ``::group::`` command,
         # so the runner processes that command itself and then stops
         # interpreting child output as workflow commands for the rest of the
-        # run.
-        self._log.write(f"{_STOP_PREFIX}{self._stop_token}\n")
+        # run. Both frames are flushed together before this constructor returns;
+        # child echo writes raw bytes through ``log.buffer`` and flushes it
+        # immediately, so a buffered text destination would otherwise surface
+        # child output above the protective frame.
+        self._write_frames(
+            f"{_GROUP_PREFIX}{_escape_data(self._label)}\n",
+            f"{_STOP_PREFIX}{self._stop_token}\n",
+        )
 
     @property
     def log(self) -> typ.IO[str]:
@@ -251,14 +214,44 @@ class GitHubActionsSession:
             # command itself must be interpreted by the runner, so it has to
             # be written after the stop-commands bracket has ended. The runner
             # resumes on reading the token as a command of its own, so this is
-            # ``::<token>::``, not the stop command repeated.
-            self._log.write(f"::{self._stop_token}::\n")
-            self._log.write(f"{_ENDGROUP}\n")
+            # ``::<token>::``, not the stop command repeated. Flushing here
+            # keeps the terminal frame ahead of any raw child bytes that still
+            # reach ``log.buffer`` before the session is collected.
+            self._write_frames(
+                f"::{self._stop_token}::\n",
+                f"{_ENDGROUP}\n",
+            )
         if not self._emit_annotation:
             return
         if outcome.outcome == TerminalOutcome.EXIT_ZERO:
             return
         self._emit_error_annotation(outcome)
+
+    def _write_frames(self, *frames: str) -> None:
+        """Write one framing block to the log and flush it.
+
+        Echo writes a binary-capable destination through ``log.buffer`` and
+        flushes that buffer immediately, bypassing the text layer. A buffered
+        text destination therefore has to be flushed when a framing block is
+        complete, or the runner can read child bytes before the workflow
+        command that was meant to precede them. Flushing once per block keeps
+        the framing atomic while leaving child echo unchanged.
+
+        Parameters
+        ----------
+        *frames : str
+            Complete workflow-command lines to append to the log.
+
+        Notes
+        -----
+        Nothing is flushed when *frames* is empty, so an annotation-only
+        session with no framing writes performs no destination I/O at all.
+        """
+        if not frames:
+            return
+        for frame in frames:
+            self._log.write(frame)
+        self._log.flush()
 
     def _emit_error_annotation(self, outcome: SessionOutcome) -> None:
         """Write one ``::error::`` workflow command for a failed run.
@@ -271,7 +264,7 @@ class GitHubActionsSession:
         title = _escape_property(self._annotation_label)
         detail = outcome.detail or outcome.outcome.value
         message = _escape_data(detail)
-        self._log.write(f"{_ERROR_PREFIX}title={title}::{message}\n")
+        self._write_frames(f"{_ERROR_PREFIX}title={title}::{message}\n")
 
 
 class GitHubActionsSink:

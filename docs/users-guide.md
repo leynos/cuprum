@@ -2356,12 +2356,14 @@ child output. The default single-command title is the bounded run label
 `argv_title=True`. Pipelines continue to use `pipeline` by default.
 
 The group header is written before the child starts, regardless of `echo` or
-`capture`. `argv_title=True` writes the full program and every argument to the
-job log, joined with plain spaces, without shell quoting. Arguments may contain
-secrets, so enable this only when that disclosure is intentional. A
-caller-provided `title`, project name and program name also enter workflow
-logs. Workflow-command escaping protects the command syntax; it does not redact
-values. See the
+`capture`. A buffered custom text stream receives each framing block already
+flushed, so child output cannot overtake the group opening, lease release, or
+annotation; Cuprum still never closes a caller-owned stream. `argv_title=True`
+writes the full program and every argument to the job log, joined with plain
+spaces, without shell quoting. Arguments may contain secrets, so enable this
+only when that disclosure is intentional. A caller-provided `title`, project
+name and program name also enter workflow logs. Workflow-command escaping
+protects the command syntax; it does not redact values. See the
 [structured logging argv warning](#keep-secrets-out-of-telemetry) for the same
 disclosure concern in telemetry records.
 

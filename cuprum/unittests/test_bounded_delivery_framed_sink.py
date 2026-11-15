@@ -10,7 +10,13 @@ import pytest
 
 from cuprum import ScopeConfig, TimeoutExpired, scoped, sh
 from cuprum.sh import BoundedDelivery, ExecutionContext, RunOutputOptions
+from cuprum.sinks import GitHubActionsSink
 from tests.helpers.catalogue import python_catalogue
+from tests.helpers.github_actions_frames import (
+    buffered_log,
+    expected_frame,
+    stop_token,
+)
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import Pipeline, SafeCmd
@@ -150,3 +156,38 @@ def test_blocked_framed_sink_does_not_hold_run_or_race_closing_frame(
         )
 
     assert destination.messages == ("OPEN\n", "payload\n", "CLOSE\n")
+
+
+def test_bounded_delivery_orders_frames_around_buffered_child_bytes() -> None:
+    """A buffered custom log holds opening, payload, and terminal order."""
+    catalogue, program = python_catalogue()
+    payload = b"\xff bounded payload\n"
+    command = sh.make(program, catalogue=catalogue)(
+        "-c",
+        "import sys; sys.stdout.buffer.write(b'\\xff bounded payload\\n'); "
+        "sys.stdout.buffer.flush()",
+    )
+    log, raw = buffered_log()
+    sink = GitHubActionsSink(log, force=True, title="bounded")
+
+    with scoped(ScopeConfig(allowlist=frozenset([program]))):
+        result = command.run_sync(
+            output=RunOutputOptions(
+                capture=True,
+                echo_stdout=True,
+                echo_stderr=False,
+                sink=sink,
+                delivery=BoundedDelivery(
+                    max_queued_bytes=128,
+                    drain_grace_s=1.0,
+                ),
+            ),
+        )
+
+    value = raw.getvalue()
+    expected = expected_frame("bounded", stop_token(value), payload)
+    assert result.ok is True, f"the bounded framed run must succeed; got {result!r}"
+    assert value == expected, (
+        f"bounded delivery must preserve frame, payload, frame order; "
+        f"got {value!r}, expected {expected!r}"
+    )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections.abc as cabc
+import io
 from pathlib import Path
 
 import pytest
@@ -317,4 +318,55 @@ def test_flags_annotate_pipeline_as_single_group(
     )
     assert value.endswith("::error title=pipeline::exit_nonzero\n"), (
         f"the annotation must report the pipeline's categorical outcome; got {value!r}"
+    )
+
+
+def test_flags_flush_frames_before_binary_echo_on_buffered_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The convenience flags order framing ahead of child bytes on a wrapper.
+
+    The flags install the sink on the parent's stderr, which a caller may have
+    replaced with a non-line-buffered wrapper. The byte buffer, not the text
+    layer, is what the runner reads, so the frame is asserted there.
+    """
+    monkeypatch.setenv("GITHUB_ACTIONS", _ON_CI)
+    raw = io.BytesIO()
+    log = io.TextIOWrapper(
+        raw,
+        encoding="utf-8",
+        newline="",
+        line_buffering=False,
+        write_through=False,
+    )
+    monkeypatch.setattr("sys.stderr", log)
+    payload = b"\xff flag payload\n"
+    command, allowlist = _python_command(
+        "import sys; sys.stdout.buffer.write(b'\\xff flag payload\\n'); "
+        "sys.stdout.buffer.flush()",
+    )
+
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = command.run_sync(output=_flags_output(group=True))
+
+    value = raw.getvalue()
+    stop_line = next(
+        line for line in value.split(b"\n") if line.startswith(b"::stop-commands::")
+    )
+    token = stop_line.removeprefix(b"::stop-commands::")
+    expected = (
+        f"::group::{_run_label(command)}\n".encode()
+        + b"::stop-commands::"
+        + token
+        + b"\n"
+        + payload
+        + b"::"
+        + token
+        + b"::\n"
+        + b"::endgroup::\n"
+    )
+    assert result.ok is True, f"the flagged run must succeed; got {result!r}"
+    assert value == expected, (
+        f"the flags must flush the stop frame before child bytes; "
+        f"got {value!r}, expected {expected!r}"
     )
