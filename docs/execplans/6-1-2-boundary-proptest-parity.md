@@ -114,6 +114,40 @@ ownership and error contracts, stop and report the exact incompatibility.
   `rust_consume_stream` and every in-repository caller passes a readable
   descriptor.
 
+- **Residual, latent, repaired 2026-11-15: three review findings that could
+  not fire on any committed input.** Each was fixed because the guard itself
+  was wrong, not because a current case failed. Recorded separately from the
+  defect above so the distinction between "observed" and "reasoned" stays
+  legible.
+
+  The streamed-witness guard in `tests/helpers/consume_boundary_oracle.py`
+  tested length and tail only. `capture_from_producer` can rebuild exactly one
+  shape — a repeated `cuprum-boundary/` prefix followed by the tail — so a
+  payload of the right length and tail with any other prefix would have
+  selected the subprocess witness and failed inside the producer with a
+  misleading "named boundary pattern" `ValueError`. No committed named case has
+  that shape and `large_payload_strategy` generates a random 1–128-byte pattern
+  that cannot equal the prefix, so it never fired. The guard now asks the
+  producer's own precondition through a new `is_streamable_payload` predicate
+  rather than duplicating its rule, and a four-case parametrized test pins each
+  discriminating dimension.
+
+  The ty typing-contract tests redirected only project and ancestor discovery.
+  `--config-file` does not bypass user-level configuration, which ty still
+  loads and merges, so a contributor whose own `ty.toml` relaxed
+  `invalid-argument-type` could have silenced the diagnostic the tests exist to
+  require. Verified empirically with ty 0.0.74 in a scratch directory before
+  writing the fix, including that ty prefers `XDG_CONFIG_HOME` over `HOME` when
+  both are set. `_ty_environment` now redirects both roots and the regression
+  asserts that redirection directly, so the test fails if the guard stops doing
+  it.
+
+  Two Windows docstrings claimed more than the boundary establishes.
+  `_validate_windows_consume_reader` checks range only; whether a descriptor is
+  open, readable, and synchronous is not observable from an `int`, and the
+  native boundary is what reports those. The docstrings, the design note, and
+  the verification table now say so.
+
 - High impact, medium likelihood: a pre-filled pipe blocks on a large input.
   Use temporary files for generated native consumption and a concurrent
   producer only for a small number of real-pipe integration scenarios.
@@ -519,6 +553,35 @@ ownership and error contracts, stop and report the exact incompatibility.
   records `# DIFF_SHA256: f44c348b0...` in its header and the same value at its
   end, with `# DIRTY_AT_END: 0`. The parity lane again refused to pass without
   its full complement: `running 30 tests`, `30 passed; 0 failed`.
+- [x] (2026-11-15) Reconcile the hosted reviews' ten findings and re-gate at
+  `72bea44c0`. All ten were checked against source before any edit, and all ten
+  were real. One was a genuine defect the earlier reviews had not reached:
+  `_read` invokes the CRT invalid parameter handler for a descriptor that is
+  closed, not open for reading, locked, or accompanied by a `buffer_size` above
+  `INT_MAX`, and the *default* handler terminates the process, so the
+  `-1`/`EBADF` continuation return the entry point documented was only
+  reachable with a handler installed. A direct caller therefore passed the
+  wrapper's range-only check and the interpreter died with
+  `STATUS_STACK_BUFFER_OVERRUN` instead of receiving an `OSError`. The repair
+  installs a thread-local invalid parameter handler for the `_read` call and
+  restores the previous one on drop, which preserves the published error
+  contract rather than changing it, and rejects a `buffer_size` above the
+  signed limit before the CRT sees it. Nine further findings were latent rather
+  than firing and are recorded in the Risks section. The full eight-gate bundle
+  was then re-run against exactly the committed tree: every log names
+  `ed36c8204` with `# DIRTY: 12` at start and end, the twelve blobs committed at
+  `72bea44c0` match the pre-commit `git hash-object` fingerprint one for one,
+  and the latest source edit (02:19:37Z) precedes the first gate start
+  (02:28:55Z). Results: `check-fmt` 0 (1s); `lint` 0 (230s, `interrogate`
+  `actual: 100.0%`, Skylos and duplication gates passed); `typecheck` 0 (1s);
+  `test` 0 (1052s, main suite `5048 passed, 22 skipped, 3 deselected`, Nextest
+  `189 tests run: 189 passed, 30 skipped`, all doctests ok, zero
+  `FAILED`/`INTERNALERROR`); `test-rust` 0 (291s); `lint-windows` 0 (1s, cache
+  fingerprint 6s newer than the edited `windows_crt.rs`, so the cached result
+  covers this source); `markdownlint` 0 (25s); `nixie` 0 (4s). `lint-windows`
+  was deliberately re-checked rather than trusted: a fresh-looking 1s pass
+  could have meant the gate never compiled the changed file, and the
+  fingerprint timestamps are what ruled that out.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
