@@ -9,10 +9,11 @@ recalculate the census rather than trust the numbers in the report.
 ## Layout
 
 ```text
-r{1,2,3}-control/       three pre-change captures, `ccc970116`
-r{1,2,3}-candidate/     three post-change captures, `2dd643995`
-unprofiled/             six load-admitted ABBA `cb` pairs and their evidence
-unprofiled/attempts/    every attempt's result documents, admitted or not
+r{1,2,3}-control/         three pre-change captures of the PR base, `e170f908f`
+r{1,2,3}-candidate/       three post-change captures of the PR head, `064d69405`
+unprofiled/               six admitted ABBA `cb` pairs and their evidence
+unprofiled/attempts/      every attempt of this collection, admitted or not
+unprofiled/superseded/    what remains of the earlier collection's records
 ```
 
 Each capture directory carries the same eight committed files:
@@ -39,7 +40,14 @@ reports the sum of the weights in the committed `stacks.folded`.
 that ran it, the `cuprum` package directory the worker imported, and the
 revision that directory resolved to, so a capture cannot be attributed to the
 wrong tree. Absolute host paths are replaced with `<repo:control>` and
-`<repo:candidate>`.
+`<repo:candidate>`. It also records the one-minute load average immediately
+before and after the capture.
+
+The two round-1 captures report py-spy exit status 1 because py-spy's teardown
+lost its child during reaping (`Error: No child process (os error 10)`). The
+capture itself completed: its log reports `Samples: <n> Errors: 0`, and the sum
+of the committed weights matches that count, so the exit status records a known
+reaping race rather than a failed capture. Every other capture exits 0.
 
 ## Reproducing the census
 
@@ -84,26 +92,78 @@ overwhelmingly likely to appear, so a candidate reading of zero is evidence
 rather than silence. Every capture in this directory clears the floor, and the
 per-capture `anchor_weight` is committed so the claim can be checked.
 
+Every capture's `stacks.folded` also contains exactly one line whose stack is
+empty — a space followed by the sample weight, for example `' 34'`. py-spy
+emits it when a sample carries no resolvable frames. The census drops it, so
+the folded weight sum exceeds the census's `total_weight` by exactly that
+line's weight. The difference is the check that the census read the whole file
+and discarded nothing else.
+
 ## The unprofiled timing pairs
 
-`unprofiled/` holds the wall-clock comparison. Each variant ran one discarded
-warm-up, then six `cb` runs (`echo-devnull-cb-s1-python`, repeat count 1) in
-ABBA order — control first for rounds 1 to 3, candidate first for rounds 4 to 6
-— so that a drift in host load affects both variants rather than one. Each run's
-`wall_time_seconds` is in its committed result document, and
-`timing-summary.json` records the paired ratios, their geometric mean, and the
-10,000-resample bootstrap 95% interval.
+`unprofiled/` holds the wall-clock and CPU-time comparison. Each variant ran
+one discarded warm-up, then six `cb` runs (`echo-devnull-cb-s1-python`, repeat
+count 1) in ABBA order — control first for rounds 1, 3 and 5, candidate first
+for rounds 2, 4 and 6 — so that a drift in host conditions affects both
+variants rather than one. The accepted set is the second collection; the first,
+on the earlier revisions, is described in
+[`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](../../tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
-This host is shared with other work, whose linker bursts push the one-minute
-load average past 30. A wall-time pair measured during such a burst measures
-contention, not the workload, so a pair is admitted only when neither arm's
-sampled load average exceeds 20 — a rule that reads `/proc/loadavg` and never a
-run's ratio. `timing-attempts.tsv` lists every attempt of both load-gated
-passes with each arm's sampled maximum and whether the attempt was admitted;
-`load-samples.json` holds the full five-second series behind those maxima, so
-the rule can be re-applied. `unprofiled/attempts/` keeps each attempt's result
-documents, including rejected ones, and the accepted attempt is copied to the
-canonical `cb-rN-<arm>.*` names that `timing-summary.json` reads.
+Each admitted pair contributes six files per arm under the canonical
+`cb-rN-<arm>` names: `.json` (the worker's result document, which records
+`wall_time_seconds`), `.cpu.json` (the child's CPU time and the host's busy
+share, measured by `cpuwrap.py`), `.load.log` (the five-second one-minute load
+series), `.exit`, `.log`, and nothing else. `timing-summary.json` and
+`timing-summary.log` hold the paired ratios, their geometric means, and the
+10,000-resample bootstrap 95% intervals for both quantities.
+
+`/usr/bin/time` is not installed on this host, so `cpuwrap.py` runs the worker
+under `subprocess.call` and reports `resource.getrusage(RUSAGE_CHILDREN)`,
+which is the child's CPU time exactly, together with the host's aggregate busy
+share from `/proc/stat` across the same window. CPU time is reported because a
+wall time on a host shared with other tenants mixes the workload's cost with
+the scheduler's decisions; the CPU time does not.
+
+### Admission
+
+A pair is admitted under Decision D11 when both arms exit 0 and produce a
+result document, the pair's pooled median load is at most 45, the arms' load
+medians differ by at most 20% of the pooled median, the arms' measured
+host-busy shares differ by at most 10 points, and no arm's sampled maximum
+exceeds the pooled median by more than 15. The rule reads `/proc/loadavg`,
+`/proc/stat`, and exit status, and never a wall time, a CPU time, or a ratio,
+so it cannot select on the result. It was refined twice while the collection
+ran, and the final form was then applied uniformly to every attempt by
+`reeval.py`'s logic, recorded in `d11-admissions.json`; each round's earliest
+qualifying attempt is the one adopted.
+
+`d11-attempts.tsv` lists every attempt of this collection with each arm's
+maximum and median sampled load, its host-busy share, and the verdict of the
+rule in force when it ran. `d11-admissions.json` holds the final rule's verdict
+for every attempt and the adopted attempt per round, and `load-samples.json`
+holds the full five-second series and CPU record for every adopted arm, so the
+rule can be re-applied from committed files alone. `unprofiled/attempts/` keeps
+each attempt's `.json`, `.exit`, and `.cpu.json` under `cb-rN-<arm>.aM` names,
+including rejected attempts, and an admitted attempt is copied to the canonical
+`cb-rN-<arm>.*` names that `timing-summary.json` reads. Each attempt also
+produces a `.log` and a `.load.log`, which `.gitignore` excludes; the load
+series that matters for the rule is in `d11-attempts.tsv`'s statistics and, for
+adopted arms, in full in `load-samples.json`.
+
+`unprofiled/warmup-<arm>.*` holds the discarded warm-up pair, which ran before
+round 1 under the same protocol and is not part of the accepted set.
+
+## The superseded collection
+
+`unprofiled/superseded/` holds what is left of the first collection, which
+measured control `ccc970116` and candidate `2dd643995` under Decision D9. It
+contains `timing-attempts.tsv` (that collection's attempt table, which the
+report cites when it explains why D9's ceiling of 20 could not be met),
+`load-samples.json` and `timing-summary.json` (its summary documents), and
+`attempts/` (the four attempt pairs whose result documents the re-collection
+did not overwrite). The re-collection reused every other file name in
+`unprofiled/`, so the rest of that collection's result documents survive only
+in the branch history. None of its numbers is quoted as a result.
 
 ## The microbenchmark
 
@@ -115,3 +175,9 @@ every figure is per 1,000 dispatches; divide by 1,000 for the per-event cost.
 The control worktree predates the group, so the candidate's benchmark file was
 copied into it for the measurement. The file only imports `_emit_exec_event`
 and times it, so the control run measures the control dispatcher.
+
+These runs used the project virtual environment's CPython 3.14.7 rather than
+the 3.14.4 interpreter the profiler and the `cb` pairs used, because
+`pytest-benchmark` is installed there. Both variants ran on the same
+interpreter, so the comparison is within-run; the absolute figures are not
+comparable with the profiled captures.

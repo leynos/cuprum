@@ -1,16 +1,16 @@
 {
   "caller_samples": {
-    "ExecEvent.__init__ reachable from the event-emission path": 21572
+    "ExecEvent.__init__ reachable from the event-emission path": 36547
   },
-  "construction_samples": 12394,
-  "construction_share_of_all_parent_percent": 29.8953,
-  "construction_share_percent": 30.847,
-  "consume_samples": 40179,
+  "construction_samples": 21434,
+  "construction_share_of_all_parent_percent": 26.5466,
+  "construction_share_percent": 29.2698,
+  "consume_samples": 73229,
   "limit_percent": 30.0,
   "matched_frames": {
-    "ExecEvent.__init__ reachable from the event-emission path": 12394
+    "ExecEvent.__init__ reachable from the event-emission path": 21434
   },
-  "parent_samples": 41458,
-  "status": "fail_above_limit",
+  "parent_samples": 80741,
+  "status": "pass",
   "unresolved_frames": {}
 }

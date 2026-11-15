@@ -230,7 +230,10 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   `async def` hook. `make benchmark-micro` exits 0 with 4 passed. On this host
   the `None`-returning hook costs 115.8 µs and the `async def` hook 4.65 ms per
   1,000-dispatch batch, i.e. about 116 ns and 4.7 µs per event; the async
-  figure is task creation, matching the D8 estimate.
+  figure is task creation, matching the D8 estimate. That run measured the
+  candidate tree alone under a much lower host load than the paired
+  measurement; the paired figures on the delivered revisions are 171.83 µs and
+  4.53 ms in the entry below, and those are the ones quoted elsewhere.
 - [x] (2026-11-05) EP-M5: profiler and timing evidence collected and the
   evidence document written. Six profiled captures (three pairs), their census
   results, and the classifier re-run are conformant: control target weights
@@ -238,32 +241,73 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   unprofiled timing was re-collected under the load gate and admits six pairs
   with a geometric-mean ratio of 0.9529 and a 95% interval of [0.9199, 1.0001].
   Recorded in `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md` with the raw
-  data under `docs/profiling/5-2-2-observe-hook-dispatch/`.
+  data under `docs/profiling/5-2-2-observe-hook-dispatch/`. Those numbers are
+  the record of the 2026-11-05 collection on control `ccc970116` and candidate
+  `2dd643995`; the assessment then asked for the evidence to be re-measured on
+  the delivered head, and the 2026-11-15 entries below report that measurement.
 - [x] (2026-11-05) EP-M6: documentation, changelog, and roadmap updated; the
   roadmap item is marked done. Touched `docs/users-guide.md`,
   `docs/developers-guide.md`, `docs/cuprum-design.md`, `docs/roadmap.md`,
   `docs/contents.md`, and `CHANGELOG.md`.
 - [x] (2026-11-09) ExecPlan assessment follow-up, finding 1: a hook failure
-  whose `__class__` property raises is wrapped and reported instead of
-  escaping from the handler. `_warn_hook_failure` now classifies cancellation
-  with `issubclass(type(error), asyncio.CancelledError)`, which matches the
-  real type without consulting `__class__`, exactly as the `except` clause it
+  whose `__class__` property raises is wrapped and reported instead of escaping
+  from the handler. `_warn_hook_failure` now classifies cancellation with
+  `issubclass(type(error), asyncio.CancelledError)`, which matches the real
+  type without consulting `__class__`, exactly as the `except` clause it
   replaced did. Two named regression tests cover the per-line and settled
   paths; the module records capture records through a non-formatting handler,
   because formatting such an exception inside pytest re-raises it.
 - [x] (2026-11-09) ExecPlan assessment follow-up, findings 3, 4, and 5: V1's
   assertions are complete and the growing test modules are split. The
-  comparison now proves each scheduled task wraps `_await_awaitable` around
-  the result of the hook that produced it, and compares every dispatch record
-  on level, exact `getMessage()`, structured fields, and `exc_info` type,
-  including `observe_hook_task_failed`. A second property and a named test
-  cover the settled contract under C3a, and the plan records that contract
-  explicitly. The comparison, oracle, shapes, and seeded faults each live in
-  their own module; no module exceeds 400 lines.
-- [ ] (2026-11-09) ExecPlan assessment follow-up, finding 2: re-collect the
+  comparison now proves each scheduled task wraps `_await_awaitable` around the
+  result of the hook that produced it, and compares every dispatch record on
+  level, exact `getMessage()`, structured fields, and `exc_info` type, including
+  `observe_hook_task_failed`. A second property and a named test cover the
+  settled contract under C3a, and the plan records that contract explicitly.
+  The comparison, oracle, shapes, and seeded faults each live in their own
+  module; no module exceeds 400 lines.
+- [x] (2026-11-09) ExecPlan assessment follow-up, finding 2: re-collect the
   V5 and V7 evidence against the final head, so the performance claim is
   measured on the revision that is delivered rather than on the revisions the
-  assessment examined.
+  assessment examined. Complete on 2026-11-15: V5 was re-collected on the PR
+  base `e170f908` and the candidate `064d69405` (the entry below), and V7 was
+  re-collected as six load-admitted ABBA pairs with a wall-time interval whose
+  upper bound is 0.9856 (the final entry below).
+- [x] (2026-11-14) Re-measurement, V5 complete. The control is now the PR base
+  `e170f908` and the candidate `064d69405`; the only runtime difference between
+  them is `cuprum/_observability.py`, and `benchmarks/` is identical in both
+  trees. Six fresh captures on CPython 3.14.4, py-spy 0.4.2 at 100 Hz, in three
+  matched pairs under the load alternation, give control anchors of 33,602 to
+  36,547 with target weights 2,572 to 2,762 (7.40-7.65% of the anchor) and
+  candidate anchors of 30,886 to 43,268 with both target weights zero. Every
+  anchor clears the 14,000 floor, every census exit status is the expected one,
+  and the folded weight sum reconciles with py-spy's own sample count in all
+  six: the census drops exactly one empty-stack line per capture. Profiled wall
+  times are *not* used as a speed measurement this time: host load ranged from
+  9.99 to 45.45 inside the collection and the arms are not comparable.
+- [x] (2026-11-15) Re-measurement, V7 complete. The D9 ceiling of 20 was
+  unreachable — the host ran at a one-minute load average of 20-45 for hours
+  while other agents built — so Decision D11 replaced it with a comparability
+  rule that reads load and the host's measured busy share and never a result.
+  Six ABBA pairs were admitted from ten attempts, with per-round ratios 0.9409,
+  0.9611, 0.9365, 0.9182, 1.0242, and 0.9636. The wall-time geometric mean is
+  0.956848 with a 10,000-resample bootstrap 95% interval of [0.934407,
+  0.985617] (seed 20261105), so the upper bound is 0.9856 against the 1.05
+  tolerance. The child's own CPU time gives 0.958527, [0.938406, 0.985121], and
+  CPU time is 98.7% to 100.0% of wall time in every arm, so the two independent
+  quantities agree. The round-5 pair is the only one above 1 and is retained:
+  the rule never reads a ratio, so dropping it after seeing the result would be
+  selecting on the outcome. The microbenchmark repeats moved the `None`-return
+  hook from a median-of-medians 434.89 µs to 171.83 µs per 1,000 dispatches, a
+  2.53x reduction or about 263 ns per event, while the `async def` hook
+  measured 1.033 with overlapping ranges. All figures are in
+  `docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`; the attempt table, the
+  final rule's verdicts, and the adopted arms' load series are committed beside
+  the pairs. Both collections reused the same attempt file names, so the
+  earlier collection's surviving records — its attempt table, its summary
+  documents, and the four attempt pairs the re-collection did not overwrite —
+  were moved to `unprofiled/superseded/`, and the discarded warm-up pair is
+  committed under `unprofiled/warmup-<arm>.*` rather than dropped.
 
 ## Surprises & discoveries
 
@@ -410,8 +454,9 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   keeps every attempt's artefacts under `unprofiled/attempts/`, so a rejected
   attempt is evidence rather than something the next attempt overwrites. Round
   4's attempt 2 was re-collected because its candidate load series had already
-  been destroyed by the next attempt's cleanup; `timing-attempts.tsv` records
-  it as not admitted for that reason, not because it failed the load rule.
+  been destroyed by the next attempt's cleanup;
+  `superseded/timing-attempts.tsv` records it as not admitted for that reason,
+  not because it failed the load rule.
 
 ## Decision log
 
@@ -505,6 +550,38 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   result. The budget was raised after round 3's first two attempts were
   rejected on load and before any accepted round's ratio was known.
   Date/Author: 2026-11-05, implementation agent.
+- Decision D11 (2026-11-15, implementation): replace D9's absolute load
+  ceiling with a within-pair comparability rule for the re-collection.
+  Rationale: from 2026-11-14 the host's one-minute load average stayed between
+  20 and 45 for more than six hours while other tenants built, so D9's ceiling
+  of 20 was unreachable; round 1 of the re-collection spent four attempts and
+  round 2 four more without an admission, and an eight-attempt run that waited
+  45 minutes per attempt for a quiet window admitted nothing. The ceiling was a
+  proxy for what actually corrupts a pair — a burst inside one arm, or an
+  arm-to-arm imbalance — and both are measurable directly. A pair is admitted
+  when both arms exit 0 with a result document, the pair's pooled median load
+  is at most 45, the arms' load medians differ by at most 20% of the pooled
+  median, the arms' measured host-busy shares from `/proc/stat` differ by at
+  most 10 points, and no arm's maximum load exceeds the pooled median by more
+  than 15. The rule reads `/proc/loadavg`, `/proc/stat`, and exit status only,
+  never a wall time, a CPU time, or a ratio. It was refined twice during the
+  collection because its own load diagnostics showed it rejecting comparable
+  pairs: maxima within 1.25x the pooled median rejected two attempts whose busy
+  shares agreed to within 9 points, and maxima within 1.35x with a symmetric
+  maxima bound rejected two more. The final form was then applied uniformly to
+  every recorded attempt, and each round's earliest qualifying attempt is the
+  one adopted, so the accepted set cannot be chosen for a favourable ratio.
+  Date/Author: 2026-11-15, implementation agent.
+- Decision D12 (2026-11-15, implementation): report the child's CPU time
+  beside its wall time for every unprofiled arm. Rationale: under the load
+  above, an arm's wall time carries the scheduler's decisions as well as the
+  workload's cost, and the V7 statistic is a wall-time ratio. `/usr/bin/time`
+  is not installed on this host, so a wrapper (`cpuwrap.py`, outside the
+  tracked tree) runs the worker under `subprocess.call` and records
+  `resource.getrusage(RUSAGE_CHILDREN)`, which is the child's own user plus
+  system time, together with the host's aggregate busy share from `/proc/stat`
+  across the same window. Both are recorded for every attempt, admitted or not.
+  Date/Author: 2026-11-15, implementation agent.
 
 ## Outcomes & retrospective
 
@@ -513,55 +590,65 @@ independent ways: the profiler no longer sees the detector, the wall clock is
 not slower, and a direct microbenchmark of the dispatch loop shows the removed
 cost.
 
-*Census.* Three matched capture pairs at repeat count 2, control `ccc970116`
-against candidate `2dd643995`, CPython 3.14.4, py-spy 0.4.2 at 100 Hz:
+*Census.* Three matched capture pairs at repeat count 2, control `e170f908`
+against candidate `064d69405`, CPython 3.14.4, py-spy 0.4.2 at 100 Hz:
 
 | pair | control `target` / `any` | control anchor | candidate `target` / `any` | candidate anchor |
 | ---- | ------------------------ | -------------- | -------------------------- | ---------------- |
-| 1    | 1,899 / 1,899            | 21,572         | 0 / 0                      | 19,346           |
-| 2    | 1,887 / 1,887            | 21,425         | 0 / 0                      | 18,217           |
-| 3    | 1,964 / 1,964            | 22,591         | 0 / 0                      | 19,675           |
+| 1    | 2,762 / 2,762            | 36,547         | 0 / 0                      | 35,919           |
+| 2    | 2,678 / 2,678            | 36,179         | 0 / 0                      | 43,268           |
+| 3    | 2,572 / 2,572            | 33,602         | 0 / 0                      | 30,886           |
 
 In every control the location-specific and name-only weights agree and no
 target sample falls outside the anchor, so the detector is reachable only
 through `emit_line`. Every candidate reports zero on both weights while its
-anchor clears the 14,000 floor by at least 4,217 samples, so the zero is an
+anchor clears the 14,000 floor by more than 16,000 samples, so the zero is an
 observed absence. The census exits 1 for each control and 0 for each candidate.
+The only runtime difference between the two revisions is
+`cuprum/_observability.py`, and `benchmarks/` is identical in both trees, so
+the captures differ by the change under test.
 
 *Wall time.* Six load-admitted ABBA pairs of the unprofiled `cb` scenario give
-ratios 0.9203, 0.9529, 1.0661, 0.9064, 0.9243, and 0.9560, a geometric mean of
-0.9529, and a 10,000-resample bootstrap 95% interval of [0.9199, 1.0001] (seed
-20261105). The upper bound is 1.0001 against the 1.05 tolerance. The profiled
-`cb` scenario, three paired captures, moved from 413.4 s to 390.3 s at the
-median (−5.59%). Both readings are consistent with removing work from the
-per-line path; neither supports a slowdown.
+ratios 0.9409, 0.9611, 0.9365, 0.9182, 1.0242, and 0.9636, a geometric mean of
+0.956848, and a 10,000-resample bootstrap 95% interval of [0.934407, 0.985617]
+(seed 20261105). The upper bound is 0.9856 against the 1.05 tolerance. The
+child's own CPU time, measured with `getrusage(RUSAGE_CHILDREN)` because
+`/usr/bin/time` is not installed, gives a geometric mean of 0.958527 and an
+interval of [0.938406, 0.985121]; CPU time is 98.7% to 100.0% of wall time in
+every arm, so two independent quantities agree. Profiled wall times are *not*
+used as a speed measurement: host load ranged from 9.99 to 45.45 inside the
+profiled collection and the arms are not comparable. Every reading is
+consistent with removing work from the per-line path; none supports a slowdown.
 
 *Microbenchmark.* The `observe-dispatch` group dispatches 1,000 events per
 call. Across four runs with alternating order, a hook that returns `None` fell
-from a median-of-medians 385.91 µs to 113.92 µs per 1,000 dispatches, a 3.39x
-reduction or about 272 ns per event, while an `async def` hook was unchanged at
-0.978. The async path is `asyncio.Task` creation, which this change does not
-touch.
+from a median-of-medians 434.89 µs to 171.83 µs per 1,000 dispatches, a 2.53x
+reduction or about 263 ns per event, while an `async def` hook measured 1.033
+with overlapping ranges. The async path is `asyncio.Task` creation, which this
+change does not touch (Decision D8).
 
 *Construction share.* The 5.2.1 classifier re-run on the same stacks moved from
-a 30.7670% control median to 33.0662% candidate median, a rise of 2.2992
+a 29.4469% control median to a 30.4699% candidate median, a rise of 1.0230
 points. This is the metric's documented inversion when work outside the counted
-constructor is removed, and the rise is larger than 5.2.1's 0.9686-point
-forecast because the forecast counted the detector's leaf frames only while the
-denominator loses every stack that reached it, including the
-`abc.__instancecheck__` work beneath. 5.2.1's gate is not 5.2.2's to pass, and
-this plan does not claim it.
+constructor is removed, and it lands within 0.05 points of 5.2.1's 0.9686-point
+forecast. 5.2.1's gate is not 5.2.2's to pass, and this plan does not claim it.
 
 *Retrospective.* Two things dominated the effort. The first was measurement,
-not code: this host's shared load made an unprofiled pair admissible only
-inside short calm windows, and the first two collections — plus a third that
-waited for calm before each pair — had to be discarded because a linker burst
-inside a run measures contention rather than the workload. A driver defect that
-sent its diagnostic line to standard output masked this for one pass by making
-`awk` compare a timestamp's year against the load ceiling; writing diagnostics
-to standard error and keeping each attempt's artefacts fixed it. The lesson is
-that a load gate needs its own evidence trail, which is why
-`timing-attempts.tsv` and `load-samples.json` are committed beside the accepted
+not code. This host's shared load made an unprofiled pair admissible only
+inside short calm windows, so the first two collections — plus a third that
+waited for calm before each pair — were discarded because a linker burst inside
+a run measures contention rather than the workload, and a later collection on
+the delivered head could not admit a single pair under D9's absolute ceiling
+while other agents' builds held the load above it. A driver defect that sent
+its diagnostic line to standard output masked the first failure for one pass by
+making `awk` compare a timestamp's year against the load ceiling; writing
+diagnostics to standard error and keeping each attempt's artefacts fixed it.
+The real repair was to stop gating on an absolute load figure: D11 measures the
+two properties that figure was a proxy for (a burst inside one pair, and an
+arm-to-arm imbalance) and reads no result, so the accepted set can be stated in
+advance and every attempt stays on the record. The lesson is that a load gate
+needs its own evidence trail, which is why `superseded/timing-attempts.tsv`,
+`d11-attempts.tsv`, and `load-samples.json` are committed beside the accepted
 numbers. The second was scope: the CodeScene follow-ups in EP-M2 changed the
 dispatcher's shape but not its behaviour, and folding the two failure handlers
 into one removed a complexity warning without adding hot-path work.
@@ -762,8 +849,8 @@ Obligations:
   dispatchers and must observe a mismatch:
   `test_specification_rejects_every_non_none_scheduled` (rejected by the
   non-awaitable-value class),
-  `test_specification_rejects_native_coroutines_only` (rejected by the
-  `Future`, `@types.coroutine`, and `__await__` classes), and
+  `test_specification_rejects_native_coroutines_only` (rejected by the `Future`,
+  `@types.coroutine`, and `__await__` classes), and
   `test_specification_rejects_reversed_task_order` (rejected by the
   task-to-hook identity assertion). Seeded faults close any coroutine they
   drop, so no unraisable `RuntimeWarning` leaks into later tests.

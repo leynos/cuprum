@@ -1,0 +1,129 @@
+{
+  "rule": {
+    "max_pooled_median_load": 45.0,
+    "median_tolerance_fraction_of_pooled": 0.2,
+    "busy_share_tolerance": 0.1,
+    "max_load_margin_above_pooled": 15.0,
+    "reads_ratios": false
+  },
+  "attempts": [
+    {
+      "round": 1,
+      "attempt": 1,
+      "pooled_median_load": 31.424999999999997,
+      "max_load_control": 37.3,
+      "max_load_candidate": 34.62,
+      "host_busy_control": 0.5433,
+      "host_busy_candidate": 0.5489,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 2,
+      "attempt": 1,
+      "pooled_median_load": 27.915,
+      "max_load_control": 29.35,
+      "max_load_candidate": 34.96,
+      "host_busy_control": 0.4583,
+      "host_busy_candidate": 0.5462,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 2,
+      "attempt": 2,
+      "pooled_median_load": 29.165,
+      "max_load_control": 30.45,
+      "max_load_candidate": 38.14,
+      "host_busy_control": 0.5039,
+      "host_busy_candidate": 0.5057,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 2,
+      "attempt": 3,
+      "pooled_median_load": 33.95,
+      "max_load_control": 43.36,
+      "max_load_candidate": 37.7,
+      "host_busy_control": 0.6055,
+      "host_busy_candidate": 0.6252,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 2,
+      "attempt": 4,
+      "pooled_median_load": 29.995,
+      "max_load_control": 39.12,
+      "max_load_candidate": 30.78,
+      "host_busy_control": 0.6112,
+      "host_busy_candidate": 0.4828,
+      "final_rule_admitted": false,
+      "final_rule_reason": "host busy shares differ by 0.128"
+    },
+    {
+      "round": 3,
+      "attempt": 1,
+      "pooled_median_load": 18.725,
+      "max_load_control": 40.06,
+      "max_load_candidate": 21.53,
+      "host_busy_control": 0.7027,
+      "host_busy_candidate": 0.5433,
+      "final_rule_admitted": false,
+      "final_rule_reason": "arm medians differ by 7.23; host busy shares differ by 0.159; control maximum 40.06 is above 18.73 + 15"
+    },
+    {
+      "round": 3,
+      "attempt": 2,
+      "pooled_median_load": 15.18,
+      "max_load_control": 22.68,
+      "max_load_candidate": 22.22,
+      "host_busy_control": 0.5187,
+      "host_busy_candidate": 0.4839,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 4,
+      "attempt": 1,
+      "pooled_median_load": 16.049999999999997,
+      "max_load_control": 20.06,
+      "max_load_candidate": 22.79,
+      "host_busy_control": 0.5781,
+      "host_busy_candidate": 0.5126,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 5,
+      "attempt": 1,
+      "pooled_median_load": 15.295,
+      "max_load_control": 21.08,
+      "max_load_candidate": 19.43,
+      "host_busy_control": 0.5112,
+      "host_busy_candidate": 0.5427,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    },
+    {
+      "round": 6,
+      "attempt": 1,
+      "pooled_median_load": 12.59,
+      "max_load_control": 17.27,
+      "max_load_candidate": 16.24,
+      "host_busy_control": 0.4785,
+      "host_busy_candidate": 0.3884,
+      "final_rule_admitted": true,
+      "final_rule_reason": "admitted"
+    }
+  ],
+  "adopted": {
+    "1": 1,
+    "2": 1,
+    "3": 2,
+    "4": 1,
+    "5": 1,
+    "6": 1
+  }
+}

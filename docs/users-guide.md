@@ -2970,12 +2970,12 @@ Dispatching each line to a synchronous hook is cheaper still. Cuprum used to ask
 `inspect.isawaitable` of every hook's return value for every line; it now
 dismisses a `None` result by identity and recognizes a native coroutine by
 exact type, so only the remaining shapes reach the general test. In the
-benchmarked dispatch loop a hook that returns `None` costs about 114 ns per
-event instead of 386 ns, a 3.4x reduction. An `async def` hook is unchanged,
+benchmarked dispatch loop a hook that returns `None` costs about 172 ns per
+event instead of 435 ns, a 2.5x reduction. An `async def` hook is unchanged,
 because its cost is the `asyncio.Task` that carries the coroutine, not the
 check. On the full line-callback workload the geometric-mean candidate/control
-wall-time ratio was 0.9529 across six paired runs, with a 95% interval of
-[0.9199, 1.0001]. See the
+wall-time ratio was 0.9568 across six paired runs, with a 95% interval of
+[0.9344, 0.9856]. See the
 [evidence record](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 #### Aggregate Python stream-operation events

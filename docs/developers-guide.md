@@ -5493,8 +5493,8 @@ retained generated `ExecEvent.__init__`, so an optimization that removes work
 metric's known behaviour, not a regression; judge such work by the per-frame
 contributions the classifier reports instead. The 5.2.1 measurement records the
 case concretely, and item 5.2.2 has since measured it: removing the per-line
-`inspect.isawaitable` call moved the share from a control median of 30.7670% to
-a candidate median of 33.0662%, 2.2992 points *above* the bar, while the
+`inspect.isawaitable` call moved the share from a control median of 29.4469% to
+a candidate median of 30.4699%, 0.4699 points *above* the bar, while the
 detector's sampled weight fell to zero in every candidate capture. See
 [the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md) and
 [the 5.2.2 evidence](tee-hotpath-observe-hook-dispatch-5-2-2.md).
@@ -8593,13 +8593,17 @@ whose goal is speed.
 The concrete instance is roadmap item 5.2.2, which removed the per-line
 `inspect.isawaitable` call. 5.2.1 counted 589 samples on that frame, all
 denominator-only, and forecast from that leaf count that the share would rise
-0.9686 points to 30.9686%. The measured rise is larger: the census counts every
-stack that *reaches* the detector, including the `abc.__instancecheck__` work
-beneath it, which is 1,887 to 1,964 samples per capture at repeat count 2. The
-share moved from a control median of 30.7670% to a candidate median of
-33.0662%, a rise of 2.2992 points, while the detector's sampled weight fell to
-zero in every candidate capture. The forecast's direction was right and its
-size was low. The full analysis is in
+0.9686 points to 30.9686%. The census counts every stack that *reaches* the
+detector, including the `abc.__instancecheck__` work beneath it, which is 2,572
+to 2,762 samples per capture at repeat count 2. Measured on the delivered
+revisions, the share moved from a control median of 29.4469% to a candidate
+median of 30.4699%, a rise of 1.0230 points, while the detector's sampled
+weight fell to zero in every candidate capture. The forecast's direction and
+size were both right: the measured rise lands within 0.05 points of it, and
+both arms sit about 0.49 points below the collection 5.2.1 measured. An earlier
+collection of this item measured a 2.30-point rise and explained it as the
+forecast counting only leaf frames; that collection was superseded, the size
+did not reproduce, and the explanation is withdrawn. The full analysis is in
 [`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 To re-run or re-judge the gate, the committed captures and the classifier rules
