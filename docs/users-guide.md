@@ -2467,6 +2467,14 @@ stderr chunks from a command or pipeline share one FIFO in the order the run
 loop enqueues them. Any queued output discarded after a worker failure is also
 reported as `UNDELIVERED`.
 
+The opening frame is the exception. A session writes and flushes its group
+opening before the child starts, on the task that opens the run, so it is
+already written when the session is returned. Bounded delivery does not move
+that write to its worker: the run cannot start until the frame has reached the
+destination. A destination whose reader has stalled therefore delays the start
+of the run even with bounded delivery; the worker covers the output written
+after the child starts.
+
 The same guarantees apply to `SafeCmd.lines()`: delivery setup is deferred
 until iteration begins, and its worker closes before the final result is
 published or during stream cleanup. A stream refused by the consuming scope
