@@ -313,6 +313,9 @@ def test_a_failing_sink_does_not_replace_the_transfer_error(
     ) -> None:
         """Leave a partial download behind, then fail the transfer."""
         pending.write_bytes(b"partial")
+        assert pending in staged_siblings(destination), (
+            "the matcher must recognize the staging name the downloader reserved"
+        )
         msg = "connection reset"
         raise OSError(msg)
 
