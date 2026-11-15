@@ -338,6 +338,23 @@ fn consume_stream_files(
     consume_with_reader(|buffer| read_stream(reader, buffer), buffer_size, "windows")
 }
 
+/// Widen a read length for the byte counter, logging and failing on overflow.
+///
+/// `platform` labels the overflow event so it names the entry point's
+/// platform.
+fn read_length_as_u64(read_len: usize, platform: &'static str) -> Result<u64, PumpError> {
+    u64::try_from(read_len).map_err(|_| {
+        tracing::error!(platform, "read length conversion overflowed");
+        PumpError::LengthOverflow
+    })
+}
+
+/// Borrow the `read_len` bytes a read filled, failing if the reader reported
+/// more than the buffer holds.
+fn filled_prefix(buffer: &[u8], read_len: usize) -> Result<&[u8], PumpError> {
+    buffer.get(..read_len).ok_or(PumpError::BufferRangeExceeded)
+}
+
 /// Drain `read` to EOF, decoding the bytes as UTF-8 with replacement.
 ///
 /// Each platform entry point supplies a closure over its own capability-typed
@@ -366,15 +383,8 @@ fn consume_with_reader(
         if read_len == 0 {
             break;
         }
-        let read_bytes = u64::try_from(read_len).map_err(|_| {
-            tracing::error!(platform, "read length conversion overflowed");
-            PumpError::LengthOverflow
-        })?;
-        total_read = total_read.saturating_add(read_bytes);
-        let chunk = buffer
-            .get(..read_len)
-            .ok_or(PumpError::BufferRangeExceeded)?;
-        pending.extend_from_slice(chunk);
+        total_read = total_read.saturating_add(read_length_as_u64(read_len, platform)?);
+        pending.extend_from_slice(filled_prefix(&buffer, read_len)?);
         decode_utf8_replace(&mut pending, &mut output, FinalChunk::new(false));
     }
 
