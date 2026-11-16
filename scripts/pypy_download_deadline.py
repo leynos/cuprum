@@ -1,0 +1,233 @@
+"""The one transfer deadline and the watchdog that enforces it.
+
+A deadline covers every redirect hop, the request that opens it, the header
+parse, and every body read. A deadline checked only between reads cannot stop
+a server that trickles header bytes, because each individual read still
+finishes inside the socket timeout. The watchdog therefore shuts the
+connection's socket down once the transfer's own clock says no time remains,
+which makes a blocked read or a blocked send fail.
+
+A socket timeout bounds each blocking call, not a sequence of them, so the
+budget is recomputed between phases rather than fixed when a hop opens. A call
+already in flight cannot be re-armed, though, and the standard library applies
+a hop's timeout to every resolved address in turn before TLS negotiation
+reuses it, so a multi-address host can overrun the deadline by one hop timeout
+per address. DNS resolution is outside the socket timeout altogether.
+
+The clock and the waiter are seams: a test supplies both together, so a
+deadline is reached and a blocked read released without real seconds. The
+waiter is handed the watchdog's stop event, so a substituted waiter can block
+on its own condition and still be released by the same signal that ends the
+watch; it returns `True` once the watchdog has been asked to stop, exactly as
+`threading.Event.wait` does.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import http.client
+import socket
+import threading
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    type Clock = cabc.Callable[[], float]
+    # Takes the seconds left and the watchdog's stop event, and returns True
+    # once the watchdog must stop, the same contract as `threading.Event.wait`.
+    type Waiter = cabc.Callable[[float, threading.Event], bool]
+
+
+# The most a single hop may spend opening its connection and sending its
+# request; a hop with less time left than this gets only what remains.
+_CONNECT_TIMEOUT_SECONDS = 60.0
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Transfer:
+    """The one deadline, clock, and wait every redirect hop of a download shares.
+
+    A test supplies `wait` beside the clock it advances, so one injected time
+    source covers the deadline check and the wait that releases a blocked read.
+    """
+
+    deadline: float
+    clock: Clock
+    wait: Waiter | None = None
+
+    def expired(self) -> bool:
+        """Report whether the transfer has no time left."""
+        return self.clock() >= self.deadline
+
+    def remaining(self) -> float:
+        """Report the seconds left before the deadline, never below zero."""
+        return max(self.deadline - self.clock(), 0.0)
+
+
+def _require_time_left(transfer: _Transfer) -> None:
+    """Refuse to continue a transfer once its deadline has passed."""
+    if transfer.expired():
+        msg = "release download exceeded the transfer deadline"
+        raise TimeoutError(msg)
+
+
+def _hop_timeout(transfer: _Transfer) -> float:
+    """Bound one hop's connection and request by the time the transfer has left.
+
+    A hop that starts with less than `_CONNECT_TIMEOUT_SECONDS` to spare gets
+    only what remains, so a transfer with seconds left does not hand its socket
+    a minute in which to block. The budget bounds one blocking call, not their
+    sum: the standard library applies it to every resolved address in turn and
+    the TLS handshake reuses it, so connection setup can still overrun the
+    deadline by one hop timeout per address. A transfer with no time left is
+    refused before a socket is opened at all; a timeout of zero would instead
+    make the socket non-blocking, which never fails the way a spent budget must.
+
+    Returns
+    -------
+    float
+        The seconds the next hop may spend connecting and sending its request.
+
+    Raises
+    ------
+    TimeoutError
+        If the transfer has no time left, so no socket may be opened.
+    """
+    # One reading both refuses a spent transfer and sizes the budget. A separate
+    # guard could pass, then let the second reading return zero for a deadline
+    # that passed in between, handing the socket a non-blocking timeout.
+    remaining = transfer.remaining()
+    if remaining <= 0.0:
+        msg = "release download exceeded the transfer deadline"
+        raise TimeoutError(msg)
+    return min(_CONNECT_TIMEOUT_SECONDS, remaining)
+
+
+def _arm_socket(connection: http.client.HTTPSConnection, transfer: _Transfer) -> None:
+    """Arm an opened connection's socket with the time the transfer has left.
+
+    Opening the connection has already spent part of the hop's budget, and a
+    socket timeout bounds one blocking call rather than a sequence of them, so
+    the request must be sent under what remains now rather than the timeout
+    the socket was opened with.
+
+    Raises
+    ------
+    OSError
+        If the connection holds no socket to arm.
+    """
+    sock = connection.sock
+    if sock is None:
+        msg = "release download opened no socket for its request"
+        raise OSError(msg)
+    sock.settimeout(_hop_timeout(transfer))
+
+
+@contextlib.contextmanager
+def _deadline_failures(transfer: _Transfer) -> cabc.Iterator[None]:
+    """Report a socket failure past the deadline as the transfer's TimeoutError.
+
+    The watchdog releases a blocked read or send by shutting its socket down,
+    so the failure that surfaces is the socket's. Past the deadline the caller
+    must see the deadline; before it the failure is the server's and surfaces
+    unchanged.
+
+    Yields
+    ------
+    None
+        Control while the bounded work runs.
+
+    Raises
+    ------
+    TimeoutError
+        If the work failed against a socket after the deadline passed.
+    OSError
+        If the work failed against a socket before the deadline passed.
+    http.client.HTTPException
+        If the work failed against a socket before the deadline passed.
+    """
+    try:
+        yield
+    except TimeoutError:
+        raise
+    except (OSError, http.client.HTTPException) as error:
+        if transfer.expired():
+            msg = "release download exceeded the transfer deadline"
+            raise TimeoutError(msg) from error
+        raise
+
+
+class _DeadlineWatchdog:
+    """Shut a connection's socket down when its transfer deadline passes.
+
+    The socket is captured when the watchdog is armed, because
+    `HTTPConnection.getresponse` hands a close-delimited response its socket
+    and clears `connection.sock`. Reading it at the deadline would find
+    nothing and leave a stalled body blocked until the socket timeout.
+    """
+
+    def __init__(
+        self,
+        connection: http.client.HTTPSConnection,
+        transfer: _Transfer,
+    ) -> None:
+        """Arm a watchdog for `connection`'s current socket.
+
+        The remaining time comes from the transfer's own clock, so the wait and
+        every deadline check share one time source. The transfer's waiter, when
+        a test supplies one, is handed the watchdog's stop event beside the
+        remaining time, so a waiter that blocks can be released when the
+        transfer ends instead of holding `__exit__` in `join`. The default is
+        that event's own `wait`, called directly by `_watch`.
+        """
+        self._sock = connection.sock
+        self._transfer = transfer
+        self._stop = threading.Event()
+        self._wait = transfer.wait
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+
+    def __enter__(self) -> _DeadlineWatchdog:
+        """Start watching, so a blocked read fails at the deadline."""
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        """Stop watching and wait for the watchdog thread to finish."""
+        self._stop.set()
+        self._thread.join()
+
+    def _watch(self) -> None:
+        """Wait until the transfer has no time left, then shut the socket down.
+
+        The clock is re-read after each wait returns, so a wakeup that arrives
+        before the deadline only starts another wait; the socket is shut down
+        only once the transfer's own clock says no time remains. Without that
+        re-check a coarse or injected waiter could interrupt a healthy read.
+
+        The stop signal is re-read too. A substituted waiter can return before
+        the deadline however often it is called, so without this check a
+        transfer that finished first would leave the loop spinning and
+        `__exit__` blocked in `join` for ever. The default wait is the stop
+        event's own method, so an unstubbed watchdog is woken by `__exit__`
+        rather than sleeping out its remaining time.
+        """
+        while not self._stop.is_set():
+            remaining = self._transfer.remaining()
+            if remaining <= 0.0:
+                self._shut_down()
+                return
+            if self._wait is None:
+                stopped = self._stop.wait(remaining)
+            else:
+                stopped = self._wait(remaining, self._stop)
+            if stopped:
+                return
+        # The transfer finished first, so the socket is no longer ours to stop.
+
+    def _shut_down(self) -> None:
+        """Shut down the captured socket, treating a closed one as done."""
+        if self._sock is not None:
+            with contextlib.suppress(OSError):
+                self._sock.shutdown(socket.SHUT_RDWR)

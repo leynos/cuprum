@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -13,7 +14,9 @@ from tests.helpers.ci_workflows import (
     job,
     step_inputs,
     steps,
+    workflow_document,
 )
+from tests.helpers.makefile import recipe_of, recipe_tokens
 
 WORKFLOW = "rust-boundaries.yml"
 
@@ -136,17 +139,163 @@ def test_verus_archives_the_negative_compiler_evidence() -> None:
     )
 
 
+def _logical_assignment(makefile: str, name: str) -> str:
+    """Return the value of a Makefile assignment with continuations joined."""
+    lines = makefile.splitlines()
+    index = next(
+        position for position, line in enumerate(lines) if line.startswith(f"{name} =")
+    )
+    value = lines[index].partition("=")[2]
+    while value.rstrip().endswith("\\"):
+        index += 1
+        value = f"{value.rstrip()[:-1]} {lines[index].strip()}"
+    return value
+
+
 def test_prover_tools_selects_its_required_python() -> None:
     """The installer must override CI's Python 3.13 with its required Python 3.14."""
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
         encoding="utf-8"
     )
-    assignment = next(
-        line for line in makefile.splitlines() if line.startswith("PROVER_TOOLS =")
+    invocation = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS"))
+    assert "$(PROVER_TOOLS_RUN)" in invocation, (
+        "the CLI invocation must stay a named variable, so the Kani version "
+        "check can run it under its own PATH"
     )
-    arguments = shlex.split(assignment.partition("=")[2])
+    arguments = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS_RUN"))
     assert "--python" in arguments, (
         "ambient UV_PYTHON can select an incompatible runtime"
     )
     runtime = arguments[arguments.index("--python") + 1]
     assert runtime == "3.14", "the pinned prover-tools package requires Python 3.14"
+
+
+def test_boundary_kani_finds_the_installed_binaries() -> None:
+    """The local target must run the Kani the install target placed in `.cache`.
+
+    `cargo kani` resolves `cargo-kani` on `PATH`. CI appends the cache's `bin`
+    directory to `$GITHUB_PATH`, but a local `make boundary-kani` sees only the
+    target's own environment, so the target must export that directory itself.
+    """
+    makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
+        encoding="utf-8"
+    )
+    cached_bin = _logical_assignment(makefile, "KANI_CACHED_BIN").strip()
+    assert cached_bin == "$(CURDIR)/.cache/boundary-kani/bin", (
+        "the cached frontend must be the one `install-boundary-kani` fills"
+    )
+    assert "boundary-kani: export PATH := $(KANI_CACHED_BIN):$(PATH)" in makefile, (
+        "make boundary-kani must resolve the Kani installed into .cache"
+    )
+
+
+#: Each job, its cache restore step, and the inputs its key must hash. Both
+#: jobs archive the Verus install and its solver, so a new shared-installer
+#: revision must invalidate both entries.
+_TOOL_CACHE_INPUTS = [
+    (
+        "verus",
+        "Restore pinned verifier, solver, and compiler objects",
+        ["tools/verus/*", "tools/prover-tools/VERSION"],
+    ),
+    (
+        "extended",
+        "Restore proof tools and Miri sysroots",
+        ["tools/kani/*", "tools/prover-tools/VERSION", "Makefile"],
+    ),
+]
+
+
+def _restore_inputs(job_name: str, step_name: str) -> dict[str, object]:
+    """Return the declared inputs of one job's cache restore step."""
+    restore = next(
+        step for step in steps(WORKFLOW, job_name) if step.get("name") == step_name
+    )
+    return step_inputs(restore, f"the {job_name} restore must declare its inputs")
+
+
+@pytest.mark.parametrize(("job_name", "step_name", "expected"), _TOOL_CACHE_INPUTS)
+def test_tool_caches_track_the_shared_installer_pin(
+    job_name: str, step_name: str, expected: list[str]
+) -> None:
+    """A new shared-installer revision must invalidate every archived verifier.
+
+    The retired `scripts/install_boundary_z3.py` used to name the Verus key. The
+    pin now lives in `tools/prover-tools/VERSION`, so both jobs hash that file:
+    otherwise the archived solver and verifier could outlive the revision that
+    produced them. Hashing only the pin also restores a warm cache after an
+    unrelated Makefile edit, which the extended job keeps as an input.
+    """
+    key = str(_restore_inputs(job_name, step_name).get("key", ""))
+    assert re.findall(r"'([^']*)'", key) == expected, (
+        f"the {job_name} cache key must hash only the inputs that pick the binaries"
+    )
+
+
+def test_the_verus_restore_prefix_hashes_the_same_inputs() -> None:
+    """The verus restore prefix must reject the same revisions as its key."""
+    job_name, step_name, expected = _TOOL_CACHE_INPUTS[0]
+    prefix = "boundary-verus-${{ hashFiles(" + ", ".join(
+        f"'{path}'" for path in expected
+    )
+    inputs = _restore_inputs(job_name, step_name)
+    assert str(inputs.get("restore-keys", "")).startswith(prefix), (
+        "the restore prefix must hash the same inputs as the key"
+    )
+
+
+def test_boundary_workflows_do_not_reference_the_retired_installers() -> None:
+    """Kani and Z3 downloads must stay delegated to the shared dependency."""
+    workflow = Path(__file__).resolve().parents[1] / ".github/workflows" / WORKFLOW
+    source = workflow.read_text(encoding="utf-8")
+    assert "install_boundary_kani" not in source, (
+        "the workflow must not call the retired Kani installer"
+    )
+    assert "install_boundary_z3" not in source, (
+        "the workflow must not call the retired Z3 installer"
+    )
+
+
+def test_the_download_integration_target_supplies_its_opt_in() -> None:
+    """The opt-in suite needs both the switch and the pinned revision."""
+    tokens = recipe_tokens(recipe_of("boundary-download-integration"))
+
+    assert tokens == (
+        "CUPRUM_RUN_DOWNLOAD_INTEGRATION=1",
+        "CUPRUM_PROVER_TOOLS_SOURCE=$(PROVER_TOOLS_SOURCE)",
+        "$(PYTEST)",
+        "-v",
+        "scripts/tests/test_boundary_download_integration.py",
+        "scripts/tests/test_boundary_pypy_https.py",
+    ), "the target must switch the suite on, pass the pin, and name both modules"
+
+
+def test_the_verus_job_runs_the_bounded_download_contracts() -> None:
+    """The controlled HTTPS scenarios run where the pinned revision is installed."""
+    commands = [str(step.get("run", "")) for step in steps(WORKFLOW, "verus")]
+
+    assert any(
+        "make boundary-download-integration" in command for command in commands
+    ), "the verus job must exercise the bounded download contracts"
+
+
+def test_the_boundary_workflow_watches_the_download_harness() -> None:
+    """Editing a harness module must re-run the boundary workflow."""
+    triggers = workflow_document(WORKFLOW)[True]
+    assert isinstance(triggers, dict), "the boundary workflow must declare triggers"
+    pull_request = triggers["pull_request"]
+    assert isinstance(pull_request, dict), "pull_request must declare its filters"
+    paths = pull_request["paths"]
+
+    assert "scripts/tests/boundary_download_*.py" in paths, (
+        "the download harness modules must trigger the boundary workflow"
+    )
+    assert {
+        "scripts/pypy_download.py",
+        "scripts/pypy_download_deadline.py",
+        "scripts/pypy_download_metrics.py",
+        "scripts/install_pypy312.py",
+    } <= set(paths), (
+        "editing any module of the downloader, or its installer, must not skip "
+        "the controlled HTTPS coverage that only this workflow runs"
+    )

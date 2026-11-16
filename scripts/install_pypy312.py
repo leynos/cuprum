@@ -9,17 +9,32 @@ The Makefile provides the pinned release URL, digest, and installation paths
 through environment variables. Keeping those values at the call site preserves
 Make overrides while moving download and extraction behaviour into testable
 Python code.
+
+`scripts.pypy_download` owns the bounded HTTPS fetch: it applies a byte ceiling
+and a single transfer deadline before the digest check, so a stalled or
+oversized response cannot fill the host disk. This module owns the release
+layout and the extraction that turns a verified archive into the configured
+interpreter.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import platform
 import tarfile
 from pathlib import Path
 
-from scripts.install_boundary_kani import checked_download
+from scripts.pypy_download import checked_download
+
+__all__ = [
+    "PyPyInstallation",
+    "checked_download",
+    "install",
+    "installation_from_environment",
+    "main",
+]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -164,6 +179,10 @@ def main() -> None:
         If the archive cannot be downloaded or the destination cannot be read
         or created.
     """  # ruff: ignore[docstring-extraneous-exception] - these propagate from installation_from_environment and install.
+    # The bootstrap downloads its archive without the project environment, so
+    # the standard logging framework is its only collection path. Enabling INFO
+    # surfaces the downloader's timed span and outcome summary on the CLI.
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     install(installation_from_environment())
 
 
