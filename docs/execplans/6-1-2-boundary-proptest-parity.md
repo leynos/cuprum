@@ -672,6 +672,19 @@ ownership and error contracts, stop and report the exact incompatibility.
   split. Both rows now describe `duplicate_crt_reader`, the absence of an
   unsafe constructor, and the child-process proof of the abort hazard. A grep
   for `borrow_crt_reader` across the repository returns nothing.
+- [x] (2026-11-16) Repair the two gate findings the borrow-contract change
+  introduced, each caught by a different gate and neither visible to the other.
+  The spelling gate rejected a word in the new subprocess module document that
+  this repository spells with Oxford `-ize`; en-GB-oxendict keeps `-ize`,
+  unlike en-GB, so the `-ise` form was wrong and became `materialized`.
+  `make test` then failed
+  `test_compile_contracts_build_graph.py::test_the_compile_fail_inventory_is_pinned`,
+  because the new `compile_fail,E0451` doctest on `BorrowedCrtFileDescriptor`
+  was not in `EXPECTED_COMPILE_FAIL_DOCTESTS`. That pin exists so a deleted
+  compile-fail contract fails rather than vanishing, and its message asks for
+  an update alongside the contract being added — which is what this was, so
+  `rust/cuprum-native-io/src/windows_crt.rs: 1` was added and the module's nine
+  cases re-ran green.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
