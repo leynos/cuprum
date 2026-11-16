@@ -447,13 +447,14 @@ reaps the child — and its owned process group, when one was requested — canc
 the other stream's consumer, and discards any captured output, because no
 result is returned to carry it. Output the callback was never given is lost,
 including lines `SafeCmd.lines()` had read but not yet yielded: iteration ends
-by raising the callback's error. The one exception is a run whose own deadline
-has expired at that moment, before or in the same event-loop step as the
-callback's failure: the exit wait is then that run's outcome, so the caller
-receives the timeout rather than the callback's error. Awaitable observe hooks
-follow a different contract: each is a delivery task whose earliest failure is
-reported when the run finalizes, so one failing hook does not by itself end the
-run.
+by raising the callback's error. The one exception is an exit wait that has
+already settled with its own timeout when the callback's failure is observed:
+that timeout is then the run's outcome, so the caller does not receive the
+callback's error. An expiry that has merely elapsed while the exit wait is
+still pending changes nothing — precedence follows that settlement, not the
+clock. Awaitable observe hooks follow a different contract: each is a delivery
+task whose earliest failure is reported when the run finalizes, so one failing
+hook does not by itself end the run.
 
 If the stdin producer failed as well, the run reports that producer's
 `StdinSourceError` instead, because the producer's failure is what stopped the
