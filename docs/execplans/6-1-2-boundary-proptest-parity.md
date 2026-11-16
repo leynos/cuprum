@@ -1,9 +1,14 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `5cb52ce62`; hosted review pending. Every
-commit above that head touches documentation only, and the Markdown-scoped
-gates are re-run for each.
+eight commit gates green on candidate `c0eeb0a90` (tree `37d0e1a74`); hosted
+review pending. This paragraph repairs an earlier statement of the same status
+that named `5cb52ce62`. That head was itself documentation-only above the gated
+`cccd22419`, and only one of the eight logs from that rebase round survived —
+`make test-python`, which still reports `EXIT=0` against tree `baf1f44ae` at
+head `cccd22419`. The other seven were not retained, so the bundle was re-run
+from a clean tree against `c0eeb0a90` rather than re-asserted, and the Progress
+entry below records what each gate reported.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
 `origin/main` at `ebb8c7c25`. Issues #90, #124, and #127 are closed; their
@@ -695,11 +700,23 @@ ownership and error contracts, stop and report the exact incompatibility.
   inherited the fix instead of re-solving it, so no Rust was edited for the
   lint. The weave pass left a duplicated blank line in
   `rust/cuprum-streams/src/lib.rs`, which `make check-fmt` caught and
-  `cccd22419` removes. Results, each from a log whose `# GATE` line names the
-  tree it ran against and whose own `EXIT=` footer is the authority: `lint` 0,
-  `test-rust` 0 (196 passed, 30 skipped, doctests ok), `typecheck` 0,
-  `lint-windows` 0, `check-fmt` 0, `markdownlint` 0, `nixie` 0, `test-python` 0
-  (aggregated 6737 passed, 22 skipped, 0 failed, 0 errors).
+  `cccd22419` removes. The tested tree was `baf1f44ae` at head `cccd22419`;
+  `5cb52ce62` is a documentation-only successor that added this entry, and
+  `c0eeb0a90` is the later head the whole bundle below was run against, so no
+  claim here rests on the untested successor.
+
+  Of the eight gates, only the `test-python` log from this round survived, and
+  it reports `EXIT=0` against tree `baf1f44ae` at head `cccd22419` (aggregated
+  6737 passed, 22 skipped, 0 failed, 0 errors). The other seven were not
+  retained, and this entry originally asserted them from a bundle whose logs no
+  longer exist — an unevidenced claim, which the superseded figures removed.
+  The whole bundle was therefore re-run from a clean tree at `c0eeb0a90`
+  (`37d0e1a74`), each gate writing its own `# GATE` header naming that tree and
+  head, with its own `EXIT=` footer as the authority. Every one returned 0:
+  `lint`, `check-fmt`, `markdownlint`, `nixie`, `typecheck`, `lint-windows`,
+  `test-rust` (196 passed, 30 skipped, doctests ok), and `test-python`
+  (aggregated 6737 passed, 22 skipped, 0 failed, 0 errors) — the same aggregate
+  the surviving rebase log reported.
 - [x] (2026-11-16) Answer the hosted pre-merge rows at the rebased head. The
   three failing rows were pinned to `ed36c82`, which the rebase orphaned, and
   two of them described code that no longer exists. *Module-Level
