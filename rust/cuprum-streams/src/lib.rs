@@ -410,7 +410,6 @@ fn absorb_read(
     Ok(read_bytes)
 }
 
-
 /// Drain `read` to EOF, decoding the bytes as UTF-8 with replacement.
 ///
 /// Each platform entry point supplies a closure over its own capability-typed
