@@ -1,16 +1,16 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `1779a8459`; hosted review pending. Every
+eight commit gates green on candidate `5cb52ce62`; hosted review pending. Every
 commit above that head touches documentation only, and the Markdown-scoped
 gates are re-run for each.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
-`origin/main` at `c62447d824b9d68fbf310b7e9b941fce2f54ff91`. Issues #90, #124,
-and #127 are closed; their merged work is recorded under
-[Conformance basis](#conformance-basis). The implementation adds the
-extension-gated `proptest` parity suite, the Windows CRT consume boundary, and
-the supporting documentation. Roadmap 6.1.2 is checked in
+`origin/main` at `ebb8c7c25`. Issues #90, #124, and #127 are closed; their
+merged work is recorded under [Conformance basis](#conformance-basis). The
+implementation adds the extension-gated `proptest` parity suite, the Windows
+CRT consume boundary, and the supporting documentation. Roadmap 6.1.2 is
+checked in
 [`docs/roadmap.md`](roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
 and the acceptance evidence is recorded under [Progress](#progress) below;
 hosted review remains pending.
@@ -700,6 +700,25 @@ ownership and error contracts, stop and report the exact incompatibility.
   `test-rust` 0 (196 passed, 30 skipped, doctests ok), `typecheck` 0,
   `lint-windows` 0, `check-fmt` 0, `markdownlint` 0, `nixie` 0, `test-python` 0
   (aggregated 6737 passed, 22 skipped, 0 failed, 0 errors).
+- [x] (2026-11-16) Answer the hosted pre-merge rows at the rebased head. The
+  three failing rows were pinned to `ed36c82`, which the rebase orphaned, and
+  two of them described code that no longer exists. *Module-Level
+  Documentation* asked for expanded docstrings on five modules; all five were
+  rewritten, and each now names the collaborators the row asked for. *Testing
+  (Compile-Time / Ui)* asked for compile-fail and compile-pass coverage of the
+  CRT borrow constructor and the `cfg(windows)` re-export; that unsafe
+  constructor was removed in favour of `duplicate_crt_reader`, and the coverage
+  now exists as a `compile_fail,E0451` doctest on `BorrowedCrtFileDescriptor`
+  beside a positive control, pinned by the compile-fail inventory, plus a
+  compile-pass doctest fixing `consume_crt_stream`'s public signature.
+  *Developer Documentation* was partly valid: its roadmap-status complaint was
+  already fixed, but re-reading the header and Conformance basis against the
+  rebased branch found stale current-state text of this document's own. Both
+  now name `ebb8c7c25` and the live candidate, and the superseded bases moved
+  into the historical list. This entry and those two corrections are plan-only,
+  so the eight-gate bundle continues to stand on code candidate `5cb52ce62`,
+  whose tree they do not touch; they are re-checked with the documentation
+  gates on the commit that carries them.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -1228,11 +1247,11 @@ The original implementation-planning baseline was fetched `origin/main` at
 commit `40d56d69f39f09b5759d0524a5aa1e621a15e8d0` (2026-10-24), then rebased
 repeatedly as `main` advanced. The implementation branch's current base, and
 the one this document's conformance claims are made against, is `origin/main` at
-`c62447d824b9d68fbf310b7e9b941fce2f54ff91`. The branch sits directly on it
-with no open rebase. Earlier bases — `c378e2329`, `dedb39514`, `e170f908f`, and
-`7d56d0be8` on 2026-11-03, and `40d56d69f` before them — are superseded and
-kept only as history. Local recovery refs retain the pre-rebase head, base,
-target, and remote head. The original plan was drafted from
+`ebb8c7c256f7f884335815e23cdcb84dd37aa988`. The branch sits directly on it
+with no open rebase. Earlier bases — `c62447d82`, `c378e2329`, `dedb39514`,
+`e170f908f`, and `7d56d0be8` on 2026-11-03, and `40d56d69f` before them — are
+superseded and kept only as history. Local recovery refs retain the pre-rebase
+head, base, target, and remote head. The original plan was drafted from
 `32ffe22ffc9ed56cf51eb48b8fe6bbad8a1fde56`. There is no separate task-specific
 terms-of-reference document. The governing documents at the latest baseline are
 `docs/roadmap.md` §6.1.2, `docs/cuprum-design.md` (Rust extension strategy),
