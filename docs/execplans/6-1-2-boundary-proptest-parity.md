@@ -759,6 +759,45 @@ ownership and error contracts, stop and report the exact incompatibility.
   measuring less than it claimed. Coverage is unchanged: six native cases and
   the 30-test parity guard. `make check-fmt`, `make lint`, `make lint-windows`,
   and `make test-rust` pass on the resulting tree.
+- [x] (2026-11-16) Repair the eight findings in the hosted CodeRabbit review
+  of `4b1c8ae25`, committed as `8f20f1b4f`. Every finding was verified against
+  the source before any edit and all eight were valid, so none was rebutted.
+  The substantive one replaced the `ctypes` Win32 bindings in
+  `cuprum/_streams_windows.py` with `_winapi.GetCurrentProcess`,
+  `DuplicateHandle`, and `CloseHandle`. That also removed a real defect rather
+  than only an import: the deleted `_windows_error` read
+  `ctypes.get_last_error()`, a per-thread slot already stale after the
+  `DuplicateHandle` call, so a failure could be reported with a stale code;
+  `_winapi` raises from its own capture. Because `_winapi` is private and
+  typeshed guards its whole body on Windows, the three entry points resolve
+  through `getattr` plus `typ.cast` — the idiom the module already used for
+  `msvcrt.setmode` — instead of a suppression per call site; the pointer width
+  comes from `sys.maxsize.bit_length() + 1`. The null-handle guard the rewrite
+  had briefly dropped was restored with its own test. The other seven are
+  containment and documentation corrections: the errno-windows child is bounded
+  at 40 s under a new `pytest.mark.timeout(60)` so its own kill and reap report
+  before the enclosing envelope fires; the oracle helper's worst-case
+  escalation chain now totals 18 s against the 30 s budget with the arithmetic
+  recorded beside the constants; the child metadata stream is pinned to
+  `PYTHONIOENCODING=utf-8`; and the three statements that gave the direct
+  native entry a caller obligation it does not have, or pointed at the wrong
+  module, were corrected. The first gate pass failed `make typecheck` with six
+  `unresolved-attribute` diagnostics on the Windows-gated `_winapi` body, which
+  is what prompted the `getattr` resolution; the re-run is green. Evidence for
+  this candidate: `make fmt`, `make check-fmt`, `make lint`, `make typecheck`,
+  `make test`, `make markdownlint`, `make nixie`, and `make spelling` each exit
+  0, run sequentially against the staged tree that became `8f20f1b4f`.
+  `make test` reported 6739 passed, 22 skipped and 3 deselected across 32
+  pytest sessions, 196 passed and 30 skipped under nextest, and 8 passed with 3
+  ignored in the Rust doctest runs; the plan's own `make test-boundary-parity`
+  account above is unchanged. Logs: `/tmp/gate-check-fmt-3-6-1-2.out`,
+  `/tmp/gate-typecheck-3-6-1-2.out`, `/tmp/gate-test-3-6-1-2.out`,
+  `/tmp/gate-markdownlint-3-6-1-2.out`, `/tmp/gate-nixie-3-6-1-2.out`,
+  `/tmp/gate-spelling-3-6-1-2.out`, and `/tmp/gate-lint-3-6-1-2.out`. One limit
+  is worth stating: this host is not Windows, so the `_winapi` path is
+  exercised locally only through test doubles registered in `sys.modules`; the
+  genuine binding is covered by the hosted
+  `Extension-gated tests (Windows Python/Rust boundary)` job.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
@@ -1577,10 +1616,13 @@ partial bridge.
 
 ## Concrete steps and validation
 
-The acceptance evidence for the published candidate is the
-[Progress](#progress) entry dated 2026-11-15 that records the eight-gate bundle
-and its blob-identity check, together with the hosted CI result for the same
-head. This section describes how to reproduce it.
+The acceptance evidence for the current candidate is the [Progress](#progress)
+entry dated 2026-11-16 that records `8f20f1b4f` and its eight-gate bundle,
+which supersedes the 2026-11-15 entry's bundle for the earlier head; hosted CI
+for the same head is the second half of the claim. Earlier entries remain as
+the history of how each plateau was reached, and a gate result belongs only to
+the head its own log records. This section describes how to reproduce the
+bundle.
 
 All commands run from the repository root. Use a clean Git/tool environment as
 required by `AGENTS.md`. Before code work, record explicit approval, inspect
