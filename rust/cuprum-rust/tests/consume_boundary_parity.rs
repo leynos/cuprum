@@ -13,16 +13,13 @@
 //! from silently shrinking the suite while still exiting zero.
 //!
 //! Generated cases come from `support/boundary_strategies.rs`, curated seeds
-//! from `support/boundary_seeds.rs`, and the child-process launcher from
-//! `support/bounded_child.rs`.
+//! from `support/boundary_seeds.rs`, the child-process launcher from
+//! `support/bounded_child.rs`, and the oracle invocation plus its provenance
+//! checks from `support/boundary_child.rs`. That last split keeps this file to
+//! the properties and named witnesses under test, which is what the plan's
+//! per-file size limit is protecting.
 
-use std::{
-    cell::RefCell,
-    env,
-    path::{Path, PathBuf},
-    process::Command,
-    time::Duration,
-};
+use std::cell::RefCell;
 
 use proptest::{
     prelude::*,
@@ -30,6 +27,8 @@ use proptest::{
 };
 use rstest::rstest;
 
+#[path = "support/boundary_child.rs"]
+mod boundary_child;
 #[path = "support/boundary_seeds.rs"]
 mod boundary_seeds;
 #[path = "support/boundary_strategies.rs"]
@@ -37,8 +36,8 @@ mod boundary_strategies;
 #[path = "support/bounded_child.rs"]
 mod bounded_child;
 
-const PYTHON_ENV: &str = "CUPRUM_BOUNDARY_PYTHON";
-const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
+use boundary_child::{BoundaryCase, run_boundary_case};
+
 const SMALL_CASES_PER_BUFFER_BAND: u32 = 64;
 const LARGE_CASES_PER_BUFFER_SIZE: u32 = 4;
 const SHRINK_TIME_MILLIS: u32 = 120_000;
@@ -50,155 +49,6 @@ struct PropertyRun {
     rng_seed: RngSeed,
     persist_failures: bool,
     label: String,
-}
-
-/// One payload paired with the buffer size it must be consumed under.
-///
-/// The two travel together everywhere: a payload is only meaningful against
-/// the read boundary it straddles, and every diagnostic has to name both.
-/// Keeping them as one value stops the pair drifting apart at a call site and
-/// keeps the failure text consistent across the child, the interpreter check,
-/// and the property runner.
-struct BoundaryCase<'payload> {
-    payload: &'payload [u8],
-    buffer_size: u32,
-}
-
-impl<'payload> BoundaryCase<'payload> {
-    const fn new(payload: &'payload [u8], buffer_size: u32) -> Self {
-        Self {
-            payload,
-            buffer_size,
-        }
-    }
-
-    /// Describe the case for a failure message.
-    ///
-    /// Length rather than content: a generated payload can be a mebibyte of
-    /// arbitrary bytes, and echoing it would bury the diagnostic it belongs to.
-    fn describe(&self) -> String {
-        format!(
-            "payload_bytes={} buffer_size={}",
-            self.payload.len(),
-            self.buffer_size
-        )
-    }
-}
-
-fn repository_root() -> Result<PathBuf, String> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .map(Path::to_path_buf)
-        .ok_or_else(|| "cuprum-rust manifest has no repository-root ancestor".to_owned())
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "Make injects the exact project interpreter for this extension boundary test"
-)]
-fn configured_project_python() -> Option<PathBuf> { env::var_os(PYTHON_ENV).map(PathBuf::from) }
-
-/// The interpreter the Make target injected, verified to be an absolute path.
-fn project_python() -> Result<PathBuf, String> {
-    let python = configured_project_python()
-        .ok_or_else(|| format!("{PYTHON_ENV} must name the project interpreter"))?;
-    if !python.is_absolute() {
-        return Err(format!(
-            "project interpreter path is not absolute: {}",
-            python.display()
-        ));
-    }
-    Ok(python)
-}
-
-/// Build the child invocation that runs the independent Python consumer.
-fn boundary_child_command(python: &Path, buffer_size: u32) -> Result<Command, String> {
-    let helper = repository_root()?.join("tests/helpers/consume_boundary_oracle.py");
-    let mut command = Command::new(python);
-    command
-        .arg(helper)
-        .arg("--buffer-size")
-        .arg(buffer_size.to_string());
-    Ok(command)
-}
-
-/// Reject a child that failed, timed out, or could not receive its payload.
-fn require_successful_run(
-    output: &bounded_child::ChildOutput,
-    case: &BoundaryCase<'_>,
-) -> Result<String, String> {
-    if let Some(error) = &output.stdin_error {
-        return Err(format!(
-            "boundary child input transfer failed for {}: {error}",
-            case.describe()
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !output.status.success() {
-        return Err(format!(
-            "boundary child exited with {}; {}; stdout={stdout:?}; stderr={stderr:?}",
-            output.status,
-            case.describe()
-        ));
-    }
-    if !stdout.lines().any(|line| line.starts_with("PASS ")) {
-        return Err(format!(
-            "boundary child reported no success marker for {}: {stdout:?}",
-            case.describe()
-        ));
-    }
-    Ok(stdout)
-}
-
-/// Read one `KEY=value` diagnostic the child printed on stdout.
-fn reported_line<'a>(stdout: &'a str, key: &str) -> Result<&'a str, String> {
-    stdout
-        .lines()
-        .find_map(|line| line.strip_prefix(key))
-        .ok_or_else(|| format!("boundary child omitted its {}", key.trim_end_matches('=')))
-}
-
-/// Prove the child ran on the interpreter Make selected, not another install.
-fn require_expected_interpreter(stdout: &str, python: &Path) -> Result<(), String> {
-    let reported_python = reported_line(stdout, "PYTHON_EXECUTABLE=")?;
-    let expected_python = python
-        .canonicalize()
-        .map_err(|error| format!("could not resolve {PYTHON_ENV}: {error}"))?;
-    let actual_python = Path::new(reported_python)
-        .canonicalize()
-        .map_err(|error| format!("could not resolve reported interpreter: {error}"))?;
-    if actual_python != expected_python {
-        return Err(format!(
-            "boundary child used interpreter {}, expected {}",
-            actual_python.display(),
-            expected_python.display()
-        ));
-    }
-    Ok(())
-}
-
-/// Reject a child that imported a native module from somewhere unexpected.
-fn require_native_module(stdout: &str) -> Result<(), String> {
-    let native_path = Path::new(reported_line(stdout, "NATIVE_MODULE=")?);
-    if !native_path.is_absolute() || !native_path.is_file() {
-        return Err(format!(
-            "boundary child reported an invalid native module path: {}",
-            native_path.display()
-        ));
-    }
-    Ok(())
-}
-
-fn run_boundary_case(case: &BoundaryCase<'_>) -> Result<(), String> {
-    let python = project_python()?;
-    let mut command = boundary_child_command(&python, case.buffer_size)?;
-    let output = bounded_child::run_child(&mut command, case.payload, CHILD_TIMEOUT)
-        .map_err(|failure| format!("boundary child failed: {failure}"))?;
-    let stdout = require_successful_run(&output, case)?;
-    require_expected_interpreter(&stdout, &python)?;
-    require_native_module(&stdout)
 }
 
 fn property_runner(run: &PropertyRun) -> TestRunner {
