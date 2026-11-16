@@ -1,14 +1,14 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
 Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green on candidate `c0eeb0a90` (tree `37d0e1a74`); hosted
-review pending. This paragraph repairs an earlier statement of the same status
-that named `5cb52ce62`. That head was itself documentation-only above the gated
-`cccd22419`, and only one of the eight logs from that rebase round survived —
-`make test-python`, which still reports `EXIT=0` against tree `baf1f44ae` at
-head `cccd22419`. The other seven were not retained, so the bundle was re-run
-from a clean tree against `c0eeb0a90` rather than re-asserted, and the Progress
-entry below records what each gate reported.
+eight commit gates green; hosted review pending. The gates ran from a clean
+tree at code candidate `c0eeb0a90` (tree `37d0e1a74`), and the
+[Progress](#progress) entry records what each reported. The commits standing on
+`c0eeb0a90` at the time of writing modify only this file, so the
+Markdown-scoped gates are what re-check them; any later commit that touches
+anything else re-runs the full bundle before it is claimed. None of the
+plan-only commits adds a claim about the code gates that the cited run does not
+already carry.
 
 Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
 `origin/main` at `ebb8c7c25`. Issues #90, #124, and #127 are closed; their
