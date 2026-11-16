@@ -177,9 +177,14 @@ explicit trust assumptions.
 
 ADR-027 keeps compile-time boundary contracts in the ordinary build graph, so
 the Windows CRT capability is pinned by doctests rather than by `trybuild`.
-Both contracts sit beside a positive control in the same doc comment, and
-`cuprum/unittests/test_compile_contracts_build_graph.py` fails if either
-disappears.
+Both contracts sit beside a positive control in the same doc comment.
+
+The two are guarded differently.
+`cuprum/unittests/test_compile_contracts_build_graph.py` pins the workspace's
+`compile_fail` inventory, so deleting the first contract fails
+`test_the_compile_fail_inventory_is_pinned`. The second contract is a
+compile-pass doctest, which that inventory does not count, so deleting it would
+not fail that test; it surfaces only as the Windows doctest lane losing a case.
 
 | Contract                                      | Location                                            | What it pins                                                                                                                                                             |
 | --------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

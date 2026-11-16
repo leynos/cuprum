@@ -11,7 +11,7 @@ merged work is recorded under [Conformance basis](#conformance-basis). The
 implementation adds the extension-gated `proptest` parity suite, the Windows
 CRT consume boundary, and the supporting documentation. Roadmap 6.1.2 is
 checked in
-[`docs/roadmap.md`](roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
+[`docs/roadmap.md`](../roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
 and the acceptance evidence is recorded under [Progress](#progress) below;
 hosted review remains pending.
 
@@ -39,7 +39,7 @@ generated domain; it is not an exhaustive proof over all possible inputs.
 ## Constraints
 
 Implementation of this plan is approved. Roadmap 6.1.2 is checked in
-[`docs/roadmap.md`](roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
+[`docs/roadmap.md`](../roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
 noting that hosted review remains pending. The plan's earlier validation
 repairs isolate existing checker tests from ancestor project configuration and
 synchronize native lifecycle fixtures before their short timeout begins; they
