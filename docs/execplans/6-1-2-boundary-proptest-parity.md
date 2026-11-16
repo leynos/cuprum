@@ -1,24 +1,23 @@
 # Verify stream-boundary parity with proptest (6.1.2)
 
-Status: IMPLEMENTED AND LOCALLY VALIDATED — milestones M1–M3 complete and all
-eight commit gates green; hosted review pending. The gates ran from a clean
-tree at code candidate `c0eeb0a90` (tree `37d0e1a74`), and the
-[Progress](#progress) entry records what each reported. The commits standing on
-`c0eeb0a90` at the time of writing modify only this file, so the
-Markdown-scoped gates are what re-check them; any later commit that touches
-anything else re-runs the full bundle before it is claimed. None of the
-plan-only commits adds a claim about the code gates that the cited run does not
-already carry.
+Status: COMPLETE AND MERGED — milestones M1–M3 complete, all eight commit gates
+green, hosted review cleared, and pull request #619 squash-merged to `main` as
+`e78fc40bf` from the accepted head `27125e576`. The gates ran from a clean tree
+at code candidate `c0eeb0a90` (tree `37d0e1a74`), and the [Progress](#progress)
+entry records what each reported. The commits standing on `c0eeb0a90` at the
+time of writing modify only this file, so the Markdown-scoped gates are what
+re-check them; any later commit that touches anything else re-runs the full
+bundle before it is claimed. None of the plan-only commits adds a claim about
+the code gates that the cited run does not already carry.
 
-Implemented on branch `6-1-2-boundary-proptest-parity`, which sits on
+Implemented on branch `6-1-2-boundary-proptest-parity`, which sat on
 `origin/main` at `ebb8c7c25`. Issues #90, #124, and #127 are closed; their
 merged work is recorded under [Conformance basis](#conformance-basis). The
 implementation adds the extension-gated `proptest` parity suite, the Windows
 CRT consume boundary, and the supporting documentation. Roadmap 6.1.2 is
 checked in
 [`docs/roadmap.md`](../roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
-and the acceptance evidence is recorded under [Progress](#progress) below;
-hosted review remains pending.
+and the acceptance evidence is recorded under [Progress](#progress) below.
 
 This ExecPlan is a living document. Keep Constraints, Tolerances, Risks,
 Progress, Surprises & discoveries, Decision log, Outcomes & retrospective,
@@ -45,10 +44,11 @@ generated domain; it is not an exhaustive proof over all possible inputs.
 
 Implementation of this plan is approved. Roadmap 6.1.2 is checked in
 [`docs/roadmap.md`](../roadmap.md#6-trustworthy-accelerated-capture-only-consume-issues-90-127),
-noting that hosted review remains pending. The plan's earlier validation
-repairs isolate existing checker tests from ancestor project configuration and
-synchronize native lifecycle fixtures before their short timeout begins; they
-do not implement stream-boundary parity or change production code.
+after the hosted review cleared the accepted head. The plan's earlier
+validation repairs isolate existing checker tests from ancestor project
+configuration and synchronize native lifecycle fixtures before their short
+timeout begins; they do not implement stream-boundary parity or change
+production code.
 
 Keep production dispatch, public signatures, Python fallback, observation
 channels, and error policy unchanged. Preserve the completed 6.1.1 conversion
@@ -798,11 +798,25 @@ ownership and error contracts, stop and report the exact incompatibility.
   exercised locally only through test doubles registered in `sys.modules`; the
   genuine binding is covered by the hosted
   `Extension-gated tests (Windows Python/Rust boundary)` job.
-- [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
-  outstanding; local gates do not establish hosted success.
+- [x] (2026-11-16) PR #619 squash-merged to `main` as `e78fc40bf`, with the
+  accepted head `27125e576` guarded by `--match-head-commit`. CI for that head
+  was `SUCCESS` across all 27 contexts with none pending, and CodeScene had
+  approved it. CodeRabbit's `approve` command ran and returned
+  `Changes approved. Review threads were not changed.`; all 18 review threads
+  were already resolved. Two facts about that approval are recorded plainly
+  rather than smoothed over: the approval landed on the accepted head, but the
+  only substantive CodeRabbit review is the `4b1c8ae25` round whose eight
+  findings were repaired afterwards, and the `CodeRabbit` commit status on the
+  head still reads `Review paused` because the automatic review was paused by
+  an influx of commits. The approval request therefore asked for both
+  dispositions and stated that the paused status meant coverage rested on the
+  repaired round. A queued `@coderabbitai review` request was cancelled once
+  approval landed, so no comenq request for this PR remains pending. One
+  earlier queue entry was also cancelled in error and re-enqueued; the queue
+  was 31 deep at roughly 11 hours when the approval arrived first.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
-  acceptance criteria were inspectable. The hosted review below may still
-  reopen it if it exposes an in-scope gap.
+  acceptance criteria were inspectable. The hosted review has since completed
+  on the accepted head and found no in-scope gap, so the tick stands.
 
 ## Surprises & discoveries
 
@@ -1284,8 +1298,8 @@ branch's added denominator pressure exposed them. Roadmap item 6.1.2 is checked
 `[x]` in `docs/roadmap.md`, after the implementation existed and its acceptance
 criteria were inspectable; the gate bundle that supports that decision is the
 Progress entry dated 2026-11-16 for `8f20f1b4f` on base `ebb8c7c25`. The hosted
-review is still pending on the current head, and an in-scope finding there
-would reopen the roadmap item rather than leave a stale tick behind.
+review completed on the accepted head `27125e576` without an in-scope finding,
+so the roadmap tick was not reopened.
 
 ## Context and orientation
 
@@ -1610,10 +1624,11 @@ user-visible correction, documenting that reason here. Complete the full
 sequential gates and reconcile every conformance link. **Status at
 2026-11-16:** this plateau's gate and conformance work is done, 6.1.2 is checked
 `[x]` in `docs/roadmap.md`, and the plan is declared complete — see the
-Progress entry dated 2026-11-16. The hosted review has not yet cleared the
-current head, so acceptance is still pending and the hosted result may yet
-reopen the roadmap item. The original ordering constraint is retained here as
-the standard the milestones were held to, not as outstanding work.
+Progress entry dated 2026-11-16. The hosted review then cleared the accepted
+head `27125e576` without an in-scope finding and the pull request merged as
+`e78fc40bf`, so acceptance is complete and the roadmap item was not reopened.
+The original ordering constraint is retained here as the standard the
+milestones were held to, not as outstanding work.
 
 At every plateau, check its assigned requirements, retained architecture,
 external assumptions, public interfaces, dependencies, resource boundaries, and
@@ -1624,12 +1639,13 @@ partial bridge.
 
 ## Concrete steps and validation
 
-The acceptance evidence for the current candidate is the [Progress](#progress)
-entry dated 2026-11-16 that records `8f20f1b4f` and its eight-gate bundle,
-which supersedes the 2026-11-15 entry's bundle for the earlier head; hosted CI
-for the same head is the second half of the claim. Earlier entries remain as
-the history of how each plateau was reached, and a gate result belongs only to
-the head its own log records. This section describes how to reproduce the
+The acceptance evidence for the merged work is the [Progress](#progress) entry
+dated 2026-11-16 that records `8f20f1b4f` and its eight-gate bundle, which
+supersedes the 2026-11-15 entry's bundle for the earlier head; the hosted CI
+and review results on the later accepted head `27125e576`, recorded in the
+merge entry below it, are the second half of the claim. Earlier entries remain
+as the history of how each plateau was reached, and a gate result belongs only
+to the head its own log records. This section describes how to reproduce the
 bundle.
 
 All commands run from the repository root. Use a clean Git/tool environment as
@@ -1786,3 +1802,12 @@ named tracking ref and verified that local HEAD, upstream, and the remote
 branch matched. Updated draft PR #619 with the closed-issue references, test
 repairs, passing gates, and Lody session reference. This delivery record does
 not authorize implementation or mark roadmap 6.1.2 complete.
+
+Revision note (2026-11-16): recorded the merge. Pull request #619 was
+squash-merged to `main` as `e78fc40bf` from the accepted head `27125e576`,
+guarded by `--match-head-commit`, after CI reported `SUCCESS` across all 27
+contexts and both hosted reviewers approved. The status, constraints,
+plateau-status, and acceptance-evidence passages were reconciled from "hosted
+review pending" to the merged state so no delivered statement outlives the
+review it awaited; the Progress entry carries the detail, including the limits
+of that approval which are recorded there rather than smoothed over.
