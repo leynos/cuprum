@@ -215,16 +215,22 @@ fn closes_the_duplicate_without_closing_the_caller_descriptor() {
     );
 }
 
-/// Read a descriptor this test has already closed, in a child process.
+/// Exercise descriptor lifecycle hazards that need a process of their own.
 ///
 /// Closing a descriptor number frees it for reuse by any other test in this
-/// shared binary, and the hazard under test is a process abort, which only
+/// shared binary, and one hazard under test is a process abort, which only
 /// an exit status can report. The case is therefore `#[ignore]`d and driven
 /// by [`closed_descriptor_child_exits_cleanly`], which proves the child ran
 /// this case rather than passing because it selected nothing.
 #[test]
 #[ignore = "re-invoked as a child by closed_descriptor_child_exits_cleanly"]
 fn reports_a_closed_descriptor_as_an_invalid_handle() {
+    reports_a_closed_descriptor();
+    reads_the_duplicate_after_the_caller_number_is_reused();
+}
+
+/// A descriptor number this test has closed must fail instead of aborting.
+fn reports_a_closed_descriptor() {
     let (reader, writer) = crt_pipe().expect("CRT pipe should be created");
     drop(writer);
     let closed = close_and_forget(reader);
@@ -236,6 +242,40 @@ fn reports_a_closed_descriptor_as_an_invalid_handle() {
         error.raw_os_error(),
         i32::try_from(ERROR_INVALID_HANDLE).ok(),
         "a closed CRT descriptor must map to the invalid-handle code, got {error}",
+    );
+}
+
+/// The duplicate must stay bound to the resource it was taken from.
+///
+/// Duplication is one `_dup` inside [`duplicate_crt_reader`], so everything the
+/// reader does afterwards goes through the returned descriptor. This closes the
+/// caller's number and then lets the CRT hand that same number to a second pipe,
+/// which is the strongest form of rebinding available without adding a hook
+/// between validation and duplication. A reader that resolved the caller's
+/// number a second time would return the second pipe's bytes here.
+fn reads_the_duplicate_after_the_caller_number_is_reused() {
+    let (reader, writer) = crt_pipe().expect("CRT pipe should be created");
+    write_payload_and_close(writer, b"first");
+    let owned = duplicate_crt_reader(reader.0).expect("a live CRT descriptor must be duplicable");
+    let freed = close_and_forget(reader);
+
+    let (reused_reader, reused_writer) = crt_pipe().expect("second CRT pipe should be created");
+    write_payload_and_close(reused_writer, b"other");
+
+    let mut buffer = [0; 8];
+    let count = read_crt_once(owned.as_borrowed(), &mut buffer).expect("the duplicate must read");
+    let read = buffer
+        .get(..usize::try_from(count).expect("count fits usize"))
+        .expect("the CRT cannot report more bytes than the buffer holds");
+    // The message reports both numbers because whether the CRT happened to
+    // hand back the freed one is not something this test may assume; when it
+    // did, a second resolution would have read the second pipe's bytes.
+    assert_eq!(
+        read, b"first",
+        "the duplicate must read the resource it was duplicated from; the caller's number was \
+         {freed} and the second pipe's reader is {}, so reading {read:?} would mean the reader \
+         resolved a number again rather than holding its own descriptor",
+        reused_reader.0,
     );
 }
 
