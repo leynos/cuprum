@@ -1,11 +1,20 @@
-//! Windows `PyO3` stream exports, which reject raw handles lacking a synchronous capability.
+//! Windows `PyO3` stream exports with separate pump-handle and consume-CRT
+//! boundaries.
 
 use std::os::windows::io::{FromRawHandle, RawHandle};
 
 use cuprum_native_io::OwnedStream;
 use pyo3::exceptions::PyOSError;
 
-use super::{PyResult, Python, convert_fd, pyfunction, validate_buffer_size};
+use super::{
+    PyResult,
+    Python,
+    RustStreamError,
+    consume_crt_stream,
+    convert_fd,
+    pyfunction,
+    validate_buffer_size,
+};
 
 fn raw_windows_handle_error<T>() -> PyResult<T> {
     Err(PyOSError::new_err(
@@ -51,26 +60,52 @@ pub(super) fn rust_pump_stream(
     reject_transferred_windows_writer(writer)
 }
 
-/// Validate the arguments for consuming a Windows handle.
+/// Validate the arguments for consuming a Windows CRT file descriptor.
 ///
-/// The Windows boundary rejects raw handles before reading or decoding any
-/// data, because it cannot establish that they support synchronous I/O.
+/// The caller's descriptor is never read directly. It is duplicated here,
+/// synchronously and before the GIL is released, so the detached read works on
+/// a descriptor number nothing else in the process holds and cannot be closed
+/// or reused while it runs. The duplicate is binary mode, so the caller's own
+/// translation mode is neither relied on nor changed; it is closed when
+/// consume returns.
 ///
 /// # Parameters
-/// - `reader_fd`: Windows handle to read from.
+/// - `reader_fd`: caller-owned Windows CRT descriptor to read from.
 /// - `buffer_size`: Size of the internal read buffer in bytes.
 ///
 /// # Errors
-/// Returns a Python `ValueError` for invalid arguments and `OSError` when the
-/// Windows raw-handle operation is rejected.
+/// Returns a Python `ValueError` for invalid arguments and `OSError` for a
+/// descriptor that cannot be duplicated or read.
 #[pyfunction]
 #[pyo3(signature = (reader_fd, buffer_size = 65536))]
 pub(super) fn rust_consume_stream(
-    _py: Python<'_>,
+    py: Python<'_>,
     reader_fd: i64,
     buffer_size: i64,
 ) -> PyResult<String> {
-    validate_buffer_size(buffer_size)?;
-    convert_fd(reader_fd)?;
-    raw_windows_handle_error()
+    let size = validate_buffer_size(buffer_size)?;
+    let raw = convert_crt_fd(reader_fd)?;
+    // The duplication is fallible and the caller must see its error, so it
+    // runs here rather than inside the closure, where it would have to become
+    // a stream error and lose the Win32 code the classifier produced.
+    let owned = cuprum_native_io::duplicate_crt_reader(raw)
+        .map_err(|err| RustStreamError::Stream(err.into()))?;
+    // The closure owns the duplicate, so the borrow it lends inside the
+    // detached call cannot outlive its owner. The lifetime obligation that
+    // would otherwise fall on the caller is discharged here, before the GIL is
+    // released, rather than assumed.
+    py.detach(move || consume_crt_stream(owned.as_borrowed(), size))
+        .map_err(RustStreamError::Stream)
+        .map_err(Into::into)
+}
+
+fn convert_crt_fd(value: i64) -> Result<i32, RustStreamError> {
+    let descriptor = i32::try_from(value)
+        .map_err(|_| RustStreamError::InvalidDescriptor("file descriptor out of range"))?;
+    if descriptor < 0 {
+        return Err(RustStreamError::InvalidDescriptor(
+            "file descriptor must be non-negative",
+        ));
+    }
+    Ok(descriptor)
 }

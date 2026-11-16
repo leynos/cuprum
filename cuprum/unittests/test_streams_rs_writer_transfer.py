@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import ctypes
 import errno
+import sys
 import typing as typ
 from types import ModuleType
 from unittest import mock
 
 import pytest
 
-from cuprum import _streams_rs
+from cuprum import _streams_rs, _streams_windows
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -50,7 +50,6 @@ def _patch_windows_pump(
     monkeypatch: pytest.MonkeyPatch,
     *,
     native_pump: cabc.Callable[..., int],
-    kernel32: mock.Mock,
     closed_fds: list[int],
 ) -> None:
     """Install platform-neutral Windows and native pump doubles."""
@@ -69,45 +68,103 @@ def _patch_windows_pump(
         "_load_native",
         lambda: _native_pump_module(native_pump),
     )
+    # The Windows adapters live in their own module, so patch each name in the
+    # namespace that actually resolves it. Patching the re-export in
+    # ``_streams_rs`` would leave the real implementation running.
+    monkeypatch.setattr(_streams_windows, "_convert_fd_for_platform", convert_fd)
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert_fd)
-    monkeypatch.setattr(
-        ctypes, "WinDLL", mock.Mock(return_value=kernel32), raising=False
-    )
-    monkeypatch.setattr(ctypes, "get_last_error", lambda: errno.EIO, raising=False)
-    monkeypatch.setattr(
-        ctypes,
-        "WinError",
-        lambda error: OSError(error, "simulated Windows error"),
-        raising=False,
-    )
+    # Both modules hold the same ``os`` object, so this one patch covers the
+    # adapter's close and the caller's pre-native cleanup alike.
     monkeypatch.setattr(_streams_rs.os, "close", closed_fds.append)
 
 
-def test_kernel32_handle_api_declares_pointer_sized_handle_abi(
+class _WinapiModule(ModuleType):
+    """Module double declaring the three ``_winapi`` handle entry points."""
+
+    GetCurrentProcess: mock.Mock
+    DuplicateHandle: mock.Mock
+    CloseHandle: mock.Mock
+
+
+def _winapi_double(*, duplicate: cabc.Callable[..., int]) -> _WinapiModule:
+    """Return a stand-in for CPython's Windows-only ``_winapi`` module."""
+    winapi = _WinapiModule("_winapi")
+    winapi.GetCurrentProcess = mock.Mock(return_value=1)
+    winapi.DuplicateHandle = mock.Mock(side_effect=duplicate)
+    winapi.CloseHandle = mock.Mock(return_value=None)
+    return winapi
+
+
+def _duplicate_returning(handle: int) -> cabc.Callable[..., int]:
+    """Return a ``DuplicateHandle`` replacement that yields ``handle``."""
+
+    def duplicate(*_arguments: object) -> int:
+        """Ignore the request and report the configured handle."""
+        return handle
+
+    return duplicate
+
+
+def test_duplicate_windows_handle_returns_a_non_inheritable_duplicate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Kernel32 handle calls must retain pointer-sized values on Windows."""
-    kernel32 = mock.Mock()
-    windll = mock.Mock(return_value=kernel32)
-    monkeypatch.setattr(ctypes, "WinDLL", windll, raising=False)
+    """The duplicate is taken from the current process and is not inherited."""
+    winapi = _winapi_double(duplicate=_duplicate_returning(103))
+    monkeypatch.setitem(sys.modules, "_winapi", winapi)
 
-    assert _streams_rs._kernel32_handle_api() is kernel32
+    duplicated = _streams_windows._duplicate_windows_handle(12)
 
-    windll.assert_called_once_with("kernel32", use_last_error=True)
-    assert kernel32.GetCurrentProcess.argtypes == ()
-    assert kernel32.GetCurrentProcess.restype is ctypes.c_void_p
-    assert kernel32.DuplicateHandle.argtypes == (
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_uint32,
-        ctypes.c_int,
-        ctypes.c_uint32,
+    assert duplicated == 103, "expected the duplicated handle number to be returned"
+    # Positional order is part of the contract under test: ``_winapi`` binds
+    # these arguments positionally, so the flag must sit in the inherit slot.
+    winapi.DuplicateHandle.assert_called_once_with(
+        1,
+        12,
+        1,
+        0,
+        False,  # ruff: ignore[boolean-positional-value-in-call] - position under test
+        _streams_windows._DUPLICATE_SAME_ACCESS,
     )
-    assert kernel32.DuplicateHandle.restype is ctypes.c_int
-    assert kernel32.CloseHandle.argtypes == (ctypes.c_void_p,)
-    assert kernel32.CloseHandle.restype is ctypes.c_int
+
+
+def test_duplicate_windows_handle_rejects_a_null_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A null duplicate is an error, not a handle Rust may own."""
+    monkeypatch.setitem(
+        sys.modules, "_winapi", _winapi_double(duplicate=_duplicate_returning(0))
+    )
+
+    with pytest.raises(OSError, match="null handle"):
+        _streams_windows._duplicate_windows_handle(12)
+
+
+def test_duplicate_windows_handle_propagates_the_win32_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused duplication surfaces ``_winapi``'s own error, unwrapped."""
+
+    def refuse(*_arguments: object) -> int:
+        """Fail the way ``_winapi.DuplicateHandle`` reports a Win32 error."""
+        message = "simulated Windows error"
+        raise OSError(errno.EIO, message)
+
+    monkeypatch.setitem(sys.modules, "_winapi", _winapi_double(duplicate=refuse))
+
+    with pytest.raises(OSError, match="simulated Windows error"):
+        _streams_windows._duplicate_windows_handle(12)
+
+
+def test_close_windows_handle_propagates_the_win32_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused close surfaces ``_winapi``'s own error, unwrapped."""
+    winapi = _winapi_double(duplicate=_duplicate_returning(103))
+    winapi.CloseHandle.side_effect = OSError(errno.EIO, "simulated close error")
+    monkeypatch.setitem(sys.modules, "_winapi", winapi)
+
+    with pytest.raises(OSError, match="simulated close error"):
+        _streams_windows._close_windows_handle(103)
 
 
 def test_windows_writer_transfer_releases_the_crt_duplicate(
@@ -120,15 +177,13 @@ def test_windows_writer_transfer_releases_the_crt_duplicate(
     rust_owned_handle = 103
     native_pump = mock.Mock(return_value=7)
     closed_fds: list[int] = []
-    kernel32 = mock.Mock()
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
-        kernel32=kernel32,
         closed_fds=closed_fds,
     )
     monkeypatch.setattr(
-        _streams_rs,
+        _streams_windows,
         "_duplicate_windows_handle",
         lambda _handle: rust_owned_handle,
     )
@@ -156,16 +211,14 @@ def test_windows_writer_transfer_passes_the_normalized_buffer_size(
     rust_owned_handle = 103
     native_pump = mock.Mock(return_value=7)
     closed_fds: list[int] = []
-    kernel32 = mock.Mock()
     buffer_size = _OneShotBufferSize(1024)
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
-        kernel32=kernel32,
         closed_fds=closed_fds,
     )
     monkeypatch.setattr(
-        _streams_rs,
+        _streams_windows,
         "_duplicate_windows_handle",
         lambda _handle: rust_owned_handle,
     )
@@ -190,31 +243,29 @@ def test_windows_writer_transfer_passes_the_normalized_buffer_size(
     )
 
 
-@pytest.mark.parametrize(
-    ("duplicate_succeeds", "error_match"),
-    [(False, "simulated Windows error"), (True, "null handle")],
-    ids=["duplicate-handle-fails", "duplicate-handle-is-null"],
-)
+def _refuse_duplication(*_arguments: object) -> int:
+    """Fail the way ``_winapi.DuplicateHandle`` reports a Win32 error."""
+    message = "simulated Windows error"
+    raise OSError(errno.EIO, message)
+
+
 def test_windows_writer_transfer_closes_crt_fd_when_duplicate_handle_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
-    duplicate_succeeds: bool,
-    error_match: str,
 ) -> None:
     """An invalid Win32 duplication leaves Python to close the CRT writer."""
     writer_fd = 12
     native_pump = mock.Mock(return_value=7)
     closed_fds: list[int] = []
-    kernel32 = mock.Mock()
-    kernel32.GetCurrentProcess.return_value = 1
-    kernel32.DuplicateHandle.return_value = duplicate_succeeds
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
-        kernel32=kernel32,
         closed_fds=closed_fds,
     )
+    monkeypatch.setitem(
+        sys.modules, "_winapi", _winapi_double(duplicate=_refuse_duplication)
+    )
 
-    with pytest.raises(OSError, match=error_match):
+    with pytest.raises(OSError, match="simulated Windows error"):
         _streams_rs.rust_pump_stream(11, writer_fd)
 
     assert closed_fds == [writer_fd], (
@@ -231,17 +282,7 @@ def test_windows_writer_transfer_closes_handle_when_crt_close_fails(
     rust_owned_handle = 103
     native_pump = mock.Mock(return_value=7)
     close_attempts: list[int] = []
-    kernel32 = mock.Mock()
-    kernel32.GetCurrentProcess.return_value = 1
-    kernel32.CloseHandle.return_value = True
-
-    def duplicate_handle(*arguments: object) -> bool:
-        """Return the configured owned Win32 handle through the out parameter."""
-        destination = typ.cast("ctypes.c_void_p", arguments[3])
-        ctypes.cast(destination, ctypes.POINTER(ctypes.c_void_p))[0] = ctypes.c_void_p(
-            rust_owned_handle
-        )
-        return True
+    winapi = _winapi_double(duplicate=_duplicate_returning(rust_owned_handle))
 
     def close_crt_fd(fd: int) -> None:
         """Fail once, then let the outer pre-native cleanup close the CRT FD."""
@@ -249,13 +290,12 @@ def test_windows_writer_transfer_closes_handle_when_crt_close_fails(
         if len(close_attempts) == 1:
             raise OSError(errno.EIO, "simulated CRT close error")
 
-    kernel32.DuplicateHandle.side_effect = duplicate_handle
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
-        kernel32=kernel32,
         closed_fds=close_attempts,
     )
+    monkeypatch.setitem(sys.modules, "_winapi", winapi)
     monkeypatch.setattr(_streams_rs.os, "close", close_crt_fd)
 
     with pytest.raises(OSError, match="simulated CRT close error"):
@@ -264,9 +304,7 @@ def test_windows_writer_transfer_closes_handle_when_crt_close_fails(
     assert close_attempts == [writer_fd, writer_fd], (
         "expected the CRT writer close to be retried by pre-native cleanup"
     )
-    assert kernel32.CloseHandle.call_args.args[0].value == rust_owned_handle, (
-        "expected rollback to close the separately duplicated Win32 handle"
-    )
+    winapi.CloseHandle.assert_called_once_with(rust_owned_handle)
     native_pump.assert_not_called()
 
 
@@ -278,18 +316,18 @@ def test_windows_invalid_buffer_does_not_transfer_writer_resource(
     """Invalid buffers must fail before the writer becomes a Win32 handle."""
     native_pump = mock.Mock(return_value=7)
     closed_fds: list[int] = []
-    kernel32 = mock.Mock()
+    winapi = _winapi_double(duplicate=_duplicate_returning(103))
     _patch_windows_pump(
         monkeypatch,
         native_pump=native_pump,
-        kernel32=kernel32,
         closed_fds=closed_fds,
     )
+    monkeypatch.setitem(sys.modules, "_winapi", winapi)
 
     with pytest.raises(ValueError, match="buffer_size"):
         _streams_rs.rust_pump_stream(11, 12, buffer_size=buffer_size)
 
-    kernel32.DuplicateHandle.assert_not_called()
+    winapi.DuplicateHandle.assert_not_called()
     assert closed_fds == [12], (
         "expected pre-native validation to close the still Python-owned writer"
     )

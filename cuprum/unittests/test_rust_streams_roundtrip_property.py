@@ -11,10 +11,9 @@ the Rust entry point against an independently computed expectation:
   sink match Python's own results, so "the default applies" cannot be satisfied
   by two identically wrong answers.
 
-Each property here runs the entry point over a real POSIX pipe. Windows raw
-handles do not establish the synchronous-I/O capability and are rejected by
-the native boundary; the Windows rejection contract is covered separately by
-``test_rust_errno_windows.py``.
+Consume properties run over real CRT or POSIX pipes. Pump properties still
+require the Unix descriptor contract because Python cannot establish the
+synchronous Windows handle capability used by that entry point.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import _safe_close, _set_binary_mode
 from tests.helpers.stream_pipes import _read_all
 
 if typ.TYPE_CHECKING:
@@ -42,11 +41,9 @@ _SUPPRESS_FIXTURE = settings(
     max_examples=50,
 )
 
-pytestmark = pytest.mark.skipif(
+_pump_unix_only = pytest.mark.skipif(
     os.name == "nt",
-    reason=(
-        "POSIX pipe descriptors cannot establish the Windows synchronous-I/O capability"
-    ),
+    reason="pump requires the Unix descriptor capability on this boundary",
 )
 
 
@@ -68,6 +65,7 @@ def _consume_via_pipe(
         read_fd, write_fd = os.pipe()
         stack.callback(_safe_close, read_fd)
         stack.callback(_safe_close, write_fd)
+        _set_binary_mode(write_fd)
         _feed_pipe(write_fd, payload)
         # Close the writer so the consumer observes EOF; the ExitStack's
         # second close of the same descriptor is a harmless no-op.
@@ -120,6 +118,7 @@ def test_default_buffer_matches_explicit(
     )
 
 
+@_pump_unix_only
 @_SUPPRESS_FIXTURE
 @given(payload=st.binary(max_size=96))
 def test_pump_default_buffer_matches_explicit(

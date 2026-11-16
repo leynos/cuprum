@@ -5,6 +5,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use cuprum_native_io::PlatformFd;
+#[cfg(windows)]
+use cuprum_streams::consume_crt_stream;
 use cuprum_streams::{BufferSize, PumpError};
 #[cfg(unix)]
 use cuprum_streams::{consume_stream, pump_stream};

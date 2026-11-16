@@ -25,6 +25,7 @@ from cuprum.unittests._rust_stream_test_support import (
     INVALID_FD_ERRNOS,
     INVALID_FD_MESSAGE_RE,
     _safe_close,
+    _set_binary_mode,
 )
 
 if typ.TYPE_CHECKING:
@@ -86,10 +87,10 @@ _MALFORMED_VECTORS: tuple[tuple[str, bytes], ...] = (
 #: larger than the payload.
 _MALFORMED_BUFFER_SIZES: tuple[int, ...] = (1, 2, 3, 4, 5, 7, 4096, 65536)
 
-pytestmark = pytest.mark.skipif(
-    os.name == "nt",
-    reason="raw Windows handles cannot establish the synchronous native-I/O capability",
-)
+# Windows consume reads a borrowed CRT descriptor rather than a raw handle, so
+# the module is no longer skipped there. `test_rust_errno_windows.py` asserts
+# that boundary, including the text-mode contract, beside the other Windows-only
+# cases.
 
 
 def _consume_payload(
@@ -102,6 +103,7 @@ def _consume_payload(
         read_fd, write_fd = os.pipe()
         stack.callback(_safe_close, read_fd)
         stack.callback(_safe_close, write_fd)
+        _set_binary_mode(write_fd)
         view = memoryview(payload)
         while view:
             written = os.write(write_fd, view)
@@ -305,9 +307,16 @@ class TestRustConsumeStream:
             read_fd, write_fd = os.pipe()
             stack.callback(_safe_close, read_fd)
             stack.callback(_safe_close, write_fd)
+            payload = b"left unread after buffer rejection"
+            os.write(write_fd, payload)
             _safe_close(write_fd)
             with pytest.raises(ValueError, match="buffer_size"):
                 rust_streams.rust_consume_stream(read_fd, buffer_size=0)
+
+            os.fstat(read_fd)
+            assert os.read(read_fd, len(payload)) == payload, (
+                "buffer validation must leave the borrowed reader usable and unread"
+            )
 
     @staticmethod
     def test_propagates_io_errors(

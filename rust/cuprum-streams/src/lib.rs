@@ -2,21 +2,30 @@
 #![forbid(unsafe_code)]
 
 mod buffer;
+
 #[cfg(test)]
 mod buffer_size_tests;
+
 #[cfg(all(test, unix, not(miri)))]
 mod consume_snapshot_tests;
+
 #[cfg(test)]
 pub(crate) mod consume_tests;
+
 mod errors;
+
 mod io_utils;
+
 #[cfg(all(test, unix))]
 mod lib_tests;
+
 #[cfg(loom)]
 #[doc(hidden)]
 pub mod loom_support;
+
 #[cfg(test)]
 mod ownership_tests;
+
 /// The pump machine's transition boundary.
 ///
 /// [`pump_machine`]'s `step` omits a `writer_open` check because a
@@ -69,17 +78,25 @@ mod ownership_tests;
 /// }
 /// ```
 mod pump_machine;
+
 #[cfg(target_os = "linux")]
 mod splice;
+
 #[cfg(all(test, unix))]
 mod test_support;
+
 #[cfg(all(test, unix))]
 mod tracing_capture;
+
 mod utf8;
 // Timing regressions are meaningless under Miri's interpreter and Kani's
 // bounded symbolic execution, so both compile the module out.
 #[cfg(all(test, not(miri), not(kani)))]
 mod utf8_scaling_tests;
+
+#[cfg(windows)]
+mod windows_crt_consume;
+
 #[cfg(all(test, windows))]
 mod windows_tests;
 
@@ -91,6 +108,8 @@ pub use errors::PumpError;
 use io_utils::{classify_write, operation_span, read_stream};
 use pump_machine::{Flow, PumpState, WriteEvent, advance};
 use utf8::{FinalChunk, decode_utf8_replace};
+#[cfg(windows)]
+pub use windows_crt_consume::consume_crt_stream;
 
 /// Maximum accepted stream buffer size, in bytes (1 GiB).
 ///

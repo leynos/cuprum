@@ -241,6 +241,7 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   cuprum/unittests/test_backend.py \
   cuprum/unittests/test_extension_requirement_guard.py \
   cuprum/unittests/test_pipeline_post_exit_deadline.py \
+  tests/helpers/test_consume_boundary_oracle.py \
   tests/behaviour/test_rust_streams_behaviour.py \
   tests/behaviour/test_rust_streams_errors_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \
@@ -380,7 +381,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         modern-stable-develop modern-stable-extension modern-stable \
         modern-stable-warning-controls test-modern-stable-contract \
         benchmark-micro benchmark-e2e \
-        $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
+        test-boundary-parity $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
 # Serialize the lint hierarchy. Each aggregate target lists its leaves as plain
 # prerequisites, so a caller's `-f` override file is honoured directly by the
 # one Make process that reads it, with no forwarding to get wrong.
@@ -746,7 +747,7 @@ modern-stable-develop: build uv $(VENV_TOOLS) modern-stable-toolchain-check ## B
 modern-stable-extension: ## Rebuild and exercise the native extension on modern stable Rust
 	$(MAKE) modern-stable-toolchain-check
 	$(MAKE) modern-stable-develop
-	$(MAKE) test-extension
+	$(MAKE) test-extension PARITY_CARGO='$(MODERN_STABLE_CARGO_ENV)'
 
 modern-stable: ## Run modern stable Rust validation and native extension tests
 	$(MAKE) modern-stable-check
@@ -779,6 +780,42 @@ loom: build ## Run the full bounded Loom model suite
 # a message naming that command, which is the intended diagnostic.
 test-extension: build uv $(VENV_TOOLS) ## Run the extension-gated tests, requiring the extension
 	CUPRUM_REQUIRE_RUST_EXTENSION=1 $(PYTEST) -v $(EXTENSION_TEST_TARGETS)
+	$(MAKE) --no-print-directory test-boundary-parity
+
+# This separate ignored Rust integration target launches the project's Python
+# interpreter and calls the compiled extension. Keep it out of ordinary
+# `make test`: the extension workflow owns it after the guarded pytest suite.
+#
+# It deliberately uses the plain project Cargo rather than `RUST_DEBUG_CARGO`:
+# `test-extension` is also a prerequisite of the modern-stable route, which must
+# stay free of the dev-fast nightly (tests/test_ci_modern_stable_contract.py and
+# cuprum/unittests/test_modern_stable_make_contract.py both pin that). Depending
+# on the dev-fast route here made the modern-stable job demand a Cranelift
+# component it never installs. The parity check only needs whichever Cargo is
+# current and the project interpreter, so it takes neither that route nor its
+# nightly-only RUSTFLAGS.
+#
+# `PARITY_CARGO` is the caller-supplied environment prefix, so the modern-stable
+# route can select its own toolchain, target directory, and warning policy.
+# Passing it explicitly rather than reading ambient variables keeps the ordinary
+# extension lanes on the plain project Cargo: a caller that sets nothing gets
+# no prefix, which is the previous behaviour exactly. Compiling the parity test
+# under modern stable is not new coverage — `modern-stable-test` already builds
+# every target on that toolchain — but *running* the ignored parity cases there
+# was previously done on the default toolchain.
+PARITY_CARGO =
+test-boundary-parity: ## Check consume parity through the compiled Python extension
+	python_path="$$($(UV_RUN_ENV) uv run --no-sync python -c 'import sys; print(sys.executable)')" || exit $$?; \
+	if [ -z "$$python_path" ]; then printf '%s\n' 'could not resolve the project Python interpreter' >&2; exit 1; fi; \
+	log_file="$$(mktemp)"; \
+	trap 'rm -f "$$log_file"' EXIT; \
+	(cd "$(RUST_DIR)" && \
+	  CUPRUM_BOUNDARY_PYTHON="$$python_path" \
+	  $(PARITY_CARGO) $(CARGO) test -p cuprum-rust --test consume_boundary_parity $(BUILD_JOBS) -- --ignored --test-threads=1 --nocapture) >"$$log_file" 2>&1; \
+	cargo_status=$$?; \
+	cat "$$log_file"; \
+	if [ "$$cargo_status" -ne 0 ]; then exit "$$cargo_status"; fi; \
+	if ! grep -Eq '^running 30 tests?$$' "$$log_file"; then printf '%s\n' 'boundary parity target did not select all 30 ignored tests' >&2; exit 1; fi
 
 test-dev-fast-contract: build uv $(VENV_TOOLS) ## Validate dev-fast routing and adapter contracts
 	$(PYTEST) -v cuprum/unittests/test_dev_fast_contract.py cuprum/unittests/test_dev_fast_adapter.py cuprum/unittests/test_dev_fast_prerequisites.py tests/test_ci_dev_fast_action.py

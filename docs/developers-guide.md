@@ -1588,6 +1588,13 @@ to a temporary directory and requires the pinned `ty` to report
 the repository-wide check scope deliberately: a file the checker is meant to
 reject cannot be checked in without failing the gate.
 
+The checker subprocess receives an explicit fixture path, project directory,
+and the empty `cuprum/unittests/typing_fixtures/ty.toml` configuration. This
+keeps temporary fixtures independent of ancestor projects and user settings: an
+unrelated configuration must neither broaden the checked file set nor suppress
+the expected diagnostics. The hostile-ancestor regression exercises both valid
+and invalid calls under an unrelated project.
+
 The protocol lives in `cuprum/sh/builder.py` and is deliberately not
 `typing.runtime_checkable`. `safe_cmd` must not import it back, because the
 protocol imports `SafeCmd` from `safe_cmd` and the reverse import would close a
@@ -2698,6 +2705,17 @@ coupled to that cleanup, so restoring blocking mode or resuming the transport
 earlier cannot hand descriptors back to asyncio while native code is still
 mid-transfer; the grace-expiry release closes only the asyncio-owned reader,
 since the worker reads its own duplicate.
+
+The synchronous lifecycle tests coordinate native-worker readiness before
+arming their 50 ms timeout. They exercise both immediate dispatch and a 100 ms
+delayed dispatch, so startup scheduling cannot prevent the held-worker cleanup
+state from being reached. Their test-only wait wrapper retains the production
+timeout and cleanup path, including descriptor ownership and transport-release
+assertions. Both child stages stay alive until that timeout, so delayed
+dispatch cannot lose the native handoff to an already-closed reader. Shared
+fixture support lives in
+`cuprum/unittests/_native_pump_lifecycle_test_helpers.py`; this is not a
+production deadline policy or a general-purpose timing abstraction.
 
 During cancellation, `_await_native_pump_cleanup` emits structured `DEBUG`
 records at cleanup start and completion. Both records carry
@@ -5628,10 +5646,11 @@ with no `raw_os_error` — one synthesized in Rust rather than returned by a
 syscall — has no number to preserve, so PyO3's `ErrorKind` mapping remains the
 best available and is used unchanged.
 
-`cuprum/unittests/test_rust_errno.py` covers the POSIX error conversion. The
-Windows module named `test_rust_errno_windows.py` currently covers raw-handle
-rejection at the PyO3 stream boundary; it does not assert Windows error-code
-conversion.
+`cuprum/unittests/test_rust_errno.py` covers POSIX error conversion. The
+Windows module `test_rust_errno_windows.py` checks that pump still rejects raw
+handles and that consume rejects a descriptor outside the CRT's range with a
+`ValueError` before the CRT is called. Its `OSError.errno` assertion covers the
+binary-mode setup helper, not native consume.
 
 The POSIX conversion is tested natively; the Windows integration test exercises
 a different boundary, so a green run does not establish conversion coverage on
@@ -5647,9 +5666,8 @@ both platforms:
 - **Windows** — the `CI` workflow's `extension-tests-windows` job builds the
   extension and runs the extension-gated modules on `windows-2022`. This is
   deliberately not the full suite because of the `#124` interpreter-abort
-  constraint; it executes `test_rust_errno_windows.py`, which checks raw-handle
-  rejection at the PyO3 stream boundary. Reproduce the native check from a
-  Windows checkout with:
+  constraint; it executes `test_rust_errno_windows.py` and the consume parity
+  suites. Reproduce the native check from a Windows checkout with:
 
   ```bash
   make develop
@@ -5763,16 +5781,18 @@ safety contract obliges the caller to guarantee each descriptor is valid and
 open for the duration of the call and that ownership remains with the caller;
 in return the helper guarantees it never closes the borrowed reader descriptor.
 
-The exported Windows PyO3 stream functions reject raw handles because those
-integers do not establish the synchronous-I/O capability. The pump still
-consumes and closes its transferred writer when rejecting the call;
-`rust/cuprum-rust/src/stream_pyfunctions_windows.rs:10-19,36-52,66-76`
-implements that boundary, and `cuprum/unittests/test_rust_errno_windows.py`
-checks rejection and writer closure. The Python pipeline dispatcher also
-declines Windows asyncio subprocess-pipe handles with `platform_unsupported`:
-`ProactorEventLoop` uses overlapped handles, which do not satisfy the
-synchronous adapter's precondition. That fallback remains the policy until an
-overlapped-I/O implementation is designed.
+The Windows PyO3 pump rejects raw handles because those integers do not
+establish the synchronous-I/O capability. It consumes and closes its
+transferred writer on rejection;
+`rust/cuprum-rust/src/stream_pyfunctions_windows.rs:10-19,36-52` implements
+that boundary, and `cuprum/unittests/test_rust_errno_windows.py` checks
+rejection and writer closure. Windows consume instead accepts a CRT descriptor,
+which Python duplicates and sets to binary mode before the native `_read` path;
+the Rust borrow lasts only for the detached call. The Python pipeline
+dispatcher still declines Windows asyncio subprocess-pipe handles with
+`platform_unsupported`: `ProactorEventLoop` uses overlapped handles, which do
+not satisfy the synchronous adapter's precondition. That fallback remains the
+policy until an overlapped-I/O implementation is designed.
 
 The contract is checked at two levels, which are deliberately not
 interchangeable. `rust/cuprum-native-io/src/ownership_tests.rs` holds the
@@ -6540,11 +6560,65 @@ touches. Keep both when changing either.
 Both platform entry points named `consume_stream_files` delegate to one private
 loop, `consume_with_reader`. Each entry point passes a read closure over its
 own capability-typed `read_stream`, plus its platform label for the
-length-overflow event. The loop therefore never receives a handle, and Windows
-still requires a `SynchronousBorrowedStream`. `consume_tests.rs` drives that
-loop through a scripted read closure. It pins split sequences, EOF, and
-read-error propagation on every platform, including Windows, where the
+length-overflow event. Windows PyO3 consume also has a CRT-descriptor adapter
+that passes `_read` through the same loop. Two duplicates are taken, for
+different reasons: the Python wrapper's keeps the caller's translation mode
+untouched before the GIL is released, and the native entry's is what the
+detached read actually uses, so no close from another thread can race it. Both
+set binary mode on the duplicate only and close it afterwards, leaving the
+caller's descriptor and its mode alone. A direct extension caller therefore
+does not need its descriptor in binary mode, but it must keep that descriptor
+bound to the intended readable, synchronous resource until duplication
+completes, because the native entry reads the number it is handed. This adapter
+does not make overlapped asyncio subprocess handles suitable for native reads.
+`SynchronousBorrowedStream` remains the capability for known synchronous Win32
+handles used by the pump and Rust-side stream tests. `consume_tests.rs` drives
+the shared loop through a scripted read closure. It pins split sequences, EOF,
+and read-error propagation on every platform, including Windows, where the
 pipe-backed snapshots do not run.
+
+The extension-gated tests keep the Windows consume boundary active. The
+`TestRustConsumeStream` suite checks CRLF and Ctrl-Z bytes while the caller's
+descriptor is in text mode, then confirms that native consume leaves that mode
+unchanged. The boundary property suites run consume validation on Windows with
+50 Hypothesis examples per generated case; pump-only properties retain their
+Unix marker. The 1,048,577-byte incomplete-sequence witness also launches a
+bounded Python producer and drains its live stdout pipe through the direct
+native entry point, checking complete output, EOF, and borrowed-descriptor
+ownership. Reproduce those focused checks with:
+
+```bash
+uv run pytest cuprum/unittests/test_rust_consume_stream.py -q
+uv run pytest cuprum/unittests/test_rust_errno_windows.py -q
+uv run pytest cuprum/unittests/test_rust_streams_boundary_property.py -q
+uv run pytest cuprum/unittests/test_rust_streams_roundtrip_property.py -q
+uv run pytest tests/helpers/test_consume_boundary_oracle.py -k incomplete_mebibyte -q
+uv run pytest tests/behaviour/test_rust_streams_behaviour.py -k large_boundary -q
+```
+
+The text-mode check lives in `test_rust_errno_windows.py`, which is
+Windows-only and skips elsewhere, together with the unusable-descriptor child
+regression.
+
+Run the full extension target with `make test-extension`. Rust's parity child
+still uses its recorded proptest case counts and fixed seeds from
+`rust/cuprum-rust/tests/consume_boundary_parity.rs`; replay a stored failure
+with `make test-boundary-parity` after preserving the corresponding
+`proptest-regressions` entry. That target deliberately builds with the plain
+project `CARGO` rather than the dev-fast nightly: `make test-extension` is also
+a prerequisite of `make modern-stable`, whose lane must not provision dev-fast,
+so taking the accelerated route here would give the parity check a toolchain
+dependency the modern-stable job cannot satisfy. The target itself selects no
+toolchain. It prepends whatever a caller passes in `PARITY_CARGO` — empty by
+default, so an ordinary `make test-extension` uses exactly the Cargo that built
+the extension. `make modern-stable-extension` passes
+`$(MODERN_STABLE_CARGO_ENV)`, because the lane above it built the extension
+with 1.99.1 into `rust/target/modern-stable`; running the parity cases there on
+a different toolchain would test a binary the caller never built. A focused
+failure should report the first payload mismatch, buffer size, and the producer
+or native error. For hangs, the producer helper terminates and reaps its child
+after 30 seconds, then closes both pipe ends; the outer Rust boundary child
+retains its own deadline.
 
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
@@ -6752,7 +6826,7 @@ Table 1: modules gated on the compiled extension
 | `test_rust_extension.py`                                | extension availability and module surface                                                                                                                                        |
 | `test_rust_splice.py`                                   | the Linux `splice` fast path                                                                                                                                                     |
 | `test_rust_errno.py`                                    | POSIX `OSError.errno` conversion and subclass selection across the boundary                                                                                                      |
-| `test_rust_errno_windows.py`                            | raw-handle rejection at the Windows PyO3 stream boundary                                                                                                                         |
+| `test_rust_errno_windows.py`                            | Windows pump raw-handle rejection, writer closure, and consume CRT error-code preservation                                                                                       |
 | `test_backend.py`                                       | the extension-dependent backend-selection cases                                                                                                                                  |
 | `test_loom_model_conformance.py`                        | cancellation lifecycle trace correspondence to the Loom transition mapping                                                                                                       |
 | `test_extension_requirement_guard.py`                   | the fail-loud guard itself                                                                                                                                                       |
@@ -6921,6 +6995,11 @@ and neither is a defect to repair.
   every mirror in one pull request.
 
 ## Python linting
+
+The import-order contract test invokes Ruff with the repository's
+`pyproject.toml` explicitly, so temporary-directory ancestors cannot alter the
+check. Its diagnostic assertion follows the `unsorted-imports` rule name
+emitted by the pinned checker with the repository's preview setting.
 
 Cuprum uses a seven-stage Python lint gate. Ruff is the first stage and remains
 the fast, broad lint pass for formatting-adjacent checks, import order,
