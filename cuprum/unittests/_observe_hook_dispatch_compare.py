@@ -23,6 +23,7 @@ import contextlib
 import dataclasses as dc
 import typing as typ
 from itertools import starmap
+from unittest import mock
 
 from cuprum import ECHO
 from cuprum._observability import _await_awaitable, _ExecEventEmissionError
@@ -116,11 +117,8 @@ def _recorded_tasks(
         created.append(task)
         return task
 
-    asyncio.create_task = typ.cast("typ.Any", record)
-    try:
+    with mock.patch.object(asyncio, "create_task", record):
         yield
-    finally:
-        asyncio.create_task = real_create_task
 
 
 def _run_dispatch(

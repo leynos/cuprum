@@ -2169,16 +2169,9 @@ it. Per-shape assertions would pin examples of that promise without checking it
 over sequences, so these tests state the expected outcome independently of the
 implementation and compare the real dispatcher against it.
 
-Six modules under `cuprum/unittests/` split the harness by job:
-
-| Module                              | Job                                                                                                       |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `_observe_hook_dispatch_shapes.py`  | edge shapes: stand-in values, mocks, failures, and awaitables whose classification raises                 |
-| `_observe_hook_dispatch_support.py` | `HOOK_KINDS` and `make_probe`: one fresh probe per shape, recording its calls, raised errors, and results |
-| `_observe_hook_dispatch_oracle.py`  | the specification: `expected_dispatch` returns a `DispatchExpectation`                                    |
-| `_observe_hook_dispatch_records.py` | the log specification: `expected_records` gives each record's level, message, `exc_info` type, and fields |
-| `_observe_hook_dispatch_compare.py` | `mismatch`, which runs one dispatch and returns its first departure                                       |
-| `_observe_hook_dispatch_logs.py`    | the record comparison: each dispatch record's logger, level, message, fields, and `exc_info` type         |
+Six modules under `cuprum/unittests/` split the harness by job; the
+[repository layout](repository-layout.md#dispatch-specification-harness) lists
+what each one owns.
 
 `DispatchExpectation` names the hooks that must run and in what order, the
 probes whose results must schedule, every raising hook, and the surfaced

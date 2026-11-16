@@ -53,6 +53,28 @@ _Figure 1: Simplified repository tree for contributor orientation._
 
 _Table 1: Major repository paths and their ownership boundaries._
 
+## Dispatch specification harness
+
+Six modules under `cuprum/unittests/` split the observe-hook dispatch harness
+by job:
+
+| Module                              | Job                                                                                                       |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `_observe_hook_dispatch_shapes.py`  | edge shapes: stand-in values, mocks, failures, and awaitables whose classification raises                 |
+| `_observe_hook_dispatch_support.py` | `HOOK_KINDS` and `make_probe`: one fresh probe per shape, recording its calls, raised errors, and results |
+| `_observe_hook_dispatch_oracle.py`  | the specification: `expected_dispatch` returns a `DispatchExpectation`                                    |
+| `_observe_hook_dispatch_records.py` | the log specification: `expected_records` gives each record's level, message, `exc_info` type, and fields |
+| `_observe_hook_dispatch_compare.py` | `mismatch`, which runs one dispatch and returns its first departure                                       |
+| `_observe_hook_dispatch_logs.py`    | the record comparison: each dispatch record's logger, level, message, fields, and `exc_info` type         |
+
+_Table 2: The observe-hook dispatch harness modules and their jobs._
+
+The specification these modules verify, and the procedure for comparing a
+dispatcher against it, are described under
+[verifying dispatch against a specification oracle][dispatch-oracle].
+
+[dispatch-oracle]: developers-guide.md#verifying-dispatch-against-a-specification-oracle
+
 ## Conventions
 
 Source code for the Python package belongs under `cuprum/`. The Rust workspace

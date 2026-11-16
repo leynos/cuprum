@@ -476,6 +476,18 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   head are also cleared: `read_capture` no longer carries the file reading and
   the line classification it was scored for, and the seeded-fault dispatchers
   share the task-wrapping loop that made the module a duplication finding.
+- [x] (2026-11-16) Second CodeRabbit review, two quick wins. Review
+  5915266835, submitted against `5f4a1e9af`, asked for two changes. The
+  comparison harness swapped `asyncio.create_task` by assignment and restored
+  it in a `finally`, which repeats what a mock context already provides and
+  needed an `Any` cast to satisfy the type checker; `_recorded_tasks` now
+  patches the attribute with `unittest.mock.patch.object`, so the recorder is
+  active only for the synchronous dispatch call and restoration belongs to the
+  context. The six-module responsibility table also sat in the developers'
+  guide, whose scope `AGENTS.md` keeps clear of path responsibilities; it moved
+  to the repository layout under "Dispatch specification harness", and the
+  guide now links to that inventory while keeping the specification invariants
+  and the comparison procedure.
 
 ## Surprises & discoveries
 
