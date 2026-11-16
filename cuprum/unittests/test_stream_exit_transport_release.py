@@ -11,6 +11,11 @@ Each case therefore drives a real child on both spawn backends and asks the
 descriptors themselves whether they were released. The ``wait4`` owner closes
 nothing when it reaps, and the fallback's transports close only at end-of-file,
 which the descendant prevents: only the run's own release can close these.
+
+The release must also survive a cancellation that interrupts the reconciliation
+it is bundled with, which is why one case parks reconciliation at a consumer
+that refuses to settle until the test lets it, cancels again while it is
+provably in progress, and only then lets the reconciliation finish.
 """
 
 from __future__ import annotations
@@ -54,6 +59,14 @@ _SPAWN_ROUTES = (
     pytest.param(_spawn_output_pipe_holder_fallback, id="asyncio-fallback"),
 )
 
+#: The two ways a run reaches reconciliation before its streams drained: it
+#: expired its own deadline, or the caller cancelled the exit wait. Both must
+#: release the pipes even if a further cancellation interrupts the settling.
+_STOP_ROUTES = (
+    pytest.param("deadline", id="deadline-expiry"),
+    pytest.param("caller", id="caller-cancellation"),
+)
+
 #: Long enough that a run which waited for the child or its descendant could
 #: not finish inside a case's own watchdog.
 _DESCENDANT_LIFETIME_S = 30.0
@@ -88,6 +101,37 @@ async def _drained_consumer() -> _CapturedDrain:
 async def _parked_consumer() -> _CapturedDrain:
     """Stay parked, as a reader waiting on a pipe that never closes would."""
     await asyncio.sleep(_DESCENDANT_LIFETIME_S)
+    return captured("")
+
+
+async def _interruptible_reconciliation_consumer(
+    entered: asyncio.Event,
+    release: asyncio.Event,
+) -> _CapturedDrain:
+    """Park once cancelled, holding reconciliation open until released.
+
+    A cancelled reader normally settles at once, which leaves no window in
+    which reconciliation is provably still running. ``entered`` is set from
+    inside that window, and the task does not finish until the case releases
+    it, so a cancellation arriving in between lands inside the settling.
+
+    Returns
+    -------
+    _CapturedDrain
+        An empty capture, which only an uncancelled reader ever reaches.
+
+    Raises
+    ------
+    asyncio.CancelledError
+        When the reconciliation cancels this reader, after the case releases
+        it.
+    """
+    try:
+        await asyncio.sleep(_DESCENDANT_LIFETIME_S)
+    except asyncio.CancelledError:
+        entered.set()
+        await release.wait()
+        raise
     return captured("")
 
 
@@ -290,6 +334,84 @@ def test_a_caller_cancellation_releases_both_output_descriptors(
             )
             _assert_transports_released(descriptors)
         finally:
+            _kill_descendant(_recorded_pid(pid_file))
+
+    asyncio.run(run_case())
+
+
+@_posix_only
+@pytest.mark.parametrize("stop_route", _STOP_ROUTES)
+@pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
+def test_a_cancellation_during_reconciliation_releases_both_descriptors(
+    tmp_path: pathlib.Path,
+    spawn_pipe_holder: cabc.Callable[
+        [pathlib.Path, float],
+        cabc.Awaitable[asyncio.subprocess.Process],
+    ],
+    stop_route: str,
+) -> None:
+    """A cancellation interrupting the settling must not skip the release.
+
+    A release awaited after the shielded reconciliation is skipped whenever a
+    cancellation lands during that reconciliation, because the shield finishes
+    its task and then re-raises. The reconciliation here is held open at a
+    consumer that refuses to settle, so the second cancellation is provably
+    inside it, and the descriptors are read after the run has ended.
+    """
+
+    async def run_case() -> None:
+        """Interrupt a real child's settling, then read the descriptors."""
+        pid_file = tmp_path / "descendant.pid"
+        process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
+        execution = dataclasses.replace(
+            _execution(_capture_policy(tmp_path)),
+            timeout=_TIMEOUT_S if stop_route == "deadline" else None,
+        )
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        try:
+            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
+            descriptors = _output_descriptors(process)
+            ownership = _ownership(
+                _interruptible_reconciliation_consumer(entered, release),
+                _interruptible_reconciliation_consumer(entered, release),
+            )
+            waiting = asyncio.ensure_future(
+                _wait_for_streamed_process_exit(
+                    process,
+                    execution,
+                    ownership,
+                    process.pid,
+                ),
+            )
+
+            if stop_route == "caller":
+                await asyncio.sleep(_TIMEOUT_S)
+                waiting.cancel()
+            await asyncio.wait_for(entered.wait(), _WATCHDOG_S)
+            # The consumers are parked inside reconciliation, so it cannot
+            # finish until *release* is set. Cancel once more first, and yield
+            # so the cancellation is delivered before the settling resumes:
+            # both are queued in call order, so the cancelled task resumes
+            # first.
+            waiting.cancel()
+            await asyncio.sleep(0)
+            release.set()
+
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(waiting, _WATCHDOG_S)
+
+            assert process.returncode is not None, (
+                "the child must be terminated and reaped before the failure "
+                "reaches the caller"
+            )
+            assert _is_running(descendant_pid), (
+                "the descendant must still hold the pipes when the descriptors "
+                "are read, or this case proves nothing"
+            )
+            _assert_transports_released(descriptors)
+        finally:
+            release.set()
             _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())

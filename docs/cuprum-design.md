@@ -2534,11 +2534,17 @@ sequenceDiagram
   a failed task is an outcome; one that merely finishes leaves the exit wait
   running. The owned-handle and pipeline routes do not race their readers: they
   wait for the process, or every stage, and reconcile afterwards, so a reader
-  failure there surfaces at finalization. Every route that stops the run before
-  its streams drained also releases the child's output transports: a reader
+  failure there surfaces at finalization. A route that stops the run before its
+  streams drained also has to release the child's output transports: a reader
   cancelled before end-of-file leaves its descriptor with the transport that
   owns it, and a descendant holding an inherited write end prevents the
-  end-of-file that would otherwise close it. The exit wait is passed in already
+  end-of-file that would otherwise close it. The streamed exit wait releases
+  them from each of its failure handlers, composed with the reconciliation
+  under one shield so a cancellation interrupting the settling cannot skip the
+  release. The line-stream coordinator and the streamed route's own post-exit
+  collection do not release transports yet: a descendant surviving either
+  leaves the parent-side descriptor to the collector. That divergence is
+  recorded in the developers' guide. The exit wait is passed in already
   constructed, so each caller resolves `_wait_for_exit_code_within_timeout`
   from its own module namespace. It was split out of `_subprocess_wait`, which
   re-exports the name, so the single-command run, the line-stream coordinator,

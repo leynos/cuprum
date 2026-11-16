@@ -9228,13 +9228,18 @@ transport that owns it, and a descendant holding an inherited write end means
 end-of-file never arrives to release it — the `wait4` owner reaps without
 closing anything, and the fallback's asyncio transports close only at
 end-of-file. Each of `_wait_for_streamed_process_exit`'s three handlers — the
-consumer failure, the deadline expiry and the caller's cancellation — calls
-`_release_output_transports` from `cuprum/_subprocess_startup_abandon.py` once
-its reconciliation returns; closing is idempotent, so a stream that already
-drained is unaffected. The release is not yet applied to every path that can
-stop early: the line-stream coordinator and the streamed route's own post-exit
-collection close no transports, so a run ending there with a live descendant
-leaves the parent-side descriptor to the collector.
+consumer failure, the deadline expiry and the caller's cancellation — composes
+its reconciliation with `_release_output_transports` from
+`cuprum/_subprocess_startup_abandon.py` and runs the pair under one
+`_shielded_cleanup`; closing is idempotent, so a stream that already drained is
+unaffected. The pair must be composed rather than sequenced:
+`_shielded_cleanup` finishes its task and then re-raises the caller's
+cancellation, so a release awaited after a separately shielded reconciliation
+is skipped whenever a cancellation interrupts that reconciliation. The release
+is not yet applied to every path that can stop early, which is a known
+divergence rather than a guarantee: the line-stream coordinator and the
+streamed route's own post-exit collection close no transports, so a run ending
+there with a live descendant leaves the parent-side descriptor to the collector.
 
 The owned-handle route (`_settle_handle_run` in
 `cuprum/_process_handle/coordinator.py`) and the pipeline coordinator

@@ -17,7 +17,11 @@ Reconciliation settles tasks but closes no pipes. Each of those routes also
 releases the child's output transports, because a reader cancelled before
 end-of-file keeps its parent-side descriptor with the transport that owns it —
 and a descendant holding an inherited pipe means no end-of-file ever follows to
-release it.
+release it. The release runs inside the reconciliation's own shield rather than
+after it: ``_shielded_cleanup`` finishes its task and then re-raises the
+caller's cancellation, so a release awaited afterwards is skipped whenever a
+cancellation interrupts the reconciliation, leaving exactly the descriptors the
+release exists to close.
 
 ``_wait_for_streamed_process_exit`` and ``_reconcile_shielded`` are re-exported
 from ``cuprum._subprocess_stream_run``, which is where the surrounding module
@@ -87,8 +91,9 @@ async def _wait_for_streamed_process_exit(
     never come — see
     :func:`~cuprum._subprocess_rendezvous._await_exit_or_writer_failure`.
     Whatever that race raises — a deadline expiry, a producer or consumer
-    failure, a cancellation — lands in the handlers below, which already
-    reconcile every stream task before the error propagates.
+    failure, a cancellation — lands in the handlers below, which reconcile
+    every stream task, and release the child's output transports, under one
+    shield before the error propagates.
 
     Returns
     -------
@@ -103,6 +108,31 @@ async def _wait_for_streamed_process_exit(
         re-raised unchanged rather than translated: it is the task's own error,
         and identity is what tells the two apart.
     """
+
+    async def reconcile_then_release(*, preserve: bool) -> _DrainPair:
+        """Settle the run's tasks, then release the pipes it stopped reading.
+
+        Both halves run under **one** shield, not two: a shielded reconciliation
+        followed by a separate release would leave the release unawaited
+        whenever a cancellation interrupted the reconciliation's shield. The
+        ``finally`` also releases when reconciliation itself fails, so no route
+        out of this helper keeps the descriptors the run has finished with.
+
+        Returns
+        -------
+        _DrainPair
+            The drained stdout and stderr results, records included.
+        """
+        try:
+            return await _reconcile_shielded(
+                execution,
+                tasks,
+                pid,
+                preserve=preserve,
+            )
+        finally:
+            await _release_output_transports(process, execution)
+
     try:
         return await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(process, execution),
@@ -125,19 +155,14 @@ async def _wait_for_streamed_process_exit(
             tasks.consumers,
             stdin_log=tasks.stdin_log,
         ):
-            await _reconcile_shielded(execution, tasks, pid, preserve=False)
-            await _release_output_transports(process, execution)
+            await _shielded_cleanup(reconcile_then_release(preserve=False))
             raise
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
         # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_drain, stderr_drain = await _reconcile_shielded(
-            execution,
-            tasks,
-            pid,
-            preserve=True,
+        stdout_drain, stderr_drain = await _shielded_cleanup(
+            reconcile_then_release(preserve=True),
         )
-        await _release_output_transports(process, execution)
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_drain.payload,
@@ -149,6 +174,5 @@ async def _wait_for_streamed_process_exit(
         # while terminating, say — need the same reconciliation. Do not preserve
         # stream output while another error propagates, but settle every task
         # before re-raising the original failure unchanged.
-        await _reconcile_shielded(execution, tasks, pid, preserve=False)
-        await _release_output_transports(process, execution)
+        await _shielded_cleanup(reconcile_then_release(preserve=False))
         raise
