@@ -736,6 +736,29 @@ ownership and error contracts, stop and report the exact incompatibility.
   so the eight-gate bundle continues to stand on code candidate `5cb52ce62`,
   whose tree they do not touch; they are re-checked with the documentation
   gates on the commit that carries them.
+- [x] (2026-11-16) Bring two files back under the 400-line cap and bound a
+  child wait, from the hosted assessment of `c81b64cd0`. The assessment named
+  `rust/cuprum-native-io/src/windows_crt.rs` at 608 lines and
+  `rust/cuprum-rust/tests/consume_boundary_parity.rs` at 411; this plan's own
+  Constraints section requires every new code file to stay under 400, so both
+  were real. Both splits follow the repository's existing seam rather than
+  compressing code: `windows_crt.rs` keeps production and declares its tests
+  through `#[path = "windows_crt_tests.rs"] mod tests`, the idiom
+  `pump_machine.rs` and `utf8.rs` already use, which keeps the tests a child
+  module so they still reach the private `classify_crt_error`,
+  `crt_read_count`, and `read_crt_once` and keeps the libtest path the
+  child-process probe re-invokes. `consume_boundary_parity.rs` keeps the
+  properties and hands the oracle invocation to `support/boundary_child.rs`.
+  `property_runner` deliberately stayed: it derives its regression path from
+  `file!()`, so moving it would relocate the proptest failure file without
+  changing a test. The assessment's second finding, that the
+  closed-descriptor child's `Command::output()` had no deadline, is also
+  repaired by a polling `wait_bounded` that kills and reaps on expiry. While
+  doing so the child's streams became piped rather than inherited — without
+  that the vacuity check on its result line could never have passed, so the
+  original form was measuring less than it claimed. Coverage is unchanged: six
+  native cases and the 30-test parity guard. `make check-fmt`, `make lint`,
+  `make lint-windows`, and `make test-rust` pass on the resulting tree.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
