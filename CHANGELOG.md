@@ -36,12 +36,13 @@
   pipeline run keeps its previous behaviour: it waits for every stage to exit
   before settling its readers, so a consumer failure there is reported at
   finalization and `timeout=` is the bound. The failure's own error is
-  re-raised unchanged — a `TimeoutError` inside it is never reported as the
-  run's timeout — and the child and its owned group are terminated and reaped
-  before the error reaches the caller. A stdin producer that failed as well
-  outranks it: the writer publishes its failure before its own teardown runs,
-  so the caller receives the `StdinSourceError` naming the input contract that
-  broke rather than the failure it caused
+  re-raised unchanged, and a `TimeoutError` inside it is not mistaken for the
+  run's deadline; a deadline that has expired, or expires in the same
+  event-loop step, is reported as one. The child and its owned group are
+  terminated and reaped before the error reaches the caller. A stdin producer
+  that failed as well outranks it: the writer publishes its failure before its
+  own teardown runs, so the caller receives the `StdinSourceError` naming the
+  input contract that broke rather than the failure it caused
   ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **Awaitable observe hooks are bounded per run:** an observed run now admits
   line observation against a ceiling of 256 unfinished observe-hook tasks,
