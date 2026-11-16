@@ -751,14 +751,14 @@ ownership and error contracts, stop and report the exact incompatibility.
   properties and hands the oracle invocation to `support/boundary_child.rs`.
   `property_runner` deliberately stayed: it derives its regression path from
   `file!()`, so moving it would relocate the proptest failure file without
-  changing a test. The assessment's second finding, that the
-  closed-descriptor child's `Command::output()` had no deadline, is also
-  repaired by a polling `wait_bounded` that kills and reaps on expiry. While
-  doing so the child's streams became piped rather than inherited — without
-  that the vacuity check on its result line could never have passed, so the
-  original form was measuring less than it claimed. Coverage is unchanged: six
-  native cases and the 30-test parity guard. `make check-fmt`, `make lint`,
-  `make lint-windows`, and `make test-rust` pass on the resulting tree.
+  changing a test. The assessment's second finding, that the closed-descriptor
+  child's `Command::output()` had no deadline, is also repaired by a polling
+  `wait_bounded` that kills and reaps on expiry. While doing so the child's
+  streams became piped rather than inherited — without that the vacuity check
+  on its result line could never have passed, so the original form was
+  measuring less than it claimed. Coverage is unchanged: six native cases and
+  the 30-test parity guard. `make check-fmt`, `make lint`, `make lint-windows`,
+  and `make test-rust` pass on the resulting tree.
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
