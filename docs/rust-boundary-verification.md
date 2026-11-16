@@ -173,6 +173,30 @@ implementations. Auto-trait results for typed handles and private `FnOnce`
 callbacks, callback re-entrancy, panic/drop behaviour, and GIL release remain
 explicit trust assumptions.
 
+### Windows CRT compile-time contracts
+
+ADR-027 keeps compile-time boundary contracts in the ordinary build graph, so
+the Windows CRT capability is pinned by doctests rather than by `trybuild`.
+Both contracts sit beside a positive control in the same doc comment, and
+`cuprum/unittests/test_compile_contracts_build_graph.py` fails if either
+disappears.
+
+| Contract                                      | Location                                            | What it pins                                                                                                                                                             |
+| --------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Forging a borrowed CRT descriptor is refused  | `rust/cuprum-native-io/src/windows_crt.rs:27`       | `compile_fail,E0451`. `BorrowedCrtFileDescriptor` has private fields, so callers cannot assert ownership they do not hold; `as_borrowed` is the only constructor.        |
+| `consume_crt_stream`'s public signature holds | `rust/cuprum-streams/src/windows_crt_consume.rs:34` | A compiling doctest binds the `cfg(windows)` re-export to a `for<'a> fn(BorrowedCrtFileDescriptor<'a>, BufferSize)` pointer, so a renamed or re-signatured export fails. |
+
+Table 2b. The Windows CRT compile-time contracts and their positive controls.
+
+The `cfg(windows)` gating itself has no `compile_fail` contract. A negative
+case that names a name absent from the target cannot satisfy ADR-0027's control
+requirement: the control has to import everything the negative case imports,
+and on a host where the item does not exist there is no value for it to bind.
+The gating is instead witnessed by the compiling doctest, which is compiled
+only on Windows, and by the `Native contracts (windows-2022)` job: that job's
+`--doc` step in `.github/workflows/rust-boundaries.yml` is the only lane that
+compiles it, and the workflow comment there says so.
+
 ## Generated FFI and cross-language handoff
 
 The following operations contain no explicit `unsafe` token in the baseline,
