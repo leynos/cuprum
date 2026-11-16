@@ -1280,8 +1280,12 @@ wheel-manifest snapshot missing the newly shipped `cuprum/_streams_windows.py`,
 and an `interrogate` failure caused by two undocumented helper `__init__`
 methods. All are repaired. The `interrogate` failure is worth remembering: the
 six pre-existing misses on `main` round to a passing `100.0%`, and only this
-branch's added denominator pressure exposed them. Roadmap 6.1.2 is checked
-after the implementation is accepted, not before.
+branch's added denominator pressure exposed them. Roadmap item 6.1.2 is checked
+`[x]` in `docs/roadmap.md`, after the implementation existed and its acceptance
+criteria were inspectable; the gate bundle that supports that decision is the
+Progress entry dated 2026-11-16 for `8f20f1b4f` on base `ebb8c7c25`. The hosted
+review is still pending on the current head, and an in-scope finding there
+would reopen the roadmap item rather than leave a stale tick behind.
 
 ## Context and orientation
 
@@ -1603,9 +1607,13 @@ following the style guide and link it from the design document and
 need explanation. Review `docs/users-guide.md`: retain its
 implemented-but-not-integrated statement; change it only for an approved
 user-visible correction, documenting that reason here. Complete the full
-sequential gates and reconcile every conformance link. Only then mark 6.1.2
-`[x]` in `docs/roadmap.md` and this plan COMPLETE. The planning PR must not
-mark the feature done.
+sequential gates and reconcile every conformance link. **Status at
+2026-11-16:** this plateau's gate and conformance work is done, 6.1.2 is checked
+`[x]` in `docs/roadmap.md`, and the plan is declared complete — see the
+Progress entry dated 2026-11-16. The hosted review has not yet cleared the
+current head, so acceptance is still pending and the hosted result may yet
+reopen the roadmap item. The original ordering constraint is retained here as
+the standard the milestones were held to, not as outstanding work.
 
 At every plateau, check its assigned requirements, retained architecture,
 external assumptions, public interfaces, dependencies, resource boundaries, and
