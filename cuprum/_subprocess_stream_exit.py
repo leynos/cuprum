@@ -6,12 +6,18 @@ this module owns the *exit wait* and the reconciliation that a failed wait
 owes, while ``_subprocess_stream_run`` owns the post-exit collection that
 follows it and both run loops that drive them.
 
-The two helpers here share one rule that is easy to get wrong in isolation: a
+The helpers here share one rule that is easy to get wrong in isolation: a
 failure escaping the wait must reconcile **every** task the run owns before it
 propagates, and the reconciliation is shielded so a cancellation arriving
 during it cannot abandon the work. The timeout route hands the drained text to
 the timeout handler; every other route settles promptly without capturing,
 because the text it would drain is text nobody will read.
+
+Reconciliation settles tasks but closes no pipes. Each of those routes also
+releases the child's output transports, because a reader cancelled before
+end-of-file keeps its parent-side descriptor with the transport that owns it —
+and a descendant holding an inherited pipe means no end-of-file ever follows to
+release it.
 
 ``_wait_for_streamed_process_exit`` and ``_reconcile_shielded`` are re-exported
 from ``cuprum._subprocess_stream_run``, which is where the surrounding module
@@ -23,6 +29,7 @@ from __future__ import annotations
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_startup_abandon import _release_output_transports
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
@@ -119,6 +126,7 @@ async def _wait_for_streamed_process_exit(
             stdin_log=tasks.stdin_log,
         ):
             await _reconcile_shielded(execution, tasks, pid, preserve=False)
+            await _release_output_transports(process, execution)
             raise
         # The process has been terminated; cancel the stdin writer and drain the
         # stream consumers exactly once here, then hand the decoded output to the
@@ -129,6 +137,7 @@ async def _wait_for_streamed_process_exit(
             pid,
             preserve=True,
         )
+        await _release_output_transports(process, execution)
         _handle_stream_timeout(
             exc,
             stdout_text=stdout_drain.payload,
@@ -141,4 +150,5 @@ async def _wait_for_streamed_process_exit(
         # stream output while another error propagates, but settle every task
         # before re-raising the original failure unchanged.
         await _reconcile_shielded(execution, tasks, pid, preserve=False)
+        await _release_output_transports(process, execution)
         raise

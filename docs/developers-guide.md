@@ -9221,6 +9221,21 @@ which is where the test suite's monkeypatch seams replace it.
 `_subprocess_wait` re-exports the name, and `_is_early_failure` with it, for
 the same one-import-path reason its deadline names are re-exported.
 
+A route that stops the run before its streams have necessarily drained also
+releases the child's output transports. Settling a reader is not enough: one
+cancelled before end-of-file leaves its parent-side descriptor with the
+transport that owns it, and a descendant holding an inherited write end means
+end-of-file never arrives to release it — the `wait4` owner reaps without
+closing anything, and the fallback's asyncio transports close only at
+end-of-file. Each of `_wait_for_streamed_process_exit`'s three handlers — the
+consumer failure, the deadline expiry and the caller's cancellation — calls
+`_release_output_transports` from `cuprum/_subprocess_startup_abandon.py` once
+its reconciliation returns; closing is idempotent, so a stream that already
+drained is unaffected. The release is not yet applied to every path that can
+stop early: the line-stream coordinator and the streamed route's own post-exit
+collection close no transports, so a run ending there with a live descendant
+leaves the parent-side descriptor to the collector.
+
 The owned-handle route (`_settle_handle_run` in
 `cuprum/_process_handle/coordinator.py`) and the pipeline coordinator
 (`cuprum/_pipeline_collect.py`) are deliberately not call sites. Both wait for
