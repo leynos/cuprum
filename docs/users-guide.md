@@ -490,8 +490,9 @@ finalizes, and a final stage that keeps writing into an undrained pipe is not
 stopped by it. Set `timeout=` on a pipeline run whose lines you observe.
 
 Line observation decodes for display, so an undecodable byte in text mode
-raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
-[byte-exact mode](#binary-output)
+raises under `ExecutionContext(errors="strict")`, exactly as it always has.
+That failure ends the run on the same terms as a raising callback, because the
+consumer task carrying it is what failed. The [byte-exact mode](#binary-output)
 is the one place observation replaces such bytes instead, so that the bytes
 returned to the caller are not decided by a decode the caller never asked for.
 

@@ -26,20 +26,22 @@
 
 ### Fixed
 
-- **A failing output callback ends a single command's run instead of waiting
-  on a blocked child:** a line or output callback that raises now ends that
-  command's run at once. Previously `run()` and `lines()` waited for the child
-  to exit before observing the failed consumer, so a child that kept writing to
-  an undrained pipe filled it and never exited, leaving a run with no
-  `timeout=` waiting indefinitely. A pipeline run keeps its previous behaviour:
-  it waits for every stage to exit before settling its readers, so a callback
-  failure there is reported at finalization and `timeout=` is the bound. The
-  callback's own error is re-raised unchanged — a `TimeoutError` it raises is
-  never reported as the run's timeout — and the child and its owned group are
-  terminated and reaped before the error reaches the caller. A stdin producer
-  that failed as well outranks it: the writer publishes its failure before its
-  own teardown runs, so the caller receives the `StdinSourceError` naming the
-  input contract that broke rather than the callback failure it caused
+- **A failed stream consumer ends a single command's run instead of waiting on
+  a blocked child:** when a stdout or stderr consumer fails — a line or output
+  callback that raises, or the incremental decoder that feeds it rejecting a
+  byte under `errors="strict"` — that command's run now ends at once. Previously
+  `run()` and `lines()` waited for the child to exit before observing the
+  failed consumer, so a child that kept writing to an undrained pipe filled it
+  and never exited, leaving a run with no `timeout=` waiting indefinitely. A
+  pipeline run keeps its previous behaviour: it waits for every stage to exit
+  before settling its readers, so a consumer failure there is reported at
+  finalization and `timeout=` is the bound. The failure's own error is
+  re-raised unchanged — a `TimeoutError` inside it is never reported as the
+  run's timeout — and the child and its owned group are terminated and reaped
+  before the error reaches the caller. A stdin producer that failed as well
+  outranks it: the writer publishes its failure before its own teardown runs,
+  so the caller receives the `StdinSourceError` naming the input contract that
+  broke rather than the failure it caused
   ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **Awaitable observe hooks are bounded per run:** an observed run now admits
   line observation against a ceiling of 256 unfinished observe-hook tasks,
