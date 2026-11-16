@@ -5144,14 +5144,18 @@ separate usage-error code.
 
 The command reads the capture with `read_capture`, `Frame`, and `FramePattern`
 from `benchmarks/_line_event_profile_model.py`, so the 5.2.1 classifier parses
-the same stacks identically. It differs from the classifier in one way: a
-folded-stack line the parser cannot read makes the census inconclusive rather
-than merely absent, because weight the census did not read cannot support a
-claim about weight that is gone. The only line it tolerates without counting is
-py-spy's frame-less record, a bare sample weight such as `' 34'` for a sample
-with no resolvable frames. Its arithmetic is checked against an independent
-brute-force recount in `cuprum/unittests/test_hot_path_frame_census.py`, whose
-generated inputs always cover the five stack shapes that decide the answer.
+the same stacks identically. `Frame` and `FramePattern` are owned by
+`benchmarks/_line_event_profile_shapes.py`, which the model imports them from,
+so the frozen capture, frame, and rule shapes stay apart from the parsers and
+validation that fill them, and each module stays small enough to read whole. It
+differs from the classifier in one way: a folded-stack line the parser cannot
+read makes the census inconclusive rather than merely absent, because weight
+the census did not read cannot support a claim about weight that is gone. The
+only line it tolerates without counting is py-spy's frame-less record, a bare
+sample weight such as `' 34'` for a sample with no resolvable frames. Its
+arithmetic is checked against an independent brute-force recount in
+`cuprum/unittests/test_hot_path_frame_census.py`, whose generated inputs always
+cover the five stack shapes that decide the answer.
 
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 

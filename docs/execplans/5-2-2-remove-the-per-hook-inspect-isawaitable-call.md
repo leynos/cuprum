@@ -488,6 +488,17 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   to the repository layout under "Dispatch specification harness", and the
   guide now links to that inventory while keeping the specification invariants
   and the comparison procedure.
+- [x] (2026-11-16) Census import note names the owning module. The same
+  review's Developer Documentation pre-merge row recorded, as a non-blocking
+  gap, that the developers' guide still described the census as reading `Frame`
+  and `FramePattern` from `benchmarks/_line_event_profile_model.py`. That
+  sentence was true of the import site — the model re-exports the shapes so the
+  parsers, their callers, and their tests share one import surface — but it no
+  longer named the module that defines them. The paragraph now names
+  `benchmarks/_line_event_profile_shapes.py` as the owner and states why the
+  split exists, matching that module's own docstring: the shapes are frozen
+  data and the parsers are the policy that decides what the data may contain,
+  so each module stays small enough to read whole.
 
 ## Surprises & discoveries
 
