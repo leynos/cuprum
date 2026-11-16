@@ -685,6 +685,21 @@ ownership and error contracts, stop and report the exact incompatibility.
   an update alongside the contract being added — which is what this was, so
   `rust/cuprum-native-io/src/windows_crt.rs: 1` was added and the module's nine
   cases re-ran green.
+- [x] (2026-11-16) Rebase onto `origin/main` at `ebb8c7c25` and re-run the
+  whole bundle against the rebased candidate `cccd22419` (tree `baf1f44ae`).
+  The rebase was forced by a finding rather than by housekeeping: the Whitaker
+  suite had been rebuilt and now carries `bumpy-road-function`, which flagged
+  `consume_with_reader` in a file this branch does not touch. The branch was
+  three commits behind, and one of them (`3c60048af`) is main's own extraction
+  of that function's helpers to clear the same lint. Rebasing therefore
+  inherited the fix instead of re-solving it, so no Rust was edited for the
+  lint. The weave pass left a duplicated blank line in
+  `rust/cuprum-streams/src/lib.rs`, which `make check-fmt` caught and
+  `cccd22419` removes. Results, each from a log whose `# GATE` line names the
+  tree it ran against and whose own `EXIT=` footer is the authority: `lint` 0,
+  `test-rust` 0 (196 passed, 30 skipped, doctests ok), `typecheck` 0,
+  `lint-windows` 0, `check-fmt` 0, `markdownlint` 0, `nixie` 0, `test-python` 0
+  (aggregated 6737 passed, 22 skipped, 0 failed, 0 errors).
 - [ ] PR review. Hosted CodeRabbit assessments, CI, and CodeScene remain
   outstanding; local gates do not establish hosted success.
 - [x] Roadmap 6.1.2 marked done, after the implementation existed and its
