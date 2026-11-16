@@ -2532,11 +2532,13 @@ sequenceDiagram
   or a callback that raises while the child would still be running, therefore
   surfaces as its own error instead of being reported as `TimeoutExpired`. Only
   a failed task is an outcome; one that merely finishes leaves the exit wait
-  running. The exit wait is passed in already constructed, so each caller
-  resolves `_wait_for_exit_code_within_timeout` from its own module namespace.
-  It was split out of `_subprocess_wait`, which re-exports the name, so the
-  single-command run, the line-stream coordinator, and the timeout test modules
-  keep one import path. See the
+  running. The owned-handle and pipeline routes do not race their readers: they
+  wait for the process, or every stage, and reconcile afterwards, so a reader
+  failure there surfaces at finalization. The exit wait is passed in already
+  constructed, so each caller resolves `_wait_for_exit_code_within_timeout`
+  from its own module namespace. It was split out of `_subprocess_wait`, which
+  re-exports the name, so the single-command run, the line-stream coordinator,
+  and the timeout test modules keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
   2026-09-27 and 2026-11-15.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:

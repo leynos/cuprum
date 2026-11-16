@@ -9221,6 +9221,17 @@ which is where the test suite's monkeypatch seams replace it.
 `_subprocess_wait` re-exports the name, and `_is_early_failure` with it, for
 the same one-import-path reason its deadline names are re-exported.
 
+The owned-handle route (`_settle_handle_run` in
+`cuprum/_process_handle/coordinator.py`) and the pipeline coordinator
+(`cuprum/_pipeline_collect.py`) are deliberately not call sites. Both wait for
+the process — or every stage — to exit and only then reconcile their readers,
+so a reader failure there is reported at finalization rather than ending the
+run early, and a child that keeps writing is bounded only by the run's
+`timeout=`. Racing their readers would mean choosing a precedence between a
+reader failure and a stage failure, and settling a partly-run pipeline's
+output, which is a change to the pipeline contract rather than to this race.
+`docs/users-guide.md` states the limit for pipeline `on_line` callbacks.
+
 `cuprum/_subprocess_stream_run.py` owns the streamed single-command run after
 the process has been spawned. `_run_subprocess_with_streams` waits for exit,
 reconciles the stdin writer and both stream consumers on every exit path, and
