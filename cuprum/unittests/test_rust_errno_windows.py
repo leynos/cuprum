@@ -247,6 +247,14 @@ def _derived_errno(winerror: int) -> int | None:
     ],
     ids=("closed", "write-only"),
 )
+# The child bound below only does its job if this test outlives it. The
+# repository default is 30 seconds, which a wedged child could consume
+# entirely before pytest-timeout fired; on Windows its default method
+# terminates the whole interpreter, so the suite would abort without the
+# child-specific diagnostic. The child is therefore bounded at 40 seconds and
+# this marker widens the test's envelope to 60, leaving the kill-and-reap
+# steps 20 seconds to report.
+@pytest.mark.timeout(60)
 def test_direct_consume_reports_an_unusable_descriptor(
     mode: str,
     expected_winerror: int,
@@ -281,8 +289,9 @@ def test_direct_consume_reports_an_unusable_descriptor(
         check=False,
         # The child imports the extension and opens a pipe, so it should finish
         # in well under a second. A bound keeps a wedged child from hanging the
-        # suite for pytest-timeout's whole budget and reports it as this test.
-        timeout=60,
+        # suite to pytest-timeout's whole budget and reports it as this test;
+        # it must stay below that budget, which the marker above widens.
+        timeout=40,
     )
     assert completed.returncode == 0, (
         f"consume on a {mode} descriptor must not terminate the interpreter; "

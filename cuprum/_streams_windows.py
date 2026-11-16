@@ -31,85 +31,85 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from types import ModuleType
 
 
-# ``DuplicateHandle`` takes a BOOL and a flag word in its last two slots.
-# ctypes binds foreign calls positionally only, so keyword arguments would
-# fail at runtime; these names keep each literal out of the argument list.
-_DO_NOT_INHERIT_HANDLE = 0
+# ``DuplicateHandle`` takes a BOOL and a flag word in its last two slots. The
+# ``_winapi`` binding is positional-only, so these names keep each literal out
+# of the argument list and name the policy it encodes.
+_DO_NOT_INHERIT_HANDLE = False
 _DUPLICATE_SAME_ACCESS = 2
 
 
-def _kernel32_handle_api() -> ModuleType:
-    """Load Kernel32 with the handle signatures required by the pump."""
-    import ctypes
+class _HandleApi(typ.NamedTuple):
+    """The three ``_winapi`` entry points a handle transfer needs."""
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # ty: ignore[unresolved-attribute]  # Windows-only ctypes API.
-    kernel32.GetCurrentProcess.argtypes = ()
-    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
-    kernel32.DuplicateHandle.argtypes = (
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_void_p),
-        ctypes.c_uint32,
-        ctypes.c_int,
-        ctypes.c_uint32,
-    )
-    kernel32.DuplicateHandle.restype = ctypes.c_int
-    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
-    kernel32.CloseHandle.restype = ctypes.c_int
-    return kernel32
+    current_process: cabc.Callable[[], int]
+    duplicate_handle: cabc.Callable[..., int]
+    close_handle: cabc.Callable[[int], None]
 
 
-def _windows_error(ctypes_module: ModuleType) -> OSError:
-    """Build an OSError from a Windows-only ctypes last-error function."""
-    get_last_error = typ.cast(
-        "cabc.Callable[[], int]",
-        getattr(ctypes_module, "get_last_error"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+def _winapi_handle_api() -> _HandleApi:
+    """Load the current-process and handle entry points from ``_winapi``.
+
+    ``_winapi`` is a private CPython module, and typeshed declares its whole
+    body under a Windows-only guard, so on a non-Windows host every one of
+    these names is absent from the analysed module. Resolving them through
+    ``getattr`` keeps the call sites type-checkable there, and mirrors how
+    ``msvcrt``'s entry points are reached below.
+
+    Returns
+    -------
+    _HandleApi
+        The current-process, duplicate and close entry points, resolved from
+        whichever ``_winapi`` build is installed.
+    """
+    import _winapi
+
+    return _HandleApi(
+        current_process=typ.cast(
+            "cabc.Callable[[], int]",
+            getattr(_winapi, "GetCurrentProcess"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+        ),
+        duplicate_handle=typ.cast(
+            "cabc.Callable[..., int]",
+            getattr(_winapi, "DuplicateHandle"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+        ),
+        close_handle=typ.cast(
+            "cabc.Callable[[int], None]",
+            getattr(_winapi, "CloseHandle"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
+        ),
     )
-    win_error = typ.cast(
-        "cabc.Callable[[int], OSError]",
-        getattr(ctypes_module, "WinError"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
-    )
-    return win_error(get_last_error())
 
 
 def _duplicate_windows_handle(handle: int) -> int:
     """Duplicate a Win32 handle so Rust can own it independently of the CRT."""
-    import ctypes
-
-    kernel32 = _kernel32_handle_api()
-    current_process = kernel32.GetCurrentProcess()
-    duplicated_handle = ctypes.c_void_p()
-    duplicate_succeeded = kernel32.DuplicateHandle(
+    api = _winapi_handle_api()
+    current_process = api.current_process()
+    duplicate = api.duplicate_handle(
         current_process,
-        ctypes.c_void_p(handle),
+        handle,
         current_process,
-        ctypes.byref(duplicated_handle),
         0,
         _DO_NOT_INHERIT_HANDLE,
         _DUPLICATE_SAME_ACCESS,
     )
-    if not duplicate_succeeded:
-        raise _windows_error(ctypes)
-    if duplicated_handle.value is None:
+    # Rust treats the handle it receives as an owned resource and would close
+    # whatever number arrived, so a null result is rejected here rather than
+    # smuggled across as a valid handle.
+    if duplicate == 0:
         msg = "DuplicateHandle returned a null handle"
         raise OSError(msg)
-    return int(duplicated_handle.value)
+    return duplicate
 
 
 def _close_windows_handle(handle: int) -> None:
     """Close a duplicated Win32 handle that was not handed to Rust."""
-    import ctypes
-
-    if not _kernel32_handle_api().CloseHandle(ctypes.c_void_p(handle)):
-        raise _windows_error(ctypes)
+    _winapi_handle_api().close_handle(handle)
 
 
 @contextlib.contextmanager
@@ -149,7 +149,6 @@ def _convert_fd_for_platform(fd: int) -> int:
     if os.name != "nt":
         return fd
 
-    import ctypes
     import msvcrt
 
     get_osfhandle = typ.cast(
@@ -157,6 +156,10 @@ def _convert_fd_for_platform(fd: int) -> int:
         getattr(msvcrt, "get_osfhandle"),  # ruff: ignore[get-attr-with-constant]  # Windows-only API.
     )
     handle = get_osfhandle(fd)
-    bit_size = ctypes.sizeof(ctypes.c_void_p) * 8
-    mask = (1 << bit_size) - 1
-    return handle & mask
+    # ``get_osfhandle`` reports a raw HANDLE, which is signed when its top bit
+    # is set. Rust receives a ``u64``, so sign-extended values have to be
+    # narrowed back to the pointer's own width. ``sys.maxsize`` is
+    # ``2**63 - 1`` on a 64-bit interpreter and ``2**31 - 1`` on a 32-bit one,
+    # so its bit length plus the sign bit is exactly the pointer width.
+    pointer_bits = sys.maxsize.bit_length() + 1
+    return handle & ((1 << pointer_bits) - 1)

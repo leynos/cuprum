@@ -58,8 +58,22 @@ _PRODUCER_SOURCE = (
     "sys.stdout.buffer.flush()\n"
 )
 
-_PRODUCER_TIMEOUT_SECONDS = 30
-_STATUS_TIMEOUT_SECONDS = 5
+# These bounds describe how long this helper may spend *containing* a stuck
+# child, so they have to finish inside every budget that encloses a call to it.
+# The oracle runs both under the Rust parity child and directly under pytest,
+# and each imposes 30 seconds: ``CHILD_TIMEOUT`` in
+# ``rust/cuprum-rust/tests/support/boundary_child.rs`` and this repository's
+# ``timeout = 30`` in ``pyproject.toml``. A healthy producer finishes in well
+# under a second, so the wait below is pure containment.
+#
+# Worst case is the full escalation chain: one producer wait, then terminate
+# and kill each with their own status read, then the cleanup path in
+# ``capture_from_producer``. That is 10 + 2 + 2 + 2 + 2 = 18 seconds, which
+# leaves 12 seconds of startup and teardown margin inside the 30-second
+# envelope. Raising either constant requires re-deriving that sum, not just
+# raising it.
+_PRODUCER_TIMEOUT_SECONDS = 10
+_STATUS_TIMEOUT_SECONDS = 2
 
 
 class _ProducerExitError(RuntimeError):

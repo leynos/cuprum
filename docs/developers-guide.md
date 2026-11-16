@@ -6450,15 +6450,21 @@ Both platform entry points named `consume_stream_files` delegate to one private
 loop, `consume_with_reader`. Each entry point passes a read closure over its
 own capability-typed `read_stream`, plus its platform label for the
 length-overflow event. Windows PyO3 consume also has a CRT-descriptor adapter
-that passes `_read` through the same loop. The Python wrapper duplicates the
-reader, sets the duplicate to binary mode, and closes it after native consume;
-direct extension callers must keep an open synchronous CRT descriptor in binary
-mode. This adapter does not make overlapped asyncio subprocess handles suitable
-for native reads. `SynchronousBorrowedStream` remains the capability for known
-synchronous Win32 handles used by the pump and Rust-side stream tests.
-`consume_tests.rs` drives the shared loop through a scripted read closure. It
-pins split sequences, EOF, and read-error propagation on every platform,
-including Windows, where the pipe-backed snapshots do not run.
+that passes `_read` through the same loop. Two duplicates are taken, for
+different reasons: the Python wrapper's keeps the caller's translation mode
+untouched before the GIL is released, and the native entry's is what the
+detached read actually uses, so no close from another thread can race it. Both
+set binary mode on the duplicate only and close it afterwards, leaving the
+caller's descriptor and its mode alone. A direct extension caller therefore
+does not need its descriptor in binary mode, but it must keep that descriptor
+bound to the intended readable, synchronous resource until duplication
+completes, because the native entry reads the number it is handed. This adapter
+does not make overlapped asyncio subprocess handles suitable for native reads.
+`SynchronousBorrowedStream` remains the capability for known synchronous Win32
+handles used by the pump and Rust-side stream tests. `consume_tests.rs` drives
+the shared loop through a scripted read closure. It pins split sequences, EOF,
+and read-error propagation on every platform, including Windows, where the
+pipe-backed snapshots do not run.
 
 The extension-gated tests keep the Windows consume boundary active. The
 `TestRustConsumeStream` suite checks CRLF and Ctrl-Z bytes while the caller's
@@ -6472,11 +6478,16 @@ ownership. Reproduce those focused checks with:
 
 ```bash
 uv run pytest cuprum/unittests/test_rust_consume_stream.py -q
+uv run pytest cuprum/unittests/test_rust_errno_windows.py -q
 uv run pytest cuprum/unittests/test_rust_streams_boundary_property.py -q
 uv run pytest cuprum/unittests/test_rust_streams_roundtrip_property.py -q
 uv run pytest tests/helpers/test_consume_boundary_oracle.py -k incomplete_mebibyte -q
 uv run pytest tests/behaviour/test_rust_streams_behaviour.py -k large_boundary -q
 ```
+
+The text-mode check lives in `test_rust_errno_windows.py`, which is
+Windows-only and skips elsewhere, together with the unusable-descriptor child
+regression.
 
 Run the full extension target with `make test-extension`. Rust's parity child
 still uses its recorded proptest case counts and fixed seeds from

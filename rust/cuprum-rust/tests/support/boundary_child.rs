@@ -95,7 +95,16 @@ fn boundary_child_command(python: &Path, buffer_size: u32) -> Result<Command, St
     command
         .arg(helper)
         .arg("--buffer-size")
-        .arg(buffer_size.to_string());
+        .arg(buffer_size.to_string())
+        // The oracle reports the interpreter and native-module paths on
+        // stdout, and both are decoded as UTF-8 here. Python picks an
+        // encoding for a redirected stream from the locale, which on Windows
+        // is the ANSI code page; a path containing a character outside it
+        // would arrive as replacement bytes and fail the provenance check for
+        // a reason that has nothing to do with the boundary under test.
+        // Only the metadata stream is pinned: the payload travels on stdin as
+        // raw bytes and is never decoded.
+        .env("PYTHONIOENCODING", "utf-8");
     Ok(command)
 }
 
