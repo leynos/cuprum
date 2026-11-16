@@ -234,8 +234,11 @@ class GitHubActionsSession:
         flushes that buffer immediately, bypassing the text layer. A buffered
         text destination therefore has to be flushed when a framing block is
         complete, or the runner can read child bytes before the workflow
-        command that was meant to precede them. Flushing once per block keeps
-        the framing atomic while leaving child echo unchanged.
+        command that was meant to precede them. One flush per block publishes
+        the block at the flush that ends it, without changing child echo. That
+        is an ordering guarantee, not an atomicity one: another writer can
+        interleave between a block's writes, and a failed flush leaves the
+        bytes already written in the destination.
 
         Parameters
         ----------

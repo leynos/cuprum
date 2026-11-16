@@ -12,6 +12,8 @@ from __future__ import annotations
 import typing as typ
 
 import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from cuprum.sinks import (
     GitHubActionsSink,
@@ -177,8 +179,8 @@ def test_close_flushes_every_framing_block_it_writes(
     """Each close path writes its frames and then flushes them once.
 
     The event order is the contract: a flush that preceded the writes, or one
-    per line rather than one per framing block, would not keep a multi-line
-    frame atomic.
+    per line rather than one per framing block, would publish part of a
+    multi-line frame ahead of the rest of it.
     """
     emit_group, emit_annotation = framing
     log = _RecordingLog()
@@ -219,4 +221,90 @@ def test_flush_failure_propagates_and_second_close_writes_nothing() -> None:
     assert log.events == opened_events + terminal_writes, (
         f"the failed close must write the terminal block once and never "
         f"annotate; got {log.events!r}"
+    )
+
+
+@settings(max_examples=50, deadline=None)
+@given(payload=st.binary(max_size=256))
+def test_arbitrary_child_payload_stays_inside_the_frames(payload: bytes) -> None:
+    """Every child payload sits between the opening frames and the terminal ones.
+
+    The payload is arbitrary binary, so the frames cannot be located by
+    searching the output for them: a payload may itself contain
+    workflow-command text. The contract is positional — the opening frames end
+    where the payload begins, and the terminal frames follow every payload
+    byte. Child echo is modelled by writing to and flushing the byte buffer,
+    which is exactly what ``log.buffer`` offers it.
+    """
+    log, raw = buffered_log()
+    session = _open_session(GitHubActionsSink(log, force=True))
+
+    raw.write(payload)
+    raw.flush()
+    session.close(SessionOutcome(TerminalOutcome.EXIT_ZERO, exit_code=0))
+
+    opening = f"{_GROUP_OPEN}{_STOP_FRAME}".encode()
+    terminal = _TERMINAL.encode()
+    data = raw.getvalue()
+    assert data.startswith(opening), (
+        f"child output must not precede the opening frames; got {data[:64]!r}"
+    )
+    start = len(opening)
+    end = start + len(payload)
+    assert data[start:end] == payload, (
+        f"child bytes must follow the opening frames unchanged; "
+        f"got {data[start:end]!r} for payload {payload!r}"
+    )
+    assert data[end:] == terminal, (
+        f"the lease release and endgroup must follow all child bytes; "
+        f"got {data[end:]!r}"
+    )
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    framing=st.sampled_from(((True, True), (True, False), (False, True))),
+    fail_index=st.integers(min_value=1, max_value=2),
+)
+def test_failed_flush_aborts_close_at_any_block(
+    framing: tuple[bool, bool],
+    fail_index: int,
+) -> None:
+    """A close-time flush failure stops the close at that block, for good.
+
+    ``fail_index`` counts close-time flushes, and the framing pair decides how
+    many of them a close performs, so every reachable failure point is
+    covered. The block whose flush failed keeps its writes in the recorder —
+    the failure happens after them — but no later block is attempted, and the
+    closed session never writes again on a second close.
+    """
+    emit_group, emit_annotation = framing
+    assume(fail_index <= int(emit_group) + int(emit_annotation))
+
+    # The opening block also flushes, so the recorder's fail point is offset
+    # by it: only a group-enabled session flushes on open.
+    log = _RecordingLog(fail_flush_number=int(emit_group) + fail_index)
+    sink = GitHubActionsSink(
+        typ.cast("typ.IO[str]", log),
+        force=True,
+        emit_group=emit_group,
+        emit_annotation=emit_annotation,
+    )
+    session = _open_session(sink)
+    log.events.clear()
+
+    outcome = SessionOutcome(TerminalOutcome.EXIT_NONZERO, exit_code=1)
+    with pytest.raises(BrokenPipeError):
+        session.close(outcome)
+
+    attempted = list(log.events)
+    session.close(outcome)
+
+    flushes = [event for event in attempted if event[0] == "flush"]
+    assert len(flushes) == fail_index - 1, (
+        f"close must stop at the {fail_index}th flush; "
+        f"{fail_index - 1} flushes should have succeeded, got {attempted!r}"
+    )
+    assert log.events == attempted, (
+        f"a closed session must never write again; got {log.events!r}"
     )
