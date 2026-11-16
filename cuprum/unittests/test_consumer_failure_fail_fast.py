@@ -18,18 +18,15 @@ than with the callback's.
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
-import signal
 import typing as typ
 
 import pytest
 
 from cuprum import RunOutputOptions, StdinStream, sh
+from cuprum.unittests._wait4_process_support import _abandon
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.timeouts import (
     pending_tasks,
-    process_is_running,
     started_pids,
     wait_for_process_death,
 )
@@ -177,11 +174,15 @@ async def _drive_failure(
 
 
 def _kill_leftovers(events: cabc.Sequence[ExecEvent]) -> None:
-    """Force-kill any child this case left running, so a failure cannot leak it."""
+    """Kill any child this case left running, so a failure cannot leak it.
+
+    The probe is ``_abandon``'s rather than a liveness check on the pid: a
+    reaped child's number can already belong to an unrelated process, and
+    ``kill`` would then terminate a stranger. ``_abandon`` asks ``waitpid``
+    what this process still owns and signals only a child that is live.
+    """
     for pid in started_pids(events):
-        if process_is_running(pid):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
+        _abandon(pid)
 
 
 @pytest.mark.parametrize("entry_point", ["run", "lines"])
