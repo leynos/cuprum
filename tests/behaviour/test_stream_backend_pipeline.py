@@ -211,9 +211,9 @@ def then_pipeline_settles_within_deadline(pipeline_run: _PipelineRun) -> None:
     )
 
 
-@then("the early consumer reports completion")
-def then_early_consumer_reports_completion(pipeline_run: _PipelineRun) -> None:
-    """Assert the early consumer still produced its own output.
+@then("the early consumer reports completion and exits successfully")
+def then_early_consumer_settles(pipeline_run: _PipelineRun) -> None:
+    """Assert the early consumer kept its own output and a clean exit status.
 
     Parameters
     ----------
@@ -224,17 +224,6 @@ def then_early_consumer_reports_completion(pipeline_run: _PipelineRun) -> None:
         "the early consumer should report completion, got "
         f"{pipeline_run.result.stdout!r}"
     )
-
-
-@then("the early consumer exits successfully")
-def then_early_consumer_exits_successfully(pipeline_run: _PipelineRun) -> None:
-    """Assert the early consumer's exit status survived the release.
-
-    Parameters
-    ----------
-    pipeline_run : _PipelineRun
-        The timed run under the release deadline.
-    """
     assert pipeline_run.result.stages[1].exit_code == 0, (
         "the early consumer should exit cleanly, got "
         f"{pipeline_run.result.stages[1].exit_code}"
