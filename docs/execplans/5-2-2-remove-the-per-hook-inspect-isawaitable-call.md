@@ -5,8 +5,12 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: APPROVED (2026-11-02). Decision D1 resolved in favour of Option A, the
-result-guarded dispatcher with no per-hook classification.
+Status: COMPLETE (2026-11-17). Approved 2026-11-02, with Decision D1 resolved
+in favour of Option A, the result-guarded dispatcher with no per-hook
+classification. The implementation is delivered on branch
+`5-2-2-remove-the-per-hook-inspect-isawaitable-call`; every deterministic gate
+is green and the reviewed candidate is approved. `Outcomes & retrospective`
+maps each acceptance criterion to the measurement that meets it.
 
 Roadmap item: 5.2.2 in `docs/roadmap.md` (phase 5, "Reclaim the pure-Python
 consume hot path"; step 5.2, "Make per-line event emission cheap for
@@ -499,6 +503,13 @@ These are hard invariants. Violating one requires escalation, not a workaround.
   split exists, matching that module's own docstring: the shapes are frozen
   data and the parsers are the policy that decides what the data may contain,
   so each module stays small enough to read whole.
+- [x] (2026-11-17) Plan status records completion. CodeRabbit confirmed the
+  Developer Documentation check passes at `e26182b6e` and recorded the
+  re-export convention as a learning, so the shapes note will not be raised
+  again. It also observed that this plan's status line still read `APPROVED`
+  although every progress item is complete. The line now reads `COMPLETE`,
+  keeps the approval date and Decision D1, and states where the acceptance
+  evidence lives; the sibling 5.2.1 plan uses the same shape.
 
 ## Surprises & discoveries
 
