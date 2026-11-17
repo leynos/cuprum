@@ -1185,9 +1185,12 @@ finite burst still finishes normally. If that window expires, Cuprum closes the
 upstream read transport rather than leaving it open and unread. A producer that
 is still writing then receives a broken pipe and normally exits non-zero, so
 the pipeline settles promptly instead of waiting for a stage blocked on a full
-pipe that nothing drains. In that case `PipelineResult.ok` is `False` because
-the producer failed, while the downstream stage's own exit status and captured
-output remain available in `PipelineResult.stages`.
+pipe that nothing drains. That failure counts like any other: it can be the
+pipeline's first failure, so the fail-fast rule above also terminates any stage
+still running, including a downstream stage that had stopped reading but had
+not yet exited. In that case `PipelineResult.ok` is `False` because the
+producer failed, while every stage's recorded exit status and captured output
+remain available in `PipelineResult.stages`.
 
 The bounded drain and the reader close belong to the pure-Python pump. A hop
 that declines the Rust backend, and every hop of a Python-backend pipeline, use
