@@ -5953,11 +5953,11 @@ and `CI` run 35004943782 succeeded with its
 `extended` job is skipped on pull requests by design.
 
 Prover installation is delegated to the shared action, which runs the
-`leynos/rust-prover-tools` revision pinned in `tools/prover-tools/VERSION` (the
-same revision the action defaults to). To adopt a new revision, replace the
-commit hash in that file and the action's `prover-tools-sha`; the `hashFiles`
-inputs for the file in the verifier and extended-check cache keys invalidate
-the archived tools.
+`leynos/rust-prover-tools` revision pinned in `tools/rust-prover-tools/REF`
+(the same revision the action defaults to). To adopt a new revision, replace
+the commit hash in that file and the action's `prover-tools-sha`; the
+`hashFiles` inputs for the file in the verifier and extended-check cache keys
+invalidate the archived tools.
 
 The PyPy downloader's bounded-download harness lives under `scripts/tests/`.
 `boundary_download_support.py` creates a throwaway certificate authority and

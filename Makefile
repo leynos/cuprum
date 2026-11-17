@@ -837,18 +837,19 @@ help: ## Show available targets
 
 # Boundary verifiers use their own pinned binary toolchains; normal gates keep
 # rust/rust-toolchain.toml. Kani install is deliberately not source-built here.
-# The pin lives in its own file so the verifier cache key can hash exactly what
+# The pin lives in `tools/rust-prover-tools/REF`, its own file, so the verifier cache key can hash exactly what
 # decides the downloaded binaries, rather than every unrelated Makefile edit.
 # `$(file < ...)` resolves against make's working directory and yields an empty
 # string when the file is absent, so a run from another directory or under an
 # older make would silently drop the pin. Fail loudly instead: an empty source
 # makes `uv` resolve `prover-tools` from a package index, not the pinned commit.
-PROVER_TOOLS_SOURCE ?= $(strip $(file < tools/prover-tools/VERSION))
+PROVER_TOOLS_REV = $(or $(strip $(file < tools/rust-prover-tools/REF)),$(error \
+	tools/rust-prover-tools/REF is empty; run make from the repository root))
+PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@$(PROVER_TOOLS_REV)
 # The CLI invocation on its own, without an environment prefix: a target that
 # must put a cached binary ahead of `~/.local/bin` supplies its own PATH.
 PROVER_TOOLS_RUN = uv tool run --python 3.14 \
-	--from $(or $(PROVER_TOOLS_SOURCE),$(error PROVER_TOOLS_SOURCE is empty; \
-	run make from the repository root)) prover-tools
+	--from $(PROVER_TOOLS_SOURCE) prover-tools
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
