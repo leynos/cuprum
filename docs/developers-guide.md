@@ -5882,12 +5882,12 @@ parallelism to its caller.
 ordering. See
 [Boundary harness compile tier](coverage-timeout-tiers.md#boundary-harness-compile-tier).
 
-Install the checksum-verified prebuilt tools first with `make install-verus` and
-`make install-boundary-kani`. The pinned `rust-prover-tools` installer selects
-Python `3.14` explicitly, including when CI exports `UV_PYTHON=3.13`; this
-tool-only runtime does not change the project Python test matrix. Verus uses
-Rust `1.98.0`, Verus `0.2026.09.06.8dea4a2`, and a separately installed
-prebuilt Z3 `4.16.0`. Kani uses `0.67.0` with compiler
+CI installs the checksum-verified prebuilt tools through the shared
+`leynos/shared-actions/.github/actions/install-prover-tools` action, pinned by
+full SHA. Cuprum keeps no installer of its own; the installers and their
+download tests are owned upstream in `leynos/rust-prover-tools`. Verus uses Rust
+`1.98.0`, Verus `0.2026.09.06.8dea4a2`, and a separately installed prebuilt Z3
+`4.16.0`. Kani uses `0.67.0` with compiler
 `rustc 1.93.0-nightly (53732d5e0 2025-11-20)` and CBMC `6.8.0`; Miri uses
 `nightly-2026-08-07` with `rustc 1.99.0-nightly (84b36a78a 2026-08-06)`. The
 Verus input is regenerated from the production progress kernels on every run.
@@ -5952,51 +5952,23 @@ and `CI` run 35004943782 succeeded with its
 `Extension-gated tests (Python/Rust boundary)` jobs. The boundary workflow's
 `extended` job is skipped on pull requests by design.
 
-The boundary installers and fault harnesses have narrow reuse policies. Kani
-and Z3 installation is delegated to the pinned `leynos/rust-prover-tools`
-revision. Its shared downloader accepts only HTTPS, follows a bounded number of
-redirects, rejects an oversized `Content-Length` before the destination opens,
-counts streamed bytes against a per-asset ceiling, and applies one monotonic
-deadline across redirects, header parsing, and the body. A hop that starts with
-no time left is refused before a socket opens, and each hop arms one socket
-timeout fixed at the smaller of the per-hop limit and the time the deadline
-leaves. Body reads re-arm that socket with the time remaining, and once the
-request has been sent a deadline watchdog shuts it down, so a response that
-trickles bytes or headers cannot hold the transfer past the deadline.
-Connection setup, TLS negotiation, and the request send run under the hop's own
-timeout, before the watchdog exists, so they are not re-armed and can still
-consume their full timeout after the deadline has passed.
-[rust-prover-tools issue 252](https://github.com/leynos/rust-prover-tools/issues/252)
-tracks arming those phases with the time left. The verified archive is
-published atomically only after the SHA-256 check. Cuprum's
-`make install-boundary-kani` and `make install-verus` pass explicit repository,
-install, and cache paths, and the Kani target also names its version file and
-disables the shared CLI's compile, setup, and verification phases so
-`cargo kani setup` remains the single owner of native setup. Before each
-delegated call the Makefile clears every name listed in
-`PROVER_TOOLS_AMBIENT_VARS`, the fixed set of ambient options the shared CLI
-would otherwise read as flag defaults, so a stray CI value cannot redirect an
-installation away from the repository cache. To adopt a new shared revision,
-replace the commit hash in `tools/prover-tools/VERSION`, run both install
-targets cold and warm, and rely on the `hashFiles` inputs for that file in the
-verifier and extended-check cache keys to invalidate the archived tools. Both
-keys hash the pin because both jobs restore the Verus install and its solver:
-the verus job from its own archive, and the extended job inside the proof-tool
-archive it shares with Kani and Miri.
+Prover installation is delegated to the shared action, which runs the
+`leynos/rust-prover-tools` revision pinned in `tools/prover-tools/VERSION` (the
+same revision the action defaults to). To adopt a new revision, replace the
+commit hash in that file and the action's `prover-tools-sha`; the `hashFiles`
+inputs for the file in the verifier and extended-check cache keys invalidate
+the archived tools.
 
-The bounded-download harness lives in four modules under `scripts/tests/`.
+The PyPy downloader's bounded-download harness lives under `scripts/tests/`.
 `boundary_download_support.py` creates a throwaway certificate authority and
-serves one HTTPS connection on a loopback socket;
-`boundary_download_scenarios.py` names the responses that must be refused;
-`boundary_download_runner.py` owns the isolated `uv` process and the paths
-around it; and `boundary_download_driver.py` runs inside that process, where
-the pinned revision is importable. `test_boundary_download_integration.py`
-holds the assertions and is skipped unless `CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`,
-so the default suite never reaches the network.
+serves one HTTPS connection on a loopback socket, and
+`boundary_download_scenarios.py` names the responses that must be refused.
+`test_boundary_pypy_https.py` holds the assertions and is skipped unless
+`CUPRUM_RUN_DOWNLOAD_INTEGRATION=1`, so the default suite never reaches the
+network.
 
-`make boundary-download-integration` runs that module together with
-`test_boundary_pypy_https.py`, which drives the PyPy downloader and the
-`install` entry point over the same loopback server.
+`make boundary-download-integration` runs that module, which drives the PyPy
+downloader and the `install` entry point over the same loopback server.
 `test_boundary_pypy_transfer.py` holds the unit and property cases that need no
 socket, `test_boundary_pypy_watchdog.py` holds the deadline-watchdog cases,
 `test_boundary_pypy_metrics.py` holds the metric and span cases, and all three
@@ -6029,11 +6001,8 @@ blocks on that event is therefore released by the same signal `__exit__` sets,
 so the download's exit cannot join a parked thread. The deadline, the clock and
 waiter seam, and the watchdog live in `scripts/pypy_download_deadline.py`. The
 target needs the `openssl` binary to mint the throwaway certificate authority,
-`uv` with a Python 3.14 interpreter for the isolated driver, network access to
-install the pinned `rust-prover-tools` revision, and a loopback socket for each
-scenario. The PyPy cases need only `openssl` and the loopback socket; they
-trust the test certificate authority through `SSL_CERT_FILE` for the duration
-of one test.
+and a loopback socket for each scenario. They trust the test certificate
+authority through `SSL_CERT_FILE` for the duration of one test.
 
 The retired `scripts/install_boundary_kani.py` and
 `scripts/install_boundary_z3.py` entry points are gone.
@@ -6945,12 +6914,11 @@ contract still reports the offending file and line for a skip that does not
 precede an approved fixture.
 
 Run Kani separately because it is a bounded model checker rather than a normal
-unit-test runner. Install the checksum-verified prebuilt pinned Kani binaries
-without a source build, then run the boundary harnesses from the repository
-root:
+unit-test runner. Install the pinned Kani through the shared
+`install-prover-tools` action's installer (`prover-tools kani install`), then
+run the boundary harness from the repository root:
 
 ```bash
-make install-boundary-kani
 make boundary-kani
 ```
 

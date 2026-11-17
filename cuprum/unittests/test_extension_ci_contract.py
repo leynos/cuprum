@@ -62,6 +62,9 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
     "release.yml": {
         ".github/actions/ensure-cargo-version",
     },
+    "rust-boundaries.yml": {
+        ".github/actions/install-prover-tools",
+    },
 }
 
 
