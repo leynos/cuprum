@@ -37,6 +37,12 @@ if typ.TYPE_CHECKING:
 # waits for the producer instead of releasing its reader.
 _EARLY_CLOSE_DEADLINE_S = 10.0
 
+# The downstream stage each named mode runs, so one step serves both pipelines.
+_DOWNSTREAM_MODES = {
+    "uppercasing": "import sys; sys.stdout.write(sys.stdin.read().upper())",
+    "immediately-exiting": "import sys; sys.stdout.write('OK')",
+}
+
 
 class _PipelineRun(typ.NamedTuple):
     """A timed pipeline run, reported with the deadline it was given.
@@ -112,20 +118,24 @@ def given_fd_extraction_fails() -> dict[str, int]:
 
 
 @given(
-    "a simple two stage uppercase pipeline",
+    parsers.parse("a two stage python pipeline with an {mode} downstream stage"),
     target_fixture="pipeline_under_test",
 )
-def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
-    """Create a two stage pipeline that uppercases its input.
+def given_two_stage_pipeline(mode: str) -> tuple[sh.Pipeline, frozenset[Program]]:
+    """Create a two stage pipeline whose downstream stage runs ``mode``.
+
+    Parameters
+    ----------
+    mode : str
+        The downstream behaviour named by the step, a key of
+        ``_DOWNSTREAM_MODES``.
 
     Returns
     -------
     tuple[sh.Pipeline, frozenset[Program]]
         The pipeline and the allowlist of programs required.
     """
-    return _make_echo_python_pipeline(
-        "import sys; sys.stdout.write(sys.stdin.read().upper())",
-    )
+    return _make_echo_python_pipeline(_DOWNSTREAM_MODES[mode])
 
 
 @given(
@@ -141,23 +151,6 @@ def given_continuing_producer_pipeline() -> tuple[sh.Pipeline, frozenset[Program
         The pipeline and the allowlist of programs required.
     """
     return early_close_pipeline()
-
-
-@given(
-    "a pipeline with an immediately exiting downstream stage",
-    target_fixture="pipeline_under_test",
-)
-def given_short_lived_downstream_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
-    """Create a pipeline whose downstream stage does not read stdin.
-
-    Returns
-    -------
-    tuple[sh.Pipeline, frozenset[Program]]
-        The pipeline and the allowlist of programs required.
-    """
-    return _make_echo_python_pipeline(
-        "import sys; sys.stdout.write('OK')",
-    )
 
 
 # -- When steps ---------------------------------------------------------------
