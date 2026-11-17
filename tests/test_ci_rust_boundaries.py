@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -152,26 +151,8 @@ def _logical_assignment(makefile: str, name: str) -> str:
     return value
 
 
-def test_prover_tools_selects_its_required_python() -> None:
-    """The installer must override CI's Python 3.13 with its required Python 3.14."""
-    makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text(
-        encoding="utf-8"
-    )
-    invocation = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS"))
-    assert "$(PROVER_TOOLS_RUN)" in invocation, (
-        "the CLI invocation must stay a named variable, so the Kani version "
-        "check can run it under its own PATH"
-    )
-    arguments = shlex.split(_logical_assignment(makefile, "PROVER_TOOLS_RUN"))
-    assert "--python" in arguments, (
-        "ambient UV_PYTHON can select an incompatible runtime"
-    )
-    runtime = arguments[arguments.index("--python") + 1]
-    assert runtime == "3.14", "the pinned prover-tools package requires Python 3.14"
-
-
 def test_boundary_kani_finds_the_installed_binaries() -> None:
-    """The local target must run the Kani the install target placed in `.cache`.
+    """The local target must run the Kani the shared action placed in `.cache`.
 
     `cargo kani` resolves `cargo-kani` on `PATH`. CI appends the cache's `bin`
     directory to `$GITHUB_PATH`, but a local `make boundary-kani` sees only the
@@ -182,7 +163,7 @@ def test_boundary_kani_finds_the_installed_binaries() -> None:
     )
     cached_bin = _logical_assignment(makefile, "KANI_CACHED_BIN").strip()
     assert cached_bin == "$(CURDIR)/.cache/boundary-kani/bin", (
-        "the cached frontend must be the one `install-boundary-kani` fills"
+        "the cached frontend must be the one the shared install action fills"
     )
     assert "boundary-kani: export PATH := $(KANI_CACHED_BIN):$(PATH)" in makefile, (
         "make boundary-kani must resolve the Kani installed into .cache"
@@ -257,17 +238,15 @@ def test_boundary_workflows_do_not_reference_the_retired_installers() -> None:
 
 
 def test_the_download_integration_target_supplies_its_opt_in() -> None:
-    """The opt-in suite needs both the switch and the pinned revision."""
+    """The opt-in suite needs its switch."""
     tokens = recipe_tokens(recipe_of("boundary-download-integration"))
 
     assert tokens == (
         "CUPRUM_RUN_DOWNLOAD_INTEGRATION=1",
-        "CUPRUM_PROVER_TOOLS_SOURCE=$(PROVER_TOOLS_SOURCE)",
         "$(PYTEST)",
         "-v",
-        "scripts/tests/test_boundary_download_integration.py",
         "scripts/tests/test_boundary_pypy_https.py",
-    ), "the target must switch the suite on, pass the pin, and name both modules"
+    ), "the target must switch the suite on and name its module"
 
 
 def test_the_verus_job_runs_the_bounded_download_contracts() -> None:

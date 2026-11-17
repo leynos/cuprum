@@ -141,7 +141,6 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
-            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
             .cache/boundary-z3
             ~/.cache/sccache
@@ -153,9 +152,22 @@ jobs:
         with:
           cache-size: 1G
       - name: Install prebuilt verifier and solver
-        run: |
-          make install-verus
-          rustup toolchain install 1.98.0 --profile minimal
+        id: prover
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
+        with:
+          tools: verus
+          runner-image: ubuntu2404
+          verus-install-dir: ${{ github.workspace }}/.cache/boundary-verus
+          z3-install-dir: ${{ github.workspace }}/.cache/boundary-z3
+      - name: Point the Makefile at the installed Verus
+        env:
+          VERUS_BIN: ${{ steps.prover.outputs.verus-bin }}
+        run: echo "VERUS_INSTALL_DIR=$(dirname "$(dirname "$VERUS_BIN")")" >> "$GITHUB_ENV"
+      - name: Install the Rust toolchain Verus builds with
+        run: rustup toolchain install 1.98.0 --profile minimal
       - name: Test proof correspondence and binary installation contracts
         run: uv run pytest scripts/tests/test_boundary_*.py
       - name: Exercise bounded download contracts over controlled HTTPS
@@ -185,7 +197,6 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
-            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
             .cache/boundary-z3
             ~/.cache/sccache
@@ -232,16 +243,20 @@ jobs:
             ~/.rustup/toolchains/nightly-2026-08-07-x86_64-unknown-linux-gnu
             .cache/boundary-kani
             .cache/boundary-z3
-            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
           # The archived tools include the Verus install and its solver, so a
           # shared prover-tools pin also invalidates this entry.
           key: boundary-${{ matrix.check }}-${{ hashFiles('tools/kani/*', 'tools/prover-tools/VERSION', 'Makefile') }}
       - name: Install prebuilt Kani frontend and bundle
         if: matrix.check == 'kani'
-        run: |
-          make install-boundary-kani
-          echo "${GITHUB_WORKSPACE}/.cache/boundary-kani/bin" >> "$GITHUB_PATH"
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
+        with:
+          tools: kani
+          runner-image: ubuntu2404
+          kani-install-dir: ${{ github.workspace }}/.cache/boundary-kani/bin
       - name: Install pinned Miri binary toolchain
         if: matrix.check == 'miri'
         run: rustup toolchain install nightly-2026-08-07 --profile minimal --component miri
@@ -252,10 +267,26 @@ jobs:
           set -o pipefail
           mkdir -p rust/target/boundary-verification
           make "boundary-${BOUNDARY_CHECK}" 2>&1 | tee "rust/target/boundary-verification/${BOUNDARY_CHECK}.log"
+      - name: Install prebuilt Verus for the fault runs
+        id: prover
+        if: matrix.check == 'kani'
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
+        with:
+          tools: verus
+          runner-image: ubuntu2404
+          verus-install-dir: ${{ github.workspace }}/.cache/boundary-verus
+          z3-install-dir: ${{ github.workspace }}/.cache/boundary-z3
+      - name: Point the Makefile at the installed Verus
+        if: matrix.check == 'kani'
+        env:
+          VERUS_BIN: ${{ steps.prover.outputs.verus-bin }}
+        run: echo "VERUS_INSTALL_DIR=$(dirname "$(dirname "$VERUS_BIN")")" >> "$GITHUB_ENV"
       - name: Exercise deliberate production faults
         if: matrix.check == 'kani'
         run: |
-          make install-verus
           rustup toolchain install 1.98.0 --profile minimal
           make boundary-faults
       - name: Archive proof summaries and failures
@@ -286,6 +317,5 @@ jobs:
             ~/.rustup/toolchains/nightly-2026-08-07-x86_64-unknown-linux-gnu
             .cache/boundary-kani
             .cache/boundary-z3
-            ~/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
           key: ${{ steps.boundary-cache.outputs.cache-primary-key }}
