@@ -99,10 +99,11 @@
   upstream reader transport before pipeline completion waits for every stage.
   The producer's next write meets a broken pipe, so a stage that would
   otherwise keep writing into a pipe nobody reads exits, and the pipeline
-  settles inside its own timeout. The downstream stage keeps its own result and
-  exit status, and only the timed-out drain path changes. Every fallback hop
-  inherits the rule, since all of them reach `_pump_stream`
-  ([#552](https://github.com/leynos/cuprum/issues/552)).
+  settles inside its own timeout. A downstream stage that has already exited
+  keeps its own result and exit status, while fail-fast may terminate one that
+  has stopped reading but is still running. Only the timed-out drain path
+  changes, and every fallback hop inherits the rule, since all of them reach
+  `_pump_stream` ([#552](https://github.com/leynos/cuprum/issues/552)).
 
 ## [0.2.0-beta2] - 2026-10-18
 
