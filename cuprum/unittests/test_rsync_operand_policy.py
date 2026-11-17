@@ -448,18 +448,25 @@ def test_rsync_option_shaped_names_are_normalized_after_the_separator(
     and that none carries remote spelling. A rejection inside the builder would
     therefore be an over-broad policy rather than a defence, so the property
     asserts the documented acceptance as well as the separation.
+
+    The generated spelling is handed to the builder unnormalized, so the
+    builder's own normalization is what the oracle below is compared against.
+    Passing a pre-normalized string would have made the property pass even if
+    the builder forwarded its operand unchanged.
     """
     normalized = str(safe_path(operand, allow_relative=True))
     assert not _has_remote_spelling(normalized), (
         f"the strategy must not generate remote spelling: {normalized!r}"
     )
     local = str(safe_path(_LOCAL_RELATIVE, allow_relative=True))
+    arguments = (operand, _LOCAL_RELATIVE) if is_source else (_LOCAL_RELATIVE, operand)
     expected = (normalized, local) if is_source else (local, normalized)
     role = "source" if is_source else "destination"
-    argv = _rsync_argv(*expected, RsyncOptions(archive=True, allow_relative=True))
+    argv = _rsync_argv(*arguments, RsyncOptions(archive=True, allow_relative=True))
 
     assert argv == ("--archive", "--", *expected), (
-        "exactly one separator must follow the flags and precede both operands"
+        "exactly one separator must follow the flags and precede both "
+        f"operands, normalized by the builder; got {argv!r}"
     )
     emitted = _emitted_operand(argv, role)
     assert emitted == normalized, (
