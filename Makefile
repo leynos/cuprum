@@ -849,7 +849,8 @@ PROVER_TOOLS_SOURCE ?= git+https://github.com/leynos/rust-prover-tools@$(PROVER_
 # The CLI invocation on its own, without an environment prefix: a target that
 # must put a cached binary ahead of `~/.local/bin` supplies its own PATH.
 PROVER_TOOLS_RUN = uv tool run --python 3.14 \
-	--from $(PROVER_TOOLS_SOURCE) prover-tools
+	--from $(or $(strip $(PROVER_TOOLS_SOURCE)),$(error PROVER_TOOLS_SOURCE is empty; \
+	run make from the repository root)) prover-tools
 VERUS_INSTALL_DIR ?= $(HOME)/.local/share/cuprum-verus-0.2026.09.06.8dea4a2
 MIRI_TOOLCHAIN = nightly-2026-08-07
 KANI_VERSION = 0.67.0
