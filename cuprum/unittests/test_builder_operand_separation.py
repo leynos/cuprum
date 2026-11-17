@@ -9,6 +9,13 @@ command with the caller's privileges.
 
 Every test skips when its tool is missing. The checkpoint test additionally
 requires GNU tar, because the option pair it defends against is GNU tar's.
+
+``test_rsync_spawn_vector_carries_the_separator`` closes the gap between the
+argv assertion and the child: it binds ``RSYNC`` to a stub that exits without
+transferring, records the vector handed to the spawn seam, and asserts the
+separator survived the execution boundary. Its negative control pairs an
+option-shaped operand with a remote partner and asserts the rejection precedes
+any spawn.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed ``tar --version`` probe.
+import sys
 import tarfile
 import typing as typ
 
@@ -30,10 +38,13 @@ from cuprum.builders import (
     tar_extract,
 )
 from cuprum.catalogue import RSYNC, TAR
+from cuprum.context.registration import bind_executable
+from cuprum.unittests.test_spawn_argv_vector import _capture_spawn_configs
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from cuprum._wait4_spawn import DirectProcessConfig
     from cuprum.sh import CommandResult, SafeCmd
 
 _TAR_AVAILABLE = shutil.which("tar") is not None
@@ -67,6 +78,10 @@ requires_tar = pytest.mark.skipif(not _TAR_AVAILABLE, reason=_TAR_SKIP_REASON)
 requires_rsync = pytest.mark.skipif(
     not _RSYNC_AVAILABLE,
     reason=_RSYNC_SKIP_REASON,
+)
+_posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the recorded spawn binds rsync to a POSIX shell-script stub",
 )
 
 
@@ -215,3 +230,97 @@ def test_rsync_with_a_remote_looking_source_transfers_nothing(
         "a rejected remote operand must never reach the rsync executable"
     )
     assert not destination.exists(), "no transfer may be attempted"
+
+
+def _write_successful_rsync_stub(directory: Path) -> Path:
+    """Write a stub ``rsync`` that performs no transfer and exits successfully."""
+    stub = directory / "rsync-stub"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return stub
+
+
+def _run_bound_rsync(
+    command: SafeCmd,
+    stub: Path,
+    *,
+    working_dir: Path,
+) -> CommandResult:
+    """Run ``command`` with ``RSYNC`` bound to ``stub`` inside an allowing scope."""
+    with (
+        scoped(ScopeConfig(allowlist=frozenset({RSYNC}))),
+        bind_executable(RSYNC, str(stub)),
+    ):
+        return command.run_sync(context=ExecutionContext(cwd=working_dir))
+
+
+def _build_and_run_rsync(
+    source: str,
+    destination: str,
+    stub: Path,
+    working_dir: Path,
+) -> CommandResult:
+    """Build and run one archive rsync with ``RSYNC`` bound to ``stub``."""
+    command = rsync_sync(
+        source,
+        destination,
+        options=RsyncOptions(archive=True, allow_relative=True),
+    )
+    return _run_bound_rsync(command, stub, working_dir=working_dir)
+
+
+@_posix_only
+def test_rsync_spawn_vector_carries_the_separator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The separated vector reaches the spawn seam exactly as built.
+
+    The argv assertions elsewhere stop at ``SafeCmd``. This test records what
+    the spawn call is handed, so a later rewrite cannot drop the separator or
+    interpose a shell between the builder and the child. The bound stub exits
+    without transferring, so the recorded vector is the only observable.
+    """
+    stub = _write_successful_rsync_stub(tmp_path)
+    recorded: list[DirectProcessConfig] = []
+    _capture_spawn_configs(monkeypatch, recorded)
+
+    result = _build_and_run_rsync("--rsh=cmd", "data/out", stub, tmp_path)
+
+    assert result.ok, f"the stub rsync failed unexpectedly: {result.stderr}"
+    assert len(recorded) == 1, "exactly one spawn must carry the transfer"
+    expected = (str(stub), "--archive", "--", "--rsh=cmd", "data/out")
+    assert recorded[0].argv == expected, (
+        "the spawn vector must be the bound executable, the flags, the "
+        f"separator, then the operands; got {recorded[0].argv!r}"
+    )
+    assert "-c" not in recorded[0].argv, (
+        "cuprum must not interpose a shell between the builder and the child"
+    )
+
+
+@_posix_only
+@pytest.mark.parametrize("role", ["source", "destination"])
+def test_rsync_remote_partner_records_no_spawn(
+    role: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A remote partner is rejected before the bound executable is spawned.
+
+    The negative control for the test above: the stub and the recording seam
+    are wired exactly as they are for an accepted transfer, so an empty record
+    is evidence that construction stopped the run rather than that nothing was
+    watching.
+    """
+    stub = _write_successful_rsync_stub(tmp_path)
+    recorded: list[DirectProcessConfig] = []
+    _capture_spawn_configs(monkeypatch, recorded)
+    source, destination = (
+        ("host:path", "--rsh=cmd") if role == "source" else ("--rsh=cmd", "host:path")
+    )
+
+    with pytest.raises(ValueError, match=rf"rsync {role} must be a local path"):
+        _build_and_run_rsync(source, destination, stub, tmp_path)
+
+    assert not recorded, "a rejected remote operand must never spawn the executable"
