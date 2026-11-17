@@ -65,6 +65,7 @@ from cuprum._capture_cleanup import _cleanup_capture_sinks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._reclaim_reporting import _report_reclaim_failure
 from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
+from cuprum._stream_transport import _stream_transport
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
@@ -341,16 +342,12 @@ def _close_asyncio_output_transports(
 
     asyncio publishes no accessor for the transport carrying a read pipe, so
     each stream is asked instead: the project's
-    :func:`cuprum._pipeline_stream_fds._stream_transport` already tolerates
+    :func:`cuprum._stream_transport._stream_transport` already tolerates
     both spellings of that attribute. A stream answers with its own pipe
     transport, so closing it releases exactly that descriptor and leaves
     termination and group ownership untouched; asyncio finishes the
     subprocess transport once every pipe it owns has disconnected.
     """
-    # Imported here rather than at module scope for the reason ``_release_pipes``
-    # gives: this module sits on a shorter load path than the pipeline internals.
-    from cuprum._pipeline_stream_fds import _stream_transport
-
     for stream in (process.stdout, process.stderr):
         if stream is None:
             continue

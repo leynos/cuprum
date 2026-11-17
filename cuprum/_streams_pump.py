@@ -32,7 +32,7 @@ import enum
 import logging
 import typing as typ
 
-from cuprum._pipeline_stream_fds import _stream_transport
+from cuprum._stream_transport import _stream_transport
 from cuprum.pump_observation import _current_pump_event_exec_id
 from cuprum.stream_events import StreamOperation, StreamOperationOutcome
 from cuprum.stream_observation import (
