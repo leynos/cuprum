@@ -4598,8 +4598,8 @@ transport is absent or already closing, and a `RuntimeError` or `OSError` from
 the timeout path releases: EOF, `DOWNSTREAM_CLOSED`, the writerless drain and
 cancellation are unchanged.
 
-Every hop that falls back to the Python pump inherits this rule, because they
-all reach `_pump_stream` (see [section 13.4](#134-fallback-strategy)). The
+Every hop that falls back to the Python pump inherits this rule, since all of
+them reach `_pump_stream` (see [section 13.4](#134-fallback-strategy)). The
 native Rust transfer loop does not: it drains the reader for the whole
 transfer, so an early downstream close has no bounded window to expire and no
 timeout branch from which to release. A producer that never stops writing
