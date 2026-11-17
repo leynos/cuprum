@@ -119,6 +119,7 @@
       'cuprum/_stream_echo.py',
       'cuprum/_stream_line_boundaries.py',
       'cuprum/_stream_line_consumer.py',
+      'cuprum/_stream_transport.py',
       'cuprum/_streams.py',
       'cuprum/_streams_pump.py',
       'cuprum/_streams_rs.py',

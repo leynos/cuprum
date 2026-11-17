@@ -4553,15 +4553,17 @@ and then stops. Stopping alone leaves that reader attached to a pipe nothing
 will read again: a producer that keeps writing fills the pipe buffer and blocks
 with no timeout, while pipeline completion waits for every stage to exit. So
 when the bounded drain reports `POST_CLOSE_DRAIN_TIMEOUT`,
-`_release_stream_reader_transport` closes the reader transport through the same
-`_stream_transport` lookup the hand-off uses — what the loop would have done at
-EOF. The producer's next write then fails with a broken pipe, the stage exits,
-and the pipeline settles with that stage's own non-zero status recorded while
-the downstream stage keeps its own result. Nothing is released when the
-transport is absent or already closing, and a `RuntimeError` or `OSError` from
-`close()` is logged at `DEBUG` and suppressed so teardown still completes. Only
-the timeout path releases: EOF, `DOWNSTREAM_CLOSED`, the writerless drain and
-cancellation are unchanged.
+`_release_stream_reader_transport` closes the reader transport through
+`cuprum._stream_transport._stream_transport`, the lookup the hand-off also uses
+— what the loop would have done at EOF. The producer's next write then fails
+with a broken pipe and the stage exits. That exit is an ordinary pipeline
+failure, so fail-fast may terminate stages still running, including a
+downstream stage that had stopped reading but not yet exited; the recorded
+status and captured output of every stage remain in `PipelineResult.stages`.
+Nothing is released when the transport is absent or already closing, and a
+`RuntimeError` or `OSError` from `close()` is logged at `DEBUG` and suppressed
+so teardown still completes. Only the timeout path releases: EOF,
+`DOWNSTREAM_CLOSED`, the writerless drain and cancellation are unchanged.
 
 Every hop that falls back to the Python pump inherits this rule, since all of
 them reach `_pump_stream` (see [section 13.4](#134-fallback-strategy)). The
@@ -4627,14 +4629,19 @@ resuming earlier would hand reader or writer state back to asyncio while native
 code was still mid-transfer.
 
 The module's scope is deliberately narrow: descriptor extraction plus the pause
-and blocking-mode lifecycle for the Rust pump hand-off. Production code
-consumes it only from `cuprum/_pipeline_streams.py`; the
+and blocking-mode lifecycle for the Rust pump hand-off. Its production
+consumers are `cuprum/_pipeline_streams.py` and the
+`cuprum/_pipeline_stream_native_*` modules that carry out that hand-off; the
 `cuprum/unittests/test_pipeline_stream*` modules also import the seams
 directly, to inject the partial failures the public entry point cannot provoke.
-Its reuse policy is that new descriptor lifecycle concerns for that hand-off
-belong here rather than being inlined into the pump, but the seams are not a
-general-purpose descriptor utility — anything serving a different caller should
-be designed against that caller's real requirements instead of widening these.
+The transport lookup those seams share belongs to the leaf module
+`cuprum/_stream_transport.py`, so a caller that only needs a stream's transport
+— the reader release above, or the abandoned-startup reclaim — imports that
+instead of reaching into the hand-off. Its reuse policy is that new descriptor
+lifecycle concerns for that hand-off belong here rather than being inlined into
+the pump, but the seams are not a general-purpose descriptor utility — anything
+serving a different caller should be designed against that caller's real
+requirements instead of widening these.
 
 ### 13.7 Linux splice() Optimization
 

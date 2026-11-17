@@ -30,7 +30,8 @@ from unittest import mock
 import pytest
 
 from cuprum import _subprocess_startup_abandon as reclaim
-from cuprum._pipeline_stream_fds import _extract_stream_fd, _stream_transport
+from cuprum._pipeline_stream_fds import _extract_stream_fd
+from cuprum._stream_transport import _stream_transport
 from cuprum._subprocess_startup_abandon import _discard_outputs
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.unittests._startup_abandon_support import (
@@ -218,7 +219,7 @@ class _FailingStream:
     """A stream whose read fails, still publishing the transport it wraps.
 
     The transport is kept reachable under the private name
-    :func:`~cuprum._pipeline_stream_fds._stream_transport` consults, so the
+    :func:`~cuprum._stream_transport._stream_transport` consults, so the
     fallback's per-stream close still names the pipe the real reader owned.
     A stub that hid the transport would let this case pass while the real
     descriptor leaked.
