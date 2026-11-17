@@ -152,6 +152,7 @@ jobs:
         with:
           cache-size: 1G
       - name: Install prebuilt verifier and solver
+        id: prover
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
         env:
           # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
@@ -161,6 +162,10 @@ jobs:
           runner-image: ubuntu2404
           verus-install-dir: ${{ github.workspace }}/.cache/boundary-verus
           z3-install-dir: ${{ github.workspace }}/.cache/boundary-z3
+      - name: Point the Makefile at the installed Verus
+        env:
+          VERUS_BIN: ${{ steps.prover.outputs.verus-bin }}
+        run: echo "VERUS_INSTALL_DIR=$(dirname "$(dirname "$VERUS_BIN")")" >> "$GITHUB_ENV"
       - name: Install the Rust toolchain Verus builds with
         run: rustup toolchain install 1.98.0 --profile minimal
       - name: Test proof correspondence and binary installation contracts
@@ -168,8 +173,6 @@ jobs:
       - name: Exercise bounded download contracts over controlled HTTPS
         run: make boundary-download-integration
       - name: Verify production kernels and compiler prohibition
-        env:
-          VERUS_INSTALL_DIR: ${{ github.workspace }}/.cache/boundary-verus
         run: |
           set -o pipefail
           mkdir -p rust/target/boundary-verification
@@ -265,6 +268,7 @@ jobs:
           mkdir -p rust/target/boundary-verification
           make "boundary-${BOUNDARY_CHECK}" 2>&1 | tee "rust/target/boundary-verification/${BOUNDARY_CHECK}.log"
       - name: Install prebuilt Verus for the fault runs
+        id: prover
         if: matrix.check == 'kani'
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
         env:
@@ -275,10 +279,13 @@ jobs:
           runner-image: ubuntu2404
           verus-install-dir: ${{ github.workspace }}/.cache/boundary-verus
           z3-install-dir: ${{ github.workspace }}/.cache/boundary-z3
-      - name: Exercise deliberate production faults
+      - name: Point the Makefile at the installed Verus
         if: matrix.check == 'kani'
         env:
-          VERUS_INSTALL_DIR: ${{ github.workspace }}/.cache/boundary-verus
+          VERUS_BIN: ${{ steps.prover.outputs.verus-bin }}
+        run: echo "VERUS_INSTALL_DIR=$(dirname "$(dirname "$VERUS_BIN")")" >> "$GITHUB_ENV"
+      - name: Exercise deliberate production faults
+        if: matrix.check == 'kani'
         run: |
           rustup toolchain install 1.98.0 --profile minimal
           make boundary-faults
