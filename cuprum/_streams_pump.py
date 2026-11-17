@@ -256,7 +256,10 @@ def _release_stream_reader_transport(reader: asyncio.StreamReader) -> None:
     writing fills the pipe buffer and blocks with no timeout, and pipeline
     completion waits for that stage forever. Closing the transport is what the
     loop would have done at EOF, and it makes the producer's next write fail
-    with a broken pipe so the stage exits and the pipeline settles.
+    with a broken pipe so the stage exits and the pipeline settles. That exit
+    is an ordinary pipeline failure, so the fail-fast rule may then terminate
+    other still-running stages, including a downstream stage that had stopped
+    reading but had not yet finished.
 
     Nothing is released unless the transport is present and still open, so a
     reader without a transport — a test double, or an already-closed pipe —
