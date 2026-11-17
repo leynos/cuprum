@@ -33,6 +33,17 @@ Feature: Pipeline execution with stream backend selection
     And all stages exit successfully
     And the Python pump fallback is used
 
+  Scenario: A continuing producer settles when the Rust pump falls back
+    Given the stream backend is set to rust
+    And the Rust extension is reported as available
+    And inter-stage file descriptor extraction fails
+    And a continuing producer piped into an early-exiting consumer
+    When I run the pipeline synchronously with a deadline
+    Then the pipeline settles within its deadline
+    And the early consumer reports completion
+    And the early consumer exits successfully
+    And the Python pump fallback is used
+
   Scenario: Pipeline raises when Rust is forced but unavailable
     Given the stream backend is set to rust
     And the Rust extension is not available for pipeline execution

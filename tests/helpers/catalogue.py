@@ -14,7 +14,7 @@ from cuprum.program import Program
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.sh import SafeCmd
+    from cuprum.sh import Pipeline, SafeCmd
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -75,6 +75,46 @@ def build_python_catalogue_env() -> PythonCatalogue:
         catalogue=catalogue,
         program=program,
         builder=sh.make(program, catalogue=catalogue),
+    )
+
+
+# A producer that never stops on its own: the pipeline can settle only once the
+# pump is finished with its stdout. BrokenPipeError is deliberately left
+# uncaught, so a released pipe ends the stage instead of hiding the release.
+_CONTINUING_PRODUCER_CODE = """
+import sys
+
+chunk = b'x' * 4096
+while True:
+    sys.stdout.buffer.write(chunk)
+    sys.stdout.buffer.flush()
+""".strip()
+
+# Reads one byte and exits successfully, closing the hop while the producer is
+# still writing.
+_EARLY_EXITING_CONSUMER_CODE = (
+    "import sys; sys.stdin.buffer.read(1); sys.stdout.write('done')"
+)
+
+
+def early_close_pipeline() -> tuple[Pipeline, frozenset[Program]]:
+    """Build a continuing producer piped into an early-exiting consumer.
+
+    The shape is the regression for an early downstream close: the consumer
+    succeeds and leaves, and only a pump that releases the upstream reader lets
+    the still-writing producer fail so the pipeline settles.
+
+    Returns
+    -------
+    tuple[Pipeline, frozenset[Program]]
+        The pipeline and the allowlist of programs it requires.
+    """
+    catalogue, python_program = python_catalogue()
+    python = sh.make(python_program, catalogue=catalogue)
+    return (
+        python("-c", _CONTINUING_PRODUCER_CODE)
+        | python("-c", _EARLY_EXITING_CONSUMER_CODE),
+        frozenset([python_program]),
     )
 
 

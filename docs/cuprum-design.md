@@ -4314,6 +4314,14 @@ Cuprum selects the stream backend at runtime using the following precedence:
    - the Rust pump implementation itself lives in `cuprum._streams_rs` and is
      only entered after `get_stream_backend()` resolves `StreamBackend.RUST`.
 
+A hop that falls back therefore inherits the Python pump's cleanup rule,
+including the upstream-reader release after a post-close drain timeout
+described in [section 13.6](#136-thread-safety-and-asyncio-integration).
+Backend selection changes which pump moves the bytes, never how an early
+downstream close is cleaned up. The `python` backend, an `auto` resolution that
+falls back, and every declined or unprepared native hand-off all reach the same
+`_pump_stream` entry point.
+
 Final stdout and stderr consumption currently bypasses this Rust dispatch
 pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the ADR-002
 measurement and parity-test gates, so backend selection does not change capture
@@ -4572,6 +4580,31 @@ or reuse the descriptors native I/O is still using: the release never touches
 the worker's duplicates, and the descriptor it closes is the transport's own.
 If any safe hand-off preparation step fails, the dispatcher keeps the original
 asyncio descriptors with the Python fallback.
+
+The same release principle covers the pure-Python pump, which owns no worker
+duplicates. After an early downstream close, `_relay_chunks` keeps draining the
+upstream reader for a bounded window (`_POST_CLOSE_DRAIN_TIMEOUT_S`, 0.25 s)
+and then stops. Stopping alone leaves that reader attached to a pipe nothing
+will read again: a producer that keeps writing fills the pipe buffer and blocks
+with no timeout, while pipeline completion waits for every stage to exit. So
+when the bounded drain reports `POST_CLOSE_DRAIN_TIMEOUT`,
+`_release_stream_reader_transport` closes the reader transport through the same
+`_stream_transport` lookup the hand-off uses — what the loop would have done at
+EOF. The producer's next write then fails with a broken pipe, the stage exits,
+and the pipeline settles with that stage's own non-zero status recorded while
+the downstream stage keeps its own result. Nothing is released when the
+transport is absent or already closing, and a `RuntimeError` or `OSError` from
+`close()` is logged at `DEBUG` and suppressed so teardown still completes. Only
+the timeout path releases: EOF, `DOWNSTREAM_CLOSED`, the writerless drain and
+cancellation are unchanged.
+
+Every hop that falls back to the Python pump inherits this rule, because they
+all reach `_pump_stream` (see [section 13.4](#134-fallback-strategy)). The
+native Rust transfer loop does not: it drains the reader for the whole
+transfer, so an early downstream close has no bounded window to expire and no
+timeout branch from which to release. A producer that never stops writing
+therefore keeps a native hop busy for as long as it writes; that path is
+outside this change's scope.
 
 #### Raw descriptor lifecycle
 
