@@ -4316,11 +4316,12 @@ Cuprum selects the stream backend at runtime using the following precedence:
 
 A hop that falls back therefore inherits the Python pump's cleanup rule,
 including the upstream-reader release after a post-close drain timeout
-described in [section 13.6](#136-thread-safety-and-asyncio-integration).
-Backend selection changes which pump moves the bytes, never how an early
-downstream close is cleaned up. The `python` backend, an `auto` resolution that
-falls back, and every declined or unprepared native hand-off all reach the same
-`_pump_stream` entry point.
+described in [section 13.6](#136-thread-safety-and-asyncio-integration). The
+`python` backend, an `auto` resolution that falls back, and every declined or
+unprepared native hand-off all reach the same `_pump_stream` entry point, so
+every path that selects it shares that rule. A successful native hand-off does
+not, for the reason given in that section: its transfer loop has no bounded
+drain window to expire.
 
 Final stdout and stderr consumption currently bypasses this Rust dispatch
 pathway. `rust_consume_stream()` remains a Phase 2 candidate behind the ADR-002
