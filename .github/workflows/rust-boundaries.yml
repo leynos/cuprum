@@ -153,6 +153,9 @@ jobs:
           cache-size: 1G
       - name: Install prebuilt verifier and solver
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
         with:
           tools: verus
           runner-image: ubuntu2404
@@ -244,6 +247,9 @@ jobs:
       - name: Install prebuilt Kani frontend and bundle
         if: matrix.check == 'kani'
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
         with:
           tools: kani
           runner-image: ubuntu2404
@@ -261,6 +267,9 @@ jobs:
       - name: Install prebuilt Verus for the fault runs
         if: matrix.check == 'kani'
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        env:
+          # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
+          UV_PYTHON: '3.14'
         with:
           tools: verus
           runner-image: ubuntu2404
