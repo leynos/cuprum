@@ -177,12 +177,12 @@ _TOOL_CACHE_INPUTS = [
     (
         "verus",
         "Restore pinned verifier, solver, and compiler objects",
-        ["tools/verus/*", "tools/prover-tools/VERSION"],
+        ["tools/verus/*", "tools/rust-prover-tools/REF"],
     ),
     (
         "extended",
         "Restore proof tools and Miri sysroots",
-        ["tools/kani/*", "tools/prover-tools/VERSION", "Makefile"],
+        ["tools/kani/*", "tools/rust-prover-tools/REF", "Makefile"],
     ),
 ]
 
@@ -202,7 +202,7 @@ def test_tool_caches_track_the_shared_installer_pin(
     """A new shared-installer revision must invalidate every archived verifier.
 
     The retired `scripts/install_boundary_z3.py` used to name the Verus key. The
-    pin now lives in `tools/prover-tools/VERSION`, so both jobs hash that file:
+    pin now lives in `tools/rust-prover-tools/REF`, so both jobs hash that file:
     otherwise the archived solver and verifier could outlive the revision that
     produced them. Hashing only the pin also restores a warm cache after an
     unrelated Makefile edit, which the extended job keeps as an input.

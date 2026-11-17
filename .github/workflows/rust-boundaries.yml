@@ -144,8 +144,8 @@ jobs:
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
             .cache/boundary-z3
             ~/.cache/sccache
-          key: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-${{ github.run_id }}
-          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/prover-tools/VERSION') }}-
+          key: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/rust-prover-tools/REF') }}-${{ github.run_id }}
+          restore-keys: boundary-verus-${{ hashFiles('tools/verus/*', 'tools/rust-prover-tools/REF') }}-
       - name: Set up sccache
         id: sccache
         uses: ./.github/actions/setup-sccache
@@ -246,7 +246,7 @@ jobs:
             ~/.rustup/toolchains/1.98.0-x86_64-unknown-linux-gnu
           # The archived tools include the Verus install and its solver, so a
           # shared prover-tools pin also invalidates this entry.
-          key: boundary-${{ matrix.check }}-${{ hashFiles('tools/kani/*', 'tools/prover-tools/VERSION', 'Makefile') }}
+          key: boundary-${{ matrix.check }}-${{ hashFiles('tools/kani/*', 'tools/rust-prover-tools/REF', 'Makefile') }}
       - name: Install prebuilt Kani frontend and bundle
         if: matrix.check == 'kani'
         uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
