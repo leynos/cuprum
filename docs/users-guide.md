@@ -1148,6 +1148,21 @@ near-simultaneous completions may use stage order as a tie-break. Interior
 stdout is consumed by the next stage and appears as `None` in that stage's
 result.
 
+An interior stage's stdout is pumped into the next stage's stdin. If a
+downstream stage exits before the upstream producer has finished, Cuprum keeps
+draining the upstream output for a bounded window, so a producer that writes a
+finite burst still finishes normally. If that window expires, Cuprum closes the
+upstream read transport rather than leaving it open and unread. A producer that
+is still writing then receives a broken pipe and normally exits non-zero, so
+the pipeline settles promptly instead of waiting for a stage blocked on a full
+pipe that nothing drains. In that case `PipelineResult.ok` is `False` because
+the producer failed, while the downstream stage's own exit status and captured
+output remain available in `PipelineResult.stages`.
+
+The bounded drain and the reader close belong to the pure-Python pump. A hop
+that declines the Rust backend, and every hop of a Python-backend pipeline, use
+it, so the behaviour is the same whichever reason selected it.
+
 ## Run commands concurrently
 
 `run_concurrent()` is async; `run_concurrent_sync()` is for synchronous
