@@ -1,0 +1,8 @@
+{
+  "anchor_weight": 30315,
+  "status": "fail_target_present",
+  "target_weight": 1998,
+  "target_weight_any_location": 1998,
+  "target_weight_outside_anchor": 0,
+  "total_weight": 60587
+}

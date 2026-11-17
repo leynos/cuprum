@@ -2173,7 +2173,19 @@ implemented with the following decisions:
   capacity-wait duration. The tracing adapter records only what explains a
   backpressure episode — the capacity wait, and a prune that actually dropped
   settled tasks — because depth and saturation samples arrive on the per-line
-  path, and tracing each one would grow the span with the line count.
+  path, and tracing each one would grow the span with the line count. Because
+  the dispatcher runs once per output line per hook, it decides whether to
+  schedule from the hook's *result*, never from a classification of the hook: a
+  `None` result — the only result a synchronous hook returns — is dismissed by
+  one identity comparison, a native coroutine — the only result an `async def`
+  hook returns — is recognized by one exact-type comparison against
+  `types.CoroutineType`, and only a result that is neither reaches
+  `inspect.isawaitable`. Every hook shape that works today keeps working,
+  including a plain function or lambda that returns a coroutine, a bound async
+  method, and an object with `async def __call__`. No hook classification may
+  decide whether a result is scheduled: static classification cannot see a
+  lambda or a decorated wrapper that returns a coroutine, so it could at best
+  select a fast path, never establish correctness.
 
 ### 8.1.4 Timeouts
 

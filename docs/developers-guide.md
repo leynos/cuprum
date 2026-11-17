@@ -1790,6 +1790,42 @@ combined boundary in `_pipeline_types`.
   `_WriteOutcome.CLOSED` when the downstream pipe closes early. The caller
   keeps writer ownership and closes it exactly once.
 
+`_emit_observe_hook` classifies a hook's *result*, not its hook, and the order
+of its checks is a hot-path contract rather than a detail:
+
+- `result is None` returns without scheduling. One synchronous hook runs per
+  observed line, so this identity check is the first thing dispatch does after
+  the call returns.
+- `type(result) is types.CoroutineType` schedules a native coroutine. An
+  `async def` hook always returns one, and the exact type test keeps the
+  general fallback off the common asynchronous path. The coroutine type cannot
+  be subclassed, so the check is total for native coroutines.
+- `inspect.isawaitable(result)` decides every remaining shape: objects with
+  `__await__`, generator-based coroutines, and awaitables returned through a
+  decorator, `functools.partial`, or a mock.
+
+A scheduled result is wrapped in `_await_awaitable` so a task can be created
+for any awaitable, not only a coroutine. The task is named
+`cuprum.observe.<phase>`, appended to the caller's list inside the dispatcher
+so the caller owns it before dispatch continues, and logged at `DEBUG` with the
+running count. The wrapper logs `observe_hook_task_started` and
+`observe_hook_task_finished`; a non-cancellation exception logs
+`observe_hook_task_failed` with `exc_info` and is re-raised, so the task's
+failure still reaches whoever awaits it. Cancellation is never logged as a
+failure, and is classified by asking whether `asyncio.CancelledError` is a
+superclass of `type(error)` rather than with `isinstance`: `isinstance` consults
+`__class__`, which a hook exception may define to raise, and such an error
+would escape the handler instead of being wrapped and reported.
+
+A hook that raises during an ordinary phase ends the dispatch: the exception is
+wrapped in `_ExecEventEmissionError` with the tasks scheduled so far, and raised
+`from` the original. Classification itself runs outside that handler, so an
+error raised while classifying — a result whose `__class__` or `__await__`
+access raises — escapes unwrapped, and the tasks scheduled before it never
+reach the caller. The harness described under "Verifying dispatch against a
+specification oracle" below treats that escape as part of the contract rather
+than an accident.
+
 `SafeCmd.run()` enforces the allowlist, then collects hooks from the current
 context, emits the `plan` event, runs before-hooks, and delegates subprocess
 execution to `_execute_with_hooks`. Pipeline execution follows the same
@@ -2129,6 +2165,85 @@ Only `TracingHook` has an active map, so "the active map drains correctly" is a
 claim about that hook alone; `test_tracing_span_stateful.py` asserts it
 directly by cross-checking `hook._active_spans` against a model after every
 step.
+
+### Verifying dispatch against a specification oracle
+
+`_emit_exec_event` promises something about *sequences* of hooks, not about any
+one hook: exactly the awaitable results are scheduled, in hook order, up to the
+first that raises; a settled dispatch runs every hook before it surfaces the
+first failure; and each task can be paired with the hook result that produced
+it. Per-shape assertions would pin examples of that promise without checking it
+over sequences, so these tests state the expected outcome independently of the
+implementation and compare the real dispatcher against it.
+
+Six modules under `cuprum/unittests/` split the harness by job; the
+[repository layout](repository-layout.md#dispatch-specification-harness) lists
+what each one owns.
+
+`DispatchExpectation` names the hooks that must run and in what order, the
+probes whose results must schedule, every raising hook, and the surfaced
+failure — or the awaitability-check error, which escapes unwrapped and takes
+precedence. `scheduled_probe_indices` pairs each scheduled task with the hook
+that produced it, which is unambiguous because every occurrence of a shape has
+the same awaitability.
+
+`mismatch(dispatch, kinds, event, records)` runs one dispatch and reports the
+first departure, in a fixed order:
+
+- calls: each probe's call count, then the trace of the probes that ran, so two
+  hooks called in reverse are caught even though every count agrees. The trace
+  records each probe's position, not its kind, because two probes of the same
+  kind would otherwise trace identically;
+- failure: whether the error is wrapped, and whether the wrapped error is the
+  raising hook's own exception object — or, when the check itself failed, the
+  error type that must escape unwrapped;
+- tasks: count, order, the `cuprum.observe.<phase>` name, the
+  `_await_awaitable` wrapper, and the identity of the wrapped result;
+- logs: the scheduling and failure records in emission order, then the task
+  lifecycle records as an unordered multiset.
+
+The task view is taken before settlement, because a completed coroutine drops
+its frame and the wrapper and wrapped result are only observable at scheduling
+time. Settlement comes before the call comparison, because an async hook
+records its call only when its coroutine runs, so comparing calls first would
+report a correctly scheduled hook as never called.
+
+Lifecycle records are sorted by level, message, and the `cuprum_*` fields,
+because a suspension can interleave two tasks' records; each sorted pair is
+then compared in full, so the sort key cannot hide an `exc_info` difference it
+omits. That is how a task-failure record missing its exception information is
+caught.
+
+One shape needs its own mechanism. A failing awaitability check escapes
+unwrapped, so the tasks scheduled before it never reach the caller. The
+comparison therefore instruments `asyncio.create_task` for the synchronous
+dispatch call in `_recorded_tasks`, records each task as it is created,
+compares those tasks like any others, and settles them afterwards — so an
+example mixing `async_def` with `check_raises` neither loses evidence nor
+leaves a pending task behind.
+
+`test_observe_hook_dispatch_properties.py` runs the comparison over generated
+hook sequences: `test_dispatch_matches_specification` covers the ordinary
+phases and `test_settled_dispatch_matches_specification` covers `settled`. Named
+`@example` cases pin every `HOOK_KINDS` entry, so a change to the domain
+cannot silently drop a shape. Both properties hold before and after the
+result-guarded fast path: they are preservation properties, not a red test.
+
+`test_observe_hook_dispatch_seeded_faults.py` keeps the comparison honest by
+running it against dispatchers that misread the contract — scheduling every
+non-`None` result, scheduling only native coroutines, calling hooks in reverse,
+reversing task order, and emitting a task failure without `exc_info` — and
+requiring a mismatch for each. The reversed call order is seeded twice, once
+with two different kinds and once with two hooks of the same kind, because only
+the second case proves the trace identifies probes and not kinds. A property
+that accepts a wrong dispatcher is worse than no property, so a new rule in the
+specification needs a seeded fault that breaks it.
+`test_observe_hook_dispatch.py` pins the named shapes and patches
+`inspect.isawaitable` with a spy that attributes a call through
+`_emit_observe_hook.__code__`, which is what proves a `None` result never
+reaches the detector; `test_settled_hook_dispatch.py` covers terminal dispatch,
+and `tests/behaviour/test_observe_hook_dispatch_behaviour.py` carries the
+scenario-level contract.
 
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`. `_pump_stream` closes
@@ -4572,6 +4687,19 @@ what the kernel delivers. Pipe capacity and writer scheduling still decide how
 the payload is split, so this measures end-to-end throughput through the
 consumer loop rather than any single read.
 
+Its `observe-dispatch` group times `_emit_exec_event` over a batch of 1,000
+events per benchmark call, once per hook shape (`sync` and `async`), which
+keeps pytest-benchmark's own loop entry out of the per-event figure. The batch
+size also fixes what each case measures, and the two differ: the sync hook
+schedules nothing, so its figure is dispatch alone, while the async case
+collects the batch's tasks and awaits them inside the timed call, so its figure
+covers task execution and settlement as well. Because the batch is timed as a
+whole and settled once, the async case measures the cost of producing and
+completing a run's worth of tasks rather than the marginal cost of one
+dispatch. Comparing the group across trees requires the same benchmark file in
+both, which is why a measurement of an older tree copies the current file into
+it.
+
 Run the hyperfine end-to-end throughput benchmarks, which write
 `dist/benchmarks/pipeline-throughput.json`:
 
@@ -4990,6 +5118,62 @@ export PYTHONPERFSUPPORT=1
 uv run maturin develop --release --manifest-path rust/cuprum-rust/Cargo.toml
 uv run python benchmarks/profile_tee_hotpath.py --profiler perf run
 ```
+
+### Hot-path frame census (`benchmarks/summarize_hot_path_frames.py`)
+
+Roadmap item 5.2.2's gate asks a narrower question than the 5.2.1
+construction-share classifier: after the change, does any sampled weight still
+reach a named detector frame while sitting under a named anchor frame?
+`benchmarks/summarize_hot_path_frames.py` answers it from one py-spy raw-stack
+capture:
+
+```bash
+python -m benchmarks.summarize_hot_path_frames <stacks.folded> \
+  --anchor FUNCTION@LOCATION --target FUNCTION@LOCATION \
+  --min-anchor-weight N --output <out.json>
+```
+
+Both frame specs are exact: `FUNCTION@LOCATION` must split into exactly two
+non-empty halves, and an over- or under-specified value is rejected rather than
+silently truncated. `--min-anchor-weight` is required and must be positive, so
+a caller can neither inherit a default floor that would weaken the claim nor
+supply a floor of zero that admits every capture.
+
+The result document reports `total_weight`, `anchor_weight`, `target_weight`,
+`target_weight_any_location`, `target_weight_outside_anchor`, and `status`.
+Every weight counts a stack once, however many matching frames it holds.
+`target_weight` matches the target at its own location, while
+`target_weight_any_location` matches the function name alone, because py-spy
+renders different `inspect.py` line numbers across interpreters; the two must
+agree or the run is inconclusive. `target_weight_outside_anchor` counts samples
+that reach the target without passing through the anchor, which shows whether
+the detector is reachable by another route.
+
+Exit status 0 means both target weights are zero and the anchor meets the
+floor; 1 means they agree and are non-zero; 2 means the input or the command
+line was malformed, the floor was not positive or the anchor fell below it, or
+the two target weights disagreed. A floor failure is reported even when the
+target weight is zero, because observing no target samples is only evidence of
+absence when the anchored region carried enough samples to have shown one. The
+flags come from a Cyclopts command, as the
+[scripting standards](scripting-standards.md) require, so `--help` documents
+them and a malformed command line takes the inconclusive status rather than a
+separate usage-error code.
+
+The command reads the capture with `read_capture`, `Frame`, and `FramePattern`
+from `benchmarks/_line_event_profile_model.py`, so the 5.2.1 classifier parses
+the same stacks identically. `Frame` and `FramePattern` are owned by
+`benchmarks/_line_event_profile_shapes.py`, which the model imports them from,
+so the frozen capture, frame, and rule shapes stay apart from the parsers and
+validation that fill them, and each module stays small enough to read whole. It
+differs from the classifier in one way: a folded-stack line the parser cannot
+read makes the census inconclusive rather than merely absent, because weight
+the census did not read cannot support a claim about weight that is gone. The
+only line it tolerates without counting is py-spy's frame-less record, a bare
+sample weight such as `' 34'` for a sample with no resolvable frames. Its
+arithmetic is checked against an independent brute-force recount in
+`cuprum/unittests/test_hot_path_frame_census.py`, whose generated inputs always
+cover the five stack shapes that decide the answer.
 
 ## Fixture generation (`benchmarks/deterministic_b64_fixture.py`)
 
@@ -5467,10 +5651,12 @@ retained generated `ExecEvent.__init__`, so an optimization that removes work
 **raises** the share. A higher share after a successful optimization is this
 metric's known behaviour, not a regression; judge such work by the per-frame
 contributions the classifier reports instead. The 5.2.1 measurement records the
-case concretely, and its successor is already forecast: item 5.2.2's
-`inspect.isawaitable` removal is expected to move the share 0.9686 points
-*above* the bar by succeeding. See
-[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md).
+case concretely, and item 5.2.2 has since measured it: removing the per-line
+`inspect.isawaitable` call moved the share from a control median of 28.1409% to
+a candidate median of 29.3436%, a rise of 1.2027 points, while the detector's
+sampled weight fell to zero in every candidate capture. See
+[the 5.2.1 evidence](tee-hotpath-line-event-emission-5-2-1.md) and
+[the 5.2.2 evidence](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 ## Cargo cache snapshots
 
@@ -8703,14 +8889,24 @@ path can score a higher share. The share is an attribution metric, not a
 stopwatch, and it must not be used as an acceptance instrument for a change
 whose goal is speed.
 
-The concrete instance is roadmap item 5.2.2, which removes the per-line
-`inspect.isawaitable` call — 589 samples, all denominator-only. Deleting it
-moves the share from 29.9414% to a **conditional forecast** of 30.9686%, which
-is worse by the gate's own criterion while being faster in fact. Read that
-number as the direction and rough size of the inversion, not as a measurement:
-no capture exists with the call absent. The full analysis, including the
-sampling caveats, is in
-[`docs/tee-hotpath-line-event-emission-5-2-1.md`](tee-hotpath-line-event-emission-5-2-1.md).
+The concrete instance is roadmap item 5.2.2, which removed the per-line
+`inspect.isawaitable` call. 5.2.1 counted 589 samples on that frame, all
+denominator-only, and forecast from that leaf count that the share would rise
+0.9686 points to 30.9686%. The census counts every stack that *reaches* the
+detector, including the `abc.__instancecheck__` work beneath it, which is 1,932
+to 2,207 samples per capture at repeat count 2. Measured on the delivered
+revisions, the share moved from a control median of 28.1409% to a candidate
+median of 29.3436%, a rise of 1.2027 points, while the detector's sampled
+weight fell to zero in every candidate capture. The forecast's direction and
+approximate size were both right: the measured rise is 0.23 points above it.
+Both arms sit below the level the 5.2.1 collection measured — by 1.80 and 0.60
+points — and about as far below this item's own previous collection, which
+measured the same two trees before the base's line-emission refactor moved the
+emission path; that shift belongs to the shared base, not to either arm. An
+earlier collection of this item measured a 2.30-point rise and explained it as
+the forecast counting only leaf frames; neither later collection reproduces
+that size, and the explanation is withdrawn. The full analysis is in
+[`docs/tee-hotpath-observe-hook-dispatch-5-2-2.md`](tee-hotpath-observe-hook-dispatch-5-2-2.md).
 
 To re-run or re-judge the gate, the committed captures and the classifier rules
 are in `docs/profiling/5-2-1-line-event-emission/`, whose `README.md` documents

@@ -224,6 +224,28 @@ _Applications upgrading from 0.1 should follow the
   [evidence record](docs/tee-hotpath-line-event-emission-5-2-1.md) and the raw
   captures under
   [`docs/profiling/5-2-1-line-event-emission/`](docs/profiling/5-2-1-line-event-emission/README.md).
+- **Per-line hook dispatch stops asking every result whether it is awaitable:**
+  The dispatcher that hands each line event to each observe hook called
+  `inspect.isawaitable` on every hook's return value, which is `None` for the
+  synchronous hooks that dominate real use. It now decides from the result
+  instead of classifying the hook: `None` is dismissed by one identity
+  comparison, a native coroutine is recognized by one exact-type comparison
+  against `types.CoroutineType`, and only the remaining shapes — an
+  `asyncio.Future`, an object with `__await__`, a generator-based coroutine —
+  reach the unchanged `inspect.isawaitable` test. Scheduling, ordering, failure
+  propagation, and every supported hook shape (including a lambda or plain
+  wrapper that returns a coroutine) are unchanged. Three matched py-spy pairs
+  put the detector at 1,932–2,207 sampled frames under the per-line emitter in
+  the control and **zero** in every candidate. A synchronous hook costs about
+  167 ns per event instead of 433 ns, and the line-callback workload's
+  geometric-mean wall-time ratio was 0.9355 with a 95% interval of [0.8977,
+  0.9748], so the change does not regress the scenario. The 5.2.1
+  construction-share metric rises from a 28.1409% control median to 29.3436%,
+  which is that metric's documented inversion when work outside the counted
+  constructor is removed, not a regression. See the
+  [evidence record](docs/tee-hotpath-observe-hook-dispatch-5-2-2.md) and the
+  raw captures under
+  [`docs/profiling/5-2-2-observe-hook-dispatch/`](docs/profiling/5-2-2-observe-hook-dispatch/README.md).
 
 <!-- markdownlint-disable-next-line MD024 -->
 ### Added

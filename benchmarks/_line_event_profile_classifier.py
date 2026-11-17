@@ -68,7 +68,7 @@ CONSTRUCTION_SHARE_LIMIT_PERCENT = 30.0
 # definitions rather than from a capture so an inlined or re-laid-out
 # dispatcher cannot quietly drop the guard:
 # `_emit_event` at `cuprum/_pipeline_types.py:220` and `_emit_exec_event`, a
-# module-level function, at `cuprum/_observability.py:88`. Cite the frame, not
+# module-level function, at `cuprum/_observability.py:111`. Cite the frame, not
 # the number: merging main moved both bodies, and only the name-and-location
 # match above survived that.
 _HOOK_DISPATCH_BOUNDARY: tuple[FramePattern, ...] = (

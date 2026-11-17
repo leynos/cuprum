@@ -1,0 +1,4 @@
+# py-spy's own report for this capture, kept because the full log is not
+# committed: `.gitignore` excludes `*.log`. The host path is replaced with
+# `<capture>`, and the file is otherwise exactly what py-spy printed.
+py-spy> Wrote raw flamegraph data to '<capture>/stacks.folded'. Samples: 55384 Errors: 0

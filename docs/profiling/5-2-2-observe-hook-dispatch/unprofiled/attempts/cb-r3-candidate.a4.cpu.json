@@ -1,0 +1,9 @@
+{
+  "exit": 0,
+  "wall_seconds": 265.13666731724516,
+  "user_seconds": 245.000969,
+  "sys_seconds": 15.337038,
+  "cpu_seconds": 260.338007,
+  "host_busy_fraction": 0.5459184157814295,
+  "cpu_count": 24
+}
