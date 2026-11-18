@@ -18,11 +18,13 @@ than with the callback's.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 import pytest
 
 from cuprum import RunOutputOptions, StdinStream, sh
+from cuprum._process_exit import _NON_REAPING_PROBE_AVAILABLE, _child_was_collected
 from cuprum.unittests._wait4_process_support import _abandon
 from tests.helpers.catalogue import python_builder as build_python_builder
 from tests.helpers.timeouts import (
@@ -142,34 +144,81 @@ def _failing_callback(callback_kind: str, sentinel: BaseException) -> LineHook:
     return typ.cast("LineHook", _async_callback(sentinel))
 
 
-async def _drive_failure(
-    command: SafeCmd,
-    output: RunOutputOptions,
-    entry_point: str,
-    sentinel: BaseException,
-) -> None:
+@dc.dataclass(frozen=True, slots=True)
+class _FailureCase:
+    """What one lifecycle case drives, and the failure it must receive back."""
+
+    command: SafeCmd
+    output: RunOutputOptions
+    entry_point: str
+    sentinel: BaseException
+    events: list[ExecEvent]
+
+
+def _only_started_pid(events: cabc.Sequence[ExecEvent], context: str) -> int:
+    """Return the one child the run started, insisting there is exactly one.
+
+    Returns
+    -------
+    int
+        The pid of the case's only child.
+    """
+    pids = started_pids(events)
+    assert len(pids) == 1, f"{context} must start exactly one child, got {pids!r}"
+    return pids[0]
+
+
+def _assert_child_already_reaped(pid: int, context: str) -> None:
+    """Assert, while the run is still unwinding, that the child is collected.
+
+    The kernel is asked directly because the process object is not in hand
+    here: an unrested child leaves a status this process can still wait for,
+    and ``WNOWAIT`` answers whether one remains without taking it from the
+    reaper that owns it. ``returncode`` would not do — it is published by that
+    reaper, so it lags the kernel by however long the reaper takes.
+
+    This must run before the event loop is torn down. Teardown collects
+    abandoned children by itself, so a check made afterwards cannot tell a run
+    that reaped its child in time from one that left the work to shutdown. A
+    platform with no non-reaping probe establishes nothing, so those hosts fall
+    back to the caller's post-run ``wait_for_process_death``.
+    """
+    if not _NON_REAPING_PROBE_AVAILABLE:
+        return
+    assert _child_was_collected(pid), (
+        f"{context} must terminate and reap the child before its error reaches "
+        "the caller, or the caller is told the run ended while the child it "
+        "spawned is still waitable"
+    )
+
+
+async def _drive_failure(case: _FailureCase) -> None:
     """Exercise one entry point and assert the callback's error comes back."""
 
     async def invoke() -> None:
         """Drive the selected entry point to its callback failure."""
-        if entry_point == "run":
-            await command.run(output=output)
+        if case.entry_point == "run":
+            await case.command.run(output=case.output)
             return
-        async for _event in command.lines(output=output):
+        async for _event in case.command.lines(output=case.output):
             pass
 
     with pytest.raises(_CallbackError) as caught:
         await invoke()
-    assert caught.value is sentinel, (
-        f"{entry_point} must re-raise the callback's own exception, got "
+    assert caught.value is case.sentinel, (
+        f"{case.entry_point} must re-raise the callback's own exception, got "
         f"{caught.value!r}"
     )
     left = pending_tasks()
     # Names rather than the tasks themselves: a task has no ordering, so
     # ``sorted`` would raise precisely while reporting the leak.
     assert not left, (
-        f"{entry_point} must leave no unfinished owned tasks behind, got "
+        f"{case.entry_point} must leave no unfinished owned tasks behind, got "
         f"{sorted(task.get_name() for task in left)!r}"
+    )
+    _assert_child_already_reaped(
+        _only_started_pid(case.events, case.entry_point),
+        f"{case.entry_point} after a callback failure",
     )
 
 
@@ -195,30 +244,26 @@ def test_failing_output_callback_ends_the_run(
 ) -> None:
     """A callback failure ends the run without any configured timeout."""
     sentinel = _CallbackError(f"{entry_point} {stream} {callback_kind}")
-    command = build_python_builder()("-c", _CHILD_SCRIPT.format(stream=stream))
-    output = RunOutputOptions(on_line=_failing_callback(callback_kind, sentinel))
     events: list[ExecEvent] = []
+    case = _FailureCase(
+        command=build_python_builder()("-c", _CHILD_SCRIPT.format(stream=stream)),
+        output=RunOutputOptions(on_line=_failing_callback(callback_kind, sentinel)),
+        entry_point=entry_point,
+        sentinel=sentinel,
+        events=events,
+    )
     try:
         with sh.observe(events.append):
             try:
-                asyncio.run(
-                    asyncio.wait_for(
-                        _drive_failure(command, output, entry_point, sentinel),
-                        _WATCHDOG_S,
-                    ),
-                )
+                asyncio.run(asyncio.wait_for(_drive_failure(case), _WATCHDOG_S))
             except TimeoutError:
                 pytest.fail(
                     f"{entry_point} did not end within {_WATCHDOG_S}s of a "
                     f"{callback_kind} {stream} callback failure, so it waited on "
                     "a child that could never exit"
                 )
-        pids = started_pids(events)
-        assert len(pids) == 1, (
-            f"{entry_point} must start exactly one child, got {pids!r}"
-        )
         wait_for_process_death(
-            pids[0],
+            _only_started_pid(events, entry_point),
             seconds=3.0,
             context=f"{entry_point} after a {callback_kind} {stream} failure",
         )
@@ -289,14 +334,16 @@ def test_source_failure_outranks_the_callback_failure_it_caused() -> None:
             "the run must leave no unfinished owned tasks behind, got "
             f"{sorted(task.get_name() for task in pending_tasks())!r}"
         )
+        _assert_child_already_reaped(
+            _only_started_pid(events, "the precedence case"),
+            "the precedence case",
+        )
 
     try:
         with sh.observe(events.append):
             asyncio.run(drive())
-        pids = started_pids(events)
-        assert len(pids) == 1, f"exactly one child must be started, got {pids!r}"
         wait_for_process_death(
-            pids[0],
+            _only_started_pid(events, "the precedence case"),
             seconds=3.0,
             context="after a source failure outranked the callback's",
         )
