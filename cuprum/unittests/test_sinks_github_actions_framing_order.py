@@ -279,7 +279,15 @@ def test_failed_flush_aborts_close_at_any_block(
     closed session never writes again on a second close.
     """
     emit_group, emit_annotation = framing
-    assume(fail_index <= int(emit_group) + int(emit_annotation))
+    blocks = [
+        block
+        for emit, block in (
+            (emit_group, _TERMINAL_EVENTS),
+            (emit_annotation, _ANNOTATION_EVENTS),
+        )
+        if emit
+    ]
+    assume(fail_index <= len(blocks))
 
     # The opening block also flushes, so the recorder's fail point is offset
     # by it: only a group-enabled session flushes on open.
@@ -300,10 +308,13 @@ def test_failed_flush_aborts_close_at_any_block(
     attempted = list(log.events)
     session.close(outcome)
 
-    flushes = [event for event in attempted if event[0] == "flush"]
-    assert len(flushes) == fail_index - 1, (
-        f"close must stop at the {fail_index}th flush; "
-        f"{fail_index - 1} flushes should have succeeded, got {attempted!r}"
+    expected = [event for block in blocks[: fail_index - 1] for event in block] + list(
+        blocks[fail_index - 1][:-1]
+    )
+    assert attempted == expected, (
+        f"close must stop at the {fail_index}th flush, having published every "
+        f"earlier block and the failed block's writes; expected {expected!r}, "
+        f"got {attempted!r}"
     )
     assert log.events == attempted, (
         f"a closed session must never write again; got {log.events!r}"
