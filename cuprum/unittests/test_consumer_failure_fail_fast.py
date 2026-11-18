@@ -271,6 +271,33 @@ def test_failing_output_callback_ends_the_run(
         _kill_leftovers(events)
 
 
+def _parking_callback(
+    entered: asyncio.Event,
+    parked: asyncio.Event,
+    raised: asyncio.Event,
+    failure: BaseException,
+) -> LineHook:
+    """Report entry, then fail with *failure* once the producer has parked.
+
+    Returns
+    -------
+    LineHook
+        A hook that sets *entered*, waits for *parked*, sets *raised*, and
+        only then raises.
+    """
+
+    async def callback(_event: LineEvent) -> None:
+        """Report entry, then fail once the producer's cleanup has parked."""
+        entered.set()
+        await parked.wait()
+        raised.set()
+        raise failure
+
+    # The public alias types the hook as synchronous; the coordinator awaits
+    # an awaitable outcome as well.
+    return typ.cast("LineHook", callback)
+
+
 def test_source_failure_outranks_the_callback_failure_it_caused() -> None:
     """A producer's own failure is reported, not the callback's it caused.
 
@@ -293,14 +320,12 @@ def test_source_failure_outranks_the_callback_failure_it_caused() -> None:
         parked = asyncio.Event()
         release = asyncio.Event()
         callback_raised = asyncio.Event()
-
-        async def callback(_event: LineEvent) -> None:
-            """Report entry, then fail once the producer's cleanup has parked."""
-            callback_entered.set()
-            await parked.wait()
-            callback_raised.set()
-            raise callback_failure
-
+        hook = _parking_callback(
+            callback_entered,
+            parked,
+            callback_raised,
+            callback_failure,
+        )
         command = build_python_builder()(
             "-c",
             "import time; print('line', flush=True); time.sleep(30)",
@@ -311,11 +336,7 @@ def test_source_failure_outranks_the_callback_failure_it_caused() -> None:
                 await asyncio.wait_for(
                     command.run(
                         stdin=StdinStream(source),
-                        # The public alias types the hook as synchronous; the
-                        # coordinator awaits an awaitable outcome as well.
-                        output=RunOutputOptions(
-                            on_line=typ.cast("LineHook", callback),
-                        ),
+                        output=RunOutputOptions(on_line=hook),
                     ),
                     _WATCHDOG_S,
                 )
