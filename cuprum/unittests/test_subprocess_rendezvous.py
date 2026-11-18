@@ -11,6 +11,7 @@ attribution in ``test_line_stream_reader_failure.py``.
 from __future__ import annotations
 
 import asyncio
+import typing as typ
 
 import pytest
 
@@ -25,6 +26,53 @@ from cuprum.unittests._rendezvous_support import (
     failed_task,
     retrieve,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+
+def _task_for(sentinel: BaseException | None) -> asyncio.Task[object] | None:
+    """Build an already-failed task for *sentinel*, or no task for ``None``."""
+    return None if sentinel is None else failed_task(sentinel)
+
+
+async def _race_failing_tasks(
+    stdin_message: str | None,
+    consumer_messages: cabc.Sequence[str | None],
+) -> tuple[BaseException, ExitProbe, tuple[BaseException | None, ...]]:
+    """Race failing tasks into the rendezvous and report what it selected.
+
+    The first message names the stdin writer's failure and the rest name the
+    consumers' in stdout-then-stderr order; ``None`` marks a stream cuprum
+    holds no pipe for, whose slot therefore holds no task. Returning the
+    sentinels in that same order lets a case assert identity rather than
+    compare messages. Every task created here is retrieved before returning, so
+    a failing assertion in the caller cannot leave one pending.
+
+    Returns
+    -------
+    tuple[BaseException, ExitProbe, tuple[BaseException | None, ...]]
+        The failure the race raised, the probe it raced against, and the
+        sentinels in writer-then-consumers order.
+    """
+    sentinels = tuple(
+        None if message is None else CallbackError(message)
+        for message in (stdin_message, *consumer_messages)
+    )
+    stdin_task = _task_for(sentinels[0])
+    consumers = tuple(_task_for(sentinel) for sentinel in sentinels[1:])
+    probe = ExitProbe()
+    try:
+        with pytest.raises(CallbackError) as caught:
+            await _await_exit_or_writer_failure(
+                probe.wait(),
+                stdin_task,
+                consumers=consumers,
+            )
+    finally:
+        tasks = (stdin_task, *consumers)
+        await retrieve(*[task for task in tasks if task is not None])
+    return caught.value, probe, sentinels
 
 
 def test_exit_with_nothing_to_race_is_awaited_directly() -> None:
@@ -51,46 +99,25 @@ def test_exit_with_nothing_to_race_is_awaited_directly() -> None:
     )
 
 
-def test_successful_consumer_leaves_the_exit_wait_running() -> None:
-    """A consumer that merely finishes does not end the run."""
+@pytest.mark.parametrize("settlement", ["succeeds", "cancelled"])
+def test_a_consumer_that_does_not_fail_leaves_the_exit_wait_running(
+    settlement: str,
+) -> None:
+    """A consumer that merely finishes or was cancelled does not end the run."""
 
     async def scenario() -> tuple[tuple[int, float], bool]:
-        """Race a consumer that succeeds against the exit wait.
+        """Race a consumer that settles without failing against the exit wait.
 
         Returns
         -------
         tuple[tuple[int, float], bool]
             The exit result, and whether the exit wait was cancelled.
         """
-        probe = ExitProbe(exit_code=3, ticks=2)
+        probe = ExitProbe(exit_code=4, ticks=2)
         consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
-        result = await _await_exit_or_writer_failure(
-            probe.wait(),
-            None,
-            consumers=(consumer,),
-        )
-        return result, probe.cancelled.is_set()
-
-    result, cancelled = asyncio.run(scenario())
-    assert result == (3, 1.5), f"the run must end on the exit, got {result!r}"
-    assert not cancelled, "a consumer that succeeds must not cancel the exit wait"
-
-
-def test_cancelled_consumer_leaves_the_exit_wait_running() -> None:
-    """A cancelled consumer is a teardown, not a failure, and is not re-raised."""
-
-    async def scenario() -> tuple[tuple[int, float], bool]:
-        """Race a consumer that was cancelled before the race began.
-
-        Returns
-        -------
-        tuple[tuple[int, float], bool]
-            The exit result, and whether the exit wait was cancelled.
-        """
-        probe = ExitProbe(exit_code=4, ticks=1)
-        consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
-        consumer.cancel()
-        await retrieve(consumer)
+        if settlement == "cancelled":
+            consumer.cancel()
+            await retrieve(consumer)
         result = await _await_exit_or_writer_failure(
             probe.wait(),
             None,
@@ -100,76 +127,44 @@ def test_cancelled_consumer_leaves_the_exit_wait_running() -> None:
 
     result, cancelled = asyncio.run(scenario())
     assert result == (4, 1.5), f"the run must end on the exit, got {result!r}"
-    assert not cancelled, "a cancelled consumer must not cancel the exit wait"
+    assert not cancelled, f"a consumer that {settlement} must not cancel the exit wait"
 
 
 def test_none_consumer_slots_are_skipped_and_the_other_is_still_raced() -> None:
     """A stream cuprum holds no pipe for is skipped, not waited on."""
-
-    async def scenario() -> None:
-        """Fail the stderr stream while the stdout slot holds no task."""
-        probe = ExitProbe()
-        sentinel = CallbackError("stderr callback failed")
-        stderr_task = failed_task(sentinel)
-        with pytest.raises(CallbackError) as caught:
-            await _await_exit_or_writer_failure(
-                probe.wait(),
-                None,
-                consumers=(None, stderr_task),
-            )
-        assert caught.value is sentinel, (
-            f"the failed stream must still end the run, got {caught.value!r}"
-        )
-        assert probe.cancelled.is_set(), (
-            "the failed stream must cancel the exit wait even when the other "
-            "slot holds no task"
-        )
-
-    asyncio.run(scenario())
+    raised, probe, (_, _, stderr) = asyncio.run(
+        _race_failing_tasks(None, (None, "stderr callback failed")),
+    )
+    assert raised is stderr, f"the failed stream must still end the run, got {raised!r}"
+    assert probe.cancelled.is_set(), (
+        "the failed stream must cancel the exit wait even when the other slot "
+        "holds no task"
+    )
 
 
 def test_consumer_failure_cancels_the_exit_and_raises_the_same_object() -> None:
     """A failed consumer ends the run at once, terminating a live child."""
-
-    async def scenario() -> None:
-        """Fail the only consumer against a child that never exits."""
-        probe = ExitProbe()
-        sentinel = CallbackError("callback failed")
-        consumer = failed_task(sentinel)
-        with pytest.raises(CallbackError) as caught:
-            await _await_exit_or_writer_failure(
-                probe.wait(),
-                None,
-                consumers=(consumer,),
-            )
-        assert caught.value is sentinel, (
-            "the caller must receive the very object the consumer raised, got "
-            f"{caught.value!r}"
-        )
-        assert probe.cancelled.is_set(), (
-            "a consumer failure must cancel the exit wait, which is what "
-            "terminates and reaps the child"
-        )
-
-    asyncio.run(scenario())
+    raised, probe, (_, consumer) = asyncio.run(
+        _race_failing_tasks(None, ("callback failed",)),
+    )
+    assert raised is consumer, (
+        f"the caller must receive the very object the consumer raised, got {raised!r}"
+    )
+    assert probe.cancelled.is_set(), (
+        "a consumer failure must cancel the exit wait, which is what terminates "
+        "and reaps the child"
+    )
 
 
 def test_stdin_failure_cancels_the_exit_wait_and_raises_the_same_object() -> None:
     """The default empty consumer sequence still races the stdin writer."""
-
-    async def scenario() -> None:
-        """Fail the stdin writer and leave the consumer sequence at its default."""
-        probe = ExitProbe()
-        sentinel = CallbackError("producer failed")
-        stdin_task = failed_task(sentinel)
-        with pytest.raises(CallbackError) as caught:
-            await _await_exit_or_writer_failure(probe.wait(), stdin_task)
-        assert caught.value is sentinel, (
-            f"the caller must receive the writer's own error, got {caught.value!r}"
-        )
-        assert probe.cancelled.is_set(), "a writer failure must cancel the exit wait"
-
-    asyncio.run(scenario())
+    raised, probe, (writer,) = asyncio.run(
+        _race_failing_tasks("producer failed", ()),
+    )
+    assert raised is writer, (
+        f"the caller must receive the writer's own error, got {raised!r}"
+    )
+    assert probe.cancelled.is_set(), "a writer failure must cancel the exit wait"
 
 
 def test_settled_exit_wins_over_a_consumer_failing_in_the_same_step() -> None:
@@ -184,8 +179,7 @@ def test_settled_exit_wins_over_a_consumer_failing_in_the_same_step() -> None:
             The race's result, and the failure the consumer still carries.
         """
         probe = ExitProbe(exit_code=9, ticks=0)
-        sentinel = CallbackError("callback failed")
-        consumer = failed_task(sentinel)
+        consumer = failed_task(CallbackError("callback failed"))
         try:
             result = await _await_exit_or_writer_failure(
                 probe.wait(),
@@ -206,68 +200,18 @@ def test_settled_exit_wins_over_a_consumer_failing_in_the_same_step() -> None:
 
 def test_stdin_failure_wins_over_a_consumer_failure() -> None:
     """The writer's failure is preferred when both fail in the same step."""
-
-    async def scenario() -> BaseException:
-        """Fail the writer and a consumer in the same loop step.
-
-        Returns
-        -------
-        BaseException
-            Whichever failure the race chose to raise.
-        """
-        probe = ExitProbe()
-        writer_sentinel = CallbackError("producer failed")
-        consumer_sentinel = CallbackError("callback failed")
-        stdin_task = failed_task(writer_sentinel)
-        consumer = failed_task(consumer_sentinel)
-        try:
-            with pytest.raises(CallbackError) as caught:
-                await _await_exit_or_writer_failure(
-                    probe.wait(),
-                    stdin_task,
-                    consumers=(consumer,),
-                )
-        finally:
-            await retrieve(consumer)
-        return caught.value
-
-    raised = asyncio.run(scenario())
-    assert str(raised) == "producer failed", (
-        f"the stdin writer's failure must win, got {raised!r}"
+    raised, _, (writer, _consumer) = asyncio.run(
+        _race_failing_tasks("producer failed", ("callback failed",)),
     )
+    assert raised is writer, f"the stdin writer's failure must win, got {raised!r}"
 
 
 def test_stdout_failure_wins_over_a_stderr_failure() -> None:
     """The consumer pair's own order decides between two failed readers."""
-
-    async def scenario() -> BaseException:
-        """Fail both stream consumers in the same loop step.
-
-        Returns
-        -------
-        BaseException
-            Whichever failure the race chose to raise.
-        """
-        probe = ExitProbe()
-        stdout_sentinel = CallbackError("stdout failed")
-        stderr_sentinel = CallbackError("stderr failed")
-        stdout_task = failed_task(stdout_sentinel)
-        stderr_task = failed_task(stderr_sentinel)
-        try:
-            with pytest.raises(CallbackError) as caught:
-                await _await_exit_or_writer_failure(
-                    probe.wait(),
-                    None,
-                    consumers=(stdout_task, stderr_task),
-                )
-        finally:
-            await retrieve(stdout_task, stderr_task)
-        return caught.value
-
-    raised = asyncio.run(scenario())
-    assert str(raised) == "stdout failed", (
-        f"stdout's failure must be reported first, got {raised!r}"
+    raised, _, (_, stdout, _stderr) = asyncio.run(
+        _race_failing_tasks(None, ("stdout failed", "stderr failed")),
     )
+    assert raised is stdout, f"stdout's failure must be reported first, got {raised!r}"
 
 
 def test_teardown_induced_reader_failure_does_not_replace_the_selected_one() -> None:

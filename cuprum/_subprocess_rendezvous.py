@@ -7,25 +7,21 @@ reconciliation is ``cuprum._subprocess_wait``'s, but the decision to end a run
 nor the parent's task set is at fault, so neither module is the right place to
 notice it.
 
-The arithmetic is the reason the race exists at all. Awaiting the child first
-looks correct, and is, as long as a producer that fails also stops the child.
-It does not: the writer's own teardown closes the pipe, so a child that reads
-to EOF and then works — or one that never reads at all — keeps running after
-the failure and the caller is told the child was slow when its input source was
-already dead. That is not a hypothetical shape; it is what a `head`-like child
-that ignores its input, or any child with real work after its last read,
-produces. A stream *consumer* fails the same way from the other end: a raising
-``on_line`` callback ends the task draining the child's output, nothing reads
-the pipe any more, and a child that keeps writing blocks on a full pipe rather
-than exiting — so the exit the coordinator is waiting for never arrives.
+Awaiting the child first looks correct, and is, as long as a task that fails
+also stops the child. It does not. A writer's teardown closes the pipe, so a
+child that reads to EOF and then works — or one that never reads — keeps
+running after the failure, and the caller is told the child was slow when its
+input source was already dead. A stream *consumer* fails from the other end: a
+raising ``on_line`` callback ends the task draining the output, nothing reads
+the pipe, and a child that keeps writing blocks on a full pipe rather than
+exiting — so the exit the coordinator waits for never arrives.
 
 The resolution is deliberately narrow. A writer or consumer that *finishes*
-first is the ordinary case — a producer exhausted, a stream closed, the child
-still draining — and the run continues to the child's exit as it always did.
-Only a task that *failed* is an outcome, and the exit wait is then cancelled,
-which is itself the termination: ``_wait_for_exit_code``'s cancellation handler
-escalates through ``_terminate_all_shielded``. No termination policy is
-restated here.
+first is the ordinary case — a producer exhausted, a stream closed — and the
+run continues to the child's exit as it always did. Only a task that *failed*
+is an outcome, and the exit wait is then cancelled, which is itself the
+termination: ``_wait_for_exit_code``'s cancellation handler escalates through
+``_terminate_all_shielded``. No termination policy is restated here.
 
 The precedence between the early-failure sources is state-based and fixed, so a
 run with several failing tasks reports the same one every time: a settled exit
@@ -37,20 +33,17 @@ Settling the tasks it reports on is its callers' work, through the
 reconciliation each already performs.
 
 The precedence is read twice, and the second read is the writer's alone. A
-stdin writer raises its own exception before its cleanup releases the pipe, so
-while a consumer has already failed the writer can still be running;
-terminating the child is what lets it finish, so the race asks it again once the
-exit wait is cancelled. The consumers are not asked again: termination makes the
-pipes reach EOF, a text run's decoder then flushes what it still holds, and a
-truncated sequence raises — an artefact that would replace the caller's callback
-failure whenever it landed on stdout while the callback failed on stderr.
+stdin writer raises before its cleanup releases the pipe, so it can still be
+running while a consumer has already failed, and terminating the child is what
+lets it finish. The consumers are not asked again: termination makes the pipes
+reach EOF, a strict decoder then flushes a truncated sequence, and that
+artefact would replace the callback failure already selected.
 
 A writer's second read alone is not enough, because that window has two ends. A
 writer that has already raised is *still running* while it unwinds — its
-producer's finalizer is the caller's code and is given a window of its own — so
-a read taken during that unwinding sees a task that has not failed. The writer
-therefore publishes its failure before it starts unwinding, and precedence
-reads that publication before the task.
+producer's finalizer is the caller's code — so a read taken then sees a task
+that has not failed. The writer therefore publishes its failure before it
+starts unwinding, and precedence reads that publication before the task.
 """
 
 from __future__ import annotations
@@ -252,6 +245,67 @@ async def _cancel_exit_wait(exit_wait: asyncio.Task[tuple[int, float]]) -> None:
     await asyncio.gather(exit_wait, return_exceptions=True)
 
 
+def _pending_tasks(
+    exit_task: asyncio.Task[tuple[int, float]],
+    stdin_task: asyncio.Task[object] | None,
+    monitored: cabc.Sequence[asyncio.Task[object]],
+) -> set[asyncio.Task[object]]:
+    """Return every task the race waits on, without the absent slots."""
+    return {task for task in (exit_task, stdin_task, *monitored) if task is not None}
+
+
+async def _await_first_settlement(
+    pending: set[asyncio.Task[object]],
+    exit_task: asyncio.Task[tuple[int, float]],
+) -> None:
+    """Wait for one task in *pending* to settle, forwarding cancellation.
+
+    The caller's cancellation is handed to the exit wait before it propagates:
+    that wait owns the child's termination, and an abandoned wait would leave
+    the child running behind the caller's teardown.
+    """
+    try:
+        await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        if not exit_task.done():
+            await _shielded_cleanup(_cancel_exit_wait(exit_task))
+        raise
+
+
+async def _stop_on_early_failure(
+    exit_task: asyncio.Task[tuple[int, float]],
+    stdin_task: asyncio.Task[object] | None,
+    stdin_log: _StdinWriterLog | None,
+    failure: BaseException,
+) -> typ.NoReturn:
+    """Terminate the child, then raise the failure the run reports.
+
+    Cancelling the exit wait *is* the termination: its cancellation handler
+    terminates and reaps the child, so no termination policy is restated here.
+
+    The writer is then asked once more, because it raises before its cleanup
+    closes the pipe and so can settle only while that termination runs. Without
+    that read, a run whose ``encoding`` this build does not know would be
+    answered with the output decoder's ``LookupError`` rather than the
+    ``StdinSourceError`` the caller's input contract promises. The consumers
+    are not re-read: a failure that exists only because the run is ending is
+    not a candidate for what ended it.
+    """
+    await _shielded_cleanup(_cancel_exit_wait(exit_task))
+    settled = _writer_failure(stdin_task, stdin_log)
+    raise settled if settled is not None else failure
+
+
+def _unfinished(
+    pending: set[asyncio.Task[object]],
+    exit_task: asyncio.Task[tuple[int, float]],
+) -> set[asyncio.Task[object]]:
+    """Drop the tasks that settled without failing; keep the exit wait."""
+    # The finished ones would otherwise make the next wait return at once, and
+    # the exit wait stays whatever its state because the loop reads it next.
+    return {task for task in pending if task is exit_task or not task.done()}
+
+
 async def _await_exit_or_writer_failure(
     exit_wait: cabc.Coroutine[typ.Any, typ.Any, tuple[int, float]],
     stdin_task: asyncio.Task[object] | None,
@@ -261,63 +315,37 @@ async def _await_exit_or_writer_failure(
 ) -> tuple[int, float]:
     """Race the child's exit against its stdin writer and stream consumers.
 
-    A producer or consumer that fails is the run's outcome even while the child
-    is still running, and the exit wait is cancelled — which is what terminates
-    the child — before that failure is raised. A task that merely *finishes*
-    first changes nothing: the run still ends on the child's exit, because a
-    producer exhausting its chunks or a stream reaching EOF is the ordinary way
-    a stream ends.
+    A task that *fails* is the run's outcome even while the child runs: the
+    exit wait is cancelled, which is itself the termination, and the failure is
+    raised by :func:`_stop_on_early_failure`. A task that merely *finishes*
+    first changes nothing, because a producer exhausting its chunks or a
+    stream reaching EOF is the ordinary way a stream ends.
 
-    The precedence is fixed so the reported failure does not depend on which
-    task the event loop happened to settle first: a settled exit wins, then the
-    stdin writer, then the consumers in stdout-then-stderr order. A task that
-    failed *after* the exit settled is likewise left to the caller, whose
-    existing post-exit await already reports it; racing to catch that case too
-    would only duplicate a check the caller must make anyway.
+    The precedence is fixed, so the reported failure does not depend on which
+    task the loop happened to settle first: a settled exit wins, then the stdin
+    writer, then the consumers in stdout-then-stderr order. A task that failed
+    *after* the exit settled is left to the caller, whose post-exit await
+    already reports it.
 
-    The precedence is applied once to decide that the run must stop, and the
-    *writer* is asked once more after the exit wait's cancellation has
-    terminated the child, because a stdin writer unwinding its own cleanup can
-    settle on its failure only during that termination. Without the second
-    read, a run whose ``encoding`` this build does not know would report its
-    output decoder's :class:`LookupError` instead of the
-    :class:`~cuprum.sh.StdinSourceError` the caller's input contract promises.
+    Consumer tasks are neither cancelled nor gathered here: they belong to the
+    caller, whose reconciliation settles them, and doing it here too would
+    settle them twice.
 
-    The consumers are deliberately not asked again. Termination makes the
-    child's pipes reach EOF, so a reader still draining can fail on what that
-    leaves behind — a truncated sequence flushed by a strict decoder, say — and
-    that artefact outranks the callback failure already selected whenever it
-    lands on stdout while the callback failed on stderr. It is a consequence of
-    cuprum ending the run, not the failure that ended it.
-
-    *stdin_log* closes the other end of the same window. A writer that has
-    already raised is still running while it unwinds, so a read taken then sees
-    no failure on the task at all; the writer publishes its failure to the log
-    first, and both reads consult it before the task.
-
-    Consumer tasks are *not* cancelled or gathered here. They belong to the
-    caller, whose reconciliation on every failure route settles them; doing it
-    here as well would settle them twice and race the caller's own teardown.
-
-    ``exit_wait`` is passed in already constructed rather than created here so
-    each caller keeps resolving the wait helper from its own module namespace.
-    That is where the test suite's monkeypatch seams replace it, so a call that
-    reached for the name in this module would silently bypass them.
+    ``exit_wait`` arrives constructed: each caller resolves the wait helper
+    from its own module namespace, where the test seams replace it.
 
     Parameters
     ----------
     exit_wait : collections.abc.Coroutine[Any, Any, tuple[int, float]]
         The child's exit wait, not yet started.
     stdin_task : asyncio.Task[object] | None
-        The run's stdin writer, if it has one. ``None`` for an inherited stdin,
-        which has no pipe of cuprum's and so nothing that can fail.
+        The run's stdin writer, or ``None`` for an inherited stdin, which has
+        no pipe of cuprum's that can fail.
     consumers : collections.abc.Sequence[asyncio.Task[object] | None], default=()
-        The run's stdout and stderr stream consumers, in that order. A stream
-        cuprum holds no pipe for has ``None`` in its slot and is skipped.
+        The run's stdout and stderr consumers, in that order. A stream with no
+        pipe of cuprum's has ``None`` in its slot and is skipped.
     stdin_log : _StdinWriterLog | None, default=None
-        The failure the writer published before it began unwinding. Absent for
-        a run whose writer has no such hand-off, which is then read off the
-        task alone.
+        The failure the writer published before it began unwinding.
 
     Returns
     -------
@@ -327,64 +355,26 @@ async def _await_exit_or_writer_failure(
     Raises
     ------
     asyncio.CancelledError
-        If the caller cancels the race. The exit wait owns the child's
-        termination, so the cancellation is forwarded to it before this
-        re-raises.
+        If the caller cancels the race; the exit wait is cancelled first.
     """  # ruff: ignore[docstring-extraneous-exception] - a monitored task's failure propagates.
     monitored = tuple(task for task in consumers if task is not None)
     if stdin_task is None and not monitored:
-        # Nothing to race: an inherited stdin and unobserved streams have
-        # nothing of cuprum's that can fail.
+        # Nothing to race: no stream of cuprum's exists that could fail.
         return await exit_wait
     exit_task = asyncio.create_task(exit_wait)
-    pending = {task for task in (exit_task, stdin_task, *monitored) if task is not None}
+    pending = _pending_tasks(exit_task, stdin_task, monitored)
     while True:
-        try:
-            await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-        except BaseException:
-            # The caller was cancelled while the tasks ran side by side. Handing
-            # the cancellation to the exit wait is what terminates the child;
-            # without it the wait would be abandoned mid-flight and the child
-            # left running behind the caller's teardown.
-            if not exit_task.done():
-                await _shielded_cleanup(_cancel_exit_wait(exit_task))
-            raise
+        await _await_first_settlement(pending, exit_task)
         if exit_task.done():
-            # The exit wins outright, including over a sibling that failed in
-            # the same step: its result or its own exception is this call's
-            # outcome, and any consumer failure is the caller's to report.
+            # The exit wins outright, even over a sibling that failed in the
+            # same step: its own result or exception is this call's outcome.
             return await exit_task
         failure = _first_early_failure(stdin_task, monitored, stdin_log=stdin_log)
         if failure is not None:
-            # Raised outside the ``try`` above on purpose: inside it, the
-            # handler would catch this very raise, see a settled exit task, and
-            # re-raise — correct, but only by accident of ordering.
-            await _shielded_cleanup(_cancel_exit_wait(exit_task))
-            # The writer is asked again now that the teardown has run, and that
-            # second read is load-bearing rather than defensive. A stdin writer
-            # raises its own failure before its cleanup closes the pipe, so it
-            # can still be *running* while a consumer has already failed: an
-            # unrecognized ``encoding`` fails the writer and both decoders, and
-            # the decoders fail first. Terminating the child is what lets the
-            # writer finish, so the source failure the caller's data contract
-            # names is only visible here. Reporting the consumer's error
-            # instead would answer a bad stdin encoding with the reader failure
-            # it caused.
-            #
-            # Only the writer is asked. Terminating the child can also make a
-            # *reader* fail on its own — the EOF this cancellation produced
-            # makes a strict decoder flush a truncated sequence — and such an
-            # artefact would replace the selected callback failure whenever it
-            # landed on stdout while the callback failed on stderr. The
-            # consumers were ranked above by the first read; a failure that
-            # exists only because the run is ending is not a candidate for what
-            # ended it.
-            settled = _writer_failure(stdin_task, stdin_log)
-            raise settled if settled is not None else failure
-        # Every task that settled did so without failing: drop the finished
-        # ones so the next wait does not return on them at once, then keep
-        # waiting for the exit or a failure.
-        pending = {task for task in pending if task is exit_task or not task.done()}
+            # Raised outside any ``try`` on purpose: a handler would catch
+            # this very raise and re-raise only by accident of ordering.
+            await _stop_on_early_failure(exit_task, stdin_task, stdin_log, failure)
+        pending = _unfinished(pending, exit_task)
 
 
 __all__ = [

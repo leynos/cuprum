@@ -11,39 +11,26 @@ parent's transport buffer before the next is pulled, so the writer cannot
 run far ahead of the child; pulling eagerly would let an unbounded producer
 outrun the child and re-materialize the payload in the parent's memory.
 What that bounds is how far *ahead* the producer runs, not what one step
-retains: ``drain()`` returns once the transport's write buffer has fallen
-below its low-water mark, and the OS pipe holds bytes of its own, so several
-chunks can be in flight together, and the chunk currently being written
-stays live in the parent until its drain completes. Retained memory is
-therefore the largest chunk yielded plus those buffers. The bound is on how
-far ahead the producer runs; the type does not police chunk size at all.
+retains: ``drain()`` returns below its low-water mark, the OS pipe holds bytes
+of its own, and the chunk being written stays live until its drain completes.
+Retained memory is therefore the largest chunk yielded plus those buffers, and
+the type does not police chunk size at all.
 
 This module imports the pipe primitives (``_close_stdin``, ``_emit_stdin_error``)
 from ``cuprum._subprocess_stdin``, and the dispatcher in that module imports
-this one's ``_write_stdin_stream`` lazily inside the function body. The
-dependency therefore only ever runs in one direction once both modules are
-loaded.
+this one's ``_write_stdin_stream`` lazily inside the function body, so the
+dependency only ever runs in one direction once both modules are loaded.
 
-The per-chunk write machinery — the sink, the encoder, and the question of
-whether a pipe error came from the child — lives in
-``cuprum._subprocess_stdin_write``, which this module pulls in as ``_write``.
-That split keeps each module inside the 400-line ceiling and draws the same
-line the code does: this module owns *which* failures are the producer's, and
-``_subprocess_stdin_write`` owns *how* a chunk reaches the pipe.
-
-Turning a classified failure into the exception the caller catches lives in
-``cuprum._subprocess_stdin_errors``. That third split exists for the same
-ceiling reason: the pair that builds the public ``StdinSourceError`` reads
-neither the sink nor the process, so keeping it here put the module over the
-line without deepening the seam the code draws. This module owns which side
-failed; that one owns what the caller is told about it.
-
-Bounding the producer's finalization lives in
-``cuprum._subprocess_stdin_finalize``, the fourth split for the same reason
-and the one that carries the cooperation limit: ``aclose`` is caller code, so
-cuprum bounds how long it waits rather than promising the cleanup finished.
-The order it is called in stays here, because that is a fact about this
-module's two resources rather than about the wait.
+Three further splits keep each module inside the 400-line ceiling along seams
+the code already draws. ``cuprum._subprocess_stdin_write`` (``_write``) owns
+*how* a chunk reaches the pipe — the sink, the encoder, and whether a pipe
+error came from the child — while this module owns *which* failures are the
+producer's. ``cuprum._subprocess_stdin_errors`` owns what the caller is told
+about a classified failure, reading neither sink nor process.
+``cuprum._subprocess_stdin_finalize`` bounds the producer's finalization and
+carries its cooperation limit: ``aclose`` is caller code, so cuprum bounds how
+long it waits rather than promising the cleanup finished. The release order
+stays here, because it is a fact about the two resources, not about the wait.
 """
 
 from __future__ import annotations
@@ -164,31 +151,16 @@ async def _drain_source_into_pipe(
 ) -> None:
     """Pump the producer into the pipe, applying the run's failure policy.
 
-    This is the one place the three failure outcomes are told apart. A
-    producer failure ends the run with the producer's own exception as the
-    cause. A genuine child-side close is normal — a child that reads part of
-    its input and exits is behaving correctly — so it is recorded as an
-    ``early_close`` observation and the run proceeds to its exit code. Any
-    other failure is the encoder or the pipe, and is reported as itself.
+    This is the one place the three outcomes are told apart: a producer failure
+    ends the run with its own exception as the cause, a genuine child-side
+    close is normal and recorded as an ``early_close``, and anything else is
+    the encoder or the pipe and is reported as itself.
 
-    Each failure is published to *context*'s log before it is raised, rather
-    than left to the task that will carry it: the ``finally`` below runs the
-    caller's producer finalizer, so the task is still running for as long as
-    that takes. A run whose exit race asked the task during that window would
-    see no writer failure and report the consumer failure it caused instead.
-
-    The producer's whole lifecycle lives inside this guarded region — building
-    its iterator, pulling from it, and finalizing it. Building the iterator
-    runs the producer's own ``__aiter__``, which is where that promise would
-    otherwise break: a producer whose machinery is itself a pipe raises the
-    same ``BrokenPipeError`` the write side does, so
-    :func:`_start_producer` marks it as the producer's failure before the
-    shared handler can read it as the child having closed its end. The
-    producer is finalized on every exit path either way.
-
-    Keeping the policy here rather than in the caller leaves the caller with
-    setup and teardown alone, and keeps each handler's ``raise`` visible to
-    the linter that requires it.
+    The producer's whole lifecycle is inside this guarded region, building its
+    iterator included: ``__aiter__`` is producer code too, so a producer whose
+    machinery is a pipe raises the same ``BrokenPipeError`` the write side
+    does, and :func:`_start_producer` marks that as the producer's failure
+    before the handler could read it as the child closing its end.
 
     Raises
     ------
@@ -197,8 +169,6 @@ async def _drain_source_into_pipe(
         reason other than the child closing its end.
     asyncio.CancelledError
         If the writer is cancelled while the run is being torn down.
-        Cancellation is control flow rather than a source failure, so it
-        propagates unchanged instead of being wrapped.
     """  # ruff: ignore[docstring-extraneous-exception] - _stdin_source_error is the exception the caller catches, built by _subprocess_stdin_errors rather than raised here as a class.
     source: cabc.AsyncIterator[str | bytes] | None = None
     try:
@@ -206,15 +176,13 @@ async def _drain_source_into_pipe(
         await _pump_chunks(source, sink)
         await _write._flush_encoder(sink)
     except asyncio.CancelledError:
-        # Cancellation is control flow, not a source failure: the run is being
-        # torn down and the caller must see the cancellation, not an error.
+        # Control flow, not a source failure: the caller must see it unchanged.
         raise
     except _ProducerFailureError as exc:
-        # The producer failed, so there is no child-side close to weigh: the
-        # marker is the only reason this is distinguishable once the exception
-        # has left _pump_chunks. The producer's own cause is both what is
-        # reported and what is chained from, so the diagnostic names the
-        # exception the producer actually raised.
+        # There is no child-side close to weigh, and the marker is the only
+        # reason that is still distinguishable here. Publishing before the
+        # raise matters: finalizing the producer keeps this task running, and a
+        # race asking it then would report the consumer failure it caused.
         sink.report_boundary(
             exc.cause,
             category=StdioFailureCategory.PRODUCER,
@@ -224,8 +192,7 @@ async def _drain_source_into_pipe(
         context.log.publish(error)
         raise error from exc.cause
     except Exception as exc:
-        # Blind on purpose, and reported as itself rather than as a failure to
-        # write: the writer's own guard has already established that this is
+        # Blind on purpose: the writer's guard has already established this is
         # not the child closing its end, so anything left is cuprum's to name.
         if not _write._is_early_close(exc):
             sink.report_boundary(
@@ -243,24 +210,29 @@ async def _drain_source_into_pipe(
             operation="early_close",
         )
     finally:
-        # The pipe is released *before* the producer is finalized, and that
-        # order is the point rather than an incidental arrangement. The
-        # producer is the caller's code and its cleanup may suspend; the pipe
-        # is cuprum's, and the child's EOF depends on this close reaching it.
-        # Finalizing first let a stalled producer hold the child's input open
-        # for as long as its cleanup chose, which is the dependency this
-        # reverses: whatever the caller's finalizer does, cuprum's own pipe is
-        # already released.
-        #
-        # The nested ``finally`` keeps the producer from being abandoned when
-        # this close is itself interrupted. A cancellation arriving inside the
-        # close propagates from it, and a plain sequence would skip the
-        # finalization that follows — leaving a producer cuprum owned still
-        # open on exactly the teardown path that most needs it closed.
-        try:
-            await _close_stdin(process, sink.stdin, context.observation)
-        finally:
-            await _finalize_stdin_source(source)
+        await _release_stdin_source(process, sink, source, context)
+
+
+async def _release_stdin_source(
+    process: asyncio.subprocess.Process,
+    sink: _write._StreamSink,
+    source: cabc.AsyncIterator[str | bytes] | None,
+    context: _StdinWriterContext,
+) -> None:
+    """Close cuprum's pipe, then finalize the caller's producer.
+
+    The order is the contract: the producer's cleanup may suspend, while the
+    child's EOF depends on this close reaching it, so finalizing first would
+    let a stalled producer hold the child's input open.
+
+    The nested ``finally`` keeps the producer from being abandoned when the
+    close is itself interrupted — a plain sequence would skip the finalization
+    on exactly the teardown path that most needs it.
+    """
+    try:
+        await _close_stdin(process, sink.stdin, context.observation)
+    finally:
+        await _finalize_stdin_source(source)
 
 
 def _start_producer(

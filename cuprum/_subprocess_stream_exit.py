@@ -30,6 +30,7 @@ and the repository's commentary already refer to them.
 
 from __future__ import annotations
 
+import contextlib
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
@@ -45,6 +46,7 @@ from cuprum._subprocess_wait import (
 
 if typ.TYPE_CHECKING:
     import asyncio
+    import collections.abc as cabc
 
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_wait_types import _DrainPair, _RunTaskOwnership
@@ -53,6 +55,24 @@ __all__ = [
     "_reconcile_shielded",
     "_wait_for_streamed_process_exit",
 ]
+
+
+@contextlib.asynccontextmanager
+async def _releasing_output_transports(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> cabc.AsyncIterator[None]:
+    """Release the child's output transports however the block ends.
+
+    Yields
+    ------
+    None
+        Control, with the release owed on every exit from the block.
+    """
+    try:
+        yield
+    finally:
+        await _release_output_transports(process, execution)
 
 
 async def _reconcile_shielded(
@@ -112,26 +132,13 @@ async def _wait_for_streamed_process_exit(
     async def reconcile_then_release(*, preserve: bool) -> _DrainPair:
         """Settle the run's tasks, then release the pipes it stopped reading.
 
-        Both halves run under **one** shield, not two: a shielded reconciliation
-        followed by a separate release would leave the release unawaited
-        whenever a cancellation interrupted the reconciliation's shield. The
-        ``finally`` also releases when reconciliation itself fails, so no route
-        out of this helper keeps the descriptors the run has finished with.
-
         Returns
         -------
         _DrainPair
-            The drained stdout and stderr results, records included.
+            The drained results, records included.
         """
-        try:
-            return await _reconcile_shielded(
-                execution,
-                tasks,
-                pid,
-                preserve=preserve,
-            )
-        finally:
-            await _release_output_transports(process, execution)
+        async with _releasing_output_transports(process, execution):
+            return await _reconcile_shielded(execution, tasks, pid, preserve=preserve)
 
     try:
         return await _await_exit_or_writer_failure(
@@ -141,34 +148,16 @@ async def _wait_for_streamed_process_exit(
             stdin_log=tasks.stdin_log,
         )
     except TimeoutError as exc:
-        # A ``TimeoutError`` can arrive here two ways, and only one of them is
-        # this run's deadline. A callback or stdin producer that failed with
-        # one is a monitored task's own error, re-raised by the race unchanged;
-        # ``TimeoutError`` is an ``OSError`` subclass, so a type check alone
-        # cannot tell them apart. Identity can, and it is exact: the race
-        # raises the very object the task carries. Reconciling without
-        # capturing, then re-raising, is the route every other non-timeout
-        # failure already takes.
-        if _is_early_failure(
+        await _reconcile_after_timeout(
             exc,
-            tasks.stdin_task,
-            tasks.consumers,
-            stdin_log=tasks.stdin_log,
-        ):
-            await _shielded_cleanup(reconcile_then_release(preserve=False))
-            raise
-        # The process has been terminated; cancel the stdin writer and drain the
-        # stream consumers exactly once here, then hand the decoded output to the
-        # timeout handler so it survives on the resulting TimeoutExpired.
-        stdout_drain, stderr_drain = await _shielded_cleanup(
-            reconcile_then_release(preserve=True),
+            execution,
+            tasks,
+            reconcile_then_release,
         )
-        _handle_stream_timeout(
-            exc,
-            stdout_text=stdout_drain.payload,
-            stderr_text=stderr_drain.payload,
-            timeout=execution.timeout,
-        )
+        # Only a monitored task's own failure returns from that helper; the
+        # deadline route raises ``TimeoutExpired`` from inside it, so reaching
+        # here means the caller's error is re-raised unchanged.
+        raise
     except BaseException:
         # Cancellation, and any other failure escaping the wait — an OS error
         # while terminating, say — need the same reconciliation. Do not preserve
@@ -176,3 +165,43 @@ async def _wait_for_streamed_process_exit(
         # before re-raising the original failure unchanged.
         await _shielded_cleanup(reconcile_then_release(preserve=False))
         raise
+
+
+async def _reconcile_after_timeout(
+    error: TimeoutError,
+    execution: _SubprocessExecution,
+    tasks: _RunTaskOwnership,
+    reconcile_then_release: cabc.Callable[..., cabc.Awaitable[_DrainPair]],
+) -> None:
+    """Settle the run after the exit wait raised a ``TimeoutError``.
+
+    That error arrives two ways and only one of them is this run's deadline. A
+    callback or stdin producer that failed with one is a monitored task's own
+    error, re-raised by the race unchanged; ``TimeoutError`` is an ``OSError``
+    subclass, so a type check alone cannot tell them apart. Identity can, and
+    it is exact: the race raises the very object the task carries. That route
+    returns, so the caller re-raises the error unchanged after reconciling
+    without capturing output — the route every other non-timeout failure takes.
+
+    Otherwise the deadline expired. The process has been terminated; the stdin
+    writer is cancelled and the stream consumers drained exactly once, and the
+    decoded output is handed to the timeout handler so it survives on the
+    ``TimeoutExpired`` it raises. This never returns on that route.
+    """
+    if _is_early_failure(
+        error,
+        tasks.stdin_task,
+        tasks.consumers,
+        stdin_log=tasks.stdin_log,
+    ):
+        await _shielded_cleanup(reconcile_then_release(preserve=False))
+        return
+    stdout_drain, stderr_drain = await _shielded_cleanup(
+        reconcile_then_release(preserve=True),
+    )
+    _handle_stream_timeout(
+        error,
+        stdout_text=stdout_drain.payload,
+        stderr_text=stderr_drain.payload,
+        timeout=execution.timeout,
+    )

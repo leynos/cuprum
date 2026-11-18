@@ -21,6 +21,7 @@ provably in progress, and only then lets the reconciliation finish.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import typing as typ
 
@@ -51,6 +52,11 @@ if typ.TYPE_CHECKING:
     import pathlib
 
     from cuprum._stream_drain_finish import _CapturedDrain
+
+    _SpawnPipeHolder = cabc.Callable[
+        [pathlib.Path, float],
+        cabc.Awaitable[asyncio.subprocess.Process],
+    ]
 
 #: Both backends: the descriptor question is answered by the kernel, not by
 #: which object owns the pipe, so neither may be left uncovered.
@@ -179,14 +185,53 @@ def _capture_policy(tmp_path: pathlib.Path) -> FileBackedCapture:
     return FileBackedCapture(spill_threshold_bytes=None, directory=tmp_path)
 
 
+@contextlib.asynccontextmanager
+async def _pipe_holding_child(
+    tmp_path: pathlib.Path,
+    spawn_pipe_holder: _SpawnPipeHolder,
+) -> cabc.AsyncIterator[tuple[asyncio.subprocess.Process, int, tuple[int, ...]]]:
+    """Spawn the descendant-holding child and kill any descendant on exit.
+
+    Yields
+    ------
+    tuple[asyncio.subprocess.Process, int, tuple[int, ...]]
+        The child, its descendant's pid, and both parent-side descriptors.
+    """
+    pid_file = tmp_path / "descendant.pid"
+    process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
+    try:
+        descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
+        yield process, descendant_pid, _output_descriptors(process)
+    finally:
+        _kill_descendant(_recorded_pid(pid_file))
+
+
+def _assert_released_before_the_descendant_ends(
+    process: asyncio.subprocess.Process,
+    descendant_pid: int,
+    descriptors: tuple[int, ...],
+) -> None:
+    """Assert the run ended first, and closed both descriptors despite it.
+
+    The descendant check comes before the descriptor check because the
+    descriptors having been released proves nothing if the pipes could already
+    have reached end-of-file on their own.
+    """
+    assert process.returncode is not None, (
+        "the child must be terminated and reaped before the failure reaches the caller"
+    )
+    assert _is_running(descendant_pid), (
+        "the descendant must still hold the pipes when the descriptors are "
+        "read, or this case proves nothing"
+    )
+    _assert_transports_released(descriptors)
+
+
 @_posix_only
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_a_consumer_failure_releases_both_output_descriptors(
     tmp_path: pathlib.Path,
-    spawn_pipe_holder: cabc.Callable[
-        [pathlib.Path, float],
-        cabc.Awaitable[asyncio.subprocess.Process],
-    ],
+    spawn_pipe_holder: _SpawnPipeHolder,
 ) -> None:
     """The early-failure route must release the pipes the run stopped on.
 
@@ -198,35 +243,26 @@ def test_a_consumer_failure_releases_both_output_descriptors(
 
     async def run_case() -> None:
         """End a real child's run on a consumer failure, then read its fds."""
-        pid_file = tmp_path / "descendant.pid"
-        process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
-        try:
-            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
-            descriptors = _output_descriptors(process)
-            ownership = _ownership(_failed_consumer(), _parked_consumer())
-
+        async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
+            process,
+            descendant_pid,
+            descriptors,
+        ):
             with pytest.raises(_ConsumerError):
                 await asyncio.wait_for(
                     _wait_for_streamed_process_exit(
                         process,
                         _execution(_capture_policy(tmp_path)),
-                        ownership,
+                        _ownership(_failed_consumer(), _parked_consumer()),
                         process.pid,
                     ),
                     _WATCHDOG_S,
                 )
-
-            assert process.returncode is not None, (
-                "the child must be terminated and reaped before the failure "
-                "reaches the caller"
+            _assert_released_before_the_descendant_ends(
+                process,
+                descendant_pid,
+                descriptors,
             )
-            assert _is_running(descendant_pid), (
-                "the descendant must still hold the pipes when the descriptors "
-                "are read, or this case proves nothing"
-            )
-            _assert_transports_released(descriptors)
-        finally:
-            _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())
 
@@ -235,10 +271,7 @@ def test_a_consumer_failure_releases_both_output_descriptors(
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_a_deadline_expiry_releases_both_output_descriptors(
     tmp_path: pathlib.Path,
-    spawn_pipe_holder: cabc.Callable[
-        [pathlib.Path, float],
-        cabc.Awaitable[asyncio.subprocess.Process],
-    ],
+    spawn_pipe_holder: _SpawnPipeHolder,
 ) -> None:
     """The timeout route must release the pipes it stopped reading.
 
@@ -249,39 +282,30 @@ def test_a_deadline_expiry_releases_both_output_descriptors(
 
     async def run_case() -> None:
         """Expire a real child's run, then read the descriptors it left open."""
-        pid_file = tmp_path / "descendant.pid"
-        process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
         execution = dataclasses.replace(
             _execution(_capture_policy(tmp_path)),
             timeout=_TIMEOUT_S,
         )
-        try:
-            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
-            descriptors = _output_descriptors(process)
-            ownership = _ownership(_drained_consumer(), _drained_consumer())
-
+        async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
+            process,
+            descendant_pid,
+            descriptors,
+        ):
             with pytest.raises(_SubprocessTimeoutError):
                 await asyncio.wait_for(
                     _wait_for_streamed_process_exit(
                         process,
                         execution,
-                        ownership,
+                        _ownership(_drained_consumer(), _drained_consumer()),
                         process.pid,
                     ),
                     _WATCHDOG_S,
                 )
-
-            assert process.returncode is not None, (
-                "the child must be terminated and reaped before the timeout "
-                "reaches the caller"
+            _assert_released_before_the_descendant_ends(
+                process,
+                descendant_pid,
+                descriptors,
             )
-            assert _is_running(descendant_pid), (
-                "the descendant must still hold the pipes when the descriptors "
-                "are read, or this case proves nothing"
-            )
-            _assert_transports_released(descriptors)
-        finally:
-            _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())
 
@@ -290,10 +314,7 @@ def test_a_deadline_expiry_releases_both_output_descriptors(
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_a_caller_cancellation_releases_both_output_descriptors(
     tmp_path: pathlib.Path,
-    spawn_pipe_holder: cabc.Callable[
-        [pathlib.Path, float],
-        cabc.Awaitable[asyncio.subprocess.Process],
-    ],
+    spawn_pipe_holder: _SpawnPipeHolder,
 ) -> None:
     """The cancellation route must release the pipes it abandons.
 
@@ -304,37 +325,28 @@ def test_a_caller_cancellation_releases_both_output_descriptors(
 
     async def run_case() -> None:
         """Cancel a real child's run, then read the descriptors it left open."""
-        pid_file = tmp_path / "descendant.pid"
-        process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
-        try:
-            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
-            descriptors = _output_descriptors(process)
-            ownership = _ownership(_parked_consumer(), _parked_consumer())
+        async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
+            process,
+            descendant_pid,
+            descriptors,
+        ):
             waiting = asyncio.ensure_future(
                 _wait_for_streamed_process_exit(
                     process,
                     _execution(_capture_policy(tmp_path)),
-                    ownership,
+                    _ownership(_parked_consumer(), _parked_consumer()),
                     process.pid,
                 ),
             )
-
             await asyncio.sleep(_TIMEOUT_S)
             waiting.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(waiting, _WATCHDOG_S)
-
-            assert process.returncode is not None, (
-                "the child must be terminated and reaped before the "
-                "cancellation reaches the caller"
+            _assert_released_before_the_descendant_ends(
+                process,
+                descendant_pid,
+                descriptors,
             )
-            assert _is_running(descendant_pid), (
-                "the descendant must still hold the pipes when the descriptors "
-                "are read, or this case proves nothing"
-            )
-            _assert_transports_released(descriptors)
-        finally:
-            _kill_descendant(_recorded_pid(pid_file))
 
     asyncio.run(run_case())
 
@@ -344,10 +356,7 @@ def test_a_caller_cancellation_releases_both_output_descriptors(
 @pytest.mark.parametrize("spawn_pipe_holder", _SPAWN_ROUTES)
 def test_a_cancellation_during_reconciliation_releases_both_descriptors(
     tmp_path: pathlib.Path,
-    spawn_pipe_holder: cabc.Callable[
-        [pathlib.Path, float],
-        cabc.Awaitable[asyncio.subprocess.Process],
-    ],
+    spawn_pipe_holder: _SpawnPipeHolder,
     stop_route: str,
 ) -> None:
     """A cancellation interrupting the settling must not skip the release.
@@ -361,57 +370,49 @@ def test_a_cancellation_during_reconciliation_releases_both_descriptors(
 
     async def run_case() -> None:
         """Interrupt a real child's settling, then read the descriptors."""
-        pid_file = tmp_path / "descendant.pid"
-        process = await spawn_pipe_holder(pid_file, _DESCENDANT_LIFETIME_S)
         execution = dataclasses.replace(
             _execution(_capture_policy(tmp_path)),
             timeout=_TIMEOUT_S if stop_route == "deadline" else None,
         )
         entered = asyncio.Event()
         release = asyncio.Event()
-        try:
-            descendant_pid = await _wait_for_pid_file(pid_file, _PID_FILE_WAIT_S)
-            descriptors = _output_descriptors(process)
-            ownership = _ownership(
-                _interruptible_reconciliation_consumer(entered, release),
-                _interruptible_reconciliation_consumer(entered, release),
-            )
-            waiting = asyncio.ensure_future(
-                _wait_for_streamed_process_exit(
-                    process,
-                    execution,
-                    ownership,
-                    process.pid,
-                ),
-            )
-
-            if stop_route == "caller":
-                await asyncio.sleep(_TIMEOUT_S)
+        async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
+            process,
+            descendant_pid,
+            descriptors,
+        ):
+            try:
+                waiting = asyncio.ensure_future(
+                    _wait_for_streamed_process_exit(
+                        process,
+                        execution,
+                        _ownership(
+                            _interruptible_reconciliation_consumer(entered, release),
+                            _interruptible_reconciliation_consumer(entered, release),
+                        ),
+                        process.pid,
+                    ),
+                )
+                if stop_route == "caller":
+                    await asyncio.sleep(_TIMEOUT_S)
+                    waiting.cancel()
+                await asyncio.wait_for(entered.wait(), _WATCHDOG_S)
+                # The consumers are parked inside reconciliation, so it cannot
+                # finish until *release* is set. Cancel once more first, and
+                # yield so the cancellation is delivered before the settling
+                # resumes: both are queued in call order, so the cancelled task
+                # resumes first.
                 waiting.cancel()
-            await asyncio.wait_for(entered.wait(), _WATCHDOG_S)
-            # The consumers are parked inside reconciliation, so it cannot
-            # finish until *release* is set. Cancel once more first, and yield
-            # so the cancellation is delivered before the settling resumes:
-            # both are queued in call order, so the cancelled task resumes
-            # first.
-            waiting.cancel()
-            await asyncio.sleep(0)
-            release.set()
-
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(waiting, _WATCHDOG_S)
-
-            assert process.returncode is not None, (
-                "the child must be terminated and reaped before the failure "
-                "reaches the caller"
-            )
-            assert _is_running(descendant_pid), (
-                "the descendant must still hold the pipes when the descriptors "
-                "are read, or this case proves nothing"
-            )
-            _assert_transports_released(descriptors)
-        finally:
-            release.set()
-            _kill_descendant(_recorded_pid(pid_file))
+                await asyncio.sleep(0)
+                release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(waiting, _WATCHDOG_S)
+                _assert_released_before_the_descendant_ends(
+                    process,
+                    descendant_pid,
+                    descriptors,
+                )
+            finally:
+                release.set()
 
     asyncio.run(run_case())

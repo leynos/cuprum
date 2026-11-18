@@ -289,6 +289,67 @@ _RENDEZVOUS_SEAMS = {
 _READER_WATCHDOG_S = 10.0
 
 
+def _failing_reader_hook(
+    handoff: asyncio.Event,
+    sentinel: BaseException,
+    *,
+    gated: bool,
+) -> LineHook:
+    """Build an ``on_line`` hook that fails the run with *sentinel*.
+
+    A gated hook waits for *handoff* before failing, which is what places its
+    failure after the exit settled; an ungated one insists the hand-off has not
+    happened yet, so the arm named for the rendezvous really does reach it.
+
+    Returns
+    -------
+    LineHook
+        A hook that raises *sentinel* when the run offers it a line.
+    """
+
+    async def fail_reader(_event: LineEvent) -> None:
+        """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
+        if gated:
+            # The hand-off is the assertion: the run's exit has settled, so
+            # this failure belongs to the post-exit collect.
+            await handoff.wait()
+        else:
+            assert not handoff.is_set(), (
+                "the before-exit arm must fail while the exit wait is still "
+                "pending, so it reaches the rendezvous rather than the collect"
+            )
+        raise sentinel
+
+    return typ.cast("LineHook", fail_reader)
+
+
+async def _drive_entry_point(
+    command: SafeCmd,
+    entry_point: str,
+    output: RunOutputOptions,
+) -> None:
+    """Run the command through whichever entry point the case selected."""
+    if entry_point == "run":
+        await command.run(output=output)
+        return
+    async for _event in command.lines(output=output):
+        pass
+
+
+def _assert_lines_observations(
+    seen: list[LineStreamEvent],
+    phases: list[LineStreamPhase],
+) -> None:
+    """Assert the ``lines`` route still reported the failure and teardown."""
+    assert [(event.sink, event.error_type) for event in seen if event.sink] == [
+        ("callback", "_ReaderTimeoutError"),
+    ], f"the reader failure must remain observable, got {seen!r}"
+    assert {
+        LineStreamPhase.TEARDOWN_STARTED,
+        LineStreamPhase.TEARDOWN_COMPLETED,
+    } <= set(phases), f"a reader failure must still reconcile the run, got {phases!r}"
+
+
 @pytest.mark.parametrize("entry_point", ["run", "lines"])
 @pytest.mark.parametrize("child", sorted(_CHILD_SCRIPTS))
 def test_reader_timeout_is_not_reported_as_the_run_deadline(
@@ -317,28 +378,13 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
     seen: list[LineStreamEvent] = []
     gated = child == "after-exit"
     handoff = record_rendezvous(monkeypatch, _RENDEZVOUS_SEAMS[entry_point])
-
-    async def fail_reader(_event: LineEvent) -> None:
-        """Fail the run from an ``on_line`` hook with a ``TimeoutError``."""
-        if gated:
-            # The hand-off is the assertion: the run's exit has settled, so
-            # this failure belongs to the post-exit collect.
-            await handoff.wait()
-        else:
-            assert not handoff.is_set(), (
-                "the before-exit arm must fail while the exit wait is still "
-                "pending, so it reaches the rendezvous rather than the collect"
-            )
-        raise sentinel
+    output = RunOutputOptions(
+        on_line=_failing_reader_hook(handoff, sentinel, gated=gated),
+    )
 
     async def drive() -> None:
-        """Run the command, iterating lines when that entry point is selected."""
-        output = RunOutputOptions(on_line=typ.cast("LineHook", fail_reader))
-        if entry_point == "run":
-            await command.run(output=output)
-        else:
-            async for _event in command.lines(output=output):
-                pass
+        """Drive the selected entry point with the failing reader attached."""
+        await _drive_entry_point(command, entry_point, output)
 
     with (
         observe_line_stream(seen.append),
@@ -359,12 +405,4 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
         f"{phases!r}"
     )
     if entry_point == "lines":
-        assert [(event.sink, event.error_type) for event in seen if event.sink] == [
-            ("callback", "_ReaderTimeoutError"),
-        ], f"the reader failure must remain observable, got {seen!r}"
-        assert {
-            LineStreamPhase.TEARDOWN_STARTED,
-            LineStreamPhase.TEARDOWN_COMPLETED,
-        } <= set(phases), (
-            f"a reader failure must still reconcile the run, got {phases!r}"
-        )
+        _assert_lines_observations(seen, phases)
