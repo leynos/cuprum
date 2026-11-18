@@ -103,8 +103,16 @@ mod windows_crt_consume;
 mod windows_tests;
 
 pub use consume::consume_stream;
-#[cfg(test)]
-pub(crate) use consume::{consume_stream_files, consume_with_reader};
+// Only the unix-gated test modules drive the platform entry point directly;
+// leaving it re-exported on Windows would be an unused import under
+// `-D warnings`.
+#[cfg(all(test, unix))]
+pub(crate) use consume::consume_stream_files;
+// The Windows CRT adapter and the crate's tests are the only callers; an
+// unconditional re-export would be an unused import on unix under
+// `-D warnings`.
+#[cfg(any(test, windows))]
+pub(crate) use consume::consume_with_reader;
 #[cfg(unix)]
 use cuprum_native_io::{AsStream, OwnedStream};
 #[cfg(windows)]
