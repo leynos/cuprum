@@ -94,6 +94,16 @@
   `cuprum_teardown_errors_total` gains an `operation` label naming the failed
   step, so an incomplete reclaim is visible rather than silently suppressed
   ([#545](https://github.com/leynos/cuprum/issues/545)).
+- **An early-closing pipeline stage releases its upstream producer:** when the
+  Python pump's bounded post-close drain times out, the pump now closes the
+  upstream reader transport before pipeline completion waits for every stage.
+  The producer's next write meets a broken pipe, so a stage that would
+  otherwise keep writing into a pipe nobody reads exits, and the pipeline
+  settles inside its own timeout. A downstream stage that has already exited
+  keeps its own result and exit status, while fail-fast may terminate one that
+  has stopped reading but is still running. Only the timed-out drain path
+  changes, and every fallback hop inherits the rule, since all of them reach
+  `_pump_stream` ([#552](https://github.com/leynos/cuprum/issues/552)).
 
 ## [0.2.0-beta2] - 2026-10-18
 

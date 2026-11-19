@@ -14,6 +14,7 @@ import os
 import sys
 import typing as typ
 
+from cuprum._stream_transport import _stream_transport
 from cuprum.pump_events import RustPumpDeclineReason
 
 if typ.TYPE_CHECKING:
@@ -50,23 +51,6 @@ def _fd_from_transport(transport: object | None) -> int | None:
         return int(fileno())
     except (OSError, ValueError, TypeError, AttributeError):
         return None
-
-
-def _stream_transport(stream: object) -> object | None:
-    """Return a stream's transport, tolerating the private attribute name.
-
-    ``asyncio.StreamWriter`` publishes ``transport``; ``StreamReader`` keeps it
-    on ``_transport``, so both spellings are consulted.
-
-    Returns
-    -------
-    object or None
-        The stream's transport, or ``None`` when it exposes neither attribute.
-    """
-    transport = getattr(stream, "transport", None)
-    if transport is None:
-        transport = getattr(stream, "_transport", None)
-    return transport
 
 
 def _extract_stream_fd(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import textwrap
+import time
 import typing as typ
 
 import pytest
@@ -12,88 +13,24 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from cuprum import ScopeConfig, scoped, sh
+from cuprum._backend import StreamBackend, get_stream_backend
 from cuprum._streams import (
     _POST_CLOSE_DRAIN_TIMEOUT_S,
     _READ_SIZE,
     _drain_stream_reader_bounded,
     _pump_stream,
 )
-from tests.helpers.catalogue import python_catalogue
+from cuprum.unittests._stream_pump_support import (
+    _StallingPumpReader,
+    _StubPumpReader,
+    _StubPumpWriter,
+)
+from tests.helpers.catalogue import early_close_pipeline, python_catalogue
 
-
-class _StubPumpReader:
-    """Stub stream reader yielding queued chunks then EOF."""
-
-    def __init__(self, chunks: list[bytes], *, delay_s: float = 0.0) -> None:
-        """Initialize the stub with queued chunks and a per-read delay."""
-        self._chunks = list(chunks)
-        self._delay_s = delay_s
-        self.read_calls = 0
-        self.read_sizes: list[int] = []
-
-    async def read(self, size: int) -> bytes:
-        """Return the next queued chunk after a delay, or empty bytes at EOF."""
-        self.read_calls += 1
-        self.read_sizes.append(size)
-        await asyncio.sleep(self._delay_s)
-        if not self._chunks:
-            return b""
-        return self._chunks.pop(0)
-
-
-class _StallingPumpReader:
-    """Stub stream reader that emits one configured chunk then stalls."""
-
-    def __init__(self, first_chunk: bytes) -> None:
-        """Initialize the reader with the chunk emitted before stalling."""
-        self._first_chunk = first_chunk
-        self.read_calls = 0
-
-    async def read(self, _: int) -> bytes:
-        """Return one chunk, then wait forever unless the pump cancels the read."""
-        self.read_calls += 1
-        if self.read_calls == 1:
-            return self._first_chunk
-        await asyncio.sleep(3600)
-        return b"more"
-
-
-class _StubPumpWriter:
-    """Stub stream writer recording writes, drains, and closure."""
-
-    def __init__(self, *, fail_on_drain_call: int | None = None) -> None:
-        """Initialize the stub with an optional drain failure point."""
-        self.data = bytearray()
-        self.drain_calls = 0
-        self.write_calls = 0
-        self.closed = False
-        self.write_eof_calls = 0
-        self.wait_closed_calls = 0
-        self._fail_on_drain_call = fail_on_drain_call
-
-    def write(self, chunk: bytes) -> None:
-        """Buffer the chunk and record the write call."""
-        self.write_calls += 1
-        self.data.extend(chunk)
-
-    async def drain(self) -> None:
-        """Record drain and optionally simulate downstream closure."""
-        self.drain_calls += 1
-        await asyncio.sleep(0)
-        if self.drain_calls == self._fail_on_drain_call:
-            raise BrokenPipeError
-
-    def write_eof(self) -> None:
-        """Record that end-of-file was signalled to the writer."""
-        self.write_eof_calls += 1
-
-    def close(self) -> None:
-        """Mark the writer as closed."""
-        self.closed = True
-
-    async def wait_closed(self) -> None:
-        """Record that closure was awaited."""
-        self.wait_closed_calls += 1
+# The deadline the release regression allows the pipeline. A stage that is
+# released settles in well under a second, so half of this bound still fails a
+# regression that waits for the producer instead of releasing its reader.
+_EARLY_CLOSE_DEADLINE_S = 10.0
 
 
 @pytest.mark.usefixtures("stream_backend")
@@ -123,6 +60,43 @@ def test_pipeline_drains_upstream_after_downstream_closes() -> None:
 
     assert result.stdout == "done", "final stage should report completion"
     assert result.stages[1].exit_code == 0, "early consumer should exit cleanly"
+
+
+def test_pipeline_settles_when_producer_outlives_early_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A producer that keeps writing cannot hold the pipeline open.
+
+    The producer never ends on its own, so the pipeline can only settle if the
+    pump releases the upstream reader once its bounded post-close drain times
+    out. The producer then fails on its own broken pipe and the wait for stage
+    exits completes; without the release it blocks on a full pipe forever.
+    """
+    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", StreamBackend.PYTHON.value)
+    pipeline, allowlist = early_close_pipeline()
+    assert get_stream_backend() is StreamBackend.PYTHON, (
+        "the release regression must run on the Python pump, not a native route"
+    )
+
+    started = time.monotonic()
+    with scoped(ScopeConfig(allowlist=allowlist)):
+        result = pipeline.run_sync(timeout=_EARLY_CLOSE_DEADLINE_S)
+    elapsed = time.monotonic() - started
+
+    assert result.stdout == "done", (
+        f"the early consumer should still report completion, got {result.stdout!r}"
+    )
+    assert result.stages[1].exit_code == 0, (
+        f"the early consumer should exit cleanly, got {result.stages[1].exit_code}"
+    )
+    assert result.stages[0].exit_code not in {None, 0}, (
+        "the released producer should have exited with its own failure code, got "
+        f"{result.stages[0].exit_code}"
+    )
+    assert elapsed < _EARLY_CLOSE_DEADLINE_S / 2, (
+        "a released producer must not consume the pipeline deadline: "
+        f"took {elapsed:.2f}s of {_EARLY_CLOSE_DEADLINE_S}s"
+    )
 
 
 def test_pump_stream_logs_discarded_bytes_after_downstream_close(

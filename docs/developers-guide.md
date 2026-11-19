@@ -4084,6 +4084,11 @@ importing the private modules directly.
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
+- `cuprum/_stream_transport.py` — the transport a stream object answers to,
+  consulting `StreamWriter.transport` and `StreamReader._transport`. It is a
+  leaf importing nothing from `cuprum`, shared by the pump's reader release,
+  the raw-descriptor hand-off, and the abandoned-startup reclaim, so a caller
+  that needs only the lookup does not reach into another module's seams.
 - `cuprum/adapters/tracing_protocols.py` — the canonical PEP 544 `Span`/
   `Tracer` protocols. `tracing_adapter` re-exports both;
   `_tracing_protocols.py` remains a compatibility re-export only.
