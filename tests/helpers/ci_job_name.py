@@ -56,7 +56,9 @@ _BARE_MATRIX: typ.Final = re.compile(
     r"\A\s*matrix\.(?P<field>[a-z0-9-]+)\s*\Z", re.IGNORECASE
 )
 #: A matrix-conditional literal: the ``when`` text for a truthy field, the
-#: ``otherwise`` text for a falsy one. Both literals may be empty.
+#: ``otherwise`` text for a falsy one, and ``otherwise`` again when the field
+#: is truthy but ``when`` is empty, because GitHub's ``||`` reads the empty
+#: string as falsy. Either literal may be empty.
 _MATRIX_CHOICE: typ.Final = re.compile(
     r"\A\s*matrix\.(?P<field>[a-z0-9-]+)\s*&&\s*'(?P<when>[^']*)'\s*"
     r"\|\|\s*'(?P<otherwise>[^']*)'\s*\Z",
@@ -233,7 +235,9 @@ def _render_expression(
     choice = _MATRIX_CHOICE.match(body)
     if choice is not None:
         if _leg_value(leg, choice.group("field"), subject=subject):
-            return choice.group("when")
+            # `x && '' || otherwise` falls through: GitHub's `||` reads the
+            # empty first operand as falsy and returns the second.
+            return choice.group("when") or choice.group("otherwise")
         return choice.group("otherwise")
     bare = _BARE_MATRIX.match(body)
     if bare is not None:
