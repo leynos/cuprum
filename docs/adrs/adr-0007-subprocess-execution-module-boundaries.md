@@ -1731,3 +1731,38 @@ child: the double's `wait_closed` parks until the case releases it, so the
 assertion is made while the close has demonstrably begun and cannot have
 finished. Moving the publication after the close makes that case fail with an
 empty log.
+
+## Addendum (2026-11-19): the failure that ends a run is reported on the teardown channels
+
+The 2026-11-15 addendum made a stream-consumer failure end a run: the
+rendezvous stops, the child is terminated and reaped, and the callback's own
+exception reaches the caller. That is a decision point — cuprum kills a child
+that was still working — so it must be observable, and the question is on which
+channel.
+
+A new `ExecPhase` member was rejected. `ExecPhase` is a public
+`typing.Literal`, and consumers match it exhaustively: the metrics adapter
+raises `_UnhandledMetricsPhaseError` on a phase it does not know. Adding a
+member therefore makes an adapter that was correct when it was written start
+raising, which is a compatibility break in exchange for a label the existing
+channels already carry. The run's `settled` event already records the outcome as
+`TerminalOutcome.ERROR`, and the teardown diagnostics already exist for the
+case where a failure is absorbed; a failure that ends the run is the same
+reader failing for the same reason, distinguished only by who decided to stop.
+
+The reporting was strengthened instead. `_report_teardown_drain_failure` now
+takes each failing stream paired with its class and builds the comma-joined
+list once, so the `ERROR` `subprocess_teardown_drain_failed` record carries
+`cuprum_streams` as well as `cuprum_error_type`, and the best-effort
+`teardown_error` event names the streams in its note — the event has no field
+for them, and which reader stopped is what separates a failure that ended the
+run from one a teardown absorbed after a timeout or a cancellation.
+`cuprum/_stream_drain.py` reuses the same pairs for its `stream_consumer_failed`
+`DEBUG` record, so the three channels cannot disagree about the stream.
+
+`cuprum/unittests/test_consumer_failure_telemetry.py` pins the route end to end
+for both `run()` and `lines()` and for either stream: exactly one
+`teardown_error` event naming the failing stream, one `stream_consumer_failed`
+record labelled `drain_<stream>`, one `settled` event with
+`terminal_outcome=error`, and the callback's own exception reaching the caller
+unchanged.

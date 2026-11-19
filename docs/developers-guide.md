@@ -9252,6 +9252,29 @@ divergence rather than a guarantee: the line-stream coordinator and the
 streamed route's own post-exit collection close no transports, so a run ending
 there with a live descendant leaves the parent-side descriptor to the collector.
 
+A consumer failure that *ends* a run is a decision point — cuprum terminates
+and reaps a child that was still working — and it is reported through the
+teardown channels the run already owns rather than through a signal of its own.
+Three fire: the `subprocess_teardown_drain_failed` `ERROR` record on the
+`cuprum.timeout` logger, carrying `cuprum_operation="drain"`,
+`cuprum_teardown_outcome="drain_error"`, and `cuprum_streams`; the
+`stream_consumer_failed` `DEBUG` record on `cuprum._subprocess_wait`, carrying
+`cuprum_operation="drain_<stream>"`; and, beside the first, a best-effort
+`teardown_error` observe event whose note names the same failing streams. The
+run then settles once with `terminal_outcome=error` (`TerminalOutcome.ERROR`),
+which is the event a consumer watching only the phase stream sees.
+
+A dedicated signal for the decision would be a new `ExecPhase` member, and that
+literal is matched exhaustively by consumers — `MetricsHook` raises
+`_UnhandledMetricsPhaseError` on an unknown phase — so adding one makes an
+adapter that was correct when it was written start raising. Reusing the
+teardown channels keeps that contract intact; the guarantee is that a failure
+ends a run *and* that these channels are reached on the route, which
+`cuprum/unittests/test_consumer_failure_telemetry.py` pins for both `run()` and
+`lines()` and for either stream. The record and the event carry the stream
+because the outcome label alone cannot distinguish a failure that ended a run
+from one a teardown merely absorbed after a timeout or a cancellation.
+
 The owned-handle route (`_settle_handle_run` in
 `cuprum/_process_handle/coordinator.py`) and the pipeline coordinator
 (`cuprum/_pipeline_collect.py`) are deliberately not call sites. Both wait for
@@ -10016,10 +10039,14 @@ and leaves the span open until `settled` closes it.
 
 The parallel `cuprum.timeout` log records use the same field names under the
 `cuprum_` prefix (`cuprum_operation`, `cuprum_pid`, `cuprum_timeout_s`,
-`cuprum_error_type`, `cuprum_timeout_mode`, and `cuprum_teardown_outcome`):
-`subprocess_timeout_expired` (`WARNING`) for expiry and
-`subprocess_teardown_drain_failed` (`ERROR`, `cuprum_teardown_outcome` of
+`cuprum_error_type`, `cuprum_timeout_mode`, `cuprum_streams`, and
+`cuprum_teardown_outcome`): `subprocess_timeout_expired` (`WARNING`) for expiry
+and `subprocess_teardown_drain_failed` (`ERROR`, `cuprum_teardown_outcome` of
 `"drain_error"`) for a drain failure. A logging failure is likewise swallowed.
+`cuprum_streams` names the readers that failed, and the paired `teardown_error`
+event carries the same streams in its note: the event has no field for them,
+and which reader stopped is what separates a failure that ended the run from
+one a teardown merely absorbed.
 
 ## Subprocess stdin injection
 

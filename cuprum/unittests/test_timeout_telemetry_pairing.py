@@ -150,15 +150,21 @@ def test_teardown_drain_reports_agree_across_channels(
     Both channels name the same ``drain`` operation, so a consumer correlating
     a log record with its event is not left reconciling two spellings of one
     thing. The pid and the comma-joined error classes are shared too, and the
-    join must be built once rather than computed twice per channel.
+    join must be built once rather than computed twice per channel. The failing
+    streams travel the same way: the record carries them as a field and the
+    event in its note, and neither may re-derive them.
     """
     observation = _RecordingObservation()
+    failures = tuple(
+        ("stdout" if index % 2 == 0 else "stderr", error_type)
+        for index, error_type in enumerate(error_types)
+    )
 
     with _capture_timeout_records(logging.ERROR) as records:
         _report_teardown_drain_failure(
             typ.cast("_StageObservation", observation),
             pid=pid,
-            error_types=tuple(error_types),
+            failures=failures,
         )
 
     fields = vars(_sole_record(records))
@@ -189,4 +195,13 @@ def test_teardown_drain_reports_agree_across_channels(
     assert details.error_type == ",".join(error_types), (
         f"the joined error classes must preserve the reported order, got "
         f"{details.error_type!r} for {error_types!r}"
+    )
+    streams = ",".join(stream for stream, _ in failures)
+    assert fields["cuprum_streams"] == streams, (
+        f"the log record must name the failing streams, got "
+        f"{fields['cuprum_streams']!r} for {streams!r}"
+    )
+    assert details.note == f"consumer drain failed: {streams} ({details.error_type})", (
+        f"the event's note must name the same streams the record reports, got "
+        f"{details.note!r} for {streams!r}"
     )

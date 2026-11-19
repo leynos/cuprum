@@ -196,29 +196,26 @@ def _report_drain_failures(
 ) -> None:
     """Report unexpected consumer failures without replacing the primary error."""
     results = (("stdout", stdout_result), ("stderr", stderr_result))
-    drain_errors = tuple(
-        type(result).__name__
-        for _, result in results
+    failures = tuple(
+        (stream, type(result).__name__)
+        for stream, result in results
         if isinstance(result, BaseException)
         and not isinstance(result, asyncio.CancelledError)
     )
-    if drain_errors:
+    if failures:
         _report_teardown_drain_failure(
-            context.observation, pid=context.pid, error_types=drain_errors
+            context.observation, pid=context.pid, failures=failures
         )
-    for stream, result in results:
-        if isinstance(result, BaseException) and not isinstance(
-            result, asyncio.CancelledError
-        ):
-            _DRAIN_LOGGER.debug(
-                "stream_consumer_failed stream=%s error=%s",
-                stream,
-                type(result).__name__,
-                extra={
-                    "cuprum_operation": f"drain_{stream}",
-                    "cuprum_error_type": type(result).__name__,
-                },
-            )
+    for stream, error_type in failures:
+        _DRAIN_LOGGER.debug(
+            "stream_consumer_failed stream=%s error=%s",
+            stream,
+            error_type,
+            extra={
+                "cuprum_operation": f"drain_{stream}",
+                "cuprum_error_type": error_type,
+            },
+        )
 
 
 def _decode_consumer_result(

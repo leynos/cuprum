@@ -149,6 +149,7 @@ def test_developers_guide_documents_async_policy(
         "cuprum_timeout_s",
         "cuprum_timeout_mode",
         "cuprum_error_type",
+        "cuprum_streams",
         "cuprum_teardown_outcome",
         "cuprum_timeouts_total",
         "cuprum_teardown_errors_total",
@@ -241,6 +242,8 @@ def test_users_guide_documents_teardown_error_fields(
         "cuprum_timeout_mode",
         "cuprum_teardown_outcome",
         "cuprum_error_type",
+        "cuprum_streams",
+        "stream_consumer_failed",
         "best-effort",
     ],
 )

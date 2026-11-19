@@ -91,21 +91,31 @@ def _log_timeout_expiry(
     )
 
 
-def _log_teardown_drain_failure(*, pid: int | None, joined: str) -> None:
+def _log_teardown_drain_failure(
+    *,
+    pid: int | None,
+    joined: str,
+    streams: str,
+) -> None:
     """Record a structured diagnostic when teardown drains a failing consumer.
 
     Called when cancelling and draining stream consumers surfaces an unexpected
     exception (anything other than the expected ``CancelledError``). Reports the
     teardown outcome so a drain failure is observable even though it is absorbed
     to preserve the primary timeout or cancellation. ``joined`` is the
-    comma-joined error-class list prepared by
-    :func:`_report_teardown_drain_failure`.
+    comma-joined error-class list, and ``streams`` the comma-joined failing
+    streams, both prepared by :func:`_report_teardown_drain_failure`.
+
+    The stream matters as much as the class: a failure that *ended* a run and
+    one a teardown merely absorbed produce the same outcome label, and only the
+    stream tells an operator which reader stopped first.
     """
     _emit_timeout_log(
         logging.ERROR,
-        "subprocess_teardown_drain_failed pid=%s errors=%s",
+        "subprocess_teardown_drain_failed pid=%s errors=%s streams=%s",
         pid,
         joined,
+        streams,
         extra={
             "cuprum_pid": pid,
             # "drain" matches the ``teardown_error`` observe event's
@@ -116,6 +126,7 @@ def _log_teardown_drain_failure(*, pid: int | None, joined: str) -> None:
             "cuprum_operation": "drain",
             "cuprum_teardown_outcome": "drain_error",
             "cuprum_error_type": joined,
+            "cuprum_streams": streams,
         },
     )
 
@@ -193,13 +204,17 @@ def _emit_teardown_error_event(
     *,
     pid: int | None,
     joined: str,
+    streams: str,
 ) -> None:
     """Best-effort ``teardown_error`` observe event for a consumer drain failure.
 
     Carries ``operation="drain"``, ``pid``, and ``error_type`` (``joined``, the
     comma-joined failure classes prepared by
-    :func:`_report_teardown_drain_failure`). The failure is absorbed to preserve
-    the primary timeout or cancellation, but stays observable through this event.
+    :func:`_report_teardown_drain_failure`). The note names the failing streams
+    too: the event has no field for them, and which reader stopped is what
+    separates a failure that ended the run from one a teardown absorbed. The
+    failure is absorbed to preserve the primary timeout or cancellation, but
+    stays observable through this event.
     """
     _safe_emit(
         observation,
@@ -208,7 +223,7 @@ def _emit_teardown_error_event(
             pid=pid,
             operation="drain",
             error_type=joined,
-            note=f"consumer drain failed: {joined}",
+            note=f"consumer drain failed: {streams} ({joined})",
         ),
     )
 
@@ -301,20 +316,28 @@ def _report_teardown_drain_failure(
     observation: _StageObservation | None,
     *,
     pid: int | None,
-    error_types: tuple[str, ...],
+    failures: cabc.Sequence[tuple[str, str]],
 ) -> None:
     """Report a consumer drain failure through both teardown telemetry channels.
 
     Mirrors :func:`_report_timeout_expiry`: the comma-joined error-class list is
     built once and shared by the structured ``cuprum.timeout`` log record and the
-    ``teardown_error`` observe event. The event is emitted only when the caller
-    has an observation to emit it on. Both emissions are best-effort and cannot
-    mask the failure being cleaned up after.
+    ``teardown_error`` observe event. ``failures`` pairs each failing stream with
+    the class it failed with, so neither channel has to re-derive which reader a
+    class belongs to. The event is emitted only when the caller has an
+    observation to emit it on. Both emissions are best-effort and cannot mask the
+    failure being cleaned up after.
     """
-    joined = ",".join(error_types)
-    _log_teardown_drain_failure(pid=pid, joined=joined)
+    joined = ",".join(error_type for _, error_type in failures)
+    streams = ",".join(stream for stream, _ in failures)
+    _log_teardown_drain_failure(pid=pid, joined=joined, streams=streams)
     if observation is not None:
-        _emit_teardown_error_event(observation, pid=pid, joined=joined)
+        _emit_teardown_error_event(
+            observation,
+            pid=pid,
+            joined=joined,
+            streams=streams,
+        )
 
 
 __all__ = [

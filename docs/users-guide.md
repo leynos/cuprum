@@ -2810,13 +2810,25 @@ logger, even when no observe hook is registered. The
 - `cuprum_error_type`: `"TimeoutError"`
 
 If cleanup fails to drain a stream consumer, an `ERROR`
-`subprocess_teardown_drain_failed pid=… errors=…` record carries
+`subprocess_teardown_drain_failed pid=… errors=… streams=…` record carries
 `cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
-`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
+`cuprum_pid`, `cuprum_error_type` with the comma-joined failure classes, and
+`cuprum_streams` with the comma-joined failing streams. Each failing reader
+also emits a `DEBUG` `stream_consumer_failed` record on the
+`cuprum._subprocess_wait` logger, labelled `drain_stdout` or `drain_stderr`,
+whether or not the run has an observation.
 
 The drain failure is absorbed so it cannot displace `TimeoutExpired` or
 `CancelledError`. Logging is best-effort; the same values are emitted as
 `timeout` and `teardown_error` events, so the two channels cannot disagree.
+
+A stream callback that raises and ends the run is reported through these same
+diagnostics: the child is terminated and reaped, the records and event above
+name the reader that failed, and the run settles with `terminal_outcome` of
+`error`. See
+[the developers' guide](developers-guide.md#subprocess-execution-module-boundaries)
+for why the failure reuses the teardown channels instead of an event of its
+own.
 
 #### Startup reclaim diagnostics
 
@@ -2887,7 +2899,10 @@ hooks receive `ExecEvent` values describing:
   preserve the primary exception (ancillary). The bounded `operation` names the
   step: `drain` for a stream consumer drained with an unexpected error, or one
   of the startup reclaim's categories listed under
-  [Startup reclaim diagnostics](#startup-reclaim-diagnostics).
+  [Startup reclaim diagnostics](#startup-reclaim-diagnostics). For a `drain`
+  failure the `note` names the failing streams and the `error_type` the
+  comma-joined failure classes, so an adapter can tell which reader stopped
+  without parsing the log record.
 
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).

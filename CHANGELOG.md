@@ -39,12 +39,17 @@
   re-raised unchanged, and a `TimeoutError` inside it is not mistaken for the
   run's deadline; an exit wait that has already settled with its own timeout is
   the run's outcome instead. The child and its owned group are terminated and
-  reaped before the error reaches the caller. A stdin source that failed as
-  well outranks it — a producer's `StdinSourceError` naming the input contract
-  that broke, or whatever escaped a supplied payload's write: the writer
-  publishes its failure before its own teardown runs, so the caller receives
-  that failure rather than the one it caused
-  ([#551](https://github.com/leynos/cuprum/issues/551)).
+  reaped before the error reaches the caller. The failure is reported through
+  the run's existing teardown diagnostics: the `ERROR`
+  `subprocess_teardown_drain_failed` record and the `teardown_error` event now
+  name the failing streams, a `stream_consumer_failed` record is emitted per
+  failing reader, and the run settles with `terminal_outcome=error`. No new
+  `ExecPhase` member was added for it, because that literal is matched
+  exhaustively by consumers. A stdin source that failed as well outranks it — a
+  producer's `StdinSourceError` naming the input contract that broke, or
+  whatever escaped a supplied payload's write: the writer publishes its failure
+  before its own teardown runs, so the caller receives that failure rather than
+  the one it caused ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **A streamed run that stops before end-of-file releases its output
   descriptors:** the consumer-failure, deadline and cancellation routes now
   close the child's parent-side output pipes once their readers are settled.
