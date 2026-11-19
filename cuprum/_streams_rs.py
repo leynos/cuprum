@@ -28,6 +28,7 @@ import os
 import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
+from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
 from cuprum._streams_windows import (
     _convert_fd_for_platform,
     _duplicate_binary_reader,
@@ -46,6 +47,7 @@ if typ.TYPE_CHECKING:
 
 _I64_MIN = -(1 << 63)
 _I64_MAX = (1 << 63) - 1
+_I32_MAX = (1 << 31) - 1
 _MAX_BUFFER_SIZE = 1 << 30
 
 _LOGGER = logging.getLogger(__name__)
@@ -100,8 +102,33 @@ def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
         os.close(writer_fd)
 
 
-def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
-    """Raise native-compatible buffer-size errors before transferring a writer."""
+def _validate_buffer_size(buffer_size: int) -> int:
+    """Normalize a buffer size to ``int`` and apply the native size policy.
+
+    The order mirrors the native validator: ``operator.index`` first, then the
+    ``i64`` extraction range, then the positive and 1 GiB limits. Both wrappers
+    call this before touching a descriptor so an invalid size is always the
+    first reported failure.
+
+    Parameters
+    ----------
+    buffer_size : int
+        Candidate size; any object implementing ``__index__`` is accepted.
+
+    Returns
+    -------
+    int
+        The size as a plain ``int``, already known to be within policy.
+
+    Raises
+    ------
+    TypeError
+        If ``buffer_size`` does not implement ``__index__``.
+    OverflowError
+        If the value does not fit PyO3's ``i64`` extraction range.
+    ValueError
+        If the value is not positive or exceeds the 1 GiB cap.
+    """
     size = operator.index(buffer_size)
     if not _I64_MIN <= size <= _I64_MAX:
         msg = "Python int too large to convert to C long"
@@ -115,23 +142,60 @@ def _validate_buffer_size_before_writer_transfer(buffer_size: int) -> int:
     return size
 
 
-def _prepare_native_reader(reader_fd: int) -> int:
-    """Validate ABI representation while Python still owns the writer."""
-    # A negative value is rejected before the platform conversion: on Windows
-    # the conversion calls ``msvcrt.get_osfhandle``, which raises ``OSError``
-    # for a negative CRT descriptor rather than the documented ``ValueError``.
-    raw_reader = operator.index(reader_fd)
-    if raw_reader < 0:
-        resource = "file handle" if os.name == "nt" else "file descriptor"
-        msg = f"{resource} must be non-negative"
+def _validate_raw_reader(reader_fd: int) -> int:
+    """Normalize a raw descriptor and apply the shared range policy.
+
+    The order matches the native boundary: ``i64`` extraction range, then the
+    sign, then the signed 32-bit descriptor range. The check runs before any
+    platform conversion so an unusable value never reaches ``msvcrt`` and never
+    causes a Windows ``OSError`` where the documented class is ``ValueError``.
+
+    Parameters
+    ----------
+    reader_fd : int
+        Candidate descriptor; any object implementing ``__index__`` is
+        accepted.
+
+    Returns
+    -------
+    int
+        The descriptor as a plain ``int``, still in its raw platform form.
+
+    Raises
+    ------
+    TypeError
+        If ``reader_fd`` does not implement ``__index__``.
+    OverflowError
+        If the value does not fit PyO3's ``i64`` extraction range.
+    ValueError
+        If the descriptor is negative or outside the signed 32-bit range.
+    """
+    reader = operator.index(reader_fd)
+    if not _I64_MIN <= reader <= _I64_MAX:
+        msg = "Python int too large to convert to C long"
+        raise OverflowError(msg)
+    if reader < 0:
+        msg = "file descriptor must be non-negative"
         raise ValueError(msg)
+    if reader > _I32_MAX:
+        msg = "file descriptor out of range"
+        raise ValueError(msg)
+    return reader
+
+
+def _prepare_native_reader(reader_fd: int) -> int:
+    """Validate a raw reader, then convert it for the native platform.
+
+    Validation happens while Python still owns the writer. The converted
+    Windows handle may be pointer-sized rather than a 32-bit descriptor, so the
+    raw ``i32`` check belongs to :func:`_validate_raw_reader` and only the
+    ``i64`` representation is rechecked here.
+    """
+    raw_reader = _validate_raw_reader(reader_fd)
     reader = operator.index(_convert_fd_for_platform(raw_reader))
     if not _I64_MIN <= reader <= _I64_MAX:
         msg = "Python int too large to convert to C long"
         raise OverflowError(msg)
-    if os.name != "nt" and not -(1 << 31) <= reader < (1 << 31):
-        msg = "file descriptor out of range"
-        raise ValueError(msg)
     return reader
 
 
@@ -149,9 +213,7 @@ def _prepare_rust_pump_call(
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.NATIVE_LOAD_FAILED)
         raise
     try:
-        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
-            buffer_size
-        )
+        validated_buffer_size = _validate_buffer_size(buffer_size)
     except BaseException:
         _close_writer_after_pre_native_failure(writer_fd)
         _emit_rust_pump_handoff_outcome(RustPumpHandoffOutcome.BUFFER_VALIDATION_FAILED)
@@ -187,13 +249,17 @@ def rust_pump_stream(
     Parameters
     ----------
     reader_fd : int
-        File descriptor to read from.
+        Descriptor to read from. Any object implementing ``__index__`` is
+        accepted; the normalized value must be non-negative and within the
+        signed 32-bit descriptor range.
     writer_fd : int
-        File descriptor to write to.
+        Descriptor to write to. On Windows it is converted to an owned Win32
+        handle and the CRT descriptor is closed here; elsewhere Rust adopts
+        the descriptor itself.
     buffer_size : int, optional
-        Buffer size in bytes for each read/write cycle. Must be greater than
-        zero and no larger than 1 GiB (``1 << 30``). Defaults to ``65536``
-        (64 KiB).
+        Bytes per read/write cycle. Must be an index-like value greater than
+        zero and no larger than 1 GiB (``1 << 30``). Defaults to
+        ``NATIVE_PUMP_BUFFER_SIZE`` (64 KiB).
 
     Returns
     -------
@@ -202,22 +268,33 @@ def rust_pump_stream(
 
     Raises
     ------
-    OSError
-        If the Rust pump encounters an I/O error, or if Windows rejects a raw
-        handle because synchronous-I/O suitability has not been established.
+    ImportError
+        If the native module cannot be imported.
+    OverflowError
+        If ``buffer_size`` or ``reader_fd`` does not fit PyO3's ``i64`` range.
     ValueError
-        If the wrapper rejects an argument before any native hand-off:
-        ``buffer_size`` that is not positive or exceeds 1 GiB, or a negative
-        ``reader_fd``.
+        If ``buffer_size`` is not positive or exceeds 1 GiB, or if
+        ``reader_fd`` is negative or above the signed 32-bit descriptor
+        range.
+    OSError
+        If the Rust pump encounters an I/O error, if platform writer transfer
+        fails, or if Windows rejects a raw handle because synchronous-I/O
+        suitability has not been established.
 
     Notes
     -----
-    The wrapper validates ``buffer_size`` and ``reader_fd`` before transferring
-    a Windows writer resource, preserving the native entry point's errors
-    without leaking a duplicated handle. Other failures propagate unchanged
-    from the Rust extension: ``ImportError`` if the native module cannot be
-    imported and ``OSError`` for native I/O errors. Windows raw-handle
-    rejection has its own bounded hand-off observation outcome.
+    Validation order is fixed and shared with the consume wrapper: load the
+    native module, validate ``buffer_size``, validate ``reader_fd``, convert
+    the reader for the platform, then transfer ``writer_fd``. Argument
+    extraction uses the same buffer-then-reader order, so a non-index-like
+    value raises ``TypeError`` and an integer outside ``i64`` raises
+    ``OverflowError`` before the earlier argument's stream-domain check would
+    otherwise run.
+
+    Every pre-native failure closes the writer Python still owns and emits the
+    matching hand-off outcome; a writer that reaches Rust is adopted and closed
+    there. The gap between validation and adoption is therefore observable
+    only as the wrapper's cleanup: no argument is rechecked after the transfer.
     """  # ruff: ignore[docstring-extraneous-exception] - ValueError propagates from _prepare_rust_pump_call.
     prepared = _prepare_rust_pump_call(
         reader_fd=reader_fd,
@@ -250,53 +327,10 @@ def rust_pump_stream(
         raise
 
 
-def _validate_windows_consume_reader(reader_fd: int) -> int:
-    """Reject a CRT descriptor outside the range the Windows boundary accepts.
-
-    The checks mirror the native entry point's, but run before ``os.dup``:
-    duplicating first would surface ``os.dup``'s ``OSError`` for a descriptor
-    the caller was promised as ``ValueError``.
-
-    Only the descriptor's range is established here. Whether it is open, open
-    for reading, and synchronous is not observable from an ``int``; the native
-    boundary reports those conditions as ``OSError`` rather than terminating
-    the process, because ``_read`` would otherwise invoke the invalid parameter
-    handler's default fast-fail.
-
-    Parameters
-    ----------
-    reader_fd : int
-        Candidate CRT descriptor supplied by the caller.
-
-    Returns
-    -------
-    int
-        The same descriptor as an ``int``, once it is known to be usable.
-
-    Raises
-    ------
-    OverflowError
-        If the value does not fit PyO3's ``i64`` extraction range.
-    ValueError
-        If the descriptor is negative or exceeds the CRT's signed 32-bit range.
-    """
-    reader = operator.index(reader_fd)
-    if not _I64_MIN <= reader <= _I64_MAX:
-        msg = "Python int too large to convert to C long"
-        raise OverflowError(msg)
-    if reader < 0:
-        msg = "file descriptor must be non-negative"
-        raise ValueError(msg)
-    if reader > (1 << 31) - 1:
-        msg = "file descriptor out of range"
-        raise ValueError(msg)
-    return reader
-
-
 def rust_consume_stream(
     reader_fd: int,
     *,
-    buffer_size: int = 65536,
+    buffer_size: int = DEFAULT_NATIVE_BUFFER_SIZE,
 ) -> str:
     """Consume bytes from a file descriptor using the Rust extension.
 
@@ -306,61 +340,69 @@ def rust_consume_stream(
     Parameters
     ----------
     reader_fd : int
-        File descriptor to read from.
+        Descriptor to read from. Any object implementing ``__index__`` is
+        accepted; the normalized value must be non-negative and within the
+        signed 32-bit descriptor range.
     buffer_size : int, optional
-        Buffer size in bytes for each read cycle. Must be greater than zero and
-        no larger than 1 GiB (``1 << 30``). Defaults to ``65536`` (64 KiB).
+        Bytes per read cycle. Must be an index-like value greater than zero
+        and no larger than 1 GiB (``1 << 30``). Defaults to
+        ``DEFAULT_NATIVE_BUFFER_SIZE`` (64 KiB).
 
     Returns
     -------
     str
         Decoded output from the stream.
 
+    Raises
+    ------
+    ImportError
+        If the native module cannot be imported.
+    OverflowError
+        If ``buffer_size`` or ``reader_fd`` does not fit PyO3's ``i64`` range.
+    ValueError
+        If ``buffer_size`` is not positive or exceeds 1 GiB, or if
+        ``reader_fd`` is negative or above the signed 32-bit descriptor
+        range.
+    OSError
+        If descriptor setup or reading fails.
+
     Notes
     -----
     Implemented but not yet integrated. No production code path routes a
     consume through this function; the pump side has a
-    ``_pump_stream_dispatch`` counterpart, but consume dispatch is
-    deferred, evidence-gated work (ADR-002, Phase 2). The function is
-    exercised directly by tests and remains available for downstream
-    experimentation.
+    ``_pump_stream_dispatch`` counterpart, but consume dispatch is deferred,
+    evidence-gated work (ADR-002, Phase 2). The function is exercised directly
+    by tests and remains available for downstream experimentation.
 
-    On Windows, it duplicates the CRT reader descriptor, sets that duplicate
-    to binary mode, and closes it after the native call; the caller keeps
-    ownership and its original translation mode. The wrapper rejects a
-    negative or out-of-range Windows descriptor and an invalid
-    ``buffer_size`` itself, before ``os.dup`` runs. Duplicating first would
-    raise ``os.dup``'s ``OSError`` where the native boundary documents
-    ``ValueError`` for both arguments, and would also put the native buffer
-    check after a descriptor conversion, reversing the order the entry point
-    guarantees on every platform.
+    Validation order matches the pump wrapper: load the native module, check
+    ``buffer_size``, check ``reader_fd``, apply the platform step, then call
+    native. Both arguments are checked in Python, so neither an invalid buffer
+    nor an unusable descriptor reaches ``os.dup`` on Windows, where the CRT
+    would otherwise report ``OSError`` for a value documented as ``ValueError``
+    and could fast-fail the process in ``_read``. On Unix the native entry
+    rechecks the same policy and the wrapper passes the raw descriptor
+    through.
 
-    Failures propagate unchanged from the Rust extension rather than being
-    raised here: ``ImportError`` if the native module cannot be imported,
-    ``ValueError`` if ``buffer_size`` is not a positive integer or exceeds the
-    1 GiB maximum, and ``OSError`` if descriptor setup or reading fails.
-    ``OverflowError`` reports an integer outside PyO3's ``i64`` range.
-    """
+    On Windows the wrapper duplicates the CRT reader, sets only that duplicate
+    to binary mode, and closes it after the native call. The caller keeps
+    ownership and its original translation mode. On Unix the reader is
+    borrowed for the synchronous native call and remains open and usable
+    afterwards. The native boundary still owns its own duplication on Windows,
+    so a direct native caller is equally safe.
+    """  # ruff: ignore[docstring-extraneous-exception] - ImportError propagates from _load_native.
     native = _load_native()
+    validated_buffer_size = _validate_buffer_size(buffer_size)
+    reader = _validate_raw_reader(reader_fd)
     if os.name == "nt":
-        # Buffer validation precedes descriptor conversion in the native entry
-        # point on every platform, so the wrapper keeps that order: it is part
-        # of the documented contract, not an implementation detail. Duplicating
-        # before either check would run `os.dup` — and its `OSError` — where
-        # the caller was promised `ValueError`, and would carry a descriptor
-        # the CRT will reject into a call that fast-fails the process instead
-        # of returning an error.
-        validated_buffer_size = _validate_buffer_size_before_writer_transfer(
-            buffer_size
-        )
-        reader = _validate_windows_consume_reader(reader_fd)
+        # The validated CRT descriptor is duplicated before the native call so
+        # the caller's translation mode is untouched while the GIL is released.
         with _duplicate_binary_reader(reader) as duplicate_fd:
             return native.rust_consume_stream(
                 duplicate_fd,
                 buffer_size=validated_buffer_size,
             )
 
-    return native.rust_consume_stream(reader_fd, buffer_size=buffer_size)
+    return native.rust_consume_stream(reader, buffer_size=validated_buffer_size)
 
 
 __all__ = ["rust_consume_stream", "rust_pump_stream"]
