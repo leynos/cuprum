@@ -8128,6 +8128,20 @@ that would create its parent fails with `FileNotFoundError`. `rust/` is copied
 piecewise so a local `rust/target/` build directory is never included; the same
 rule excludes `build/`, `.cache/`, `__pycache__/`, and `.pytest_cache/`.
 
+That rule governs only the declared entry itself. mutmut copies each declared
+directory with `shutil.copytree` and no ignore filter, so a cache nested inside
+one — `scripts/__pycache__`, `tests/.pytest_cache`, a stray
+`benchmarks/build/` — is copied with its parent even though no entry names it.
+`tests/helpers/sandbox_hygiene.py` removes those directories from the sandbox
+during mutmut's statistics phase, before any test observes them. That phase
+runs once, in the process that owns the sandbox, and every subprocess the suite
+starts inherits `MUTANT_UNDER_TEST`, so the purge also requires the directory
+to be named `mutants` inside a git worktree. mutmut captures the statistics
+output and dumps it only when that phase fails; a purge appears there as
+`mutation sandbox: purged N generated directories`.
+`cuprum/unittests/test_mutation_sandbox_hygiene.py` covers a populated cache
+tree and each guard.
+
 Directories:
 
 - `benchmarks/`, `docs/`, `.github/`, and `scripts/`: packages and files
@@ -8234,6 +8248,30 @@ baseline run failed, or mutmut itself errored. Inspect the results with
 documentation helpers resolve the repository root from their own location, so
 inside the sandbox they read the copied `README.md` and `docs/` files rather
 than the working tree.
+
+### Baseline diagnostics
+
+The shared workflow publishes `mutation-mutmut-results.txt` and
+`mutants/mutmut-stats.json` only after `mutmut run` succeeds, so a failing
+baseline leaves no artefact behind: mutmut's dump of the failing run survives
+only in the step log, which GitHub expires. `leynos/shared-actions#591` tracks
+the shared fix. Until it lands, `.github/workflows/mutation-testing.yml`
+declares `baseline-diagnostics`, a job that needs `mutation-python` and runs
+only when it fails. It checks out the repository, installs uv with Python 3.13,
+reruns `mutmut run` under `uv run --with mutmut==3.7.0` for the
+`cuprum._enum_parse.*` glob, tees the output to
+`mutation-baseline-diagnostics.txt`, and uploads that file as an artefact
+whatever the rerun's outcome.
+
+The single-module glob does not weaken the diagnosis: mutmut's statistics phase
+executes the whole selected suite before it considers any mutant, so a failing
+baseline stops there with the same first error regardless of the glob. If the
+original failure was transient, the glob bounds the rerun to a handful of
+mutants rather than a second full sweep.
+
+`tests/test_ci_mutation_workflow_contract.py` pins the job's failure-only
+condition, its least-privilege permissions, the mutmut release it runs, the
+captured file name, and the unconditional upload.
 
 ### The forced-fail probe
 

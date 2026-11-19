@@ -91,6 +91,23 @@
   mutated package runs, which is the outcome mutmut expects. A contract test
   imports the root conftest in a fresh interpreter and asserts `cuprum` stays
   unimported ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation sandbox discards copied caches:** mutmut copies every
+  `[tool.mutmut].also_copy` directory, and its default `tests/` tree, with
+  `shutil.copytree` and no ignore filter, so a `__pycache__` or `.pytest_cache`
+  in the host worktree reached the baseline run inside `mutants/`. The
+  statistics phase, which runs once before any mutant is tested, now purges
+  generated directories from the sandbox. The purge is gated to that phase, to
+  a directory named `mutants`, and to a git worktree, because every sandbox
+  subprocess inherits `MUTANT_UNDER_TEST`. A regression test populates one
+  directory of every generated name
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **A failing mutation baseline keeps its diagnostics:** the shared workflow
+  publishes its results listing and statistics file only after `mutmut run`
+  succeeds, so a baseline failure left only a step log that GitHub expires. A
+  `baseline-diagnostics` job now follows a failed mutation run, reproduces the
+  baseline with the pinned mutmut release, and uploads its captured output as
+  the `mutation-baseline-diagnostics` artefact with `if-no-files-found: error`
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine

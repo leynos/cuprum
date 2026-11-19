@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import typing as typ
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, settings
@@ -32,6 +33,7 @@ from tests.helpers.extension_requirement import (
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
+from tests.helpers.sandbox_hygiene import purge_sandbox_generated_directories
 
 # Property tests assert behaviour, while pytest-timeout retains the suite-wide
 # bound for tests that hang. Hypothesis's per-example runtime is host-sensitive.
@@ -169,6 +171,13 @@ pytest_plugins = (
 )
 
 
+def _purge_mutation_sandbox() -> None:
+    """Remove host-generated directories from mutmut's statistics phase."""
+    removed = purge_sandbox_generated_directories(Path.cwd(), os.environ)
+    if removed:
+        print(f"mutation sandbox: purged {len(removed)} generated directories")
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Fail the run when the extension is required but absent.
 
@@ -201,6 +210,7 @@ def pytest_configure(config: pytest.Config) -> None:
     of the requirement by skipping differently.
     """  # ruff: ignore[docstring-extraneous-exception] - ImportError propagates from is_available()
     del config
+    _purge_mutation_sandbox()
     from cuprum import _rust_backend
 
     message = missing_extension_message(
