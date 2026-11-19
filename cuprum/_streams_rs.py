@@ -220,11 +220,12 @@ def rust_pump_stream(
     -----
     Validation order is fixed and shared with the consume wrapper: load the
     native module, validate ``buffer_size``, validate ``reader_fd``, convert
-    the reader for the platform, then transfer ``writer_fd``. Argument
-    extraction uses the same buffer-then-reader order, so a non-index-like
-    value raises ``TypeError`` and an integer outside ``i64`` raises
-    ``OverflowError`` before the earlier argument's stream-domain check would
-    otherwise run.
+    the reader for the platform, then transfer ``writer_fd``. ``buffer_size``
+    is validated completely, stream-domain check included, before
+    ``reader_fd`` is inspected, so a competing reader failure cannot pre-empt
+    a buffer error. Only once the buffer is accepted can extracting
+    ``reader_fd`` raise ``TypeError`` or ``OverflowError``, and those precede
+    its own stream-domain check.
 
     Every pre-native failure closes the writer Python still owns and emits the
     matching hand-off outcome; a writer that reaches Rust is adopted and closed

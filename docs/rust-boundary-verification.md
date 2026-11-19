@@ -249,7 +249,8 @@ historical record.
   the borrowed CRT reader, sets only that duplicate to binary mode, and closes
   it after the detached call. A Python integer's range is not proof of
   validity, lifetime, or exclusivity. The caller must keep the reader open and
-  prevent descriptor reuse until the native entry has borrowed or adopted it.
+  prevent descriptor reuse until the native call returns: both entry points
+  borrow the reader for that call, and only the pump's writer is adopted.
 
   `_prepare_native_reader` checks the platform ABI representation before writer
   ownership is transferred. Round 7 first recorded a red focused regression run

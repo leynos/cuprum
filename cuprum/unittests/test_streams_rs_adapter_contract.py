@@ -99,6 +99,14 @@ class _ArgumentCase(typ.NamedTuple):
     message: str | None
 
 
+class _SkipCase(typ.NamedTuple):
+    """One invalid-argument row that must skip both platform steps."""
+
+    reader: int
+    buffer_size: int
+    message: str
+
+
 def _pump(reader: int, buffer_size: int) -> object:
     """Call the pump with a fixed writer that never reaches the native call."""
     return _streams_rs.rust_pump_stream(reader, 9001, buffer_size=buffer_size)
@@ -356,40 +364,37 @@ def test_pump_runs_validation_then_conversion_then_transfer(
         events.append("native") or 7
     )
 
-    assert _streams_rs.rust_pump_stream(3, 4, buffer_size=1024) == 7
+    assert _streams_rs.rust_pump_stream(3, 4, buffer_size=1024) == 7, (
+        "the wrapper must return the native byte count"
+    )
 
     assert events == ["convert:3", "transfer:4", "native"], (
         f"the reader must be converted before the writer is transferred; got {events}"
     )
 
 
-def test_pump_skips_conversion_and_transfer_when_the_buffer_is_invalid(
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_SkipCase(3, 0, "buffer_size"), id="invalid-buffer"),
+        pytest.param(
+            _SkipCase(-1, 1024, "file descriptor must be non-negative"),
+            id="invalid-reader",
+        ),
+    ],
+)
+def test_pump_skips_platform_steps_when_an_argument_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
+    case: _SkipCase,
 ) -> None:
-    """Buffer validation happens before either platform step or native load."""
+    """Neither platform step runs once any argument fails validation."""
     convert = mock.Mock()
     transfer = mock.Mock()
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert)
     monkeypatch.setattr(_streams_rs, "_transfer_writer_fd_for_platform", transfer)
 
-    with pytest.raises(ValueError, match="buffer_size"):
-        _streams_rs.rust_pump_stream(3, 4, buffer_size=0)
-
-    convert.assert_not_called()
-    transfer.assert_not_called()
-
-
-def test_pump_skips_transfer_when_the_reader_is_invalid(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An unusable reader is rejected while Python still owns the writer."""
-    convert = mock.Mock()
-    transfer = mock.Mock()
-    monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert)
-    monkeypatch.setattr(_streams_rs, "_transfer_writer_fd_for_platform", transfer)
-
-    with pytest.raises(ValueError, match="file descriptor must be non-negative"):
-        _streams_rs.rust_pump_stream(-1, 4, buffer_size=1024)
+    with pytest.raises(ValueError, match=case.message):
+        _streams_rs.rust_pump_stream(case.reader, 4, buffer_size=case.buffer_size)
 
     convert.assert_not_called()
     transfer.assert_not_called()
@@ -435,7 +440,9 @@ def test_windows_consume_duplicates_the_validated_reader(
     monkeypatch.setattr(_streams_rs, "os", _platform_os("nt"))
     monkeypatch.setattr(_streams_rs, "_duplicate_binary_reader", duplicate)
 
-    assert _streams_rs.rust_consume_stream(5, buffer_size=1024) == "decoded"
+    assert _streams_rs.rust_consume_stream(5, buffer_size=1024) == "decoded", (
+        "the wrapper must return the decoded native text"
+    )
 
     assert duplicated == [5], "the caller's validated descriptor must be duplicated"
     exited.assert_called_once_with()

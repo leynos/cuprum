@@ -479,11 +479,13 @@ between a successful Python check and native adoption is not an ownership lock:
 another thread can close and reuse a descriptor number in that interval. The
 wrapper does not recheck an argument after transfer.
 
-The ownership rule is unchanged. A caller must keep each descriptor bound to
-the intended resource until the native entry has either borrowed it (consume)
-or adopted it (pump). A failure before transfer leaves the writer under Python
-ownership, and the adapter closes it; once transferred, the writer belongs to
-the native side, which closes it on every exit path.
+The ownership rule is unchanged, but it treats borrowing and adoption
+differently. A caller must keep the reader bound to the intended resource until
+the native call returns: both entry points borrow it for the duration of that
+call, and neither takes ownership of it. A caller must keep the writer bound
+only until the native entry adopts it. A failure before transfer leaves the
+writer under Python ownership, and the adapter closes it; once transferred, the
+writer belongs to the native side, which closes it on every exit path.
 
 On Windows consume the adapter duplicates the validated CRT descriptor, sets
 only that duplicate to binary mode, and closes it after the synchronous native

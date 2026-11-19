@@ -48,6 +48,32 @@ class _IndexEvidence(typ.NamedTuple):
     calls: tuple[int, ...]
 
 
+class _DescriptorOwner:
+    """Close one owned descriptor number at most once.
+
+    A descriptor the test hands to the pump is closed there, and a pipe's
+    writing end is closed by the feeder. Closing either number again later
+    could close an unrelated resource if another thread has since reused it,
+    so the owner is disarmed as soon as its descriptor leaves this test's
+    keeping.
+    """
+
+    def __init__(self, fd: int) -> None:
+        """Take ownership of ``fd``."""
+        self.fd = fd
+        self._is_active = True
+
+    def disarm(self) -> None:
+        """Stop closing ``fd`` because another owner now has it, or closed it."""
+        self._is_active = False
+
+    def close(self) -> None:
+        """Close ``fd`` if this owner still holds it."""
+        if self._is_active:
+            self._is_active = False
+            _safe_close(self.fd)
+
+
 @scenario(
     "../features/rust_streams.feature",
     "The buffer size is the first reported stream argument failure",
@@ -106,14 +132,19 @@ def _call_with_descriptor(
     entry_point = _entry_point(adapters, operation)
     with contextlib.ExitStack() as stack:
         args: tuple[int, ...] = (descriptor,)
+        writer: _DescriptorOwner | None = None
         if operation == "pump":
-            # The wrapper closes a writer that never reaches native ownership;
-            # the ExitStack close is a suppressed no-op in that case.
-            writer = os.open(os.devnull, os.O_WRONLY)
-            stack.callback(_safe_close, writer)
-            args = (descriptor, writer)
-        with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
-            entry_point(*args, buffer_size=buffer_size)
+            # The wrapper closes a writer that never reaches native ownership,
+            # so the test must not close that number again on the way out.
+            writer = _DescriptorOwner(os.open(os.devnull, os.O_WRONLY))
+            stack.callback(writer.close)
+            args = (descriptor, writer.fd)
+        try:
+            with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
+                entry_point(*args, buffer_size=buffer_size)
+        finally:
+            if writer is not None:
+                writer.disarm()
     return excinfo.value
 
 
@@ -173,22 +204,27 @@ def when_pump_index_like(adapters: ModuleType) -> _IndexEvidence:
     with contextlib.ExitStack() as stack:
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, upstream_fd)
-        sink_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, sink_fd)
+        upstream = _DescriptorOwner(upstream_fd)
+        stack.callback(upstream.close)
+        sink = _DescriptorOwner(os.open(os.devnull, os.O_WRONLY))
+        stack.callback(sink.close)
         _feed_pipe(reader_fd, upstream_fd, payload)
+        upstream.disarm()
 
         reader = _IndexOnly(reader_fd)
-        sink = _IndexOnly(sink_fd)
+        sink_argument = _IndexOnly(sink.fd)
         size = _IndexOnly(1024)
-        moved = adapters.rust_pump_stream(
-            typ.cast("int", reader),
-            typ.cast("int", sink),
-            buffer_size=typ.cast("int", size),
-        )
+        try:
+            moved = adapters.rust_pump_stream(
+                typ.cast("int", reader),
+                typ.cast("int", sink_argument),
+                buffer_size=typ.cast("int", size),
+            )
+        finally:
+            sink.disarm()
 
     assert moved == len(payload), f"the pump must transfer every byte, found {moved!r}"
-    return _IndexEvidence(moved, (reader.calls, sink.calls, size.calls))
+    return _IndexEvidence(moved, (reader.calls, sink_argument.calls, size.calls))
 
 
 @when(
@@ -201,8 +237,10 @@ def when_consume_index_like(adapters: ModuleType) -> _IndexEvidence:
     with contextlib.ExitStack() as stack:
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, upstream_fd)
+        upstream = _DescriptorOwner(upstream_fd)
+        stack.callback(upstream.close)
         _feed_pipe(reader_fd, upstream_fd, payload)
+        upstream.disarm()
 
         reader = _IndexOnly(reader_fd)
         size = _IndexOnly(8)
