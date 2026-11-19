@@ -1,10 +1,15 @@
-"""Exercise the build-wheels action's named native Maturin step.
+"""Exercise the build-wheels action's Maturin steps.
 
 Reading the YAML cannot show whether ``TARGET`` really only appends
 ``--target`` when set, whether ``--out`` really receives ``WHEELHOUSE``, or
 whether the warning-suppression environment reaches the build process. A fake
 ``maturin`` records its argv and environment while the checked-in shell body
 runs, covering the process boundary as well as the array-based invocation.
+
+The same applies to the install step ahead of it: a fake ``python`` records
+what it was asked to do, so the exact-release guard, the pinned ``pip``
+requirement, and the read-back of the installed release are exercised rather
+than asserted from the recipe text.
 """
 
 from __future__ import annotations
@@ -12,13 +17,17 @@ from __future__ import annotations
 import os
 import typing as typ
 
+import pytest
+
 from tests.helpers.workflow_steps import find_step, install_tool, run_bash, step_script
 
 if typ.TYPE_CHECKING:
+    import subprocess
     from pathlib import Path
 
 ACTION = ".github/actions/build-wheels"
 STEP = "Build wheels with maturin"
+INSTALL_STEP = "Install maturin"
 
 
 def _run_maturin(
@@ -112,4 +121,103 @@ def test_warning_suppression_reaches_maturin_process(tmp_path: Path) -> None:
 
     assert warning_setting == "1", (
         "the Maturin process must receive the warning-suppression setting"
+    )
+
+
+def _install_python_stub(tools: Path, *, record: Path, installed: str) -> None:
+    """Write a ``python`` stand-in that records argv and reports ``installed``."""
+    install_tool(
+        tools,
+        "python",
+        (
+            f"printf '%s\\n' \"$*\" >> '{record}'\n"
+            'case "$*" in\n'
+            "  '-m pip install --upgrade maturin=='*) ;;\n"
+            f"  '-m maturin --version') printf 'maturin %s\\n' '{installed}' ;;\n"
+            "  *) printf 'unexpected python invocation: %s\\n' \"$*\" >&2\n"
+            "     exit 2 ;;\n"
+            "esac\n"
+        ),
+    )
+
+
+def _run_install(
+    tmp_path: Path, *, requested: str, installed: str | None = None
+) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+    """Run the install step and return its result, python calls, and record path."""
+    tools = tmp_path / "tools"
+    record = tmp_path / "python-argv"
+    _install_python_stub(
+        tools,
+        record=record,
+        installed=requested if installed is None else installed,
+    )
+    install_step = find_step(action=ACTION, name=INSTALL_STEP)
+    declared_environment = install_step.get("env")
+    assert isinstance(declared_environment, dict), (
+        "the Maturin install step must declare an environment mapping"
+    )
+    environment = {
+        key: value
+        for key, value in declared_environment.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+    environment["MATURIN_VERSION"] = requested
+    environment["PATH"] = f"{tools}:{os.environ['PATH']}"
+    result = run_bash(
+        step_script(action=ACTION, name=INSTALL_STEP),
+        cwd=tmp_path,
+        env=environment,
+    )
+    invocations = (
+        record.read_text(encoding="utf-8").splitlines() if record.exists() else []
+    )
+    return result, invocations, record
+
+
+def test_an_exact_release_is_installed_and_read_back(tmp_path: Path) -> None:
+    """A well-formed pin installs that exact release and is then verified."""
+    result, invocations, _ = _run_install(tmp_path, requested="1.15.0")
+
+    assert result.returncode == 0, result.stderr
+    assert invocations == [
+        "-m pip install --upgrade maturin==1.15.0",
+        "-m maturin --version",
+    ], f"the step must install the exact pin and read it back, got {invocations!r}"
+
+
+@pytest.mark.parametrize(
+    "requested",
+    ["1.15", ">=1.0", "~=1.15.0", "1.15.0; rm -rf /", "1.15.0rc1"],
+    ids=["two-part", "range", "compatible", "marker", "prerelease"],
+)
+def test_a_non_exact_release_is_refused_before_pip(
+    tmp_path: Path, requested: str
+) -> None:
+    """Anything but ``X.Y.Z`` fails the step without reaching ``pip``."""
+    result, invocations, record = _run_install(tmp_path, requested=requested)
+
+    assert result.returncode != 0, (
+        f"maturin-version {requested!r} must be refused, got success"
+    )
+    assert "exact X.Y.Z release" in result.stderr, (
+        f"the refusal must name the required shape, got {result.stderr!r}"
+    )
+    assert not record.exists(), (
+        f"the guard must run before pip, but python was invoked: {invocations!r}"
+    )
+
+
+def test_a_different_installed_release_fails_the_step(tmp_path: Path) -> None:
+    """A stale preinstalled maturin must not pass as the requested pin."""
+    result, _, _ = _run_install(tmp_path, requested="1.15.0", installed="1.14.0")
+
+    assert result.returncode != 0, (
+        "an installed release that differs from the pin must fail the step"
+    )
+    assert "maturin 1.14.0" in result.stderr, (
+        f"the failure must name what pip left installed, got {result.stderr!r}"
+    )
+    assert "maturin 1.15.0" in result.stderr, (
+        f"the failure must name the requested pin, got {result.stderr!r}"
     )

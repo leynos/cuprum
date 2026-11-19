@@ -348,6 +348,12 @@ jobs:
             **/*.markdown
             **/*.mdx
 
+      # The Makefile and the workflows read these literals, so a drifted pin
+      # must name itself before the lint run that consumes it rather than
+      # surfacing later as an unexplained tool change.
+      - name: Check derived tool pins
+        run: make check-tool-pins
+
       - name: Run lint, including Skylos dead-code detection
         run: /usr/bin/make ACTIONLINT="$GITHUB_WORKSPACE/actionlint" lint
 

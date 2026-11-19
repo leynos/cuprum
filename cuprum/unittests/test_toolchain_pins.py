@@ -1,13 +1,18 @@
 """Tests for the lint and typecheck toolchain pins staying synchronized.
 
-The Ruff and ty versions are pinned in three places: the Makefile defaults
-(`RUFF_VERSION ?=` / `TY_VERSION ?=`), the workflow-level ``env`` block in
-``.github/workflows/ci.yml`` (which overrides the Makefile defaults via
-``?=`` semantics), and the ``ruff==`` / ``ty==`` dev dependencies in
-``pyproject.toml`` (which pin the virtual environment's copies for editors
-and ad hoc use). A mismatch between any two sites means CI and local runs
-lint or typecheck with different rule sets, so drift must fail on the pull
-request that introduces it.
+The Ruff, ty, Pylint and Astroid versions are pinned in four places: the
+Makefile defaults (`RUFF_VERSION ?=` / `TY_VERSION ?=`), the workflow-level
+``env`` block in ``.github/workflows/ci.yml`` (which overrides the Makefile
+defaults via ``?=`` semantics), the ``ruff==`` / ``ty==`` dev dependencies in
+``pyproject.toml`` (which pin the virtual environment's copies for editors and
+ad hoc use), and the resolved entries in ``uv.lock``. A mismatch between any
+two sites means CI and local runs lint or typecheck with different rule sets,
+so drift must fail on the pull request that introduces it.
+
+Only the workflow-level ``env`` may set those pins. A job- or step-scoped
+``env`` entry overrides it for that scope, so one job could lint with a
+version the parity assertions never read; a separate test refuses any such
+redefinition.
 
 These tests assert parity between the sites and that each pin has a
 release-version shape; they deliberately do not assert a specific version,
@@ -34,14 +39,17 @@ from cuprum.unittests._timeout_lane_support import (
     EXPECTED_NEXTEST_MIN_VERSION,
     declared_minimum_nextest_version,
 )
+from cuprum.unittests._tool_pin_support import (
+    VERSION_RE,
+    read_lock_pin,
+    read_makefile_pin,
+    read_pyproject_pin,
+)
 from cuprum.unittests.test_doctest_warning_contract import DEV_FAST_TOOLCHAIN
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
-
-#: A release version: dotted digit groups, no range operators or wildcards.
-_VERSION_SHAPE_RE = re.compile(r"\d+(?:\.\d+)+")
 
 #: (tool package name, Makefile/ci.yml env var name, human-readable subject)
 #: for each lint/typecheck tool whose pin is synchronized across sites.
@@ -51,8 +59,6 @@ _TOOL_PIN_SITES = (
     ("pylint", "PYLINT_VERSION", "Pylint"),
     ("astroid", "ASTROID_VERSION", "Astroid"),
 )
-
-_MAKEFILE_PIN_RE_TEMPLATE = r"^{name}\s*\?=\s*(\S+)\s*$"
 
 _DF12_PYPROJECT_REF_RE = re.compile(
     r"df12-python-lints @ git\+https://github\.com/leynos/df12-python-lints"
@@ -101,18 +107,6 @@ def _ci_workflow(root: pth.Path) -> Workflow:
     )
     assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
     return typ.cast("Workflow", workflow)
-
-
-def _read_makefile_pin(root: pth.Path, name: str) -> str:
-    """Read a `NAME ?= value` default from the repository Makefile."""
-    makefile = (root / "Makefile").read_text(encoding="utf-8")
-    pattern = re.compile(
-        _MAKEFILE_PIN_RE_TEMPLATE.format(name=re.escape(name)),
-        re.MULTILINE,
-    )
-    match = pattern.search(makefile)
-    assert match is not None, f"Makefile does not define a {name} ?= default"
-    return match.group(1)
 
 
 def _read_workflow_env(root: pth.Path, name: str) -> str:
@@ -171,27 +165,13 @@ def _dev_dependencies(root: pth.Path) -> list[str]:
     return dev
 
 
-def _read_pyproject_pin(root: pth.Path, package: str) -> str:
-    """Read the `package==version` pin from the pyproject dev group."""
-    prefix = f"{package}=="
-    pins = [
-        dep.removeprefix(prefix)
-        for dep in _dev_dependencies(root)
-        if dep.startswith(prefix)
-    ]
-    assert len(pins) == 1, (
-        f"expected exactly one '{prefix}' pin in the pyproject dev group, "
-        f"found {pins!r}"
-    )
-    return pins[0]
-
-
 def _read_pin_sites(root: pth.Path, tool: str, env_name: str) -> dict[str, str]:
     """Read one tool's version pin from every synchronized location."""
     return {
-        "Makefile": _read_makefile_pin(root, env_name),
+        "Makefile": read_makefile_pin(root, env_name),
         "ci.yml": _read_workflow_env(root, env_name),
-        "pyproject.toml": _read_pyproject_pin(root, tool),
+        "pyproject.toml": read_pyproject_pin(root, tool),
+        "uv.lock": read_lock_pin(root, tool),
     }
 
 
@@ -224,7 +204,7 @@ def test_modern_stable_pin_agrees_across_make_ci_and_developer_guide() -> None:
     _assert_pins_agree(pins, "modern stable")
     make_pin = pins["Makefile"]
     assert make_pin != "1.98.0", "Rust 1.98.0 has a known vtable miscompilation"
-    assert make_pin != _read_makefile_pin(root, "MSRV_TOOLCHAIN"), (
+    assert make_pin != read_makefile_pin(root, "MSRV_TOOLCHAIN"), (
         "modern stable must remain distinct from the published MSRV toolchain"
     )
     rust_toolchain = (root / "rust/rust-toolchain.toml").read_text(encoding="utf-8")
@@ -272,7 +252,7 @@ def _assert_pins_agree(pins: dict[str, str], subject: str) -> None:
     ids=[subject for _, _, subject in _TOOL_PIN_SITES],
 )
 def test_tool_pins_are_synchronized(tool: str, env_name: str, subject: str) -> None:
-    """A tool's pin is identical in the Makefile, ci.yml, and pyproject."""
+    """A tool's pin is identical in the Makefile, CI, pyproject, and lockfile."""
     _assert_pins_agree(_read_pin_sites(repo_root(), tool, env_name), subject)
 
 
@@ -281,10 +261,54 @@ def test_ruff_and_ty_pins_are_release_versions() -> None:
     root = repo_root()
     for tool, env_name, _subject in _TOOL_PIN_SITES:
         for site, value in _read_pin_sites(root, tool, env_name).items():
-            assert _VERSION_SHAPE_RE.fullmatch(value), (
+            assert VERSION_RE.fullmatch(value), (
                 f"{site} pins {tool} as {value!r}, which is not an exact "
                 "dotted release version"
             )
+
+
+def _env_scopes(job: dict[str, object]) -> list[tuple[str, object]]:
+    """Return a job's ``env`` and each of its steps' ``env``, by scope name."""
+    scopes: list[tuple[str, object]] = [("job", job.get("env"))]
+    steps = job.get("steps")
+    if isinstance(steps, list):
+        scopes.extend(
+            (f"step {step.get('name')!r}", step.get("env"))
+            for step in typ.cast("list[object]", steps)
+            if isinstance(step, dict)
+        )
+    return scopes
+
+
+def test_no_job_or_step_env_redefines_a_tool_pin() -> None:
+    """Only the workflow-level env may set a synchronized tool pin.
+
+    A job- or step-scoped ``env`` entry overrides the workflow-level value for
+    that scope alone. Such an entry would make one job lint with a version the
+    parity assertions never read, so the drift would be invisible to every
+    other test in this module.
+    """
+    workflow = _ci_workflow(repo_root())
+    jobs = workflow.get("jobs")
+    assert isinstance(jobs, dict), "ci.yml must declare a jobs mapping"
+    pinned = {env_name for _, env_name, _ in _TOOL_PIN_SITES}
+
+    offenders: list[str] = []
+    for job_name, job in jobs.items():
+        declarations = typ.cast("dict[str, object]", job)
+        for scope, environment in _env_scopes(declarations):
+            if not isinstance(environment, dict):
+                continue
+            offenders.extend(
+                f"{job_name}:{scope}:{name}"
+                for name in sorted(pinned)
+                if name in environment
+            )
+
+    assert not offenders, (
+        "a job or step env entry overrides the workflow-level tool pin for "
+        f"its own scope only; found {offenders}"
+    )
 
 
 def test_python_ci_installs_the_doctest_toolchain_before_running_tests() -> None:
@@ -293,7 +317,7 @@ def test_python_ci_installs_the_doctest_toolchain_before_running_tests() -> None
     job = _workflow_job(root, "typecheck-test")
     environment = job.get("env")
     assert isinstance(environment, dict), "typecheck-test must declare an env block"
-    expected_toolchain = _read_makefile_pin(root, "DEV_FAST_TOOLCHAIN")
+    expected_toolchain = read_makefile_pin(root, "DEV_FAST_TOOLCHAIN")
     assert expected_toolchain == DEV_FAST_TOOLCHAIN, (
         "the doctest warning test must use the Makefile's dev-fast toolchain"
     )
@@ -383,14 +407,43 @@ def test_make_lint_and_typecheck_use_the_pinned_tool_commands() -> None:
     """The dry-run recipes invoke Ruff and ty through their synchronized pins."""
     root = repo_root()
     recipes = _expanded_make_recipes(root)
-    ruff_pin = _read_makefile_pin(root, "RUFF_VERSION")
-    ty_pin = _read_makefile_pin(root, "TY_VERSION")
+    ruff_pin = read_makefile_pin(root, "RUFF_VERSION")
+    ty_pin = read_makefile_pin(root, "TY_VERSION")
 
     assert f"uv tool run --from 'ruff=={ruff_pin}' ruff check" in recipes, (
         "make lint must run Ruff through the pinned uv tool command"
     )
     assert f"uv tool run --from 'ty=={ty_pin}' ty check --python .venv" in recipes, (
         "make typecheck must run ty through its pin against the project venv"
+    )
+
+
+@pytest.mark.parametrize(
+    ("variable", "tool"),
+    [("RUFF_VERSION", "ruff"), ("TY_VERSION", "ty")],
+    ids=["ruff", "ty"],
+)
+def test_a_tool_pin_override_reaches_the_recipes(variable: str, tool: str) -> None:
+    """A command-line pin override substitutes into the expanded recipes.
+
+    This is the mechanism a contributor or a bisect uses to run one lint or
+    typecheck pass at another version. It must reach the command that runs,
+    not merely the variable that would have defaulted.
+    """
+    root = repo_root()
+    default = read_makefile_pin(root, variable)
+    override = "9.9.9"
+    assert override != default, (
+        f"the override must differ from the {variable} default {default!r}"
+    )
+
+    recipes = _expanded_make_recipes(root, extra_variables={variable: override})
+
+    assert f"{tool}=={override}" in recipes, (
+        f"make lint must honour the {variable} override"
+    )
+    assert f"{tool}=={default}" not in recipes, (
+        f"the {variable} default must not survive an explicit override"
     )
 
 
@@ -446,7 +499,7 @@ def _read_df12_refs(root: pth.Path) -> dict[str, str]:
         f"expected exactly one df12-python-lints git dependency, found {df12_deps!r}"
     )
     return {
-        "Makefile": _read_makefile_pin(root, "DF12_PYTHON_LINTS_REF"),
+        "Makefile": read_makefile_pin(root, "DF12_PYTHON_LINTS_REF"),
         "pyproject.toml": df12_deps[0],
     }
 
@@ -478,7 +531,7 @@ def test_the_nextest_floor_agrees_between_the_config_and_the_makefile() -> None:
     root = repo_root()
     floor = "NEXTEST_MIN_VERSION"
     sites = {
-        "Makefile": _read_makefile_pin(root, floor),
+        "Makefile": read_makefile_pin(root, floor),
         "rust/.config/nextest.toml": declared_minimum_nextest_version(),
     }
     assert set(sites.values()) == {EXPECTED_NEXTEST_MIN_VERSION}, (

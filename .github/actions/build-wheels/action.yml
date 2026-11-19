@@ -56,7 +56,23 @@ runs:
         MATURIN_VERSION: ${{ inputs.maturin-version }}
       run: |
         set -euo pipefail
+        # The input reaches a pip requirement, so require an exact release
+        # before it is used: a range or a marker would resolve a different
+        # version from the one the workflow and pyproject declare, and the
+        # wheel's Generator header would then disagree with both.
+        if [[ ! "${MATURIN_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "maturin-version must be an exact X.Y.Z release," \
+            "got '${MATURIN_VERSION}'." >&2
+          exit 1
+        fi
         python -m pip install --upgrade "maturin==${MATURIN_VERSION}"
+        # Read back what pip resolved. A stale preinstalled maturin would
+        # otherwise build the wheel while the pin named something else.
+        installed=$(python -m maturin --version)
+        if [[ "${installed}" != "maturin ${MATURIN_VERSION}" ]]; then
+          echo "Installed '${installed}', expected maturin ${MATURIN_VERSION}." >&2
+          exit 1
+        fi
     - name: Build wheels with maturin
       shell: bash
       env:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import yaml
 
-from cuprum.unittests._maturin_pin_support import read_text
+from cuprum.unittests._tool_pin_support import read_text
 from tests.helpers.ci_workflows import job, step_inputs, steps
 from tests.helpers.docs import repo_root
 

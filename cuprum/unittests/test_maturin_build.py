@@ -11,7 +11,7 @@ import zipfile
 
 import pytest
 
-from cuprum.unittests._maturin_pin_support import read_expected_maturin_version
+from cuprum.unittests._tool_pin_support import read_pyproject_pin
 from tests.helpers.docs import repo_root
 from tests.helpers.maturin import (
     MaturinBuildError,
@@ -126,7 +126,7 @@ def test_maturin_wheel_build_snapshot(
 ) -> None:
     """Native wheel metadata and layout match the expected maturin output."""
     root = repo_root()
-    expected = read_expected_maturin_version(root)
+    expected = read_pyproject_pin(root, "maturin")
     if not toolchain_available():
         pytest.skip("Rust toolchain unavailable.")
     if not maturin_script_locatable():

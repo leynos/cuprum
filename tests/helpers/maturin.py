@@ -1,12 +1,11 @@
 """Helpers for building and introspecting the native maturin wheel.
 
 Maturin pin-synchronization checks are not here. They belong to
-``cuprum/unittests/test_maturin_pins.py``, which owns the readers and patterns
-that compare the pins across CI files. The subset with a second consumer — the
-pyproject reader and the container-reference pattern — sits in
-``cuprum/unittests/_maturin_pin_support.py``, from which
-``cuprum/unittests/test_maturin_build.py`` takes the expected version to assert
-against the built wheel's ``Generator``.
+``cuprum/unittests/test_maturin_pins.py``, which compares the pins across the
+lockfile, the pyproject dev group and the CI files. The readers it shares with
+the other tool-pin tests live in ``cuprum/unittests/_tool_pin_support.py``, and
+``cuprum/unittests/test_maturin_build.py`` takes the expected version from
+there to assert against the built wheel's ``Generator``.
 
 This module retains the toolchain detectors and the wheel *build*, which wrap
 ``subprocess`` and ``sysconfig`` probing that does not inline cleanly; wheel

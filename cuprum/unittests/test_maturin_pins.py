@@ -1,12 +1,12 @@
 """Tests for the maturin version and container pins staying synchronized.
 
-This module owns the pin-synchronization checks. The readers live here rather
-than in `tests/helpers/maturin.py`: they read repository files, have this
-module as their only consumer, and gain nothing from indirection. The two that
-do have a second consumer — the pyproject version reader and the container
-reference pattern — sit in `_maturin_pin_support.py`, which documents why.
-Wheel building and inspection keep their helpers, because those wrap
-`subprocess` and `zipfile` work that does not inline cleanly.
+This module owns the maturin pin-synchronization checks. The version is read
+from ``pyproject.toml`` and ``uv.lock`` through the shared structured readers
+in `_tool_pin_support.py`, so maturin is checked exactly the way every other
+tool pin is: one declaration, one lock entry, one exact release. The container
+reference pattern has a second consumer and sits in `_maturin_pin_support.py`,
+which documents why. Wheel building and inspection keep their helpers, because
+those wrap `subprocess` and `zipfile` work that does not inline cleanly.
 """
 
 from __future__ import annotations
@@ -19,11 +19,12 @@ import typing as typ
 import pytest
 import yaml
 
-from cuprum.unittests._maturin_pin_support import (
-    MANYLINUX_CONTAINER_SHA256_RE,
-    read_expected_maturin_version,
+from cuprum.unittests._maturin_pin_support import MANYLINUX_CONTAINER_SHA256_RE
+from cuprum.unittests._tool_pin_support import (
+    read_lock_pin,
+    read_pyproject_pin,
+    read_single_match,
     read_text,
-    require_pin_match,
 )
 from tests.helpers.docs import repo_root
 
@@ -46,20 +47,19 @@ _AARCH64_CONTAINER_USAGE_RE = re.compile(
 def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
     """Read the maturin version pins from every synchronized location."""
     return {
-        # Reuse the dev-dependency reader so "how to read the pyproject pin"
-        # lives in exactly one place.
-        "pyproject.toml": read_expected_maturin_version(root),
-        "build-wheels.yml": require_pin_match(
-            _WORKFLOW_PIN_RE.search(
-                read_text(root, ".github/workflows/build-wheels.yml"),
-            ),
-            ".github/workflows/build-wheels.yml",
+        "pyproject.toml": read_pyproject_pin(root, "maturin"),
+        "uv.lock": read_lock_pin(root, "maturin"),
+        "build-wheels.yml": read_single_match(
+            read_text(root, ".github/workflows/build-wheels.yml"),
+            _WORKFLOW_PIN_RE,
+            location=".github/workflows/build-wheels.yml",
+            subject="MATURIN_VERSION pin",
         ),
-        "build-wheels/action.yml": require_pin_match(
-            _ACTION_PIN_RE.search(
-                read_text(root, ".github/actions/build-wheels/action.yml"),
-            ),
-            ".github/actions/build-wheels/action.yml",
+        "build-wheels/action.yml": read_single_match(
+            read_text(root, ".github/actions/build-wheels/action.yml"),
+            _ACTION_PIN_RE,
+            location=".github/actions/build-wheels/action.yml",
+            subject="maturin-version default",
         ),
     }
 
@@ -89,7 +89,7 @@ def _workflow_uses_manylinux_aarch64_container_ref(root: pth.Path) -> bool:
 
 
 def test_maturin_pins_are_synchronized() -> None:
-    """Maturin version pins stay aligned across CI and dev dependencies."""
+    """Maturin's pin agrees across the lock, CI, and dev dependencies."""
     pins = _read_maturin_pins(repo_root())
     assert len(set(pins.values())) == 1, f"Expected one maturin pin, found {pins!r}"
 
@@ -106,7 +106,7 @@ def test_installed_maturin_matches_expected_pin() -> None:
         importlib.import_module("maturin")
     except ImportError:
         pytest.skip("maturin is not installed in this interpreter.")
-    expected = read_expected_maturin_version(repo_root())
+    expected = read_pyproject_pin(repo_root(), "maturin")
     installed = im.version("maturin")
     assert installed == expected, (
         f"Expected maturin {expected}, but {installed} is installed"
