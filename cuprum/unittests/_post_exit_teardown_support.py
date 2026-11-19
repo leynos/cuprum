@@ -31,8 +31,8 @@ import pytest
 from cuprum import (
     ScopeConfig,
     _subprocess_direct_run,
+    _subprocess_stdin,
     _subprocess_stream_run,
-    _subprocess_streams,
     _subprocess_wait,
     scoped,
 )
@@ -54,10 +54,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cuprum._pipeline_types import _StageObservation
     from cuprum._stdio_plan import _StdinPlan
     from cuprum._subprocess_execution import _SubprocessExecution
-    from cuprum._subprocess_stdin_stream import _StdinCodec
+    from cuprum._subprocess_stdin import _StdinWriterContext
     from cuprum._subprocess_wait_types import (
         _DrainContext,
         _DrainPair,
@@ -229,29 +228,18 @@ class SpawnedWriter:
     :attr:`task` for the precondition that the writer was live, and pin
     settlement where nothing else can stand in for it.
 
-    The spawn is rebound on *every* module where a run resolves the name, one
-    per path: ``_subprocess_direct_run`` for the direct run, and
-    ``_subprocess_streams`` for the streamed run after the shared spawn
-    construction moved there. Rebinding only one of them would watch a name the
-    other path never reads, and the test would report a run that spawned no
-    writer rather than the missed seam it is.
-
-    A path that moved between modules needs no change here: the list names the
-    modules each path *reads*, not the module the code once lived in, so the
-    helper follows the code rather than a stale address.
+    The spawn is rebound where a run resolves it: both streaming run paths
+    start their writer through
+    ``_subprocess_stdin._spawn_run_stdin_writer``, and that helper calls
+    ``_spawn_stdin_writer`` in the same module, so one rebinding covers both.
     """
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Rebind the spawn wherever a run resolves it, retaining the task."""
+        """Rebind the spawn where a run resolves it, retaining the task."""
         self.task: asyncio.Task[None] | None = None
-        self._spawn = _subprocess_direct_run._spawn_stdin_writer
+        self._spawn = _subprocess_stdin._spawn_stdin_writer
         monkeypatch.setattr(
-            _subprocess_direct_run,
-            "_spawn_stdin_writer",
-            self._watching_spawn,
-        )
-        monkeypatch.setattr(
-            _subprocess_streams,
+            _subprocess_stdin,
             "_spawn_stdin_writer",
             self._watching_spawn,
         )
@@ -260,11 +248,10 @@ class SpawnedWriter:
         self,
         process: asyncio.subprocess.Process,
         plan: _StdinPlan,
-        codec: _StdinCodec,
-        observation: _StageObservation,
+        context: _StdinWriterContext,
     ) -> asyncio.Task[None] | None:
         """Spawn the writer unchanged, keeping a handle on the task it made."""
-        self.task = self._spawn(process, plan, codec, observation)
+        self.task = self._spawn(process, plan, context)
         return self.task
 
     def assert_settled_after_run(self) -> None:

@@ -92,9 +92,10 @@ async def _raise_stdin(
     process: asyncio.subprocess.Process,
     stdin_data: bytes,
     observation: object,
+    log: object,
 ) -> None:
     """Close stdin, then fail the writer with an injected error."""
-    _ = (stdin_data, observation)
+    _ = (stdin_data, observation, log)
     await asyncio.sleep(0)  # yield like the real writer's drain() await
     if process.stdin is not None:
         process.stdin.close()

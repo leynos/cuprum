@@ -26,6 +26,42 @@
 
 ### Fixed
 
+- **A failed stream consumer ends a single command's run instead of waiting on
+  a blocked child:** when a stdout or stderr consumer fails — a line or output
+  callback that raises, or the incremental decoder that feeds it rejecting a
+  byte under `errors="strict"` — that command's run now ends at once. Previously
+  `run()` and `lines()` waited for the child to exit before observing the
+  failed consumer, so a child that kept writing to an undrained pipe filled it
+  and never exited, leaving a run with no `timeout=` waiting indefinitely. A
+  pipeline run keeps its previous behaviour: it waits for every stage to exit
+  before settling its readers, so a consumer failure there is reported at
+  finalization and `timeout=` is the bound. The failure's own error is
+  re-raised unchanged, and a `TimeoutError` inside it is not mistaken for the
+  run's deadline; an exit wait that has already settled with its own timeout is
+  the run's outcome instead. The child and its owned group are terminated and
+  reaped before the error reaches the caller. The failure is reported through
+  the run's existing teardown diagnostics: the `ERROR`
+  `subprocess_teardown_drain_failed` record and the `teardown_error` event now
+  name the failing streams, a `stream_consumer_failed` record is emitted per
+  failing reader, and the run settles with `terminal_outcome=error`. No new
+  `ExecPhase` member was added for it, because that literal is matched
+  exhaustively by consumers. A stdin source that failed as well outranks it — a
+  producer's `StdinSourceError` naming the input contract that broke, or
+  whatever escaped a supplied payload's write: the writer publishes its failure
+  before its own teardown runs, so the caller receives that failure rather than
+  the one it caused ([#551](https://github.com/leynos/cuprum/issues/551)).
+- **A streamed run that stops before end-of-file releases its output
+  descriptors:** the consumer-failure, deadline and cancellation routes now
+  close the child's parent-side output pipes once their readers are settled.
+  They previously closed nothing — the `wait4` owner reaps without closing a
+  transport, and the fallback's asyncio transports close only at end-of-file,
+  which a descendant holding an inherited write end prevents — so those
+  descriptors survived until garbage collection. The release is composed with
+  the reconciliation it follows, so a cancellation that interrupts the settling
+  cannot skip it. Closing is idempotent, so a stream that already reached
+  end-of-file is unaffected. The line-stream coordinator and the streamed
+  route's own post-exit collection still leave this to the collector
+  ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **Awaitable observe hooks are bounded per run:** an observed run now admits
   line observation against a ceiling of 256 unfinished observe-hook tasks,
   shared by every stage of a pipeline. Line observation waits for a slot at the

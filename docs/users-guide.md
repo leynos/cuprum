@@ -439,6 +439,31 @@ guaranteed within each stream, not across streams. An awaitable observe hook
 observing the same lines is retained and bounded differently; see
 [Awaitable hooks and line backpressure](#awaitable-hooks-and-line-backpressure).
 
+For a single command — `SafeCmd.run()` and `SafeCmd.lines()` — a callback that
+raises ends the run at that point rather than after the child's exit. The error
+reaches the caller unchanged, and is not reported as this run's timeout even
+when the callback raised `TimeoutError` itself. Cuprum then terminates and
+reaps the child — and its owned process group, when one was requested — cancels
+the other stream's consumer, and discards any captured output, because no
+result is returned to carry it. Output the callback was never given is lost,
+including lines `SafeCmd.lines()` had read but not yet yielded: iteration ends
+by raising the callback's error. The one exception is an exit wait that has
+already settled with its own timeout when the callback's failure is observed:
+that timeout is then the run's outcome, so the caller does not receive the
+callback's error. An expiry that has merely elapsed while the exit wait is
+still pending changes nothing — precedence follows that settlement, not the
+clock. Awaitable observe hooks follow a different contract: each is a delivery
+task whose earliest failure is reported when the run finalizes, so one failing
+hook does not by itself end the run.
+
+If the stdin source failed as well, the run reports that failure instead,
+because it is what stopped the input the child was waiting on: a producer's own
+error, raised as `StdinSourceError` with the original chained, or whatever
+escaped a supplied payload's write. The writer publishes its failure before its
+own teardown runs — for a payload, before the pipe close that can leave that
+teardown waiting — so a run that ends during the teardown still reports it
+rather than the callback's error; the callback's error is then not reported.
+
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
 `max_line_chars` decoded characters (64 Ki by default) for one line, and
@@ -465,11 +490,16 @@ creating task does not by itself authorize the run: the allowlist, the timeout,
 the executable binding, and the environment policy in force when the first
 event is pulled govern it. Pipelines have no `lines()` method; `on_line` on a
 pipeline run observes final-stage stdout and every stage's stderr. Interior
-stdout feeds the next stage instead.
+stdout feeds the next stage instead. That is also where the early end above
+stops applying: a pipeline run waits for every stage to exit before it settles
+its readers, so a callback that raises there is reported when the run
+finalizes, and a final stage that keeps writing into an undrained pipe is not
+stopped by it. Set `timeout=` on a pipeline run whose lines you observe.
 
 Line observation decodes for display, so an undecodable byte in text mode
-raises under `ExecutionContext(errors="strict")`, exactly as it always has; the
-[byte-exact mode](#binary-output)
+raises under `ExecutionContext(errors="strict")`, exactly as it always has.
+That failure ends the run on the same terms as a raising callback, because the
+consumer task carrying it is what failed. The [byte-exact mode](#binary-output)
 is the one place observation replaces such bytes instead, so that the bytes
 returned to the caller are not decided by a decode the caller never asked for.
 
@@ -2783,13 +2813,25 @@ logger, even when no observe hook is registered. The
 - `cuprum_error_type`: `"TimeoutError"`
 
 If cleanup fails to drain a stream consumer, an `ERROR`
-`subprocess_teardown_drain_failed pid=… errors=…` record carries
+`subprocess_teardown_drain_failed pid=… errors=… streams=…` record carries
 `cuprum_operation` (`"drain"`), `cuprum_teardown_outcome` (`"drain_error"`),
-`cuprum_pid`, and `cuprum_error_type` with the comma-joined failure classes.
+`cuprum_pid`, `cuprum_error_type` with the comma-joined failure classes, and
+`cuprum_streams` with the comma-joined failing streams. Each failing reader
+also emits a `DEBUG` `stream_consumer_failed` record on the
+`cuprum._subprocess_wait` logger, labelled `drain_stdout` or `drain_stderr`,
+whether or not the run has an observation.
 
 The drain failure is absorbed so it cannot displace `TimeoutExpired` or
 `CancelledError`. Logging is best-effort; the same values are emitted as
 `timeout` and `teardown_error` events, so the two channels cannot disagree.
+
+A stream callback that raises and ends the run is reported through these same
+diagnostics: the child is terminated and reaped, the records and event above
+name the reader that failed, and the run settles with `terminal_outcome` of
+`error`. See
+[the developers' guide](developers-guide.md#subprocess-execution-module-boundaries)
+for why the failure reuses the teardown channels instead of an event of its
+own.
 
 #### Startup reclaim diagnostics
 
@@ -2860,7 +2902,10 @@ hooks receive `ExecEvent` values describing:
   preserve the primary exception (ancillary). The bounded `operation` names the
   step: `drain` for a stream consumer drained with an unexpected error, or one
   of the startup reclaim's categories listed under
-  [Startup reclaim diagnostics](#startup-reclaim-diagnostics).
+  [Startup reclaim diagnostics](#startup-reclaim-diagnostics). For a `drain`
+  failure the `note` names the failing streams and the `error_type` the
+  comma-joined failure classes, so an adapter can tell which reader stopped
+  without parsing the log record.
 
 - `capture_eof_grace_expired` — a capturing drain exhausted its fixed EOF grace
   budget while one or more readers remained pending (ancillary).

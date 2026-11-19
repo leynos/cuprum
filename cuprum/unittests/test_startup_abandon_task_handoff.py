@@ -21,7 +21,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import ScopeConfig, _subprocess_streams, scoped, sh
+from cuprum import ScopeConfig, _subprocess_stdin, _subprocess_streams, scoped, sh
 from cuprum.sh import RunOutputOptions, StdinInput
 from cuprum.unittests._start_ownership_support import (
     _assert_strictly_reaped,
@@ -152,7 +152,7 @@ def test_a_failed_consumer_start_cancels_the_stdin_writer(
         writers.append(task)
         return task
 
-    monkeypatch.setattr(_subprocess_streams, "_spawn_stdin_writer", spawn_writer)
+    monkeypatch.setattr(_subprocess_stdin, "_spawn_stdin_writer", spawn_writer)
     calls = _fail_second_consumer(monkeypatch)
 
     async def run_case() -> tuple[set[asyncio.Task[object]], bool, bool]:

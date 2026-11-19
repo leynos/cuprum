@@ -1611,3 +1611,158 @@ already said it "lives beside the config it builds rather than beside the spawn
 that asks for it". `_subprocess_streams` re-exports the name so the call path
 that reaches it there keeps working, and `_record_started` stayed with the
 reclaim module because that is the only code that consumes it.
+
+## Addendum (2026-11-15): the exit rendezvous watches stream consumers
+
+The 2026-09-27 addendum gave the rendezvous one stream task to race against the
+exit wait: the stdin writer. #551 found the same ending reached from the other
+end of the pipe. A line or output callback that raises ends the task draining
+the child's output; nothing reads that pipe any more, so a child that keeps
+writing fills it and blocks rather than exiting. Both `run()` and `lines()`
+waited for the child before observing the consumer task, so a run with no
+`timeout=` waited indefinitely: the child could not exit, and the failure was
+never read.
+
+`_await_exit_or_writer_failure` now takes an optional keyword-only
+`consumers: Sequence[Task | None]`, filtered of the `None` slots a run with an
+unobserved stream holds, and races them with the exit wait and the writer. A
+run with nothing to race — an inherited stdin and no observed stream — still
+awaits the exit coroutine directly, without creating a task for it. A consumer
+that merely succeeds or is cancelled is dropped from the monitored set and the
+race keeps waiting; only a failed one ends the run, by the rule the writer
+already followed. Consumer tasks are not cancelled or gathered in the
+rendezvous: they belong to the caller, whose reconciliation settles them on
+every failure route, and settling them in both places would race that teardown.
+
+Precedence is fixed and state-based, because `asyncio.wait` reports a settled
+set with no completion order: a settled exit wins outright, then the stdin
+writer, then the consumers in stdout-then-stderr order (`_first_early_failure`,
+over `_stdin_writer_failure` and `_consumer_failure`). This is a selection
+order rather than a report of which task failed first, and it is what makes the
+reported error stable from run to run.
+
+The writer is asked twice. A stdin writer raises its own failure before its
+cleanup releases the pipe, so while a consumer has already failed the writer
+can still be running, and terminating the child is what lets it settle. The
+race stops on the failure it can see, cancels the exit wait, and asks the
+writer again. Without that second read, a run whose `encoding` this build does
+not know would report the output decoder's `LookupError` in place of the
+`StdinSourceError` its input contract promises.
+
+The consumers are deliberately not asked again. Terminating the child makes its
+pipes reach EOF, so a reader still draining can fail on what that leaves behind
+— a truncated sequence flushed by a strict decoder, say — and that artefact
+would replace the callback failure already selected whenever it landed on
+stdout while the callback failed on stderr. It is a consequence of cuprum
+ending the run rather than a candidate for what ended it.
+
+Two writer reads are still not enough, because that window has two ends. A
+writer that has already raised is _still running_ while it unwinds: its
+producer's finalizer is the caller's code and is given a window of its own, so
+a read taken during that unwinding sees a task that has not failed and falls
+through to the consumer failure the writer's own failure caused. The run
+therefore creates a `_StdinWriterLog` beside its writer, the writer publishes
+its failure to it _before_ the raise and so before that unwinding, and both
+writer reads consult the publication ahead of the task. It is one hand-off
+rather than shared state: nothing else writes it, and it is per-run. Both
+streaming callers hand the same log to the race, so the two reads cannot
+disagree about it.
+
+The second decision is provenance. Both callers translate a `TimeoutError`
+escaping the wait into the run's deadline, and a callback may raise a
+`TimeoutError` of its own — which is also an `OSError`, so no type check can
+separate them. `_is_early_failure(error, stdin_task, consumers)` compares by
+identity against each monitored task's own exception, and a match routes to the
+non-timeout branch, which reconciles without capturing and re-raises the
+original object. Without it, `_handle_stream_timeout` would be handed a
+deadline the caller never configured, and would raise its invariant failure in
+place of the callback's real error. The predicate takes the same optional
+`stdin_log`, so a failure that is only published — raised, not yet settled on
+its task — is still recognized as monitored.
+
+Both entry points wired the consumers in: `_wait_for_streamed_process_exit`, in
+`cuprum/_subprocess_stream_exit.py`, for the streamed `run()`, and
+`_await_line_stream_exit` in the line-stream coordinator for `lines()`. The
+direct run wires no consumers and passes none. No public API changes.
+`cuprum/unittests/test_subprocess_rendezvous.py` pins the race and its
+precedence, including that a reader failing only during the teardown does not
+replace the failure selected before it,
+`cuprum/unittests/test_rendezvous_writer_handoff.py` pins the two ends of the
+writer's window without starting a child,
+`cuprum/unittests/test_consumer_failure_fail_fast.py` pins the end-to-end
+guarantee with real children that write until they are killed — including which
+failure a run with both a failed producer and a failed callback reports — and
+`cuprum/unittests/test_line_stream_reader_failure.py` pins the provenance rule
+for both entry points. The reader-failure case gates its post-exit arm on the
+exit rendezvous returning, so that arm cannot quietly exercise the rendezvous
+route instead of the collect it is named for.
+
+## Addendum (2026-11-19): the payload writer publishes before its close
+
+The 2026-11-15 addendum made every stdin writer publish its failure to a
+`_StdinWriterLog` before raising. That covered the streaming writer, whose
+finalizer is the caller's own `aclose()`, and it assumed the payload writer's
+unwinding was prompt. It is not: the payload writer closes its pipe inside that
+unwinding, and `_close_stdin` waits — within a bound — for the child-side
+reader to reach EOF. A publication made after that close would therefore be
+invisible to a race asking during it, which is exactly the read the hand-off
+exists to survive.
+
+`_write_stdin` now publishes any failure escaping its write inside a nested
+handler that runs before the `finally` that awaits the close, so the log holds
+the failure from before the close can suspend until after it returns. The arm
+is deliberately blind (`except Exception`) because the failure it must publish
+is whatever escaped, including one raised by cuprum's own `stdin_error`
+diagnostic; `CancelledError` is a `BaseException` and still passes through
+unpublished, since a cancellation is not this writer's failure.
+
+The run-scoped inputs a writer needs are now one record. `_StdinWriterContext`
+binds the stream encoder, the observation and the log once, and
+`_spawn_run_stdin_writer(process, execution)` creates the log, builds the
+context, starts the writer through `_spawn_stdin_writer`, and returns the task
+with the log. Both start paths — `_subprocess_direct_run` and
+`_build_run_task_ownership` in `_subprocess_streams` — call it rather than
+assembling the pair themselves, so the log the race reads is always the log the
+writer publishes to. `_spawn_payload_writer` takes the context rather than a
+widening parameter list, which keeps the dispatcher's arms one line each.
+
+`cuprum/unittests/test_stdin_writer_publication.py` pins the ordering without a
+child: the double's `wait_closed` parks until the case releases it, so the
+assertion is made while the close has demonstrably begun and cannot have
+finished. Moving the publication after the close makes that case fail with an
+empty log.
+
+## Addendum (2026-11-19): the failure that ends a run is reported on the teardown channels
+
+The 2026-11-15 addendum made a stream-consumer failure end a run: the
+rendezvous stops, the child is terminated and reaped, and the callback's own
+exception reaches the caller. That is a decision point — cuprum kills a child
+that was still working — so it must be observable, and the question is on which
+channel.
+
+A new `ExecPhase` member was rejected. `ExecPhase` is a public
+`typing.Literal`, and consumers match it exhaustively: the metrics adapter
+raises `_UnhandledMetricsPhaseError` on a phase it does not know. Adding a
+member therefore makes an adapter that was correct when it was written start
+raising, which is a compatibility break in exchange for a label the existing
+channels already carry. The run's `settled` event already records the outcome as
+`TerminalOutcome.ERROR`, and the teardown diagnostics already exist for the
+case where a failure is absorbed; a failure that ends the run is the same
+reader failing for the same reason, distinguished only by who decided to stop.
+
+The reporting was strengthened instead. `_report_teardown_drain_failure` now
+takes each failing stream paired with its class and builds the comma-joined
+list once, so the `ERROR` `subprocess_teardown_drain_failed` record carries
+`cuprum_streams` as well as `cuprum_error_type`, and the best-effort
+`teardown_error` event names the streams in its note — the event has no field
+for them, and which reader stopped is what separates a failure that ended the
+run from one a teardown absorbed after a timeout or a cancellation.
+`cuprum/_stream_drain.py` reuses the same pairs for its `stream_consumer_failed`
+`DEBUG` record, so the three channels cannot disagree about the stream.
+
+`cuprum/unittests/test_consumer_failure_telemetry.py` pins the route end to end
+for both `run()` and `lines()` and for either stream: exactly one
+`teardown_error` event naming the failing stream, one `stream_consumer_failed`
+record labelled `drain_<stream>`, one `settled` event with
+`terminal_outcome=error`, and the callback's own exception reaching the caller
+unchanged.

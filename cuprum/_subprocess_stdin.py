@@ -33,6 +33,7 @@ a run.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -44,8 +45,10 @@ from cuprum._stdio_plan import (
     _StdinPlan,
     _StreamStdin,
 )
+from cuprum._subprocess_rendezvous import _StdinWriterLog
 
 if typ.TYPE_CHECKING:
+    from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_stdin_stream import _StdinCodec
 
 _LOGGER = logging.getLogger("cuprum.stdin")
@@ -55,6 +58,28 @@ _LOGGER = logging.getLogger("cuprum.stdin")
 # that inherited stdin and does not read it — so this has to be a bound rather
 # than a wait; see ``_close_stdin``.
 _CLOSE_GRACE_S = 0.5
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _StdinWriterContext:
+    """The run-scoped settings handed to every stdin writer a run starts.
+
+    Three values bound once, when the writer is spawned, and never varied while
+    it runs: the encoder settings a streaming ``str`` chunk is written with, the
+    observation a failure is reported against, and the log a writer's failure
+    is published to before it unwinds.
+
+    They travel as one record so the spawn and the writer are handed the same
+    values: a caller cannot pair one run's log with another run's encoder, and
+    the streaming writer's helpers take the context rather than re-listing its
+    fields. Both writers publish through the log because both can be caught
+    mid-cleanup: the streaming writer's finalizer is the caller's code, and the
+    payload writer's close is a bounded wait that can still be pending.
+    """
+
+    codec: _StdinCodec
+    observation: _StageObservation
+    log: _StdinWriterLog
 
 
 def _emit_stdin_error(
@@ -99,6 +124,7 @@ async def _write_stdin(
     process: asyncio.subprocess.Process,
     stdin_data: bytes,
     observation: _StageObservation,
+    log: _StdinWriterLog,
 ) -> None:
     """Write caller-provided stdin bytes and close the pipe.
 
@@ -108,6 +134,10 @@ async def _write_stdin(
     payload is empty only for a run that explicitly asked for a stdin pipe and
     supplied no source, and writing nothing before closing is exactly the
     child-side view that request describes.
+
+    A failure escaping the write — the observation is caller code — is
+    published to *log* before the close begins, because that close can stay
+    pending in its bounded wait while the reader end is open.
     """
     stdin = process.stdin
     if stdin is None:
@@ -120,14 +150,22 @@ async def _write_stdin(
         extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(stdin_data)},
     )
     try:
-        stdin.write(stdin_data)
-        await stdin.drain()
-        observation.emit(
-            "stdin",
-            _EventDetails(pid=process.pid, byte_count=len(stdin_data)),
-        )
-    except (OSError, RuntimeError) as exc:
-        _emit_stdin_error(process, observation, exc, operation="write")
+        try:
+            stdin.write(stdin_data)
+            await stdin.drain()
+            observation.emit(
+                "stdin",
+                _EventDetails(pid=process.pid, byte_count=len(stdin_data)),
+            )
+        except (OSError, RuntimeError) as exc:
+            _emit_stdin_error(process, observation, exc, operation="write")
+    except Exception as exc:
+        # Blind on purpose: whatever escapes here — including a failure the
+        # error diagnostic itself raised — is this writer's own, and has to be
+        # published before the close below can suspend. Cancellation is a
+        # ``BaseException`` and passes through untouched.
+        log.publish(exc)
+        raise
     finally:
         await _close_stdin(process, stdin, observation)
     _LOGGER.debug("stdin_writer_finished pid=%s", process.pid)
@@ -219,13 +257,6 @@ def _abort_stdin_transport(
     raises from ``abort()``, and a close path for an already-finished run must
     not turn that into a new failure. Whatever the transport does here, the
     run's own outcome is already decided.
-
-    Parameters
-    ----------
-    process : asyncio.subprocess.Process
-        The child the pipe was bound to, named in the diagnostic.
-    stdin : asyncio.StreamWriter
-        The transport to release unconditionally.
     """
     try:
         stdin.transport.abort()
@@ -247,7 +278,7 @@ def _abort_stdin_transport(
 def _spawn_payload_writer(
     process: asyncio.subprocess.Process,
     payload: bytes,
-    observation: _StageObservation,
+    context: _StdinWriterContext,
 ) -> asyncio.Task[None]:
     """Start the writer that sends one complete payload and closes the pipe.
 
@@ -259,7 +290,8 @@ def _spawn_payload_writer(
     Returns
     -------
     asyncio.Task[None]
-        The payload writer task, already scheduled.
+        The payload writer task, already scheduled; it publishes its own
+        failure to the context's log before the close begins.
     """
     _LOGGER.debug(
         "stdin_writer_task_start pid=%s bytes=%s",
@@ -267,14 +299,15 @@ def _spawn_payload_writer(
         len(payload),
         extra={"cuprum_pid": process.pid, "cuprum_stdin_bytes": len(payload)},
     )
-    return asyncio.create_task(_write_stdin(process, payload, observation))
+    return asyncio.create_task(
+        _write_stdin(process, payload, context.observation, context.log)
+    )
 
 
 def _spawn_stdin_writer(
     process: asyncio.subprocess.Process,
     plan: _StdinPlan,
-    codec: _StdinCodec,
-    observation: _StageObservation,
+    context: _StdinWriterContext,
 ) -> asyncio.Task[None] | None:
     """Start the stdin writer that a resolved plan calls for, if any.
 
@@ -288,6 +321,12 @@ def _spawn_stdin_writer(
     reached by asking for a pipe and supplying no source, so the child should
     see exactly what an empty payload gives it, without a second code path
     expressing the same thing.
+
+    *context* carries the encoder, the observation, and the publication log the
+    run bound when it resolved this writer. Both writers publish a failure
+    before their cleanup runs: the streaming writer's finalizer is the caller's
+    code, and the payload writer's close can still be pending in its bounded
+    wait when the race asks.
 
     Returns
     -------
@@ -308,22 +347,53 @@ def _spawn_stdin_writer(
             return None
         case _StreamStdin(stream=producer):
             _LOGGER.debug("stdin_writer_task_start pid=%s source=stream", process.pid)
-            return asyncio.create_task(
-                _write_stdin_stream(process, producer, codec, observation)
-            )
+            return asyncio.create_task(_write_stdin_stream(process, producer, context))
         case _PipeStdin():
             # Requested a pipe, supplied no source: the child should see exactly
             # what an empty payload gives it, so the payload writer is reused
             # rather than a second code path expressing the same thing.
-            return _spawn_payload_writer(process, b"", observation)
+            return _spawn_payload_writer(process, b"", context)
         case _PayloadStdin(data=payload):
-            return _spawn_payload_writer(process, payload, observation)
+            return _spawn_payload_writer(process, payload, context)
+
+
+def _spawn_run_stdin_writer(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> tuple[asyncio.Task[None] | None, _StdinWriterLog]:
+    """Start a run's stdin writer with the log its failure is published to.
+
+    The log is created and handed over in one step because the run cannot use
+    the writer without it: the exit race reads the publication whenever it
+    asks whether the writer failed, and a task alone answers "not yet" while a
+    failed writer is still unwinding. Both streaming run paths start their
+    writer here so the two cannot drift into creating the pair differently.
+
+    Returns
+    -------
+    tuple[asyncio.Task[None] | None, _StdinWriterLog]
+        The writer task — ``None`` for an inherited stdin, which has no pipe of
+        cuprum's — and the log its failure is published to.
+    """
+    log = _StdinWriterLog()
+    # Deferred for the same reason the dispatcher defers the writer itself:
+    # the streaming module imports this one back for the pipe primitives.
+    from cuprum._subprocess_stdin_stream import _stdin_codec
+
+    context = _StdinWriterContext(
+        codec=_stdin_codec(execution.ctx),
+        observation=execution.observation,
+        log=log,
+    )
+    task = _spawn_stdin_writer(process, execution.stdio.stdin, context)
+    return task, log
 
 
 __all__ = [
     "_abort_stdin_transport",
     "_close_stdin",
     "_emit_stdin_error",
+    "_spawn_run_stdin_writer",
     "_spawn_stdin_writer",
     "_write_stdin",
 ]

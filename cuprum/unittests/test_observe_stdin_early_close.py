@@ -24,6 +24,7 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from cuprum._pipeline_types import _StageObservation
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum.events import ExecEvent
 
 
@@ -68,10 +69,11 @@ def _patch_writer_wedge_signal(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event
         process: asyncio.subprocess.Process,
         stdin_data: bytes,
         observation: _StageObservation,
+        log: _StdinWriterLog,
     ) -> None:
         """Signal the writer is running, then write stdin as usual."""
         writer_wedged.set()
-        await _write_stdin(process, stdin_data, observation)
+        await _write_stdin(process, stdin_data, observation, log)
 
     monkeypatch.setattr(
         "cuprum._subprocess_stdin._write_stdin", _coordinated_write_stdin

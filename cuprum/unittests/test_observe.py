@@ -12,6 +12,7 @@ import pytest
 
 from cuprum import sh
 from cuprum._pipeline_internals import _EventDetails
+from cuprum._subprocess_rendezvous import _StdinWriterLog
 from cuprum._subprocess_stdin import _write_stdin
 from cuprum.catalogue import ProgramCatalogue, ProjectSettings
 from cuprum.context import (
@@ -413,6 +414,7 @@ def test_write_stdin_observes_error_events(
                 typ.cast("asyncio.subprocess.Process", process),
                 b"payload",
                 typ.cast("_StageObservation", observation),
+                _StdinWriterLog(),
             )
         )
 

@@ -207,7 +207,12 @@ def _failed_run(
     """
     run = types.SimpleNamespace(
         process=types.SimpleNamespace(pid=123),
-        tasks=types.SimpleNamespace(discard_on_cancel=asyncio.Event(), stdin_task=None),
+        tasks=types.SimpleNamespace(
+            discard_on_cancel=asyncio.Event(),
+            stdin_task=None,
+            stdin_log=None,
+            consumers=(None, None),
+        ),
         settlement_started=asyncio.Event(),
         telemetry=types.SimpleNamespace(emit=double.emit),
         execution=execution,

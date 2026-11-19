@@ -2497,7 +2497,10 @@ sequenceDiagram
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin as a complete
   payload, closing the pipe, early-close diagnostics through the `cuprum.stdin`
   logger, and `_spawn_stdin_writer`, the single entry point either kind of
-  source is started from.
+  source is started from. `_spawn_run_stdin_writer` is the single entry a run's
+  start paths call: it creates the `_StdinWriterLog` its exit race reads and
+  binds the run-scoped `_StdinWriterContext` — the stream encoder, the
+  observation and that log — so neither is assembled per caller.
 - `cuprum/_subprocess_stdin_stream.py` owns the streaming source: pulling an
   async producer's chunks one at a time, writing each and draining it before
   the next pull, and deciding which failures are the producer's rather than the
@@ -2524,18 +2527,33 @@ sequenceDiagram
   coordinator, and the timeout test modules keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-27.
-- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stdin
-  failure rather than on the child's exit: `_await_exit_or_writer_failure`
-  waits on the exit wait and the stdin writer together and returns the exit
-  only once it is the sole survivor, so a producer that dies while the child
-  would still be running surfaces as `StdinSourceError` instead of being
-  reported as `TimeoutExpired`. The exit wait is passed in already constructed,
-  so each caller resolves `_wait_for_exit_code_within_timeout` from its own
-  module namespace. It was split out of `_subprocess_wait`, which re-exports
-  the name, so the single-command run, the line-stream coordinator, and the
-  timeout test modules keep one import path. See the
-  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
-  of 2026-09-27.
+- `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stream
+  task's failure rather than on the child's exit.
+  `_await_exit_or_writer_failure` waits on the exit wait, the stdin writer, and
+  the observed stream consumers together, and a settled exit is its outcome
+  outright even while a monitored task is still pending. A producer that dies,
+  or a callback that raises while the child would still be running, therefore
+  surfaces as its own error instead of being reported as `TimeoutExpired`. Only
+  a failed task is an outcome; one that merely finishes leaves the exit wait
+  running. The owned-handle and pipeline routes do not race their readers: they
+  wait for the process, or every stage, and reconcile afterwards, so a reader
+  failure there surfaces at finalization. A route that stops the run before its
+  streams drained also has to release the child's output transports: a reader
+  cancelled before end-of-file leaves its descriptor with the transport that
+  owns it, and a descendant holding an inherited write end prevents the
+  end-of-file that would otherwise close it. The streamed exit wait releases
+  them from each of its failure handlers, composed with the reconciliation
+  under one shield so a cancellation interrupting the settling cannot skip the
+  release. The line-stream coordinator and the streamed route's own post-exit
+  collection do not release transports yet: a descendant surviving either
+  leaves the parent-side descriptor to the collector. That divergence is
+  recorded in the developers' guide. The exit wait is passed in already
+  constructed, so each caller resolves `_wait_for_exit_code_within_timeout`
+  from its own module namespace. It was split out of `_subprocess_wait`, which
+  re-exports the name, so the single-command run, the line-stream coordinator,
+  and the timeout test modules keep one import path. See the
+  [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
+  2026-09-27 and 2026-11-15.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside

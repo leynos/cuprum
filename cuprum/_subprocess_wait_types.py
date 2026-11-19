@@ -35,6 +35,7 @@ if typ.TYPE_CHECKING:
     from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._pipeline_types import _StageObservation
     from cuprum._stream_drain_state import _RelayDiagnostics
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum.capture_policy import CapturePolicy
 
 # One stream's captured payload: text in the ordinary mode, the child's bytes
@@ -112,6 +113,11 @@ class _RunTaskOwnership:
     and the two close the same file through one shared
     :class:`cuprum._capture_types.SpillHandle`, so whichever runs first the
     other is a no-op.
+
+    ``stdin_log`` is the hand-off that keeps a failing writer's error from
+    hiding behind the consumer failures it caused. The writer publishes there
+    before it unwinds, so a race that reads it during that unwinding still sees
+    a failed writer; the task alone does not say so until the unwinding ends.
     """
 
     stdin_task: asyncio.Task[None] | None
@@ -120,6 +126,7 @@ class _RunTaskOwnership:
     relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
     idle: _IdleMonitor | None = None
     captures: tuple[CaptureSink | None, CaptureSink | None] = (None, None)
+    stdin_log: _StdinWriterLog | None = None
 
 
 __all__ = [

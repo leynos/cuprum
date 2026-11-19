@@ -62,13 +62,12 @@ from cuprum._subprocess_startup_abandon import (
     _abandon_started_process,
     _record_started,
 )
-from cuprum._subprocess_stdin import _spawn_stdin_writer
+from cuprum._subprocess_stdin import _spawn_run_stdin_writer
 from cuprum._subprocess_stdin_reclaim import (
     _await_task_to_completion,
     _cancel_stdin_writer,
     _settle_stdin_writer,
 )
-from cuprum._subprocess_stdin_stream import _stdin_codec
 from cuprum._subprocess_stream_post_exit import _settle_owned_group_before_draining
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
@@ -235,12 +234,7 @@ async def _run_subprocess_without_streams(
     """
     recorded: list[asyncio.Task[typ.Any]] = []
     try:
-        stdin_task = _spawn_stdin_writer(
-            process,
-            execution.stdio.stdin,
-            _stdin_codec(execution.ctx),
-            execution.observation,
-        )
+        stdin_task, stdin_log = _spawn_run_stdin_writer(process, execution)
         _record_started(recorded, stdin_task)
     except BaseException:
         await _abandon_started_process(process, execution, recorded)
@@ -249,6 +243,7 @@ async def _run_subprocess_without_streams(
         exit_code, exited_at = await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(process, execution),
             stdin_task,
+            stdin_log=stdin_log,
         )
         if stdin_task is not None:
             await _await_writer_within_deadline(execution, stdin_task)

@@ -29,11 +29,11 @@ from cuprum._line_stream.result_assembly import _assemble_line_stream_result
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _drain_stream_consumers
-from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
     _drain_context,
+    _is_early_failure,
     _reconcile_run_tasks,
     _wait_for_exit_code_within_timeout,
 )
@@ -128,27 +128,34 @@ async def _await_line_stream_exit(
     asyncio.CancelledError
         If the caller cancels line iteration while the subprocess is running.
     TimeoutError
-        When the run's configured deadline expires, or when a stdin writer
-        failed with a ``TimeoutError`` of its own — reconciled but
-        untranslated, because that is the producer's error.
+        When the run's configured deadline expires, or when a stdin writer or
+        stream reader failed with a ``TimeoutError`` of its own — reconciled
+        but untranslated, because that is the task's own error.
     """
     try:
         return await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(run.process, execution),
             run.tasks.stdin_task,
+            consumers=run.tasks.consumers,
+            stdin_log=run.tasks.stdin_log,
         )
     except TimeoutError as exc:
         # A ``TimeoutError`` can arrive here two ways, and only one of them is
         # this run's deadline. The exit wait reports its own expiry as this
-        # type; so would a stdin writer that failed with one, because the
-        # rendezvous above re-raises a failed writer unchanged and
-        # ``TimeoutError`` is an ``OSError`` subclass. Identity is what tells
-        # them apart, and it is exact: the rendezvous raises the very object
-        # ``_stdin_writer_failure`` reads back off the task. Translating the
-        # writer's failure instead would report a deadline the caller never
-        # configured, which ``_handle_stream_timeout`` rejects as an invariant
-        # violation, so the caller would lose the producer's real error.
-        if _stdin_writer_failure(run.tasks.stdin_task) is exc:
+        # type; so would a stdin writer or a stream reader that failed with
+        # one, because the rendezvous above re-raises a failed task unchanged
+        # and ``TimeoutError`` is an ``OSError`` subclass. Identity is what
+        # tells them apart, and it is exact: the rendezvous raises the very
+        # object the task carries. Translating a task's failure instead would
+        # report a deadline the caller never configured, which
+        # ``_handle_stream_timeout`` rejects as an invariant violation, so the
+        # caller would lose the real error.
+        if _is_early_failure(
+            exc,
+            run.tasks.stdin_task,
+            run.tasks.consumers,
+            stdin_log=run.tasks.stdin_log,
+        ):
             await _cleanup_failed_line_stream_run(
                 run,
                 execution,
