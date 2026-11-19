@@ -1385,11 +1385,13 @@ The policy is covered in three layers.
 examples, the direct helper test, and the Hypothesis properties. The properties
 generate `host:path` and `host::module/path` operands for both roles, and
 include a non-vacuity property asserting each generated example first passes
-`safe_path(allow_relative=True)`. That module also pins the construction order:
-a test records calls to `sh.make` and asserts none happen for a rejected
-operand, because a builder that constructs a command and then raises would
-still satisfy an assertion that merely checks no command was returned. The
-`Rsync builder rejects remote operands` scenario in
+`safe_path(allow_relative=True)`. A separate property generates option-shaped
+names with `./` prefixes and redundant separators, such as `.//--rsh=x`, and
+asserts the normalized operand appears after the separator. That module also
+pins the construction order: a test records calls to `sh.make` and asserts none
+happen for a rejected operand, because a builder that constructs a command and
+then raises would still satisfy an assertion that merely checks no command was
+returned. The `Rsync builder rejects remote operands` scenario in
 `tests/features/builder_library.feature` asserts that no command is built.
 
 That module is kept separate from `test_builder_library.py` so the per-module
@@ -1441,6 +1443,19 @@ The rule for future builders is therefore: every positional, user-supplied
 operand must follow `--`, or the builder must reject leading dashes at
 validation time, as `git_ref` does. A builder whose only user input is an
 option value needs neither.
+
+For rsync the two safeguards are complementary, and both are required. `--`
+stops option parsing, so a local name such as `--rsh=cmd` is an operand, but it
+does not disable rsync's endpoint grammar: `host:path` still names a remote
+endpoint in the operand position. The local-only validation in
+`_local_rsync_operand()` is therefore what keeps a remote transfer out of the
+builder, and the separator is what keeps a local name out of the option
+position. Finding `csf_5b717d727342c9cac60e3bfc` recorded the option-shaped
+case. The regression tests in `cuprum/unittests/test_rsync_operand_policy.py`
+pin the operand position and the endpoint rejection, and
+`test_rsync_spawn_vector_carries_the_separator` in
+`cuprum/unittests/test_builder_operand_separation.py` pins the vector handed to
+the spawn seam.
 
 The separator is honoured by the implementations the builders target, but the
 evidence differs by tool. GNU tar's support is exercised directly: the

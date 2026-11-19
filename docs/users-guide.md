@@ -1632,12 +1632,15 @@ The tar and rsync builders emit `--` before their positional path operands.
 `tar_create()` places it after the archive value, so a source named
 `--checkpoint=1` is archived as a file rather than parsed as an option, and
 `rsync_sync()` places it after the generated flags, so source and destination
-names beginning with `-` are copied rather than read as rsync options.
-`tar_extract()` needs no separator: its archive and destination are the values
-of `-f` and `-C`, and an option's value is never re-read as an option, so
-leading dashes there are already literal. A bare `-` is still special:
-`tar_extract()` reads the archive from standard input, while `tar_create()`
-writes it to standard output when its archive value is `-`.
+names beginning with `-` are copied rather than read as rsync options. A
+relative operand spelled like a remote-shell option, such as `--rsh=cmd`, is
+therefore a path operand: it names a file to copy and cannot select the local
+program rsync would run to carry a transfer. `tar_extract()` needs no
+separator: its archive and destination are the values of `-f` and `-C`, and an
+option's value is never re-read as an option, so leading dashes there are
+already literal. A bare `-` is still special: `tar_extract()` reads the archive
+from standard input, while `tar_create()` writes it to standard output when its
+archive value is `-`.
 
 ### Stream lines as they arrive
 
