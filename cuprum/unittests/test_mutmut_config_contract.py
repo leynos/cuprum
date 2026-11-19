@@ -12,10 +12,12 @@ inventory is also checked against the filesystem. Directories must precede the
 loose files they parent: mutmut creates parent directories only when copying a
 directory.
 
-The mutation run also excludes the two test modules that construct an
-environment of their own (see ``_SANDBOX_EXCLUDED_MODULES``). The exclusion is
-pinned here so it cannot widen silently, and each excluded module is checked to
-still exist inside the selected suite, so the exclusion cannot hide a deletion.
+The mutation run also excludes the test modules that cannot run against a
+mutated ``cuprum``: two build an environment of their own, and three are the
+``act`` scenarios that ``make test`` runs only from ``test-act`` (see
+``_SANDBOX_EXCLUDED_MODULES``). The exclusion is pinned here so it cannot
+widen silently, and each excluded module is checked to still exist inside the
+selected suite, so the exclusion cannot hide a deletion.
 
 Finally, the run loads a Hypothesis profile that relaxes one harness-specific
 health check: mutmut reruns the suite in one process, so a class-based
@@ -190,15 +192,25 @@ _SELECTED_ROOTS: tuple[str, ...] = ("tests/", "cuprum/unittests/")
 
 #: Test modules the mutation run must not collect.
 #:
-#: Each one constructs an environment inside the test: the nextest-route tests
-#: drive ``uv run --frozen``, and the typing contract points ty at
+#: Two of them construct an environment inside the test: the nextest-route
+#: tests drive ``uv run --frozen``, and the typing contract points ty at
 #: ``sys.prefix``. mutmut rewrites every sandboxed module to import ``mutmut``
 #: and installs itself only in an ephemeral ``uv run --with`` overlay, so
-#: neither constructed environment can import the mutated ``cuprum``. The
-#: assertions stay in the suite; only the mutation selection skips them.
+#: neither constructed environment can import the mutated ``cuprum``.
+#:
+#: The three ``act`` scenarios need a container runtime. ``make test`` already
+#: runs them only from ``test-act``, so collecting them here would make the
+#: mutation baseline depend on whether the host has ``act`` installed, and on
+#: scenario expectations that mutate no ``cuprum`` source. The recorded-output
+#: parser beside them is plain string handling and stays selected.
+#:
+#: The assertions stay in the suite; only the mutation selection skips them.
 _SANDBOX_EXCLUDED_MODULES: tuple[str, ...] = (
     "cuprum/unittests/test_nextest_route_floor.py",
     "cuprum/unittests/test_sh_typing_contract.py",
+    "tests/integration/test_workflow_integration.py",
+    "tests/integration/test_experimental_leg_integration.py",
+    "tests/integration/test_extension_typecheck_integration.py",
 )
 
 #: Hypothesis profile every mutmut pytest invocation loads.
@@ -326,18 +338,18 @@ def test_test_selection_still_collects_both_suite_roots() -> None:
     assert not missing, f"the mutation run must still collect {missing}"
 
 
-def test_mutation_run_ignores_exactly_the_environment_constructing_modules() -> None:
+def test_mutation_run_ignores_exactly_the_pinned_modules() -> None:
     """The sandbox exclusions are the pinned modules and nothing else."""
     ignored = _ignored_paths(_test_selection())
     unexpected = sorted(ignored - set(_SANDBOX_EXCLUDED_MODULES))
     missing = sorted(set(_SANDBOX_EXCLUDED_MODULES) - ignored)
     assert not unexpected, (
-        "the mutation run must not ignore modules beyond the ones that build "
-        f"their own environment; unexpected: {unexpected}"
+        "the mutation run must not ignore modules beyond the ones that cannot "
+        f"run against a mutated cuprum; unexpected: {unexpected}"
     )
     assert not missing, (
-        "every module that builds its own environment must stay excluded; "
-        f"missing: {missing}"
+        "every module that cannot run against a mutated cuprum must stay "
+        f"excluded; missing: {missing}"
     )
 
 
