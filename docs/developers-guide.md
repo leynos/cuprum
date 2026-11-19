@@ -3425,13 +3425,15 @@ text-only sinks, it owns an incremental decoder configured with
 stream. This preserves multibyte characters that span read chunks.
 
 Presentation framing has a matching flush obligation. A sink session that
-redirects echo writes each workflow-command block through its text destination
-and flushes that destination once the block is complete. Otherwise a buffered
-text wrapper would retain the frame while the binary fast path wrote child
-bytes to the same underlying buffer and flushed them first, so the runner could
-read child output above the protective frame. The raw-byte echo path is
-unchanged: it still writes to `.buffer` and flushes there, and the session's
-own flush is what makes the frame visible ahead of it.
+redirects echo writes each workflow-command block through `_write_frames`,
+which writes the whole block to the session's text destination and flushes that
+destination once, so a frame is either written and flushed together or not
+written at all. Otherwise a buffered text wrapper would retain the frame while
+the binary fast path wrote child bytes to the same underlying buffer and
+flushed them first, so the runner could read child output above the protective
+frame. The raw-byte echo path is unchanged: it still writes to `.buffer` and
+flushes there, and the session's own flush is what makes the frame visible
+ahead of it.
 
 `_StreamConfig.view_errors` resolves the error policy for a view: byte-exact
 runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
