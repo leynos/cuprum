@@ -186,8 +186,8 @@ FORK_REACHABLE_UBICLOUD_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     ),
 }
 #: The one job permitted to fail without failing the workflow, and the matrix
-#: key that says so. The 3.15a leg tracks a pre-release interpreter and is not
-#: a required context; every other leg gates a merge.
+#: key that says so. The 3.15.2 leg tracks the newest stable interpreter and is
+#: not a required context; every other leg gates a merge.
 EXPERIMENTAL_LEG_KEY = "experimental"
 CONTINUE_ON_ERROR_JOBS: typ.Final = (("ci.yml", "typecheck-test"),)
 #: Jobs that stay on GitHub-hosted runners, and why. Ubicloud offers Linux
@@ -346,7 +346,7 @@ CACHE_FAMILY_WRITERS: typ.Final[
     ("TOOL_CACHE_KEY", "self-hosted", ("3.12",)): ("ci.yml", "typecheck-test"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.13",)): ("ci.yml", "extension-tests"),
     ("TOOL_CACHE_KEY", "self-hosted", ("3.14",)): ("ci.yml", "typecheck-test"),
-    ("TOOL_CACHE_KEY", "self-hosted", ("3.15",)): ("ci.yml", "typecheck-test"),
+    ("TOOL_CACHE_KEY", "self-hosted", ("3.15.2",)): ("ci.yml", "typecheck-test"),
     ("SCCACHE_CACHE_KEY", "self-hosted", ("3.13", "lint")): (
         "ci.yml",
         "lint-test",
@@ -367,7 +367,7 @@ CACHE_FAMILY_WRITERS: typ.Final[
         "ci.yml",
         "typecheck-test",
     ),
-    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.15", "debug")): (
+    ("SCCACHE_CACHE_KEY", "self-hosted", ("3.15.2", "debug")): (
         "ci.yml",
         "typecheck-test",
     ),

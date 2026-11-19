@@ -7,9 +7,9 @@ description: >-
 inputs:
   python-version:
     description: >-
-      Python minor version the tool cache is keyed to. uv writes interpreter-
-      specific tool environments, so a 3.12 archive must never restore onto
-      3.14.
+      Python minor or exact patch version the tool cache is keyed to. uv
+      writes interpreter-specific tool environments, so a 3.12 archive must
+      never restore onto 3.14, and an exact-patch leg keeps its own family.
     required: true
   generation:
     description: >-

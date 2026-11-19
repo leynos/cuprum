@@ -72,6 +72,36 @@ def test_modern_stable_renders_a_version_scoped_compiler_family(
     ), "the tool family must follow the interpreter and runner image"
 
 
+def test_an_exact_patch_renders_its_own_tool_and_compiler_families(
+    tmp_path: Path,
+) -> None:
+    """Key an exact-patch leg separately from its minor version's family.
+
+    The experimental leg asks for `3.15.2`, and the rendered key carries that
+    request verbatim. A reader that truncated it to `3.15` would let a
+    different patch restore the tool environments and compiler objects this
+    one wrote, which is the cross-interpreter mix the family split prevents.
+    """
+    completed = _render(
+        tmp_path,
+        PYTHON_VERSION="3.15.2",
+        COMPILER_SHAPE="debug",
+        COMPILER_VERSION="",
+    )
+    assert completed.returncode == 0, completed.stderr
+    tool_key = f"tool-{IMAGE_SCOPE}-py3.15.2-tool-hash"
+    sccache_prefix = f"sccache-{IMAGE_SCOPE}-py3.15.2-debug-"
+    assert completed.exported["TOOL_CACHE_KEY"] == tool_key, (
+        "the tool family must follow the exact patch version it is keyed to"
+    )
+    assert completed.exported["SCCACHE_CACHE_PREFIX"] == sccache_prefix, (
+        "the compiler family must carry the exact patch and its build shape"
+    )
+    assert completed.exported["SCCACHE_CACHE_KEY"] == f"{sccache_prefix}42", (
+        "the exact-patch compiler key must extend its prefix with the run id"
+    )
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_error"),
     [
