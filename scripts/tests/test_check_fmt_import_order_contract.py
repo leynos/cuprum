@@ -122,7 +122,11 @@ def test_the_contract_runs_the_ruff_release_the_makefile_pins() -> None:
     result = _run_ruff(["--version"], ROOT)
 
     assert result.returncode == 0, f"ruff --version failed: {result.stderr}"
-    assert declared in result.stdout, (
+    reported = result.stdout.split()
+    assert len(reported) >= 2, (
+        f"ruff --version must report its name and release, got {result.stdout!r}"
+    )
+    assert reported[1] == declared, (
         f"the formatting contract must run the pinned Ruff {declared}, "
         f"got {result.stdout.strip()!r}"
     )

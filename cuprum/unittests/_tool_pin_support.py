@@ -298,8 +298,11 @@ def read_makefile_pin(root: pth.Path, name: str) -> str:
     >>> read_makefile_pin(repo_root(), "RUFF_VERSION").count(".")
     2
     """
+    # A trailing comment is part of the line but not of the value: Make keeps
+    # the assignment and discards the comment, so a reader that skipped such a
+    # line would miss the default that is actually in force.
     pattern = re.compile(
-        rf"^{re.escape(name)}\s*\?=\s*(\S+)\s*$",
+        rf"^{re.escape(name)}\s*\?=\s*([^\s#]+)\s*(?:#.*)?$",
         re.MULTILINE,
     )
     return read_single_match(

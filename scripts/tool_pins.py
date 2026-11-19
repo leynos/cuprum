@@ -81,7 +81,8 @@ def _makefile_site(name: str) -> Site:
         relative_path="Makefile",
         label=f"Makefile {name}",
         pattern=re.compile(
-            rf"^(?P<prefix>{re.escape(name)}\s*\?=\s*)(?P<value>\S+)(?P<suffix>\s*)$",
+            rf"^(?P<prefix>{re.escape(name)}\s*\?=\s*)(?P<value>[^\s#]+)"
+            rf"(?P<suffix>\s*(?:#.*)?)$",
             re.MULTILINE,
         ),
     )

@@ -170,6 +170,32 @@ def test_a_ruff_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None
     )
 
 
+def test_a_commented_makefile_default_is_still_synchronized(
+    repository: Path,
+) -> None:
+    """A trailing comment is preserved while the value is rewritten."""
+    _replace(
+        repository,
+        "Makefile",
+        "RUFF_VERSION ?= 0.16.4\n",
+        "RUFF_VERSION ?= 0.16.4  # keep in step with the dev group\n",
+    )
+    status, output = _check(repository)
+    assert status == 0, f"a commented default must still match, got {output!r}"
+
+    _bump(repository, "ruff", "0.16.4", "0.16.9")
+    status, output = _check(repository)
+    assert status == 1, output
+    assert "Makefile RUFF_VERSION" in output, (
+        f"drift must name the commented site, got {output!r}"
+    )
+
+    _sync(repository)
+    assert "RUFF_VERSION ?= 0.16.9  # keep in step with the dev group" in _text(
+        repository, "Makefile"
+    ), "sync must rewrite the value and keep the comment"
+
+
 def test_a_ty_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None:
     """Both ty selectors follow the canonical 0.0.84 pin."""
     _bump(repository, "ty", "0.0.74", "0.0.84")

@@ -159,7 +159,11 @@ def test_ty_is_available_to_the_suite() -> None:
         check=False,
     )
     assert result.returncode == 0, f"ty --version failed: {result.stderr}"
-    assert expected in result.stdout, (
+    reported = result.stdout.split()
+    assert len(reported) >= 2, (
+        f"ty --version must report its name and release, got {result.stdout!r}"
+    )
+    assert reported[1] == expected, (
         f"the suite must run against the pinned ty {expected}, "
         f"got {result.stdout.strip()!r}"
     )
