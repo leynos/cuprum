@@ -58,3 +58,21 @@ def test_an_absent_default_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
         read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_an_empty_default_is_refused(tmp_path: Path) -> None:
+    """A default with no value has nothing to mirror, so it is not a pin."""
+    root = _repository(tmp_path, "RUFF_VERSION ?=\n")
+
+    with pytest.raises(
+        AssertionError, match="must give RUFF_VERSION a non-empty default"
+    ):
+        read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_an_empty_first_default_still_counts_as_a_duplicate(tmp_path: Path) -> None:
+    """Make defines the variable on the first ``?=``, even with no value."""
+    root = _repository(tmp_path, "RUFF_VERSION ?=\nRUFF_VERSION ?= 0.16.4\n")
+
+    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
+        read_makefile_pin(root, "RUFF_VERSION")

@@ -7,9 +7,9 @@ whether the warning-suppression environment reaches the build process. A fake
 runs, covering the process boundary as well as the array-based invocation.
 
 The same applies to the install step ahead of it: a fake ``python`` records
-what it was asked to do, so the exact-release guard, the pinned ``pip``
-requirement, and the read-back of the installed release are exercised rather
-than asserted from the recipe text.
+each argument it was given separately, so the exact-release guard, the pinned
+``pip`` requirement, and the read-back of the installed release are exercised
+rather than asserted from the recipe text.
 """
 
 from __future__ import annotations
@@ -124,26 +124,57 @@ def test_warning_suppression_reaches_maturin_process(tmp_path: Path) -> None:
     )
 
 
+#: A line that can only be a boundary between calls, never an argument.
+_CALL_BOUNDARY = "--call--"
+
+#: The separate arguments the step must pass to pip and to the version probe.
+_EXPECTED_INSTALL_ARGV = ("-m", "pip", "install", "--upgrade", "maturin==1.15.0")
+_EXPECTED_VERSION_ARGV = ("-m", "maturin", "--version")
+
+
 def _install_python_stub(tools: Path, *, record: Path, installed: str) -> None:
-    """Write a ``python`` stand-in that records argv and reports ``installed``."""
+    """Write a ``python`` stand-in that records argv and reports ``installed``.
+
+    Each argument is recorded on its own line and every call starts with a
+    boundary line, so a single argument containing ``-m pip install`` cannot
+    pass for the separate arguments the step must pass. The stand-in validates
+    the argument boundaries itself; a quoting regression therefore fails the
+    invocation instead of reaching a permissive ``"$*"`` match.
+    """
     install_tool(
         tools,
         "python",
         (
-            f"printf '%s\\n' \"$*\" >> '{record}'\n"
-            'case "$*" in\n'
-            "  '-m pip install --upgrade maturin=='*) ;;\n"
-            f"  '-m maturin --version') printf 'maturin %s\\n' '{installed}' ;;\n"
-            "  *) printf 'unexpected python invocation: %s\\n' \"$*\" >&2\n"
-            "     exit 2 ;;\n"
-            "esac\n"
+            f"printf '%s\\n' '{_CALL_BOUNDARY}' >> '{record}'\n"
+            f"for arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{record}'; done\n"
+            'if [ "$#" -eq 5 ] && [ "$1" = "-m" ] && [ "$2" = "pip" ] &&\n'
+            '   [ "$3" = "install" ] && [ "$4" = "--upgrade" ]; then\n'
+            '  case "$5" in\n'
+            "    maturin==*) exit 0 ;;\n"
+            "  esac\n"
+            "fi\n"
+            'if [ "$#" -eq 3 ] && [ "$1" = "-m" ] && [ "$2" = "maturin" ] &&\n'
+            '   [ "$3" = "--version" ]; then\n'
+            f"  printf 'maturin %s\\n' '{installed}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "printf 'unexpected python invocation: %s\\n' \"$*\" >&2\n"
+            "exit 2\n"
         ),
     )
 
 
+def _python_invocations(record: Path) -> list[tuple[str, ...]]:
+    """Return each recorded python call's separate arguments, in call order."""
+    if not record.exists():
+        return []
+    calls = record.read_text(encoding="utf-8").split(f"{_CALL_BOUNDARY}\n")
+    return [tuple(call.splitlines()) for call in calls if call]
+
+
 def _run_install(
     tmp_path: Path, *, requested: str, installed: str | None = None
-) -> tuple[subprocess.CompletedProcess[str], list[str], Path]:
+) -> tuple[subprocess.CompletedProcess[str], list[tuple[str, ...]], Path]:
     """Run the install step and return its result, python calls, and record path."""
     tools = tmp_path / "tools"
     record = tmp_path / "python-argv"
@@ -169,10 +200,7 @@ def _run_install(
         cwd=tmp_path,
         env=environment,
     )
-    invocations = (
-        record.read_text(encoding="utf-8").splitlines() if record.exists() else []
-    )
-    return result, invocations, record
+    return result, _python_invocations(record), record
 
 
 def test_an_exact_release_is_installed_and_read_back(tmp_path: Path) -> None:
@@ -180,10 +208,10 @@ def test_an_exact_release_is_installed_and_read_back(tmp_path: Path) -> None:
     result, invocations, _ = _run_install(tmp_path, requested="1.15.0")
 
     assert result.returncode == 0, result.stderr
-    assert invocations == [
-        "-m pip install --upgrade maturin==1.15.0",
-        "-m maturin --version",
-    ], f"the step must install the exact pin and read it back, got {invocations!r}"
+    assert invocations == [_EXPECTED_INSTALL_ARGV, _EXPECTED_VERSION_ARGV], (
+        "the step must install the exact pin as separate arguments and read it "
+        f"back, got {invocations!r}"
+    )
 
 
 @pytest.mark.parametrize(

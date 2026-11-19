@@ -196,6 +196,20 @@ def test_a_commented_makefile_default_is_still_synchronized(
     ), "sync must rewrite the value and keep the comment"
 
 
+def test_an_empty_makefile_default_is_drift_and_is_repaired(repository: Path) -> None:
+    """Make defines the variable on an empty ``?=``, so it must not be skipped."""
+    _empty_makefile_declaration(repository)
+    status, output = _check(repository)
+    assert status == 1, output
+    assert "Makefile RUFF_VERSION" in output, (
+        f"an empty default must be reported as drift, got {output!r}"
+    )
+
+    _sync(repository)
+    status, output = _check(repository)
+    assert status == 0, f"sync must repair the empty default, got {output!r}"
+
+
 def test_a_ty_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None:
     """Both ty selectors follow the canonical 0.0.84 pin."""
     _bump(repository, "ty", "0.0.74", "0.0.84")
@@ -271,6 +285,21 @@ def _duplicate_makefile_declaration(repository: Path) -> None:
     )
 
 
+def _empty_leading_makefile_declaration(repository: Path) -> None:
+    """Define the Makefile Ruff default empty ahead of the real assignment."""
+    _replace(
+        repository,
+        "Makefile",
+        "RUFF_VERSION ?= 0.16.4\n",
+        "RUFF_VERSION ?=\nRUFF_VERSION ?= 0.16.4\n",
+    )
+
+
+def _empty_makefile_declaration(repository: Path) -> None:
+    """Empty the Makefile Ruff default."""
+    _replace(repository, "Makefile", "RUFF_VERSION ?= 0.16.4\n", "RUFF_VERSION ?=\n")
+
+
 def _unquoted_workflow_declaration(repository: Path) -> None:
     """Remove the quoting the workflow site depends on."""
     _replace(
@@ -300,6 +329,7 @@ def _ambiguous_action_default(repository: Path) -> None:
         (_duplicate_ruff_requirement, "exactly one ruff requirement"),
         (_remove_makefile_declaration, "Makefile RUFF_VERSION"),
         (_duplicate_makefile_declaration, "exactly one Makefile TY_VERSION"),
+        (_empty_leading_makefile_declaration, "exactly one Makefile RUFF_VERSION"),
         (_unquoted_workflow_declaration, "ci.yml RUFF_VERSION"),
         (_ambiguous_action_default, "maturin-version default"),
     ],

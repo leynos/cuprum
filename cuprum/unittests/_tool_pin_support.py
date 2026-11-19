@@ -288,9 +288,11 @@ def read_makefile_pin(root: pth.Path, name: str) -> str:
     Notes
     -----
     Fails the contract when the Makefile declares the variable zero times or
-    more than once. A second default is the failure that matters: ``?=`` keeps
-    only the first, so a duplicate would leave the later line inert while the
-    parity test still read it.
+    more than once, or gives it an empty default. A second default is the
+    failure that matters: ``?=`` keeps only the first, so a duplicate would
+    leave the later line inert while the parity test still read it. An empty
+    first default counts for the same reason: Make treats ``NAME ?=`` as
+    defining the variable as empty, so a later assignment never takes effect.
 
     Examples
     --------
@@ -300,14 +302,17 @@ def read_makefile_pin(root: pth.Path, name: str) -> str:
     """
     # A trailing comment is part of the line but not of the value: Make keeps
     # the assignment and discards the comment, so a reader that skipped such a
-    # line would miss the default that is actually in force.
+    # line would miss the default that is actually in force. The value itself
+    # may be empty, and must still be counted as a declaration.
     pattern = re.compile(
-        rf"^{re.escape(name)}\s*\?=\s*([^\s#]+)\s*(?:#.*)?$",
+        rf"^{re.escape(name)}[ \t]*\?=[ \t]*(?P<value>[^\s#]*)[ \t]*(?:#.*)?$",
         re.MULTILINE,
     )
-    return read_single_match(
+    value = read_single_match(
         read_text(root, "Makefile"),
         pattern,
         location="Makefile",
         subject=f"{name} default",
     )
+    assert value, f"Makefile must give {name} a non-empty default"
+    return value

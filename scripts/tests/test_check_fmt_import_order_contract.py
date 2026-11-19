@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from cuprum.unittests._tool_pin_support import read_makefile_pin
+
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
 
@@ -74,11 +76,7 @@ def _recipe_lines(target: str) -> list[str]:
 
 def _ruff_pin() -> str:
     """Return the Ruff version the Makefile's ``RUFF_VERSION`` default pins."""
-    return next(
-        line.split("?=", 1)[1].strip()
-        for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
-        if line.startswith("RUFF_VERSION ?=")
-    )
+    return read_makefile_pin(ROOT, "RUFF_VERSION")
 
 
 def _ruff_argv() -> list[str]:

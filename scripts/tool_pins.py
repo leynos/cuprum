@@ -77,12 +77,15 @@ class ToolPin:
 
 def _makefile_site(name: str) -> Site:
     """Return the Makefile ``NAME ?= value`` site for one variable."""
+    # The value may be empty, and must still be counted: Make defines the
+    # variable on such a line, so a later `?=` never takes effect and the
+    # empty assignment is the declaration in force.
     return Site(
         relative_path="Makefile",
         label=f"Makefile {name}",
         pattern=re.compile(
-            rf"^(?P<prefix>{re.escape(name)}\s*\?=\s*)(?P<value>[^\s#]+)"
-            rf"(?P<suffix>\s*(?:#.*)?)$",
+            rf"^(?P<prefix>{re.escape(name)}[ \t]*\?=[ \t]*)"
+            rf"(?P<value>[^\s#]*)(?P<suffix>[ \t]*(?:#.*)?)$",
             re.MULTILINE,
         ),
     )
