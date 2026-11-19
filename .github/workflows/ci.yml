@@ -421,7 +421,17 @@ jobs:
           vcpus: ${{ env.LINUX_RUNNER_VCPUS }}
 
   typecheck-test:
-    name: Typecheck and test (Python ${{ matrix.python-label }})
+    # The experimental entry alone appends the pull-request policy, so its
+    # check name says "not run on pull requests" on every event and a reviewer
+    # cannot read its green as validation. The suffix is keyed on the matrix
+    # entry rather than on `github.event_name`, which would rename the required
+    # 3.12 and 3.14 contexts on a pull request and leave no single context for
+    # a required check. Both scalar lines stay at this indent: a more-indented
+    # continuation in a folded scalar keeps its line break and puts a newline
+    # inside the expression.
+    name: >-
+      Typecheck and test (Python ${{ matrix.python-label }}${{ matrix.experimental
+      && ', not run on pull requests' || '' }})
     continue-on-error: ${{ matrix.experimental }}
     # A pull request from a fork cannot obtain an Ubicloud runner, so the fork
     # arm falls back to a GitHub-hosted label and only forks take it. Keep the
@@ -435,13 +445,17 @@ jobs:
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
     env:
-      # The pre-release leg is not a required check and may fail silently, so
+      # The experimental leg is not a required check and may fail silently, so
       # on a pull request it can only spend. GitHub cannot skip one matrix leg
       # (a job-level `if:` cannot read `matrix`, and `exclude` runs before
       # `include`), so every step carries this flag instead: on a pull request
-      # the 3.15a leg starts, skips every step, and reports success without
-      # doing anything. It still runs on push to `main` and on dispatch; only
-      # the push writes its compiler family, since the saves need a push.
+      # the 3.15.2 leg starts, skips every step, and reports success without
+      # doing anything. That conclusion is why the job's name carries the
+      # ", not run on pull requests" suffix: a green check whose steps never
+      # ran has been cited as validation of a pull request, and the name is
+      # read where the steps are not. It still runs on push to `main` and on
+      # dispatch; only the push writes its compiler family, since the saves
+      # need a push.
       LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}
       MDTABLEFIX_VERSION: '0.6.1'
       DEV_FAST_TOOLCHAIN: 'nightly-2026-08-23'
@@ -460,9 +474,16 @@ jobs:
             python-label: '3.14'
             allow-prereleases: false
             experimental: false
-          - python-version: '3.15'
-            python-label: '3.15a'
-            allow-prereleases: true
+          # The experimental leg names an exact stable patch, and the label
+          # must equal the request: the label is what the check context and
+          # the leg's readers spell, so a version bump updates the version,
+          # the label, the cache-family manifest and the documentation
+          # together. `allow-prereleases` stays false so a request for a patch
+          # that has not been released fails to set up rather than silently
+          # installing a pre-release of another version.
+          - python-version: '3.15.2'
+            python-label: '3.15.2'
+            allow-prereleases: false
             experimental: true
     steps:
       - name: Check out repository
@@ -614,9 +635,43 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
+      # `UV_PYTHON` binds uv to this leg's interpreter. The registry and tool
+      # caches are shared across legs, so uv's own discovery could otherwise
+      # select a different patch than the one this leg asked for, and the leg
+      # would validate a version it never requested.
       - name: Run typechecker
         if: env.LEG_RUNS == 'true'
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
         run: make typecheck
+
+      # `make typecheck` has built `.venv` by now, and the cache could have
+      # supplied one. Prove the environment the suites below will use is the
+      # interpreter this leg requested: `3.12` accepts any 3.12 patch, while
+      # `3.15.2` accepts only 3.15.2.
+      - name: Verify project interpreter
+        if: env.LEG_RUNS == 'true'
+        shell: bash
+        env:
+          EXPECTED_PYTHON: ${{ matrix.python-version }}
+          UV_PYTHON: ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail
+          uv run python - <<'PY'
+          import os
+          import sys
+
+          expected_text = os.environ["EXPECTED_PYTHON"]
+          expected = tuple(int(part) for part in expected_text.split("."))
+          print(sys.version)
+          print(sys.executable)
+          actual = tuple(sys.version_info[: len(expected)])
+          if actual != expected:
+              raise SystemExit(
+                  f".venv runs {sys.version.split()[0]} at {sys.executable}, "
+                  f"but this leg requested {expected_text}"
+              )
+          PY
 
       # The doctest-warning contract invokes this pinned nightly from inside
       # pytest. Install it here so a cold rustup download does not consume the
@@ -638,6 +693,8 @@ jobs:
       # lock rather than overlap.
       - name: Run tests
         if: env.LEG_RUNS == 'true'
+        env:
+          UV_PYTHON: ${{ matrix.python-version }}
         run: |
           CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make test-python
 

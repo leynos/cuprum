@@ -119,17 +119,17 @@ family is the exception: `loom.yml` saves it only during scheduled runs on
 `refs/heads/main`. Its manual dispatches and pull-request smoke runs restore
 the family without saving it.
 
-| Family                                | Writer                              |
-| ------------------------------------- | ----------------------------------- |
-| Cargo registry, Ubicloud              | `ci.yml` `extension-tests`          |
-| Tools, 3.13                           | `ci.yml` `extension-tests`          |
-| Tools, 3.12/3.14/3.15a                | `ci.yml` `typecheck-test`, that leg |
-| Compiler, 3.13 unoptimized            | `ci.yml` `extension-tests`          |
-| Compiler, 3.12/3.14/3.15a unoptimized | `ci.yml` `typecheck-test`, that leg |
-| Compiler, 3.13 release                | `ci.yml` `benchmark-ratchet`        |
-| Compiler, dev-fast lint               | `ci.yml` `lint-test`                |
-| Compiler, 3.13 modern stable 1.99.1   | `ci.yml` `modern-stable`            |
-| Compiler, Loom model                  | `loom.yml` `loom`                   |
+| Family                                 | Writer                              |
+| -------------------------------------- | ----------------------------------- |
+| Cargo registry, Ubicloud               | `ci.yml` `extension-tests`          |
+| Tools, 3.13                            | `ci.yml` `extension-tests`          |
+| Tools, 3.12/3.14/3.15.2                | `ci.yml` `typecheck-test`, that leg |
+| Compiler, 3.13 unoptimized             | `ci.yml` `extension-tests`          |
+| Compiler, 3.12/3.14/3.15.2 unoptimized | `ci.yml` `typecheck-test`, that leg |
+| Compiler, 3.13 release                 | `ci.yml` `benchmark-ratchet`        |
+| Compiler, dev-fast lint                | `ci.yml` `lint-test`                |
+| Compiler, 3.13 modern stable 1.99.1    | `ci.yml` `modern-stable`            |
+| Compiler, Loom model                   | `loom.yml` `loom`                   |
 
 `lint-test` moved to the Ubicloud lane with the fork fallback, taking its
 dev-fast lint family with it, and stopped saving the Cargo registry: on its
@@ -190,9 +190,16 @@ interpreter's suite and `extension-tests` runs its typechecker, so a leg would
 only start a runner to repeat one of them. `extension-tests` therefore owns
 both 3.13 families: the unoptimized compiler family, which it compiles, and the
 3.13 tool family, which it saves on `main` after a miss. Every remaining matrix
-leg compiles when it runs (the 3.15a leg is skipped on pull requests), and
+leg compiles when it runs (the 3.15.2 leg is skipped on pull requests), and
 compiler-cache publication happens on `main` pushes, so none of them can freeze
 a rolling generation by republishing it unchanged.
+
+The experimental leg's exact patch is part of its key, so its tool and compiler
+families are distinct from any `3.15` minor family. When the leg is renamed to
+another patch, the first `main` push that runs it starts cold on both: no
+archive matches the new key, the run compiles and installs without a restore,
+and that push publishes the first archive of the new families. The older
+families age out through the rolling generation rather than being deleted.
 
 `tests/helpers/ci_cache_families.py` resolves the family each save step
 actually publishes, expanding matrix legs and honouring a save condition that

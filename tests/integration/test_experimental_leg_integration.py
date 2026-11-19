@@ -36,11 +36,17 @@ SCENARIO_TIMEOUT = 180
 #: The branch a pull request comes from.
 FEATURE_BRANCH = "feature"
 #: The experimental leg, and a required one to compare it with.
-EXPERIMENTAL = "3.15a"
+EXPERIMENTAL = "3.15.2"
 REQUIRED = "3.12"
 #: Work every leg that runs must do. Named, so a leg that ran only its
-#: bookkeeping steps cannot pass.
-WORK: typ.Final = frozenset({"Check out repository", "Run typechecker", "Run tests"})
+#: bookkeeping steps cannot pass. The interpreter verification is work: it is
+#: what proves the environment the suite consumes is the requested one.
+WORK: typ.Final = frozenset({
+    "Check out repository",
+    "Run typechecker",
+    "Verify project interpreter",
+    "Run tests",
+})
 #: The saves that only a push to `main` may run.
 SAVES: typ.Final = frozenset({"Save the installed tools", "Save the compiler cache"})
 
