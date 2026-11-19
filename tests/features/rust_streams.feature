@@ -35,3 +35,35 @@ Feature: Optional Rust stream operations
       | consume   | a zero buffer size   | ValueError |
       | pump      | a fatal reader error | OSError    |
       | consume   | a fatal reader error | OSError    |
+
+  Scenario Outline: The buffer size is the first reported stream argument failure
+    Given the stream adapter entry points are available
+    When the <operation> entry point receives descriptor <descriptor> and buffer size <buffer_size>
+    Then it raises <exception> saying "<message>"
+
+    Examples:
+      | operation | descriptor | buffer_size | exception  | message                               |
+      | pump      | -1         | 0           | ValueError | buffer_size must be greater than zero |
+      | consume   | -1         | 0           | ValueError | buffer_size must be greater than zero |
+      | pump      | 2147483648 | 0           | ValueError | buffer_size must be greater than zero |
+      | consume   | 2147483648 | 0           | ValueError | buffer_size must be greater than zero |
+
+  Scenario Outline: Both adapters apply the same raw descriptor policy
+    Given the stream adapter entry points are available
+    When the <operation> entry point receives descriptor <descriptor> and buffer size <buffer_size>
+    Then it raises <exception> saying "<message>"
+
+    Examples:
+      | operation | descriptor          | buffer_size | exception     | message                                   |
+      | pump      | -1                  | 65536       | ValueError    | file descriptor must be non-negative      |
+      | consume   | -1                  | 65536       | ValueError    | file descriptor must be non-negative      |
+      | pump      | 2147483648          | 65536       | ValueError    | file descriptor out of range              |
+      | consume   | 2147483648          | 65536       | ValueError    | file descriptor out of range              |
+      | pump      | 9223372036854775808 | 65536       | OverflowError | Python int too large to convert to C long |
+      | consume   | 9223372036854775808 | 65536       | OverflowError | Python int too large to convert to C long |
+
+  Scenario: Index-like stream arguments are accepted by both entry points
+    Given the stream adapter entry points are available
+    When I pump a payload with index-like stream arguments
+    And I consume a payload with index-like stream arguments
+    Then each entry point returns its payload and converted every argument once

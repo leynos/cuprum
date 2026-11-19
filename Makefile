@@ -244,6 +244,7 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   tests/helpers/test_consume_boundary_oracle.py \
   tests/behaviour/test_rust_streams_behaviour.py \
   tests/behaviour/test_rust_streams_errors_behaviour.py \
+  tests/behaviour/test_streams_rs_adapter_contract_behaviour.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'

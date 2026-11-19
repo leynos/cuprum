@@ -264,7 +264,7 @@ def test_non_index_arguments_raise_type_error(
 def test_index_protocol_arguments_reach_native_as_plain_integers(
     native: SimpleNamespace,
 ) -> None:
-    """Accepted index-like values are normalised exactly once each."""
+    """Accepted index-like values are normalized exactly once each."""
     reader = _IndexLike(3)
     writer = 4
     size = _IndexLike(1024)

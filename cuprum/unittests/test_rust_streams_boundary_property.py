@@ -13,11 +13,12 @@ seam:
 The accepted arguments — where the default applies and the transfer actually
 completes — are covered by ``test_rust_streams_roundtrip_property.py``.
 
-Native buffer-size validation runs before native descriptor conversion, and
-both shims keep that order before entering native code: the pump validates its
-buffer before preparing descriptors, and Windows consume validates its buffer
-and its CRT descriptor before duplicating the descriptor. The descriptor
-properties use the default buffer so conversion is the failing step.
+Both adapters run the same Python checks before entering native code: buffer
+size first, then the raw reader's sign and signed 32-bit range, then the
+platform step. On Windows that step duplicates the validated CRT descriptor;
+Unix passes the raw descriptor through, and the native entry rechecks the same
+policy. The descriptor properties use the default buffer so the reader is the
+value that fails.
 
 Windows consume accepts CRT descriptors in the same signed 32-bit range as
 Unix descriptors and duplicates the validated descriptor, changing only the
@@ -222,14 +223,12 @@ def test_buffer_validation_precedes_descriptor_conversion(
 ) -> None:
     """An invalid buffer is reported even when the descriptor is also invalid.
 
-    Native order is buffer then descriptor on every platform. The pump shim
-    validates its buffer before preparing either descriptor; Unix consume
-    leaves descriptor validation to the native function. Windows consume
-    validates its buffer before it validates or duplicates its CRT descriptor,
-    which is also the order that keeps an unusable descriptor away from
-    ``_read``. Both values are deliberately interior ``i64``, so PyO3 extracts
-    them successfully and classification is the boundary's own rather than an
-    extraction error.
+    Both wrappers validate the buffer before the raw reader, and consume does so
+    before duplicating its CRT descriptor on Windows, which is also the order
+    that keeps an unusable descriptor away from ``_read``. Unix consume repeats
+    the same order in Python before the native entry rechecks it. Both values
+    are deliberately interior ``i64``, so PyO3 extracts them successfully and
+    classification is the boundary's own rather than an extraction error.
     """
     with pytest.raises(ValueError, match="buffer_size") as excinfo:
         entry_point(rust_streams, reader_fd=bad_fd, buffer_size=bad_size)

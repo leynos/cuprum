@@ -25,23 +25,38 @@ and ``OverflowError`` and are deliberately not reclassified as stream-domain
 failures. The shim raises its own ``OverflowError`` for that range, with the
 message ``PyO3`` uses, so only a direct native call shows that ``PyO3`` itself
 still behaves this way.
+
+PyO3 documents that the generated wrapper extracts regular and keyword
+arguments, but it does not specify an order across several arguments
+(https://pyo3.rs/main/function). Each extraction case below therefore gets its
+own call, and no test depends on which of two invalid arguments is reported
+first. That is also why the wrappers validate in Python before delegating: the
+documented precedence cannot be delegated to extraction.
 """
 
 from __future__ import annotations
 
 import contextlib
 import importlib
+import inspect
 import os
+import platform
 import sys
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from cuprum import _rust_backend
+from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
 from cuprum.unittests._rust_stream_test_support import _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
+
+_I64_MIN = -(1 << 63)
+_MAX_BUFFER_SIZE = 1 << 30
 
 # The pump retains the Unix i32 descriptor contract. Windows consume now uses
 # a CRT descriptor, so its native validation-order cases run on both platforms.
@@ -49,6 +64,27 @@ _unix_only = pytest.mark.skipif(
     sys.platform == "win32",
     reason="asserts the Unix descriptor contract the shim converts on Windows",
 )
+_cpython_only = pytest.mark.skipif(
+    platform.python_implementation() != "CPython",
+    reason="index conversion counts are a CPython implementation detail",
+)
+_native_property = settings(
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+    max_examples=50,
+)
+
+
+class _IndexOnly:
+    """Expose an integer through ``__index__`` and count conversions."""
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+        self.calls = 0
+
+    def __index__(self) -> int:
+        """Return the wrapped integer, recording the conversion."""
+        self.calls += 1
+        return self.value
 
 
 @pytest.fixture(name="native_streams")
@@ -354,3 +390,142 @@ def test_pump_maps_an_invalid_reader_descriptor_to_value_error(
             native_streams.rust_pump_stream(
                 -1, writer_fd, buffer_size=_VALID_BUFFER_SIZE
             )
+
+
+def _default_buffer_size(native: ModuleType, name: str) -> int | None:
+    """Return the native ``buffer_size`` default, or ``None`` if hidden."""
+    function = getattr(native, name)
+    try:
+        signature = inspect.signature(function)
+    except (TypeError, ValueError):
+        return None
+    parameter = signature.parameters.get("buffer_size")
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        return None
+    return typ.cast("int", parameter.default)
+
+
+@pytest.mark.parametrize("name", ["rust_pump_stream", "rust_consume_stream"])
+def test_native_declares_the_shared_default_buffer(
+    native_streams: ModuleType,
+    name: str,
+) -> None:
+    """Both exports declare the domain default the Python wrappers use.
+
+    PyO3 publishes the ``#[pyo3(signature = ...)]`` default through
+    ``__text_signature__``. When introspection is unavailable the behavioural
+    default tests below still pin that omitting the argument works.
+    """
+    default = _default_buffer_size(native_streams, name)
+    if default is None:
+        pytest.skip(f"{name} exposes no introspectable buffer_size default")
+
+    assert default == DEFAULT_NATIVE_BUFFER_SIZE, (
+        f"{name} must default to the shared 64 KiB buffer, found {default}"
+    )
+
+
+def test_native_consume_reads_with_the_declared_default_buffer(
+    native_streams: ModuleType,
+) -> None:
+    """Omitting ``buffer_size`` consumes the whole stream at the native default."""
+    payload = b"native-default-consume"
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, writer_fd)
+        os.write(writer_fd, payload)
+        _safe_close(writer_fd)
+
+        assert native_streams.rust_consume_stream(reader_fd) == payload.decode(), (
+            "the native default buffer must consume the whole stream"
+        )
+
+
+@_unix_only
+def test_native_pump_transfers_with_the_declared_default_buffer(
+    native_streams: ModuleType,
+) -> None:
+    """Omitting ``buffer_size`` pumps the whole stream at the native default."""
+    payload = b"native-default-pump"
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, writer_fd)
+        sink_fd = _open_writer()
+        stack.callback(_safe_close, sink_fd)
+        os.write(writer_fd, payload)
+        _safe_close(writer_fd)
+
+        assert native_streams.rust_pump_stream(reader_fd, sink_fd) == len(payload), (
+            "the native default buffer must transfer the whole stream"
+        )
+
+
+@_unix_only
+@_cpython_only
+def test_native_extracts_index_like_arguments_once(
+    native_streams: ModuleType,
+) -> None:
+    """``__index__`` inputs are accepted and converted exactly once each.
+
+    The writer is index-like as well, so this also shows that the pump's
+    ownership boundary accepts the same protocol as its read side.
+    """
+    payload = b"index-like-arguments"
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, writer_fd)
+        sink_fd = _open_writer()
+        stack.callback(_safe_close, sink_fd)
+        os.write(writer_fd, payload)
+        _safe_close(writer_fd)
+
+        reader = _IndexOnly(reader_fd)
+        sink = _IndexOnly(sink_fd)
+        size = _IndexOnly(1024)
+        moved = native_streams.rust_pump_stream(reader, sink, buffer_size=size)
+
+        assert moved == len(payload), "the index-like writer must receive every byte"
+        assert _descriptor_state(sink_fd) == "closed", (
+            "the extracted writer must have been adopted by the native pump"
+        )
+        assert (reader.calls, sink.calls, size.calls) == (1, 1, 1), (
+            "each index-like argument must be converted exactly once; found "
+            f"reader={reader.calls}, writer={sink.calls}, buffer={size.calls}"
+        )
+
+
+@_native_property
+@given(
+    bad_size=st.one_of(
+        st.integers(min_value=_I64_MIN, max_value=0),
+        st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=(1 << 63) - 1),
+    )
+)
+def test_native_consume_rejects_a_buffer_without_consuming_the_reader(
+    native_streams: ModuleType,
+    bad_size: int,
+) -> None:
+    """The direct native boundary rejects the buffer before reading anything.
+
+    Both arguments are otherwise valid: the reader is open and holds a
+    complete payload, and the buffer is the only invalid value. That separates
+    this property from the wrapper tests that pair two failures and can only
+    observe precedence.
+    """
+    payload = b"left unread by rejected buffer"
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        stack.callback(_safe_close, writer_fd)
+        os.write(writer_fd, payload)
+        _safe_close(writer_fd)
+
+        with pytest.raises(ValueError, match="buffer_size"):
+            native_streams.rust_consume_stream(reader_fd, buffer_size=bad_size)
+
+        assert os.read(reader_fd, len(payload)) == payload, (
+            "the native boundary must not read the stream before buffer validation"
+        )
