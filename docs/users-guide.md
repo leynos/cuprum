@@ -3460,6 +3460,14 @@ large for the native boundary to represent at all — beyond `i64::MAX`, or belo
 `i64::MIN` — is a different failure and keeps `OverflowError`, because it never
 reaches the size check.
 
+Both stream entry points (`rust_pump_stream` and `rust_consume_stream`) read
+from a caller-supplied descriptor and apply the same descriptor policy before
+any native call. The value may be any object implementing `__index__`. A
+negative value, or one above `i32::MAX` (2147483647), raises `ValueError`; a
+value outside the `i64` range raises `OverflowError`. The buffer size is
+checked first, so a call whose buffer and descriptor are both invalid always
+reports the buffer failure.
+
 An I/O failure while transferring raises `OSError`. When the failure came from
 the operating system, the exception carries its own code — `errno` on POSIX
 platforms, `winerror` on Windows — so branch on those attributes rather than on

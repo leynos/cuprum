@@ -377,10 +377,11 @@ def rust_consume_stream(
     Validation order matches the pump wrapper: load the native module, check
     ``buffer_size``, check ``reader_fd``, apply the platform step, then call
     native. Both arguments are checked in Python, so neither an invalid buffer
-    nor an unusable descriptor reaches ``os.dup`` on Windows, where the CRT
-    would otherwise report ``OSError`` for a value documented as ``ValueError``
-    and could fast-fail the process in ``_read``. On Unix the native entry
-    rechecks the same policy and the wrapper passes the raw descriptor
+    nor a negative or oversized descriptor reaches ``os.dup`` on Windows, where
+    the CRT would otherwise report ``OSError`` for a value documented as
+    ``ValueError``. An in-range descriptor that is already closed can still
+    reach the native read, so the caller must keep it open. On Unix the native
+    entry rechecks the same policy and the wrapper passes the raw descriptor
     through.
 
     On Windows the wrapper duplicates the CRT reader, sets only that duplicate

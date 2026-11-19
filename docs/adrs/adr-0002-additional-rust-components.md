@@ -469,3 +469,28 @@ no longer need the loop's reader. Descriptor-mode restoration and the
 completion-callback contract are unchanged. See
 [ADR-008](adr-0008-rust-pump-observation-channel.md)'s `2026-09-19` addendum
 for the emitted phases and counters.
+
+## Addendum: adapter validation and the pre-adoption gap (2026-11-19)
+
+Both Python adapters now validate the buffer size and the raw reader descriptor
+before any platform work. The transfer of the pump's writer still happens after
+that validation and after the reader's platform conversion, so the interval
+between a successful Python check and native adoption is not an ownership lock:
+another thread can close and reuse a descriptor number in that interval. The
+wrapper does not recheck an argument after transfer.
+
+The ownership rule is unchanged. A caller must keep each descriptor bound to
+the intended resource until the native entry has either borrowed it (consume)
+or adopted it (pump). A failure before transfer leaves the writer under Python
+ownership, and the adapter closes it; once transferred, the writer belongs to
+the native side, which closes it on every exit path.
+
+On Windows consume the adapter duplicates the validated CRT descriptor, sets
+only that duplicate to binary mode, and closes it after the synchronous native
+call. The caller keeps ownership and its original translation mode. The native
+entry takes a further duplicate for its detached read, so neither duplicate
+substitutes for the other. Negative and oversized values are rejected before
+the CRT sees them, so they cannot surface as `OSError` from `get_osfhandle` or
+`os.dup`. The check does not establish that an in-range descriptor is open:
+`_read` can still terminate the process for a value whose invalid-parameter
+handler rejects it, which is why the caller must keep the descriptor valid.
