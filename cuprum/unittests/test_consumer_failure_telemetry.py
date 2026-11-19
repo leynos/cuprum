@@ -59,12 +59,15 @@ class _RecordSelector(typ.NamedTuple):
     level: int | None = None
 
 
-# The drain's per-reader record: DEBUG, on the wait module's channel.
+# The drain's per-reader record: DEBUG, on the wait module's channel. The level
+# is part of what is pinned, because a record promoted to WARNING would change
+# which operator filters see it.
 _DRAIN_RECORD = _RecordSelector(
     _DRAIN_LOGGER,
     "stream_consumer_failed",
     "a consumer failure that ends a run must produce exactly one "
     "stream_consumer_failed record",
+    logging.DEBUG,
 )
 # The teardown's own record: ERROR, on the timeout channel, and the one the
 # pairing assertions read their fields from.
