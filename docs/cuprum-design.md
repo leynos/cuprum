@@ -2497,7 +2497,10 @@ sequenceDiagram
 - `cuprum/_subprocess_stdin.py` owns writing supplied stdin as a complete
   payload, closing the pipe, early-close diagnostics through the `cuprum.stdin`
   logger, and `_spawn_stdin_writer`, the single entry point either kind of
-  source is started from.
+  source is started from. `_spawn_run_stdin_writer` is the single entry a run's
+  start paths call: it creates the `_StdinWriterLog` its exit race reads and
+  binds the run-scoped `_StdinWriterContext` — the stream encoder, the
+  observation and that log — so neither is assembled per caller.
 - `cuprum/_subprocess_stdin_stream.py` owns the streaming source: pulling an
   async producer's chunks one at a time, writing each and draining it before
   the next pull, and deciding which failures are the producer's rather than the

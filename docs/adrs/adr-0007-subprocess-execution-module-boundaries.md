@@ -1696,3 +1696,38 @@ failure a run with both a failed producer and a failed callback reports — and
 for both entry points. The reader-failure case gates its post-exit arm on the
 exit rendezvous returning, so that arm cannot quietly exercise the rendezvous
 route instead of the collect it is named for.
+
+## Addendum (2026-11-19): the payload writer publishes before its close
+
+The 2026-11-15 addendum made every stdin writer publish its failure to a
+`_StdinWriterLog` before raising. That covered the streaming writer, whose
+finalizer is the caller's own `aclose()`, and it assumed the payload writer's
+unwinding was prompt. It is not: the payload writer closes its pipe inside that
+unwinding, and `_close_stdin` waits — within a bound — for the child-side
+reader to reach EOF. A publication made after that close would therefore be
+invisible to a race asking during it, which is exactly the read the hand-off
+exists to survive.
+
+`_write_stdin` now publishes any failure escaping its write inside a nested
+handler that runs before the `finally` that awaits the close, so the log holds
+the failure from before the close can suspend until after it returns. The arm
+is deliberately blind (`except Exception`) because the failure it must publish
+is whatever escaped, including one raised by cuprum's own `stdin_error`
+diagnostic; `CancelledError` is a `BaseException` and still passes through
+unpublished, since a cancellation is not this writer's failure.
+
+The run-scoped inputs a writer needs are now one record. `_StdinWriterContext`
+binds the stream encoder, the observation and the log once, and
+`_spawn_run_stdin_writer(process, execution)` creates the log, builds the
+context, starts the writer through `_spawn_stdin_writer`, and returns the task
+with the log. Both start paths — `_subprocess_direct_run` and
+`_build_run_task_ownership` in `_subprocess_streams` — call it rather than
+assembling the pair themselves, so the log the race reads is always the log the
+writer publishes to. `_spawn_payload_writer` takes the context rather than a
+widening parameter list, which keeps the dispatcher's arms one line each.
+
+`cuprum/unittests/test_stdin_writer_publication.py` pins the ordering without a
+child: the double's `wait_closed` parks until the case releases it, so the
+assertion is made while the close has demonstrably begun and cannot have
+finished. Moving the publication after the close makes that case fail with an
+empty log.

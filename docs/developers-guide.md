@@ -3590,11 +3590,12 @@ accumulators — without starting anything. The streamed run, the line iterator,
 and the owned handle all come through the pair, so capture, echo, and sink
 selection cannot drift between the three routes. The direct run
 (`_run_subprocess_without_streams`) is the exception: it wires no stream
-consumers and starts its own stdin writer through `_spawn_stdin_writer` and
-`_record_started`, so it calls neither builder. A step that starts a task
-belongs in `_build_run_task_ownership`; a field the run must keep belongs in
-`_build_task_ownership`, where it cannot introduce a failure the reclaim would
-have to cover.
+consumers and starts its own stdin writer through `_spawn_run_stdin_writer`,
+records the task with `_record_started`, and keeps the `stdin_log` that call
+returns for its own exit rendezvous, so it calls neither builder. A step that
+starts a task belongs in `_build_run_task_ownership`; a field the run must keep
+belongs in `_build_task_ownership`, where it cannot introduce a failure the
+reclaim would have to cover.
 
 `_report_reclaim_failure` lives in `cuprum/_reclaim_reporting.py` rather than
 beside the reclaim sequence for two reasons: the sequence is already at the
@@ -8970,8 +8971,13 @@ Keep these boundaries intact. New stdin pipe behaviour belongs in
 `_subprocess_stdin`; the streaming source — pulling a producer's chunks, the
 incremental encoder, and deciding which failures are the producer's — belongs in
 `_subprocess_stdin_stream`, whose dispatcher stays the
-`_subprocess_stdin._spawn_stdin_writer` entry point; building the public
-`StdinSourceError` a classified failure raises belongs in
+`_subprocess_stdin._spawn_stdin_writer` entry point, and whose run-scoped
+inputs are assembled only by `_subprocess_stdin._spawn_run_stdin_writer`, the
+single entry both of a run's start paths call: it creates the `_StdinWriterLog`
+the exit race reads, binds the `_StdinWriterContext` (the stream encoder, the
+observation, and that log) once, starts the writer, and returns the task with
+the log, so a caller cannot pair one run's log with another run's encoder;
+building the public `StdinSourceError` a classified failure raises belongs in
 `_subprocess_stdin_errors`, which stays a leaf so no importer gains a cycle;
 reclaiming a stdin writer that is still running — the bounded window and both
 operations that bound it — belongs in `_subprocess_stdin_reclaim`, whose seam
@@ -9191,14 +9197,17 @@ it unwinds — its producer's finalizer is the caller's code, run inside a windo
 of its own — so a read taken during that unwinding sees a task that has not
 failed. The writer therefore publishes its failure to the `_StdinWriterLog` the
 run creates for it, before the raise and so before that unwinding, and both
-writer reads consult the publication ahead of the task. Without the hand-off, a
-bad `encoding` would report the output decoder's `LookupError` in place of the
-`StdinSourceError` the input contract promises, because an unknown encoding
-fails the writer and both decoders, and the decoders settle first. Consumer
-tasks are never cancelled or gathered here: they belong to the caller, whose
-reconciliation on every failure route settles them, and doing it here as well
-would settle them twice and race that teardown. What the rendezvous does owe
-every caller is provenance.
+writer reads consult the publication ahead of the task. That ordering covers
+the payload writer as well, whose unwinding suspends: its pipe close waits,
+within a bound, for the child-side reader to reach EOF, so a publication made
+after the close would be invisible to a race asking during it. Without the
+hand-off, a bad `encoding` would report the output decoder's `LookupError` in
+place of the `StdinSourceError` the input contract promises, because an unknown
+encoding fails the writer and both decoders, and the decoders settle first.
+Consumer tasks are never cancelled or gathered here: they belong to the caller,
+whose reconciliation on every failure route settles them, and doing it here as
+well would settle them twice and race that teardown. What the rendezvous does
+owe every caller is provenance.
 `_is_early_failure(error, stdin_task, consumers, *, stdin_log=None)` answers,
 by identity, whether a caught error is a monitored task's own failure — or the
 failure its writer published — and that is what lets each caller tell a
@@ -9213,13 +9222,15 @@ streaming path (`_wait_for_streamed_process_exit` in
 `cuprum/_subprocess_stream_run.py`), and line iteration
 (`_wait_for_line_stream_exit` in `cuprum/_line_stream/coordinator.py`). The
 direct run passes no consumers because it wires none, so it races the exit wait
-against the stdin writer exactly as before. Each streaming caller hands over the
-`stdin_log` the run created beside its writer, so both routes read the same
-publication. The exit wait is passed in already constructed so each caller
-resolves `_wait_for_exit_code_within_timeout` from its own module namespace,
-which is where the test suite's monkeypatch seams replace it.
-`_subprocess_wait` re-exports the name, and `_is_early_failure` with it, for
-the same one-import-path reason its deadline names are re-exported.
+against the stdin writer exactly as before; it hands over the `stdin_log` its
+own `_spawn_run_stdin_writer` call returned. The streaming callers receive that
+pair through `_build_run_task_ownership` and pass the log on unchanged, so
+every route reads the same publication and none assembles the pair by hand. The
+exit wait is passed in already constructed so each caller resolves
+`_wait_for_exit_code_within_timeout` from its own module namespace, which is
+where the test suite's monkeypatch seams replace it. `_subprocess_wait`
+re-exports the name, and `_is_early_failure` with it, for the same
+one-import-path reason its deadline names are re-exported.
 
 A route that stops the run before its streams have necessarily drained also
 releases the child's output transports. Settling a reader is not enough: one

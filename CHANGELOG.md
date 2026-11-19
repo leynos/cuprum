@@ -39,10 +39,11 @@
   re-raised unchanged, and a `TimeoutError` inside it is not mistaken for the
   run's deadline; an exit wait that has already settled with its own timeout is
   the run's outcome instead. The child and its owned group are terminated and
-  reaped before the error reaches the caller. A stdin producer that failed as
-  well outranks it: the writer publishes its failure before its own teardown
-  runs, so the caller receives the `StdinSourceError` naming the input contract
-  that broke rather than the failure it caused
+  reaped before the error reaches the caller. A stdin source that failed as
+  well outranks it — a producer's `StdinSourceError` naming the input contract
+  that broke, or whatever escaped a supplied payload's write: the writer
+  publishes its failure before its own teardown runs, so the caller receives
+  that failure rather than the one it caused
   ([#551](https://github.com/leynos/cuprum/issues/551)).
 - **A streamed run that stops before end-of-file releases its output
   descriptors:** the consumer-failure, deadline and cancellation routes now

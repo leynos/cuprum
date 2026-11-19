@@ -31,6 +31,9 @@ from cuprum._pipeline_stream_fds import _extract_stream_fd
 from cuprum._stream_drain_state import _RelayDiagnostics
 from cuprum._subprocess_stream_exit import _wait_for_streamed_process_exit
 from cuprum._subprocess_timeout import _SubprocessTimeoutError
+from cuprum._subprocess_wait import (
+    _wait_for_exit_code_within_timeout as _real_wait_for_exit_code,
+)
 from cuprum._subprocess_wait_types import _RunTaskOwnership
 from cuprum.capture_policy import FileBackedCapture
 from cuprum.unittests._startup_abandon_support import (
@@ -52,6 +55,7 @@ if typ.TYPE_CHECKING:
     import pathlib
 
     from cuprum._stream_drain_finish import _CapturedDrain
+    from cuprum._subprocess_execution import _SubprocessExecution
 
     _SpawnPipeHolder = cabc.Callable[
         [pathlib.Path, float],
@@ -139,6 +143,40 @@ async def _interruptible_reconciliation_consumer(
         await release.wait()
         raise
     return captured("")
+
+
+def _readiness_for_the_exit_wait(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    """Signal when the exit wait has started, and run the real wait behind it.
+
+    Cancelling a run *before* its exit wait starts proves nothing about a
+    cancellation delivered inside that wait, and a fixed sleep only makes that
+    ordering likely. The wait is resolved through
+    ``cuprum._subprocess_stream_exit``'s namespace, so replacing it there is
+    seen by the exit wait under test and by nothing else.
+
+    Returns
+    -------
+    asyncio.Event
+        Set from inside the exit wait, before it can suspend.
+    """
+    started = asyncio.Event()
+
+    async def _signal_then_wait(
+        process: asyncio.subprocess.Process,
+        execution: object,
+    ) -> tuple[int, float]:
+        """Flag that the exit wait is running, then delegate to the real one."""
+        started.set()
+        return await _real_wait_for_exit_code(
+            process,
+            typ.cast("_SubprocessExecution", execution),
+        )
+
+    monkeypatch.setattr(
+        "cuprum._subprocess_stream_exit._wait_for_exit_code_within_timeout",
+        _signal_then_wait,
+    )
+    return started
 
 
 def _ownership(
@@ -315,6 +353,7 @@ def test_a_deadline_expiry_releases_both_output_descriptors(
 def test_a_caller_cancellation_releases_both_output_descriptors(
     tmp_path: pathlib.Path,
     spawn_pipe_holder: _SpawnPipeHolder,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The cancellation route must release the pipes it abandons.
 
@@ -325,6 +364,7 @@ def test_a_caller_cancellation_releases_both_output_descriptors(
 
     async def run_case() -> None:
         """Cancel a real child's run, then read the descriptors it left open."""
+        started = _readiness_for_the_exit_wait(monkeypatch)
         async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
             process,
             descendant_pid,
@@ -338,7 +378,9 @@ def test_a_caller_cancellation_releases_both_output_descriptors(
                     process.pid,
                 ),
             )
-            await asyncio.sleep(_TIMEOUT_S)
+            # Cancel only once the exit wait is provably running: a fixed
+            # sleep would make that ordering probable rather than certain.
+            await asyncio.wait_for(started.wait(), _WATCHDOG_S)
             waiting.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await asyncio.wait_for(waiting, _WATCHDOG_S)
@@ -358,6 +400,7 @@ def test_a_cancellation_during_reconciliation_releases_both_descriptors(
     tmp_path: pathlib.Path,
     spawn_pipe_holder: _SpawnPipeHolder,
     stop_route: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A cancellation interrupting the settling must not skip the release.
 
@@ -374,6 +417,7 @@ def test_a_cancellation_during_reconciliation_releases_both_descriptors(
             _execution(_capture_policy(tmp_path)),
             timeout=_TIMEOUT_S if stop_route == "deadline" else None,
         )
+        started = _readiness_for_the_exit_wait(monkeypatch)
         entered = asyncio.Event()
         release = asyncio.Event()
         async with _pipe_holding_child(tmp_path, spawn_pipe_holder) as (
@@ -394,7 +438,8 @@ def test_a_cancellation_during_reconciliation_releases_both_descriptors(
                     ),
                 )
                 if stop_route == "caller":
-                    await asyncio.sleep(_TIMEOUT_S)
+                    # As above: cancel only once the exit wait is running.
+                    await asyncio.wait_for(started.wait(), _WATCHDOG_S)
                     waiting.cancel()
                 await asyncio.wait_for(entered.wait(), _WATCHDOG_S)
                 # The consumers are parked inside reconciliation, so it cannot

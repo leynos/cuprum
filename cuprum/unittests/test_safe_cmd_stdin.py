@@ -30,6 +30,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from cuprum._pipeline_internals import _StageObservation
+    from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum.sh import CommandResult, SafeCmd
     from tests.helpers.execution import ExecuteFn, _RunKwargs
 
@@ -371,6 +372,7 @@ def test_stdin_input_cancellation_cleans_up_task(
             process: asyncio.subprocess.Process,
             stdin_data: bytes,
             observation: _StageObservation,
+            log: _StdinWriterLog,
         ) -> None:
             """Signal the writer is running, then write stdin as usual.
 
@@ -380,7 +382,7 @@ def test_stdin_input_cancellation_cleans_up_task(
             is genuinely wedged when it is cancelled.
             """
             writer_wedged.set()
-            await _real_write_stdin(process, stdin_data, observation)
+            await _real_write_stdin(process, stdin_data, observation, log)
 
         monkeypatch.setattr(
             "cuprum._subprocess_stdin._write_stdin", _tracked_write_stdin

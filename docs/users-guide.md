@@ -456,11 +456,13 @@ clock. Awaitable observe hooks follow a different contract: each is a delivery
 task whose earliest failure is reported when the run finalizes, so one failing
 hook does not by itself end the run.
 
-If the stdin producer failed as well, the run reports that producer's
-`StdinSourceError` instead, because the producer's failure is what stopped the
-input the child was waiting on. The writer publishes its failure before its own
-teardown runs, so a run that ends during that teardown still reports it rather
-than the callback's error; the callback's error is then not reported.
+If the stdin source failed as well, the run reports that failure instead,
+because it is what stopped the input the child was waiting on: a producer's own
+error, raised as `StdinSourceError` with the original chained, or whatever
+escaped a supplied payload's write. The writer publishes its failure before its
+own teardown runs — for a payload, before the pipe close that can leave that
+teardown waiting — so a run that ends during the teardown still reports it
+rather than the callback's error; the callback's error is then not reported.
 
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
