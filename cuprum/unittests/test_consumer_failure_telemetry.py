@@ -5,8 +5,8 @@ a decision point: Cuprum terminates and reaps a child that was still working.
 The channels that carry it are the ones the teardown already owns — an ERROR
 ``cuprum.timeout`` record, a ``teardown_error`` observe event naming the
 failing stream and class, and the terminal ``settled`` event — and this module
-pins that they fire on this route, once, with the callback's own exception
-still reaching the caller unchanged.
+pins that they fire on this route, once, agreeing field for field, with the
+very exception object the callback raised still reaching the caller.
 
 A signal invented for the decision alone would be a new ``ExecPhase`` member,
 and that literal is matched exhaustively by consumers: adding one makes an
@@ -46,6 +46,8 @@ _CHILD_SCRIPT = (
 # The channel the drain reports a failed reader on, named explicitly because
 # operators filter on it and moving the code must not move the channel.
 _DRAIN_LOGGER = "cuprum._subprocess_wait"
+# The channel the teardown's own ERROR record rides, named for the same reason.
+_TIMEOUT_LOGGER = "cuprum.timeout"
 
 
 class _CallbackError(RuntimeError):
@@ -56,9 +58,14 @@ class _CallbackError(RuntimeError):
         super().__init__("callback failed")
 
 
+# One instance rather than one class: the caller must receive the very object
+# the callback raised, so the case compares identity and not merely its shape.
+_SENTINEL = _CallbackError()
+
+
 def _fail(_event: object) -> None:
     """Raise the callback's failure at the point the hook is invoked."""
-    raise _CallbackError
+    raise _SENTINEL
 
 
 def _only_started_pid(events: cabc.Sequence[ExecEvent], context: str) -> int:
@@ -109,6 +116,45 @@ def _drain_records(
     return reported
 
 
+def _drain_failure_records(
+    records: cabc.Sequence[logging.LogRecord],
+) -> list[logging.LogRecord]:
+    """Return the teardown's own ERROR records, of which there must be one."""
+    reported = [
+        record
+        for record in records
+        if record.name == _TIMEOUT_LOGGER
+        and record.levelno == logging.ERROR
+        and record.getMessage().startswith("subprocess_teardown_drain_failed")
+    ]
+    assert len(reported) == 1, (
+        "a consumer failure that ends a run must produce exactly one "
+        "subprocess_teardown_drain_failed record, got "
+        f"{[r.getMessage() for r in reported]!r}"
+    )
+    return reported
+
+
+def _assert_record_matches_event(
+    record: logging.LogRecord,
+    event: ExecEvent,
+    stream: str,
+    context: str,
+) -> None:
+    """Assert the ERROR record and the observe event agree field for field."""
+    for field, expected in (
+        ("cuprum_operation", event.operation),
+        ("cuprum_pid", event.pid),
+        ("cuprum_error_type", event.error_type),
+        ("cuprum_streams", stream),
+    ):
+        actual = getattr(record, field, None)
+        assert actual == expected, (
+            f"{context} must carry {field}={expected!r} in its teardown record, "
+            f"got {actual!r}"
+        )
+
+
 def _assert_reported(
     events: cabc.Sequence[ExecEvent],
     records: cabc.Sequence[logging.LogRecord],
@@ -129,6 +175,13 @@ def _assert_reported(
     )
     assert stream in (event.note or ""), (
         f"{context} must name the failing stream in the event, got {event.note!r}"
+    )
+
+    failure = _drain_failure_records(records)[0]
+    _assert_record_matches_event(failure, event, stream, context)
+    assert f"streams={stream}" in failure.getMessage(), (
+        f"{context} must name the failing stream in the teardown record, got "
+        f"{failure.getMessage()!r}"
     )
 
     record = _drain_records(records)[0]
@@ -166,9 +219,12 @@ def test_early_consumer_failure_reports_every_channel(
     try:
         with sh.observe(events.append), pytest.raises(_CallbackError) as caught:
             _drive(command, entry_point)
-        assert caught.value.args == ("callback failed",), (
-            f"{context} must re-raise the callback's own exception, got "
+        assert caught.value is _SENTINEL, (
+            f"{context} must re-raise the callback's own exception object, got "
             f"{caught.value!r}"
+        )
+        assert caught.value.args == ("callback failed",), (
+            f"{context} must re-raise the callback's message, got {caught.value!r}"
         )
         _assert_reported(events, caplog.records, stream, context)
     finally:
