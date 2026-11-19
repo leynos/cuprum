@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import enum
 
-from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
+from cuprum._constants import NATIVE_PUMP_BUFFER_SIZE
 
 
 class PumpHopOutcome(enum.StrEnum):
@@ -23,9 +23,6 @@ class PumpHopOutcome(enum.StrEnum):
 
 PUMP_HOP_SPAN_NAME = "cuprum.rust_pump_hop"
 """The tracing span name used for one Rust-pump executor hop."""
-
-NATIVE_PUMP_BUFFER_SIZE = DEFAULT_NATIVE_BUFFER_SIZE
-"""The default byte buffer used by the native Rust pump."""
 
 PUMP_HOP_OUTCOME_ATTRIBUTE = "cuprum.outcome"
 PUMP_HOP_OPERATION_ATTRIBUTE = "cuprum.operation"
