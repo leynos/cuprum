@@ -264,6 +264,7 @@ class _RunRecorder:
     """Stand in for ``subprocess`` so a fixture run starts no Cargo process."""
 
     def __init__(self) -> None:
+        """Start with no recorded environments."""
         self.environments: list[dict[str, str]] = []
 
     def run(
