@@ -211,6 +211,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   scripts/tests/test_install_pypy312.py \
   scripts/tests/test_prepare_cargo_state.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
+  scripts/tests/test_sync_tool_pins.py \
   tests/behaviour/test_[a-h]*.py \
   tests/behaviour/test_[i-r]*.py \
   tests/behaviour/test_[s-z]*.py \
@@ -372,7 +373,7 @@ MDLINT_CHECK_COMMAND = unset FORCE_COLOR; $(LOCAL_TOOL_ENV) xargs -0 -r $(MDLINT
         pylint-integration pypy312 verify-classic-pylint verify-df12-pylint \
         rust-lint lint-clippy lint-whitaker \
         github-actions-lint \
-        lint-windows fmt check-fmt \
+        lint-windows fmt check-fmt check-tool-pins sync-tool-pins \
         markdownlint spelling nixie test test-selection test-python test-rust loom test-act typecheck \
         test-extension test-markdown-format develop makeutil skylos skylos-allow \
         duplication duplication-allow \
@@ -487,6 +488,18 @@ check-fmt: ruff ## Verify formatting
 	$(RUFF) check --select I
 	cd $(RUST_DIR) && $(RUSTFMT_CARGO) fmt --all -- --check
 	$(LOCAL_TOOL_ENV) $(MDTABLEFIX) --check $(MDTABLEFIX_SELECT) $(MDTABLEFIX_EXTENSIONS) $(MDTABLEFIX_RULES)
+
+# The pyproject dev group is the single authoritative pin declaration. These
+# targets derive the Make, workflow and composite-action literals from it so a
+# dependency update cannot leave one behind. uv.lock stays uv-owned: `check`
+# reports the `uv lock` it needs rather than rewriting the lockfile.
+check-tool-pins: ## Verify derived tool pins match pyproject.toml
+	$(UV_ENV) uv run --no-project --python 3.13 --with cyclopts \
+		python -m scripts.sync_tool_pins check
+
+sync-tool-pins: ## Rewrite derived tool pin literals from pyproject.toml
+	$(UV_ENV) uv run --no-project --python 3.13 --with cyclopts \
+		python -m scripts.sync_tool_pins sync
 
 test-markdown-format: ## Validate the Markdown formatting Makefile contract
 	@PYTHONPATH=scripts $(UV_RUN_ENV) uv run --no-project --python 3.13 \
