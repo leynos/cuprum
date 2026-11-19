@@ -31,6 +31,7 @@ class _IndexOnly:
     """Expose an integer through ``__index__`` and count conversions."""
 
     def __init__(self, value: int) -> None:
+        """Wrap ``value`` with a fresh conversion count."""
         self.value = value
         self.calls = 0
 

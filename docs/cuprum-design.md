@@ -4033,9 +4033,10 @@ is limited to the extension shim's Windows setup and cleanup boundary.
 Both Python entry points in `cuprum/_streams_rs.py` apply one order before any
 native call: load the extension, normalize and validate `buffer_size`,
 normalize and validate the raw reader descriptor, apply the platform step, then
-invoke the export. `_validate_buffer_size` and `_validate_raw_reader` implement
-the shared policy once, and `_prepare_native_reader` composes the raw check
-with the pump's platform conversion.
+invoke the export. `_validate_buffer_size` and `_validate_raw_reader` live in
+`cuprum/_stream_argument_policy.py` and implement the shared policy once;
+`_prepare_native_reader` composes the raw check with the pump's platform
+conversion.
 
 The raw reader policy is the one the native boundary already enforces:
 `operator.index`, then the PyO3 `i64` extraction range, then non-negativity,

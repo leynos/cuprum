@@ -1,7 +1,8 @@
 """Property tests for the shared stream argument helpers.
 
-``_validate_buffer_size`` and ``_validate_raw_reader`` are the single policy
-behind both adapters. These properties exercise them directly over unbounded
+``_validate_buffer_size`` and ``_validate_raw_reader`` in
+``cuprum/_stream_argument_policy.py`` are the single policy behind both
+adapters. These properties exercise them directly over unbounded
 integers and explicit boundaries, so a disagreement is reported by the smallest
 value that produces it rather than through a native call. The wrapper-level
 tables in ``test_streams_rs_adapter_contract.py`` pin which failure wins when
@@ -33,6 +34,7 @@ class _IndexOnly:
     """Expose an integer through ``__index__`` and nothing else."""
 
     def __init__(self, value: int) -> None:
+        """Wrap ``value`` for the index protocol."""
         self.value = value
 
     def __index__(self) -> int:

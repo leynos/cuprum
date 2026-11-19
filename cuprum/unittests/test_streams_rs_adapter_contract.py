@@ -56,6 +56,7 @@ class _IndexLike:
     """Expose an integer only through ``__index__`` and count conversions."""
 
     def __init__(self, value: int) -> None:
+        """Wrap ``value`` with a fresh conversion count."""
         self.value = value
         self.calls = 0
 
@@ -71,6 +72,31 @@ class _Wrapper(typ.Protocol):
     def __call__(self, reader: int, buffer_size: int) -> object:
         """Invoke the wrapper and return its result."""
         ...
+
+
+class _BufferCase(typ.NamedTuple):
+    """One buffer-size table row: the value, its class, and its message."""
+
+    buffer_size: int
+    error: type[Exception]
+    message: str
+
+
+class _ReaderCase(typ.NamedTuple):
+    """One reader table row: the value, its class, and its message."""
+
+    reader: int
+    error: type[Exception]
+    message: str
+
+
+class _ArgumentCase(typ.NamedTuple):
+    """One competing-failure row; ``message`` is optional for ``TypeError``."""
+
+    reader: int
+    buffer_size: int
+    error: type[Exception]
+    message: str | None
 
 
 def _pump(reader: int, buffer_size: int) -> object:
@@ -102,6 +128,11 @@ def fixture_native(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     descriptors. Without the ``os`` double, the pump's pre-native cleanup would
     call the real ``os.close`` on a number that names no descriptor the test
     owns — and could close pytest's own standard streams.
+
+    Returns
+    -------
+    SimpleNamespace
+        The native double installed for the test.
     """
     backend = SimpleNamespace(
         rust_pump_stream=mock.Mock(return_value=7),
@@ -123,30 +154,31 @@ def _assert_message(excinfo: pytest.ExceptionInfo[BaseException], message: str) 
 
 @pytest.mark.parametrize("wrapper", _WRAPPERS)
 @pytest.mark.parametrize(
-    ("buffer_size", "error", "message"),
+    "case",
     [
-        pytest.param(0, ValueError, _BUFFER_MESSAGES["zero"], id="zero"),
-        pytest.param(-1, ValueError, _BUFFER_MESSAGES["negative"], id="negative"),
+        pytest.param(_BufferCase(0, ValueError, _BUFFER_MESSAGES["zero"]), id="zero"),
         pytest.param(
-            _MAX_BUFFER_SIZE + 1,
-            ValueError,
-            _BUFFER_MESSAGES["cap"],
+            _BufferCase(-1, ValueError, _BUFFER_MESSAGES["negative"]),
+            id="negative",
+        ),
+        pytest.param(
+            _BufferCase(_MAX_BUFFER_SIZE + 1, ValueError, _BUFFER_MESSAGES["cap"]),
             id="above-cap",
         ),
         pytest.param(
-            _I64_MAX + 1, OverflowError, _BUFFER_MESSAGES["i64"], id="i64-high"
+            _BufferCase(_I64_MAX + 1, OverflowError, _BUFFER_MESSAGES["i64"]),
+            id="i64-high",
         ),
         pytest.param(
-            _I64_MIN - 1, OverflowError, _BUFFER_MESSAGES["i64"], id="i64-low"
+            _BufferCase(_I64_MIN - 1, OverflowError, _BUFFER_MESSAGES["i64"]),
+            id="i64-low",
         ),
     ],
 )
 def test_invalid_buffer_is_reported_before_any_descriptor_work(
     native: SimpleNamespace,
     wrapper: _Wrapper,
-    buffer_size: int,
-    error: type[Exception],
-    message: str,
+    case: _BufferCase,
 ) -> None:
     """The buffer policy is identical on both entry points.
 
@@ -154,44 +186,50 @@ def test_invalid_buffer_is_reported_before_any_descriptor_work(
     can produce the reported failure. The native call must not run, and the
     pump must close the writer Python still owns rather than transfer it.
     """
-    with pytest.raises(error) as excinfo:
-        wrapper(5, buffer_size)
+    with pytest.raises(case.error) as excinfo:
+        wrapper(5, case.buffer_size)
 
-    _assert_message(excinfo, message)
+    _assert_message(excinfo, case.message)
     native.rust_pump_stream.assert_not_called()
     native.rust_consume_stream.assert_not_called()
 
 
 @pytest.mark.parametrize("wrapper", _WRAPPERS)
 @pytest.mark.parametrize(
-    ("reader", "error", "message"),
+    "case",
     [
-        pytest.param(-1, ValueError, _READER_MESSAGES["negative"], id="negative"),
         pytest.param(
-            _I32_MAX + 1, ValueError, _READER_MESSAGES["wide"], id="above-i32"
+            _ReaderCase(-1, ValueError, _READER_MESSAGES["negative"]),
+            id="negative",
         ),
-        pytest.param((1 << 63), OverflowError, _READER_MESSAGES["i64"], id="i64-high"),
         pytest.param(
-            -((1 << 63) + 1), OverflowError, _READER_MESSAGES["i64"], id="i64-low"
+            _ReaderCase(_I32_MAX + 1, ValueError, _READER_MESSAGES["wide"]),
+            id="above-i32",
+        ),
+        pytest.param(
+            _ReaderCase(1 << 63, OverflowError, _READER_MESSAGES["i64"]),
+            id="i64-high",
+        ),
+        pytest.param(
+            _ReaderCase(-((1 << 63) + 1), OverflowError, _READER_MESSAGES["i64"]),
+            id="i64-low",
         ),
     ],
 )
 def test_invalid_reader_is_reported_with_the_shared_policy(
     native: SimpleNamespace,
     wrapper: _Wrapper,
-    reader: int,
-    error: type[Exception],
-    message: str,
+    case: _ReaderCase,
 ) -> None:
     """Reader range classification matches across pump and consume.
 
     A valid buffer keeps the earlier check out of the way, so the wrapper's own
     descriptor policy is the only source of the failure.
     """
-    with pytest.raises(error) as excinfo:
-        wrapper(reader, 1024)
+    with pytest.raises(case.error) as excinfo:
+        wrapper(case.reader, 1024)
 
-    _assert_message(excinfo, message)
+    _assert_message(excinfo, case.message)
     native.rust_pump_stream.assert_not_called()
     native.rust_consume_stream.assert_not_called()
 
@@ -387,6 +425,7 @@ def test_windows_consume_duplicates_the_validated_reader(
 
     @contextlib.contextmanager
     def duplicate(reader_fd: int) -> cabc.Iterator[int]:
+        """Yield a fake duplicate and record when it is closed."""
         duplicated.append(reader_fd)
         try:
             yield 99
@@ -404,27 +443,28 @@ def test_windows_consume_duplicates_the_validated_reader(
 
 
 @pytest.mark.parametrize(
-    ("reader", "buffer_size", "error", "message"),
+    "case",
     [
         pytest.param(
-            -1,
-            1024,
-            ValueError,
-            "file descriptor must be non-negative",
+            _ArgumentCase(
+                -1,
+                1024,
+                ValueError,
+                "file descriptor must be non-negative",
+            ),
             id="reader-negative",
         ),
         pytest.param(
-            5,
-            0,
-            ValueError,
-            "buffer_size must be greater than zero",
+            _ArgumentCase(
+                5,
+                0,
+                ValueError,
+                "buffer_size must be greater than zero",
+            ),
             id="buffer-zero",
         ),
         pytest.param(
-            typ.cast("int", "not-an-integer"),
-            1024,
-            TypeError,
-            None,
+            _ArgumentCase(typ.cast("int", "not-an-integer"), 1024, TypeError, None),
             id="reader-type",
         ),
     ],
@@ -432,10 +472,7 @@ def test_windows_consume_duplicates_the_validated_reader(
 def test_windows_consume_never_duplicates_an_invalid_argument(
     native: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
-    reader: int,
-    buffer_size: int,
-    error: type[Exception],
-    message: str | None,
+    case: _ArgumentCase,
 ) -> None:
     """CRT duplication is downstream of both Python-side checks.
 
@@ -447,11 +484,11 @@ def test_windows_consume_never_duplicates_an_invalid_argument(
     monkeypatch.setattr(_streams_rs, "os", _platform_os("nt"))
     monkeypatch.setattr(_streams_rs, "_duplicate_binary_reader", duplicate)
 
-    with pytest.raises(error) as excinfo:
-        _streams_rs.rust_consume_stream(reader, buffer_size=buffer_size)
+    with pytest.raises(case.error) as excinfo:
+        _streams_rs.rust_consume_stream(case.reader, buffer_size=case.buffer_size)
 
-    if message is not None:
-        _assert_message(excinfo, message)
+    if case.message is not None:
+        _assert_message(excinfo, case.message)
     duplicate.assert_not_called()
     native.rust_consume_stream.assert_not_called()
 
@@ -465,6 +502,7 @@ def test_windows_consume_closes_the_duplicate_when_native_raises(
 
     @contextlib.contextmanager
     def duplicate(_reader_fd: int) -> cabc.Iterator[int]:
+        """Yield a fake duplicate that records its own close."""
         try:
             yield 99
         finally:
@@ -490,6 +528,7 @@ def test_windows_consume_does_not_convert_the_borrowed_reader(
 
     @contextlib.contextmanager
     def duplicate(reader_fd: int) -> cabc.Iterator[int]:
+        """Yield an offset duplicate so the native call is distinguishable."""
         yield reader_fd + 100
 
     monkeypatch.setattr(_streams_rs, "os", _platform_os("nt"))

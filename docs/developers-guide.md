@@ -6384,12 +6384,13 @@ still blocked in native I/O cannot keep the interpreter from shutting down.
 ### Python adapter argument contract
 
 `rust_pump_stream` and `rust_consume_stream` in `cuprum/_streams_rs.py` share
-one argument policy. Both load the native module, validate `buffer_size`,
-validate the raw reader, apply the platform step, and only then call the native
-entry point. `_prepare_rust_pump_call` performs that sequence for the pump
-while Python still owns the writer. The consume wrapper performs the same
-sequence inline and, on Windows, duplicates the already-validated reader before
-the native call.
+one argument policy. The checks themselves live in
+`cuprum/_stream_argument_policy.py`, so neither wrapper can drift from the
+other. Both load the native module, validate `buffer_size`, validate the raw
+reader, apply the platform step, and only then call the native entry point.
+`_prepare_rust_pump_call` performs that sequence for the pump while Python
+still owns the writer. The consume wrapper performs the same sequence inline
+and, on Windows, duplicates the already-validated reader before the native call.
 
 Table 1: shared stream adapter argument checks
 

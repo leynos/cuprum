@@ -239,17 +239,17 @@ historical record.
   rather than close a possibly released or reused descriptor.
 - `cuprum/_streams_rs.py` applies one order on both entry points: load the
   native module, validate `buffer_size`, validate the raw reader descriptor,
-  apply the platform step, then call native. The shared helpers normalize with
-  `operator.index` and then check the `i64` extraction range, non-negativity,
-  and the signed 32-bit descriptor range, matching the native boundary. The
-  pump converts the reader before it transfers the writer, and Windows consume
-  does not call `os.dup` or `msvcrt.setmode` until both checks pass. The
-  Windows pump duplicates a native handle before closing its transferred CRT
-  writer; Windows consume duplicates the borrowed CRT reader, sets only that
-  duplicate to binary mode, and closes it after the detached call. A Python
-  integer's range is not proof of validity, lifetime, or exclusivity. The
-  caller must keep the reader open and prevent descriptor reuse until the
-  native entry has borrowed or adopted it.
+  apply the platform step, then call native. The shared helpers in
+  `cuprum/_stream_argument_policy.py` normalize with `operator.index` and then
+  check the `i64` extraction range, non-negativity, and the signed 32-bit
+  descriptor range, matching the native boundary. The pump converts the reader
+  before it transfers the writer, and Windows consume does not call `os.dup` or
+  `msvcrt.setmode` until both checks pass. The Windows pump duplicates a native
+  handle before closing its transferred CRT writer; Windows consume duplicates
+  the borrowed CRT reader, sets only that duplicate to binary mode, and closes
+  it after the detached call. A Python integer's range is not proof of
+  validity, lifetime, or exclusivity. The caller must keep the reader open and
+  prevent descriptor reuse until the native entry has borrowed or adopted it.
 
   `_prepare_native_reader` checks the platform ABI representation before writer
   ownership is transferred. Round 7 first recorded a red focused regression run

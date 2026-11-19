@@ -29,6 +29,12 @@ import typing as typ
 
 from cuprum import _pipeline_stream_cleanup_observation as _pump_obs
 from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
+from cuprum._stream_argument_policy import (
+    _I64_MAX,
+    _I64_MIN,
+    _validate_buffer_size,
+    _validate_raw_reader,
+)
 from cuprum._streams_windows import (
     _convert_fd_for_platform,
     _duplicate_binary_reader,
@@ -44,11 +50,6 @@ from cuprum.pump_span_events import NATIVE_PUMP_BUFFER_SIZE
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-
-_I64_MIN = -(1 << 63)
-_I64_MAX = (1 << 63) - 1
-_I32_MAX = (1 << 31) - 1
-_MAX_BUFFER_SIZE = 1 << 30
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,87 +103,6 @@ def _close_writer_after_pre_native_failure(writer_fd: int) -> None:
         os.close(writer_fd)
 
 
-def _validate_buffer_size(buffer_size: int) -> int:
-    """Normalize a buffer size to ``int`` and apply the native size policy.
-
-    The order mirrors the native validator: ``operator.index`` first, then the
-    ``i64`` extraction range, then the positive and 1 GiB limits. Both wrappers
-    call this before touching a descriptor so an invalid size is always the
-    first reported failure.
-
-    Parameters
-    ----------
-    buffer_size : int
-        Candidate size; any object implementing ``__index__`` is accepted.
-
-    Returns
-    -------
-    int
-        The size as a plain ``int``, already known to be within policy.
-
-    Raises
-    ------
-    TypeError
-        If ``buffer_size`` does not implement ``__index__``.
-    OverflowError
-        If the value does not fit PyO3's ``i64`` extraction range.
-    ValueError
-        If the value is not positive or exceeds the 1 GiB cap.
-    """
-    size = operator.index(buffer_size)
-    if not _I64_MIN <= size <= _I64_MAX:
-        msg = "Python int too large to convert to C long"
-        raise OverflowError(msg)
-    if size <= 0:
-        msg = "buffer_size must be greater than zero"
-        raise ValueError(msg)
-    if size > _MAX_BUFFER_SIZE:
-        msg = "buffer_size exceeds the maximum permitted size"
-        raise ValueError(msg)
-    return size
-
-
-def _validate_raw_reader(reader_fd: int) -> int:
-    """Normalize a raw descriptor and apply the shared range policy.
-
-    The order matches the native boundary: ``i64`` extraction range, then the
-    sign, then the signed 32-bit descriptor range. The check runs before any
-    platform conversion so an unusable value never reaches ``msvcrt`` and never
-    causes a Windows ``OSError`` where the documented class is ``ValueError``.
-
-    Parameters
-    ----------
-    reader_fd : int
-        Candidate descriptor; any object implementing ``__index__`` is
-        accepted.
-
-    Returns
-    -------
-    int
-        The descriptor as a plain ``int``, still in its raw platform form.
-
-    Raises
-    ------
-    TypeError
-        If ``reader_fd`` does not implement ``__index__``.
-    OverflowError
-        If the value does not fit PyO3's ``i64`` extraction range.
-    ValueError
-        If the descriptor is negative or outside the signed 32-bit range.
-    """
-    reader = operator.index(reader_fd)
-    if not _I64_MIN <= reader <= _I64_MAX:
-        msg = "Python int too large to convert to C long"
-        raise OverflowError(msg)
-    if reader < 0:
-        msg = "file descriptor must be non-negative"
-        raise ValueError(msg)
-    if reader > _I32_MAX:
-        msg = "file descriptor out of range"
-        raise ValueError(msg)
-    return reader
-
-
 def _prepare_native_reader(reader_fd: int) -> int:
     """Validate a raw reader, then convert it for the native platform.
 
@@ -190,6 +110,21 @@ def _prepare_native_reader(reader_fd: int) -> int:
     Windows handle may be pointer-sized rather than a 32-bit descriptor, so the
     raw ``i32`` check belongs to :func:`_validate_raw_reader` and only the
     ``i64`` representation is rechecked here.
+
+    Parameters
+    ----------
+    reader_fd : int
+        Raw reader descriptor to validate and convert.
+
+    Returns
+    -------
+    int
+        The platform value the native entry point receives.
+
+    Raises
+    ------
+    OverflowError
+        If the converted value does not fit PyO3's ``i64`` range.
     """
     raw_reader = _validate_raw_reader(reader_fd)
     reader = operator.index(_convert_fd_for_platform(raw_reader))
