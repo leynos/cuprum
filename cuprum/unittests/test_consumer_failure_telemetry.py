@@ -50,6 +50,33 @@ _DRAIN_LOGGER = "cuprum._subprocess_wait"
 _TIMEOUT_LOGGER = "cuprum.timeout"
 
 
+class _RecordSelector(typ.NamedTuple):
+    """How one diagnostic record is found: its channel, message and level."""
+
+    logger: str
+    prefix: str
+    expectation: str
+    level: int | None = None
+
+
+# The drain's per-reader record: DEBUG, on the wait module's channel.
+_DRAIN_RECORD = _RecordSelector(
+    _DRAIN_LOGGER,
+    "stream_consumer_failed",
+    "a consumer failure that ends a run must produce exactly one "
+    "stream_consumer_failed record",
+)
+# The teardown's own record: ERROR, on the timeout channel, and the one the
+# pairing assertions read their fields from.
+_TEARDOWN_RECORD = _RecordSelector(
+    _TIMEOUT_LOGGER,
+    "subprocess_teardown_drain_failed",
+    "a consumer failure that ends a run must produce exactly one "
+    "subprocess_teardown_drain_failed record",
+    logging.ERROR,
+)
+
+
 class _CallbackError(RuntimeError):
     """The exception the failing callback raises, carrying a fixed message."""
 
@@ -99,40 +126,22 @@ def _teardown_events(events: cabc.Sequence[ExecEvent]) -> list[ExecEvent]:
     return reported
 
 
-def _drain_records(
+def _only_record(
     records: cabc.Sequence[logging.LogRecord],
-) -> list[logging.LogRecord]:
-    """Return the drain's own failure records, of which there must be one."""
+    selector: _RecordSelector,
+) -> logging.LogRecord:
+    """Return the one record the selector describes, insisting there is one."""
     reported = [
         record
         for record in records
-        if record.name == _DRAIN_LOGGER
-        and record.getMessage().startswith("stream_consumer_failed")
+        if record.name == selector.logger
+        and record.getMessage().startswith(selector.prefix)
+        and (selector.level is None or record.levelno == selector.level)
     ]
     assert len(reported) == 1, (
-        "a consumer failure that ends a run must produce exactly one "
-        f"stream_consumer_failed record, got {[r.getMessage() for r in reported]!r}"
+        f"{selector.expectation}, got {[record.getMessage() for record in reported]!r}"
     )
-    return reported
-
-
-def _drain_failure_records(
-    records: cabc.Sequence[logging.LogRecord],
-) -> list[logging.LogRecord]:
-    """Return the teardown's own ERROR records, of which there must be one."""
-    reported = [
-        record
-        for record in records
-        if record.name == _TIMEOUT_LOGGER
-        and record.levelno == logging.ERROR
-        and record.getMessage().startswith("subprocess_teardown_drain_failed")
-    ]
-    assert len(reported) == 1, (
-        "a consumer failure that ends a run must produce exactly one "
-        "subprocess_teardown_drain_failed record, got "
-        f"{[r.getMessage() for r in reported]!r}"
-    )
-    return reported
+    return reported[0]
 
 
 def _assert_record_matches_event(
@@ -177,14 +186,14 @@ def _assert_reported(
         f"{context} must name the failing stream in the event, got {event.note!r}"
     )
 
-    failure = _drain_failure_records(records)[0]
+    failure = _only_record(records, _TEARDOWN_RECORD)
     _assert_record_matches_event(failure, event, stream, context)
     assert f"streams={stream}" in failure.getMessage(), (
         f"{context} must name the failing stream in the teardown record, got "
         f"{failure.getMessage()!r}"
     )
 
-    record = _drain_records(records)[0]
+    record = _only_record(records, _DRAIN_RECORD)
     assert f"stream={stream}" in record.getMessage(), (
         f"{context} must name the failing stream in the drain record, got "
         f"{record.getMessage()!r}"
