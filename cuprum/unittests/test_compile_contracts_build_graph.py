@@ -54,6 +54,36 @@ NESTED_BUILD_PATTERNS: typ.Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r'var(?:_os)?\(\s*"CARGO"\s*\)'),
 )
 
+#: The nextest test target that used to carry the `trybuild` UI cases.
+RETIRED_TEST_TARGET: typ.Final[str] = "compile_tests"
+
+
+def _declared_test_targets(manifest: dict[str, object]) -> set[str]:
+    """Return the names of the ``[[test]]`` targets a manifest declares."""
+    targets = manifest.get("test", [])
+    if not isinstance(targets, list):
+        return set()
+    return {
+        str(target["name"])
+        for target in targets
+        if isinstance(target, dict) and isinstance(target.get("name"), str)
+    }
+
+
+def _nextest_override_filters(config: dict[str, object]) -> list[str]:
+    """Return the filter of every override in the default nextest profile."""
+    profile = config.get("profile", {})
+    default = profile.get("default", {}) if isinstance(profile, dict) else {}
+    overrides = default.get("overrides", []) if isinstance(default, dict) else []
+    if not isinstance(overrides, list):
+        return []
+    return [
+        str(override["filter"])
+        for override in overrides
+        if isinstance(override, dict) and "filter" in override
+    ]
+
+
 #: Every `compile_fail` doctest in the workspace, counted per source file.
 #:
 #: Pinned so a deleted contract fails here rather than vanishing silently:
@@ -142,6 +172,88 @@ def test_no_rust_source_starts_a_nested_build() -> None:
         f"these sources start a nested Cargo or compiler: {offenders}. Its "
         f"queue wait on the shared compiler pool is charged to one test's "
         f"allowance, which no timeout can bound (ADR-027)"
+    )
+
+
+def test_no_compile_tests_target_remains() -> None:
+    """The retired UI harness must not return as a timed test target."""
+    offenders = [
+        _relative(manifest)
+        for manifest in _workspace_files("Cargo.toml")
+        if RETIRED_TEST_TARGET
+        in _declared_test_targets(tomllib.loads(manifest.read_text()))
+    ]
+    offenders.extend(
+        _relative(path) for path in _workspace_files(f"{RETIRED_TEST_TARGET}.rs")
+    )
+    assert not offenders, (
+        f"{offenders} restore the retired `{RETIRED_TEST_TARGET}` target. It ran "
+        f"a `trybuild` scratch build inside one test's allowance, which no "
+        f"timeout can bound (ADR-027); keep the contract in the build graph"
+    )
+
+
+def test_no_nextest_override_names_the_retired_binary() -> None:
+    """A per-binary allowance must not return in place of the retired shape."""
+    config = tomllib.loads((_rust_root() / ".config" / "nextest.toml").read_text())
+    matching = [
+        override
+        for override in _nextest_override_filters(config)
+        if RETIRED_TEST_TARGET in override
+    ]
+    assert not matching, (
+        f"the nextest profile overrides {matching}, restoring an allowance for "
+        f"a build that no longer exists; the retired tier was raised four "
+        f"times without changing the shape (ADR-027)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    [
+        pytest.param(
+            '[[test]]\nname = "compile_tests"\n',
+            {"compile_tests"},
+            id="declared",
+        ),
+        pytest.param('[lib]\nname = "compile_tests"\n', set(), id="library"),
+        pytest.param("test = 1\n", set(), id="malformed"),
+        pytest.param("", set(), id="absent"),
+    ],
+)
+def test_the_test_target_scanner_reads_binary_targets(
+    *, manifest: str, expected: set[str]
+) -> None:
+    """Only ``[[test]]`` targets count, not a library of the same name."""
+    assert _declared_test_targets(tomllib.loads(manifest)) == expected, (
+        "the scanner must read [[test]] targets and ignore unrelated tables"
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="named",
+        ),
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(other)"\n',
+            ["binary(other)"],
+            id="other",
+        ),
+        pytest.param("", [], id="absent"),
+        pytest.param("profile = 1\n", [], id="malformed"),
+    ],
+)
+def test_the_override_scanner_reads_every_filter(
+    *, config: str, expected: list[str]
+) -> None:
+    """An override's filter is read wherever it appears in the profile."""
+    assert _nextest_override_filters(tomllib.loads(config)) == expected, (
+        "every nextest override filter must be read, or a per-binary "
+        "allowance could hide in the one table the scanner skipped"
     )
 
 
