@@ -103,10 +103,10 @@ mod windows_crt_consume;
 mod windows_tests;
 
 pub use consume::consume_stream;
-// Only the unix-gated test modules drive the platform entry point directly;
-// leaving it re-exported on Windows would be an unused import under
-// `-D warnings`.
-#[cfg(all(test, unix))]
+// Only the unix-gated test modules drive the platform entry point directly,
+// and their imports of it are compiled out under Miri; either way the
+// re-export would be an unused import under `-D warnings`.
+#[cfg(all(test, unix, not(miri)))]
 pub(crate) use consume::consume_stream_files;
 // The Windows CRT adapter and the crate's tests are the only callers; an
 // unconditional re-export would be an unused import on unix under
