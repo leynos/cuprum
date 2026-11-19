@@ -153,6 +153,14 @@ run is consistent with that share: when the 1800 s allowance expired on
 graph composition because the gate log retained no per-crate timings; it does
 not claim a split in seconds.
 
+A green `make test` on `2ad7f393b` shows the result. Nextest started 196 tests
+and ran them in 7.654 s; the slowest was 2.433 s
+(`generated_payloads_round_trip_and_reach_eof`) and the next 2.272 s, with
+every other test under 0.3 s. The recipe recorded
+`rust_test_workload: 454.1 s`, which spans the test-profile build, the nextest
+run, and the doctests, so the dominant cost is now compilation in the ordinary
+build rather than a timer charged to one test.
+
 After ADR-027 the binaries and the `binary(compile_tests)` override are gone.
 No nextest test target named `compile_tests` remains, and the compile-fail
 contracts run as doctests against the workspace build.
