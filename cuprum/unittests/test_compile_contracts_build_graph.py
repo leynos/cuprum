@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import tomllib
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -35,9 +36,6 @@ from cuprum.unittests._rust_doctest_support import (
     compile_fail_defects,
 )
 from tests.helpers.docs import repo_root
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 #: The dependency tables a manifest can declare, at the top level, under
 #: ``[workspace]``, or under ``[target.'cfg(...)']``.
@@ -71,17 +69,40 @@ def _declared_test_targets(manifest: dict[str, object]) -> set[str]:
 
 
 def _nextest_override_filters(config: dict[str, object]) -> list[str]:
-    """Return the filter of every override in the default nextest profile."""
-    profile = config.get("profile", {})
-    default = profile.get("default", {}) if isinstance(profile, dict) else {}
-    overrides = default.get("overrides", []) if isinstance(default, dict) else []
-    if not isinstance(overrides, list):
+    """Return the filter of every override in every nextest profile."""
+    # A named profile such as [profile.ci] can repeat the default's override,
+    # so scanning only the default would leave a per-binary allowance
+    # reachable under another profile name.
+    profiles = config.get("profile", {})
+    if not isinstance(profiles, dict):
         return []
-    return [
-        str(override["filter"])
-        for override in overrides
-        if isinstance(override, dict) and "filter" in override
-    ]
+    filters: list[str] = []
+    for profile in profiles.values():
+        if not isinstance(profile, dict):
+            continue
+        overrides = profile.get("overrides", [])
+        if not isinstance(overrides, list):
+            continue
+        filters.extend(
+            str(override["filter"])
+            for override in overrides
+            if isinstance(override, dict) and "filter" in override
+        )
+    return filters
+
+
+def _is_integration_test_entry_point(path: Path) -> bool:
+    """Return whether ``path`` is a Cargo integration-test entry point."""
+    # Cargo infers a compile_tests target from either tests/compile_tests.rs or
+    # tests/compile_tests/main.rs at the default autotests setting, so both must
+    # be refused even though neither declares a [[test]] table.
+    if path.parent.name == "tests":
+        return path.name == f"{RETIRED_TEST_TARGET}.rs"
+    return (
+        path.name == "main.rs"
+        and path.parent.name == RETIRED_TEST_TARGET
+        and path.parent.parent.name == "tests"
+    )
 
 
 #: Every `compile_fail` doctest in the workspace, counted per source file.
@@ -184,12 +205,35 @@ def test_no_compile_tests_target_remains() -> None:
         in _declared_test_targets(tomllib.loads(manifest.read_text()))
     ]
     offenders.extend(
-        _relative(path) for path in _workspace_files(f"{RETIRED_TEST_TARGET}.rs")
+        _relative(path)
+        for path in _workspace_files("*.rs")
+        if _is_integration_test_entry_point(path)
     )
     assert not offenders, (
         f"{offenders} restore the retired `{RETIRED_TEST_TARGET}` target. It ran "
         f"a `trybuild` scratch build inside one test's allowance, which no "
         f"timeout can bound (ADR-027); keep the contract in the build graph"
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative", "expected"),
+    [
+        pytest.param("tests/compile_tests.rs", True, id="single-file"),
+        pytest.param("tests/compile_tests/main.rs", True, id="directory"),
+        pytest.param("tests/compile_tests/other.rs", False, id="directory-sibling"),
+        pytest.param("tests/other/main.rs", False, id="other-directory"),
+        pytest.param("src/compile_tests.rs", False, id="source-file"),
+        pytest.param("compile_tests.rs", False, id="repository-root"),
+    ],
+)
+def test_the_entry_point_scanner_reads_both_target_shapes(
+    *, relative: str, expected: bool
+) -> None:
+    """Cargo infers a target from a file or a directory with a ``main.rs``."""
+    assert _is_integration_test_entry_point(Path(relative)) is expected, (
+        "the scanner must reject both Cargo integration-test entry points, not "
+        "only the single-file form that a [[test]] table also names"
     )
 
 
@@ -243,6 +287,11 @@ def test_the_test_target_scanner_reads_binary_targets(
             ["binary(other)"],
             id="other",
         ),
+        pytest.param(
+            '[[profile.ci.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="named-profile",
+        ),
         pytest.param("", [], id="absent"),
         pytest.param("profile = 1\n", [], id="malformed"),
     ],
@@ -250,7 +299,7 @@ def test_the_test_target_scanner_reads_binary_targets(
 def test_the_override_scanner_reads_every_filter(
     *, config: str, expected: list[str]
 ) -> None:
-    """An override's filter is read wherever it appears in the profile."""
+    """An override's filter is read in the default and every named profile."""
     assert _nextest_override_filters(tomllib.loads(config)) == expected, (
         "every nextest override filter must be read, or a per-binary "
         "allowance could hide in the one table the scanner skipped"
