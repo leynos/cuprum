@@ -8201,8 +8201,16 @@ selection through `pytest_add_cli_args_test_selection`:
   which under `uv run --with` is an overlay whose package paths `ty` cannot
   read.
 
-Both modules keep running in every `make test`, pull-request gate, and direct
-`uv run pytest` invocation; only the mutation harness omits them.
+The three `act` scenarios under `tests/integration/` are omitted for a second
+reason: they need a container runtime, and `make test` already runs them only
+from `test-act`. A mutation selection that collected them would turn on whether
+the host has `act` installed, and on scenario expectations that exercise
+workflow files rather than `cuprum` source. The recorded-output parser beside
+them, `tests/integration/test_act_stream_parsing.py`, is plain string handling
+and stays selected.
+
+The omitted modules keep running in every `make test`, pull-request gate, and
+direct `uv run pytest` invocation; only the mutation harness omits them.
 `test_mutmut_config_contract.py` pins the exclusion list, so widening it fails
 the contract, and it asserts each ignored module still exists under a selected
 suite root so the exclusion cannot hide a deletion. Do not add a behavioural

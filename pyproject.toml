@@ -402,11 +402,21 @@ source_paths = ["cuprum/"]
 # mutmut installed; neither constructed environment does. They keep running in
 # every `make test` and pull-request gate; only the mutation selection omits
 # them, and test_mutmut_config_contract.py pins exactly which modules.
+#
+# The three act scenarios also stay out. `make test` already runs them only
+# from `test-act`, because they need a container runtime, so a mutation run
+# that collected them would behave differently on a host that has `act` from
+# one that does not: the baseline would depend on the host's scenario state
+# rather than on the source under mutation. The recorded-output parser beside
+# them is ordinary string handling and stays in the selection.
 pytest_add_cli_args_test_selection = [
     "tests/",
     "cuprum/unittests/",
     "--ignore=cuprum/unittests/test_nextest_route_floor.py",
     "--ignore=cuprum/unittests/test_sh_typing_contract.py",
+    "--ignore=tests/integration/test_workflow_integration.py",
+    "--ignore=tests/integration/test_experimental_leg_integration.py",
+    "--ignore=tests/integration/test_extension_typecheck_integration.py",
 ]
 # mutmut reruns the suite in one process, so Hypothesis sees each class-based
 # property test from more than one executor and raises its differing-executors

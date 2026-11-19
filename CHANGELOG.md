@@ -101,6 +101,16 @@
   subprocess inherits `MUTANT_UNDER_TEST`. A regression test populates one
   directory of every generated name
   ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation selection skips the container-backed scenarios:** `make test`
+  runs the three `act` scenarios only from `test-act`, because they need a
+  container runtime. mutmut collected all of `tests/integration/`, so on a host
+  with `act` installed the baseline executed them and failed on a scenario
+  expectation that had drifted from `ci.yml`, while a host without `act`
+  skipped them; the baseline therefore depended on the host rather than on the
+  source. The mutation selection now ignores those three modules, alongside the
+  two tooling contracts that build their own environment, and the configuration
+  contract pins the complete list
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **A failing mutation baseline keeps its diagnostics:** the shared workflow
   publishes its results listing and statistics file only after `mutmut run`
   succeeds, so a baseline failure left only a step log that GitHub expires. A
