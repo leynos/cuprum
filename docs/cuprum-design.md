@@ -1879,13 +1879,19 @@ session's `log` writer by default, and close the session with a bounded
 categorical outcome. A session may opt out of echo redirection with
 `redirects_echo = False`; the annotation-only `GitHubActionsSession` uses this
 to leave stdout and stderr on their usual destinations while still writing
-workflow commands through its `log` writer. In bounded-delivery mode, the
-worker and session finalizer share a per-run lock; finalization runs off-loop,
-waits behind an active write, and may leave the session open if that write
-never returns. All presentation knowledge (workflow-command syntax, escaping,
-injection shielding) stays inside the adapter; runs without a sink are
-unchanged. The single-command and pipeline runners share this contract and
-shield the bounded finalization against cancellation.
+workflow commands through its `log` writer. A session that redirects echo
+flushes `log` after each framing block. Echo writes a binary-capable
+destination through `log.buffer` and flushes that buffer itself, so without the
+framing flush a buffered text destination could surface child bytes before the
+group opening, lease release, or annotation that is meant to bracket them. In
+bounded-delivery mode, the worker and session finalizer share a per-run lock;
+finalization runs off-loop, waits behind an active write, and may leave the
+session open if that write never returns. All presentation knowledge
+(workflow-command syntax, escaping, injection shielding) stays inside the
+adapter: `cuprum/sinks/github_actions.py` owns the framing lifecycle and
+`cuprum/sinks/_github_actions_commands.py` owns the wire vocabulary it writes.
+Runs without a sink are unchanged. The single-command and pipeline runners
+share this contract and shield the bounded finalization against cancellation.
 
 Activation policy is also adapter-local: `GitHubActionsSink` reads
 `GITHUB_ACTIONS` from the parent environment at `open_session` time and

@@ -2389,12 +2389,14 @@ child output. The default single-command title is the bounded run label
 `argv_title=True`. Pipelines continue to use `pipeline` by default.
 
 The group header is written before the child starts, regardless of `echo` or
-`capture`. `argv_title=True` writes the full program and every argument to the
-job log, joined with plain spaces, without shell quoting. Arguments may contain
-secrets, so enable this only when that disclosure is intentional. A
-caller-provided `title`, project name and program name also enter workflow
-logs. Workflow-command escaping protects the command syntax; it does not redact
-values. See the
+`capture`. A buffered custom text stream receives each framing block already
+flushed, so child output cannot overtake the group opening, lease release, or
+annotation; Cuprum still never closes a caller-owned stream. `argv_title=True`
+writes the full program and every argument to the job log, joined with plain
+spaces, without shell quoting. Arguments may contain secrets, so enable this
+only when that disclosure is intentional. A caller-provided `title`, project
+name and program name also enter workflow logs. Workflow-command escaping
+protects the command syntax; it does not redact values. See the
 [structured logging argv warning](#keep-secrets-out-of-telemetry) for the same
 disclosure concern in telemetry records.
 
@@ -2497,6 +2499,14 @@ affected stream identified and no exception text included. The stdout and
 stderr chunks from a command or pipeline share one FIFO in the order the run
 loop enqueues them. Any queued output discarded after a worker failure is also
 reported as `UNDELIVERED`.
+
+The opening frame is the exception. A session writes and flushes its group
+opening before the child starts, on the task that opens the run, so it is
+already written when the session is returned. Bounded delivery does not move
+that write to its worker: the run cannot start until the frame has reached the
+destination. A destination whose reader has stalled therefore delays the start
+of the run even with bounded delivery; the worker covers the output written
+after the child starts.
 
 The same guarantees apply to `SafeCmd.lines()`: delivery setup is deferred
 until iteration begins, and its worker closes before the final result is

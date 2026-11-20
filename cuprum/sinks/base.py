@@ -97,6 +97,13 @@ class OutputSession(typ.Protocol):
     shared lifecycle leaves echoed output on the caller's original destinations
     while the session still handles its terminal annotation. Sessions without
     this hint continue to route echoed output through :attr:`log`.
+
+    A session that redirects echo must flush :attr:`log` after writing each
+    framing block, both when it opens and when it closes. Echo detects a
+    ``buffer`` attribute on the destination and writes the child's raw bytes
+    below the text layer, flushing that buffer itself; without the framing
+    flush, a buffered custom text destination can surface child output before
+    the group opening or stop-commands frame that was meant to precede it.
     """
 
     @property

@@ -2079,6 +2079,18 @@ close on every terminal path. The shared mechanics live in
   timeout or cancellation, and a drain that raised would skip the close
   entirely.
 
+The adapter's wire vocabulary lives apart from its framing lifecycle.
+`cuprum/sinks/_github_actions_commands.py` owns the escaping for
+workflow-command data and property positions — the runner applies different
+replacements to each — and the unpredictable stop-commands token, while
+`cuprum/sinks/github_actions.py` owns the session that writes the frames. The
+session imports the helpers by name, so
+`cuprum.sinks.github_actions._new_stop_token` stays the patch point its tests
+use; keep that seam by importing the helper rather than reaching into the
+helpers module from a test. The split also keeps the session module inside the
+400-line ceiling: a new workflow command adds its escaping and framing in
+coordination across the two modules, and neither moves back to shorten a file.
+
 `RunOutputOptions` keeps the identity of an adapter it synthesized in private
 `_synthesized_sink` metadata. The initializer compares identity so
 `dataclasses.replace` can rebuild only that options object's adapter when the
@@ -3426,6 +3438,20 @@ When echoing, `_drain` writes raw bytes to sinks with a `.buffer`. For
 text-only sinks, it owns an incremental decoder configured with
 `config.encoding` and `config.view_errors`, then flushes that decoder at end of
 stream. This preserves multibyte characters that span read chunks.
+
+Presentation framing has a matching flush obligation. A sink session that
+redirects echo writes each workflow-command block through `_write_frames`,
+which writes the whole block to the session's text destination and then flushes
+it once, so the block is published at the flush that ends it rather than at
+some later line or at close. That is an ordering guarantee, not an atomicity
+one: another writer can interleave between a block's writes, and a failed flush
+leaves the bytes already written in the destination. Otherwise a buffered text
+wrapper would retain the frame while the binary fast path wrote child bytes to
+the same underlying buffer and flushed them first, so the runner could read
+child output above the protective frame. The raw-byte echo path is unchanged:
+it still writes to `.buffer` and flushes there, and the session's own flush is
+what makes the frame visible ahead of it.
+
 `_StreamConfig.view_errors` resolves the error policy for a view: byte-exact
 runs replace undecodable input under `OBSERVER_ERROR_POLICY`, because reading
 `config.errors` there would let a strict capture policy end a run from the read
