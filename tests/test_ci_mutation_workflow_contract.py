@@ -19,6 +19,15 @@ reusable workflow always fans a repository-root cargo-mutants target
 out for ``workflow_dispatch`` full runs, and cuprum has no
 repository-root Cargo.toml, so a Rust job cannot ride the shared
 workflow at this pin.
+
+The caller also declares ``baseline-diagnostics``, which reruns the
+baseline only when the shared job failed. The shared workflow writes its
+results and statistics artefacts only after a successful run, so a
+baseline failure would otherwise leave nothing to diagnose but an
+expiring step log; ``leynos/shared-actions#591`` tracks the shared fix.
+These tests pin that job's failure-only condition, its least-privilege
+permissions, the mutmut release it reruns, and the unconditional upload
+of its captured output.
 """
 
 from __future__ import annotations
@@ -45,11 +54,24 @@ USES_RE = re.compile(
 
 #: The exact caller configuration: flat layout, so change detection
 #: watches the cuprum/ package and no src/ prefix is stripped before
-#: module-glob translation.
+#: module-glob translation. mutmut is pinned to 3.7.0 because 3.6.0's
+#: async-generator trampoline defers cleanup until loop shutdown, which
+#: fails the unchanged-source baseline.
 EXPECTED_WITH = {
     "paths": "cuprum/",
     "module-prefix-strip": "",
+    "mutmut-version": "3.7.0",
 }
+
+#: Name of the failure-only job that keeps a failing baseline's output.
+DIAGNOSTICS_JOB = "baseline-diagnostics"
+
+#: Artefact name and captured file for the baseline diagnostics.
+DIAGNOSTICS_ARTEFACT = "mutation-baseline-diagnostics"
+DIAGNOSTICS_FILE = "mutation-baseline-diagnostics.txt"
+
+#: Any ``uses:`` other than the reusable workflow call must pin a commit SHA.
+PINNED_ACTION_RE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
 def _load() -> dict[typ.Any, typ.Any]:
@@ -66,14 +88,39 @@ def _triggers(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
     return triggers
 
 
-def _mutation_job(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
-    """Return the single calling job."""
+def _jobs(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+    """Return the declared jobs mapping."""
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict), "the workflow must declare a jobs mapping"
-    assert list(jobs) == ["mutation-python"], (
-        f"expected a single job named 'mutation-python', found {sorted(jobs)}"
+    return jobs
+
+
+def _mutation_job(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+    """Return the job calling the shared reusable workflow."""
+    return _jobs(workflow)["mutation-python"]
+
+
+def _diagnostics_job(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+    """Return the failure-only baseline diagnostics job."""
+    return _jobs(workflow)[DIAGNOSTICS_JOB]
+
+
+def _steps(job: dict[typ.Any, typ.Any]) -> list[dict[typ.Any, typ.Any]]:
+    """Return a job's steps."""
+    steps = job.get("steps")
+    assert isinstance(steps, list), "the job must declare a steps list"
+    return steps
+
+
+def _step_using(job: dict[typ.Any, typ.Any], prefix: str) -> dict[typ.Any, typ.Any]:
+    """Return the single step whose ``uses`` starts with ``prefix``."""
+    matches = [
+        step for step in _steps(job) if str(step.get("uses", "")).startswith(prefix)
+    ]
+    assert len(matches) == 1, (
+        f"expected exactly one step using {prefix}, found {len(matches)}"
     )
-    return jobs["mutation-python"]
+    return matches[0]
 
 
 def test_uses_reference_is_pinned_to_a_commit_sha() -> None:
@@ -141,6 +188,96 @@ def test_with_block_is_exactly_the_documented_configuration() -> None:
     with_block = _mutation_job(_load()).get("with")
     assert with_block == EXPECTED_WITH, (
         f"jobs.mutation-python.with must be exactly {EXPECTED_WITH!r} "
-        f"(flat cuprum/ layout: watch the package, strip no prefix), got "
-        f"{with_block!r}"
+        "(flat cuprum/ layout: watch the package, strip no prefix, and pin "
+        f"the mutmut release with the async-generator fix), got {with_block!r}"
     )
+
+
+def test_jobs_are_the_mutation_run_and_its_diagnostics() -> None:
+    """The workflow carries the shared call plus one diagnostics job."""
+    jobs = _jobs(_load())
+    assert list(jobs) == ["mutation-python", DIAGNOSTICS_JOB], (
+        "the workflow must declare the shared mutation call and exactly one "
+        f"baseline diagnostics job, in that order; found {list(jobs)}"
+    )
+
+
+def test_diagnostics_job_runs_only_after_a_failed_mutation_run() -> None:
+    """The diagnostics job needs the mutation run and selects failures."""
+    job = _diagnostics_job(_load())
+    assert job.get("needs") == "mutation-python", (
+        "the diagnostics job must observe the mutation job's outcome, got "
+        f"needs={job.get('needs')!r}"
+    )
+    condition = str(job.get("if", ""))
+    assert "failure()" in condition, (
+        "the diagnostics job must run only when the mutation run failed, got "
+        f"if={condition!r}"
+    )
+
+
+def test_diagnostics_job_permissions_are_least_privilege() -> None:
+    """The diagnostics job only reads the repository."""
+    permissions = _diagnostics_job(_load()).get("permissions")
+    assert permissions == {"contents": "read"}, (
+        "jobs.baseline-diagnostics.permissions must be exactly "
+        f"{{'contents': 'read'}}, got {permissions!r}"
+    )
+
+
+def test_diagnostics_job_reproduces_the_pinned_mutmut_run() -> None:
+    """The job reruns mutmut at the version the caller pins."""
+    steps = _steps(_diagnostics_job(_load()))
+    scripts = [str(step.get("run", "")) for step in steps if "run" in step]
+    matches = [script for script in scripts if "mutmut run" in script]
+    assert len(matches) == 1, (
+        "the diagnostics job must have exactly one step that runs mutmut, "
+        f"found {len(matches)}"
+    )
+    script = matches[0]
+    pinned = f"uv run --with mutmut=={EXPECTED_WITH['mutmut-version']} mutmut run"
+    assert pinned in script, (
+        "the diagnostics run must reproduce the caller's pinned mutmut "
+        f"release; expected {pinned!r} in the step script"
+    )
+    assert f"tee {DIAGNOSTICS_FILE}" in script, (
+        "the diagnostics run must capture its output to "
+        f"{DIAGNOSTICS_FILE!r} so the upload step has a file to publish"
+    )
+
+
+def test_diagnostics_upload_keeps_the_captured_output_on_failure() -> None:
+    """The upload runs unconditionally and refuses to publish nothing."""
+    job = _diagnostics_job(_load())
+    upload = _step_using(job, "actions/upload-artifact@")
+    condition = str(upload.get("if", ""))
+    assert "always()" in condition, (
+        "the upload must run even though the reproduced baseline fails, got "
+        f"if={condition!r}"
+    )
+    with_block = upload.get("with")
+    assert isinstance(with_block, dict), "the upload step needs a with: block"
+    assert with_block.get("name") == DIAGNOSTICS_ARTEFACT, (
+        f"the artefact must be named {DIAGNOSTICS_ARTEFACT!r}, got "
+        f"{with_block.get('name')!r}"
+    )
+    assert DIAGNOSTICS_FILE in str(with_block.get("path", "")), (
+        f"the upload must publish {DIAGNOSTICS_FILE!r}, got "
+        f"path={with_block.get('path')!r}"
+    )
+    assert with_block.get("if-no-files-found") == "error", (
+        "a run with no captured diagnostics must fail loudly rather than "
+        f"upload nothing; got {with_block.get('if-no-files-found')!r}"
+    )
+
+
+def test_every_diagnostics_action_is_pinned_to_a_commit_sha() -> None:
+    """The new job's actions carry the same pin shape as the rest."""
+    steps = _steps(_diagnostics_job(_load()))
+    uses = [str(step["uses"]) for step in steps if "uses" in step]
+    assert uses, "the diagnostics job must use at least one action"
+    for reference in uses:
+        assert PINNED_ACTION_RE.match(reference), (
+            "every action in the diagnostics job must be pinned to a full "
+            f"40-character lowercase hex commit SHA, got {reference!r}"
+        )

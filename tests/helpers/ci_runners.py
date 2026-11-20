@@ -205,6 +205,10 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "benchmark-gate-harness.yml": ("workflow-harness",),
     "delayed-pr-comment.yml": ("delay_and_comment",),
     "loom.yml": ("loom",),
+    # `baseline-diagnostics` reruns a failed mutation baseline only to capture
+    # its output for the artefact upload. It gates no check and produces
+    # nothing a later job measures, so it gains nothing from a metered slot.
+    "mutation-testing.yml": ("baseline-diagnostics",),
     "release.yml": (
         "check-version",
         "attest",

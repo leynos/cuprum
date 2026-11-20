@@ -92,6 +92,68 @@
   reaching it, and `hold_observer_shutdown` for a shutdown signal from a hold
   observer raised while the acquired pair was being published, before the drain
   began ([#549](https://github.com/leynos/cuprum/issues/549)).
+- **The mutation sandbox copies every root input the baseline reads:** mutmut
+  builds `mutants/` from `cuprum/`, `[tool.mutmut].also_copy`, and its own
+  defaults, so the baseline previously failed during collection because
+  `README.md` was absent, then failed again on the next missing root input
+  because pytest runs with `-x`. `also_copy` now also carries `README.md`,
+  `.yamllint.yml`, `.concordat`, `pyproject.toml`, `scripts/`,
+  `tools/dev-fast/`, `tools/mold/`, `rust/.config/`, and
+  `rust/rust-toolchain.toml`, with directories listed before the loose files
+  they parent. The configuration contract test checks the complete inventory,
+  that each entry exists with the expected kind, and that no build output or
+  cache directory is copied
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation harness pins mutmut 3.7.0 and scopes its test selection:**
+  3.6.0's async-generator trampoline forwarded iteration only, so a mutated
+  async generator deferred its cleanup until event-loop shutdown and the
+  unchanged-source baseline failed in `test_bounded_delivery_lines`. The caller
+  now passes `mutmut-version: "3.7.0"`, the first release that forwards
+  `close()` and `athrow()` to the wrapped generator. The mutation selection
+  also omits the two tooling contracts that construct an environment of their
+  own (`test_nextest_route_floor` and `test_sh_typing_contract`): the sandbox's
+  rewritten modules import `mutmut`, which those environments do not provide.
+  Both modules still run in every normal gate, and the configuration contract
+  pins the exclusion list. Because mutmut reruns the suite in one process,
+  Hypothesis saw each class-based property test from several executors and
+  raised its `differing_executors` health check; a `mutmut-sandbox` profile,
+  selected through `pytest_add_cli_args`, now suppresses that one check while
+  inheriting the suite's unlimited deadline. mutmut's forced-fail probe then
+  aborted the run as well: the root `conftest.py` imported `cuprum` in its
+  module body, so the probe raised during conftest import, which pytest reports
+  as a usage error that mutmut refuses. The conftest now imports the package
+  under test only inside the fixtures that need it and declares its
+  fixture-only module under `pytest_plugins`, so the probe fails where the
+  mutated package runs, which is the outcome mutmut expects. A contract test
+  imports the root conftest in a fresh interpreter and asserts `cuprum` stays
+  unimported ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation sandbox discards copied caches:** mutmut copies every
+  `[tool.mutmut].also_copy` directory, and its default `tests/` tree, with
+  `shutil.copytree` and no ignore filter, so a `__pycache__` or `.pytest_cache`
+  in the host worktree reached the baseline run inside `mutants/`. The
+  statistics phase, which runs once before any mutant is tested, now purges
+  generated directories from the sandbox. The purge is gated to that phase, to
+  a directory named `mutants`, and to a git worktree, because every sandbox
+  subprocess inherits `MUTANT_UNDER_TEST`. A regression test populates one
+  directory of every generated name
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The mutation selection skips the container-backed scenarios:** `make test`
+  runs the three `act` scenarios only from `test-act`, because they need a
+  container runtime. mutmut collected all of `tests/integration/`, so on a host
+  with `act` installed the baseline executed them and failed on a scenario
+  expectation that had drifted from `ci.yml`, while a host without `act`
+  skipped them; the baseline therefore depended on the host rather than on the
+  source. The mutation selection now ignores those three modules, alongside the
+  two tooling contracts that build their own environment, and the configuration
+  contract pins the complete list
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **A failing mutation baseline keeps its diagnostics:** the shared workflow
+  publishes its results listing and statistics file only after `mutmut run`
+  succeeds, so a baseline failure left only a step log that GitHub expires. A
+  `baseline-diagnostics` job now follows a failed mutation run, reproduces the
+  baseline with the pinned mutmut release, and uploads its captured output as
+  the `mutation-baseline-diagnostics` artefact with `if-no-files-found: error`
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
   `Pipeline.run_sync()`, or `Pipeline.run_bytes_sync()` from inside a coroutine
