@@ -116,6 +116,7 @@ def test_matrix_compiler_shape_resolves_its_modern_version_scope(
     def synthetic_job_environment(
         _workflow_name: str, _job_name: str
     ) -> dict[str, str]:
+        """Return a job environment pinning the modern toolchain."""
         return {"MODERN_STABLE_TOOLCHAIN": "test-toolchain"}
 
     monkeypatch.setattr(families, "job_env", synthetic_job_environment)

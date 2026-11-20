@@ -48,6 +48,7 @@ def _prepare_then_consume(
     """
 
     async def collect() -> CommandResult | None:
+        """Run the prepare-then-consume sequence in one event loop."""
         with scoped(prepare_scope):
             stream = command.lines()
         with scoped(consume_scope):

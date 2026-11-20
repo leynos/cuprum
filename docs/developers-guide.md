@@ -6423,22 +6423,67 @@ more blocking jobs than the limit allows and asserting every one starts.
 Worker threads are daemon threads and are never joined at exit, so a worker
 still blocked in native I/O cannot keep the interpreter from shutting down.
 
-`_prepare_rust_pump_call` completes every Python-side check before the writer
-descriptor reaches native code: it loads the native module, validates the
-buffer size (`_validate_buffer_size_before_writer_transfer`), then prepares the
-reader. Buffer-size validation calls `operator.index` and raises
-`OverflowError` for values outside the `i64` range and `ValueError` for a
-non-positive size or one above the 1 GiB cap (`_MAX_BUFFER_SIZE`). Reader
-preparation (`_prepare_native_reader`) requires a non-negative descriptor
-(`ValueError`, "file descriptor must be non-negative", or "file handle must be
-non-negative" on Windows) before conversion, converts it for the platform, then
-requires an `i64`-representable value (`OverflowError`) and a 32-bit signed
-range on non-Windows platforms (`ValueError`, "file descriptor out of range").
-Each failure closes the writer Python still owns
+### Python adapter argument contract
+
+`rust_pump_stream` and `rust_consume_stream` in `cuprum/_streams_rs.py` share
+one argument policy. The checks themselves live in
+`cuprum/_stream_argument_policy.py`, so neither wrapper can drift from the
+other. Both load the native module, validate `buffer_size`, validate the raw
+reader, apply the platform step, and only then call the native entry point.
+`_prepare_rust_pump_call` performs that sequence for the pump while Python
+still owns the writer. The consume wrapper performs the same sequence inline
+and, on Windows, duplicates the already-validated reader before the native call.
+
+Table 1: shared stream adapter argument checks
+
+| Stage                   | Accepted                            | Failure         |
+| ----------------------- | ----------------------------------- | --------------- |
+| `operator.index`        | any object implementing `__index__` | `TypeError`     |
+| `i64` extraction range  | `i64::MIN..=i64::MAX`               | `OverflowError` |
+| Buffer policy           | `1..=1 GiB` (`_MAX_BUFFER_SIZE`)    | `ValueError`    |
+| Reader sign             | `>= 0`                              | `ValueError`    |
+| Reader descriptor range | `<= i32::MAX`                       | `ValueError`    |
+
+Table 2: shared stream adapter failure messages
+
+| Failure                 | Message                                          |
+| ----------------------- | ------------------------------------------------ |
+| `i64` range             | `Python int too large to convert to C long`      |
+| Non-positive buffer     | `buffer_size must be greater than zero`          |
+| Buffer above the cap    | `buffer_size exceeds the maximum permitted size` |
+| Negative reader         | `file descriptor must be non-negative`           |
+| Reader above `i32::MAX` | `file descriptor out of range`                   |
+
+Buffer validation runs first on both entry points and every platform, so a call
+with both arguments invalid always reports the buffer. The raw reader checks
+run before any platform conversion: `_convert_fd_for_platform` in the pump and
+`os.dup` in the Windows consume wrapper. A negative or oversized raw value
+therefore never reaches `msvcrt`, so it cannot turn a documented `ValueError`
+into a Windows `OSError`. The checks say nothing about whether an in-range
+descriptor is open. `_prepare_native_reader` then converts the validated raw
+value and rechecks only `i64` representability, because a Windows `PlatformFd`
+is pointer-sized rather than a 32-bit descriptor.
+
+Each native pump pre-check failure closes the writer Python still owns
 (`_close_writer_after_pre_native_failure`) and emits the matching hand-off
 outcome (`native_load_failed`, `buffer_validation_failed`, or
 `reader_preparation_failed`); a reader-preparation failure additionally logs the
 `reader_preparation` phase at `DEBUG` on the `cuprum._streams_rs` logger.
+
+### Never depend on native argument extraction order
+
+PyO3 documents how the generated wrapper extracts regular and keyword
+arguments, but not the order in which it extracts several arguments[^1]. Native
+code therefore cannot be the place that establishes which competing argument
+failure a caller sees. Where precedence is part of the observable contract,
+enforce it in Python before the call, as these adapters do. The native entry
+point may recheck the same policy as a last line of defence, but a recheck that
+runs after another argument has already been extracted cannot restore the
+documented precedence. `cuprum/unittests/test_rust_stream_native_order.py`
+records the native checks as observed behaviour for this reason, and its
+docstring forbids promoting that observation to a contract.
+
+[^1]: PyO3, "Python functions", <https://pyo3.rs/main/function>.
 
 ## Rust splice-loop and drain contract
 

@@ -11,6 +11,18 @@ import typing as typ
 
 PACKAGE_NAME = "cuprum"
 
+# The native Rust stream entry points share one default buffer size. The pump
+# and consume callers remain free to choose their own read sizes, but the
+# extension's own default is a single value, so it is owned here rather than
+# repeated at each call site and allowed to drift.
+DEFAULT_NATIVE_BUFFER_SIZE = 65_536
+
+# The opt-in hop-span channel publishes the same bound under its own name. It
+# is defined here, beside the default it mirrors, because a re-export by
+# assignment in the span module would lose the static provenance the lint
+# gates require, and an aliased import is reported as an unused name.
+NATIVE_PUMP_BUFFER_SIZE = DEFAULT_NATIVE_BUFFER_SIZE
+
 # Echoed lines are capped so a single oversized child line cannot overflow a
 # CI job log (GitHub Actions stops at a 64 KiB line) while capture stays
 # complete.

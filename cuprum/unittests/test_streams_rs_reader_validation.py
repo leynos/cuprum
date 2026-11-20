@@ -23,13 +23,9 @@ def _close_duplicate(fd: int) -> None:
     [
         (-1, ValueError),
         (1 << 64, OverflowError),
-        pytest.param(
-            1 << 31,
-            ValueError,
-            marks=pytest.mark.skipif(
-                os.name == "nt", reason="Windows handles are pointer-sized"
-            ),
-        ),
+        # The raw reader is a CRT descriptor on every platform, so the signed
+        # 32-bit range applies before any Windows conversion to a handle.
+        (1 << 31, ValueError),
     ],
 )
 def test_invalid_reader_closes_duplicate_before_native_call(
@@ -75,7 +71,7 @@ def test_windows_negative_reader_is_rejected_before_conversion(
 
     monkeypatch.setattr(_streams_rs.os, "name", "nt")
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert_reader)
-    with pytest.raises(ValueError, match="file handle must be non-negative"):
+    with pytest.raises(ValueError, match="file descriptor must be non-negative"):
         _streams_rs._prepare_native_reader(-1)
 
     assert not converted, "conversion must not run for a negative descriptor"

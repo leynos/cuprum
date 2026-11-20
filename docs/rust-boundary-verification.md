@@ -237,18 +237,25 @@ historical record.
   fails setup or submission must be closed exactly once. Once submitted, Rust
   owns the duplicate and the completion callback must wait for Rust's drop
   rather than close a possibly released or reused descriptor.
-- `cuprum/_streams_rs.py` validates buffer sizes before native entry and
-  prepares platform values. The Windows pump duplicates a native handle before
-  closing its transferred CRT writer; Windows consume duplicates the borrowed
-  CRT reader, sets only that duplicate to binary mode, and closes it after the
-  detached call. A Python integer's range is not proof of validity, lifetime,
-  or exclusivity. The caller must keep the reader open and prevent descriptor
-  reuse for the duration of native consume.
+- `cuprum/_streams_rs.py` applies one order on both entry points: load the
+  native module, validate `buffer_size`, validate the raw reader descriptor,
+  apply the platform step, then call native. The shared helpers in
+  `cuprum/_stream_argument_policy.py` normalize with `operator.index` and then
+  check the `i64` extraction range, non-negativity, and the signed 32-bit
+  descriptor range, matching the native boundary. The pump converts the reader
+  before it transfers the writer, and Windows consume does not call `os.dup` or
+  `msvcrt.setmode` until both checks pass. The Windows pump duplicates a native
+  handle before closing its transferred CRT writer; Windows consume duplicates
+  the borrowed CRT reader, sets only that duplicate to binary mode, and closes
+  it after the detached call. A Python integer's range is not proof of
+  validity, lifetime, or exclusivity. The caller must keep the reader open and
+  prevent descriptor reuse until the native call returns: both entry points
+  borrow the reader for that call, and only the pump's writer is adopted.
 
-  `_prepare_native_reader` now checks the platform ABI representation before
-  writer ownership is transferred. Round 7 first recorded a red focused
-  regression run in `/tmp/issue379-reader-validation-before.log`; the corrected
-  hand-off passed 14 focused tests, including the boundary-contract script, in
+  `_prepare_native_reader` checks the platform ABI representation before writer
+  ownership is transferred. Round 7 first recorded a red focused regression run
+  in `/tmp/issue379-reader-validation-before.log`; the corrected hand-off
+  passed 14 focused tests, including the boundary-contract script, in
   `/tmp/issue379-round7-focused-tests.log`. This check establishes only that
   the integer can be represented and is non-negative. It does not establish
   that the resource is valid, remains alive, or is exclusively owned. Round
@@ -256,6 +263,16 @@ historical record.
   validation was restored before reader preparation; the round 21 property test
   caught that precedence regression. It preserves POSIX invalid-buffer error
   precedence and closes the duplicate on validation failure.
+
+  Issue #659 extended that precedence to consume. Unix consume previously
+  delegated descriptor validation to the native entry, and Windows consume
+  validated after choosing to duplicate, so the class and message of a
+  competing failure depended on the platform. Both wrappers now report the
+  buffer first and apply the same raw-reader policy; the Windows duplication is
+  downstream of both checks. `test_streams_rs_adapter_contract.py` and
+  `test_streams_rs_helper_properties.py` pin the policy without the extension,
+  and the extension-gated native-order and behavioural suites exercise the same
+  order through the compiled boundary.
 
 These Python functions are not Rust unsafe sites, but their tests are part of
 the Rust boundary contract. In particular, preserve pause/block/duplicate/
