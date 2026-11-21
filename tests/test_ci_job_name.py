@@ -11,7 +11,11 @@ stopped discriminating still fails here.
 
 from __future__ import annotations
 
+import math
+
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from tests.helpers import ci_job_name as renderer
 
@@ -23,6 +27,48 @@ NAME = (
 LEG = {"label": "3.12", "experimental": False}
 #: The same leg with the experimental flag set, which selects the suffix.
 EXPERIMENTAL_LEG = {**LEG, "experimental": True}
+#: Hypothesis's default deadline measures the host rather than the code, and
+#: these cases are trivial; a flaky contract test is worse than a slow one.
+SETTINGS = settings(deadline=None, max_examples=200)
+#: A literal the choice grammar can carry. A quote would end the literal, a
+#: brace or `$` would leave an expression delimiter in the rendered name, and
+#: a line break makes `render_template` refuse the whole template.
+LITERALS = st.text(
+    alphabet=st.characters(blacklist_characters=["'", "$", "{", "}", "\n", "\r"]),
+    max_size=6,
+)
+#: Leg values across the coercion domain: every scalar in GitHub's falsy set,
+#: both empty and non-empty containers, and the containers Python calls falsy.
+LEG_VALUES = st.one_of(
+    st.booleans(),
+    st.integers(),
+    st.floats(),
+    st.text(),
+    st.none(),
+    st.lists(st.integers(), max_size=3),
+    st.dictionaries(st.text(max_size=2), st.integers(), max_size=2),
+)
+#: Operators the renderer does not model, so a body built from one is outside
+#: the supported forms by construction rather than by luck of the draw.
+COMPARISONS = st.sampled_from(["==", "!=", ">", "<", ">=", "<="])
+
+
+def _github_truthy(value: object) -> bool:
+    """Return GitHub's coercion, stated from its documented falsy set.
+
+    The falsy values are `false`, `0`, `-0`, `NaN`, `null` and the empty
+    string. Everything else, including an empty array or object, is truthy.
+
+    Returns
+    -------
+    bool
+        Whether the documented set makes the value truthy.
+    """
+    if isinstance(value, float) and math.isnan(value):
+        return False
+    # A set cannot be used: arrays and objects are unhashable, and they are
+    # exactly the values this oracle has to decide as truthy.
+    return value not in (False, 0, "", None)  # ruff: ignore[literal-membership] - containers are unhashable.
 
 
 @pytest.mark.parametrize(
@@ -149,3 +195,48 @@ def test_a_job_without_a_name_is_refused(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(renderer, "job", lambda *_: {})
     with pytest.raises(AssertionError, match="string name"):
         renderer.declared_name("ci.yml", "typecheck-test")
+
+
+@SETTINGS
+@given(when=LITERALS, otherwise=LITERALS, value=LEG_VALUES)
+def test_a_choice_renders_the_branch_github_selects(
+    when: str, otherwise: str, value: object
+) -> None:
+    """Model the `&&`/`||` pair over the values a matrix can hold.
+
+    The table beside this test fixes both flags; the coercion is what a leg
+    with another value would rely on, and it is not Python's truthiness.
+    """
+    template = f"a${{{{ matrix.x && '{when}' || '{otherwise}' }}}}d"
+    rendered = renderer.render_template(template, {"x": value}, subject="property")
+    selected = (when or otherwise) if _github_truthy(value) else otherwise
+    assert rendered == f"a{selected}d", (
+        f"a leg value of {value!r} must render {selected!r}, choosing between "
+        f"{when!r} and {otherwise!r}, got {rendered!r}"
+    )
+    assert "${{" not in rendered, (
+        f"a rendered name may never carry an unread opener, got {rendered!r}"
+    )
+    assert "}}" not in rendered, (
+        f"a rendered name may never carry an unread closer, got {rendered!r}"
+    )
+
+
+@SETTINGS
+@given(
+    field=st.from_regex(r"[a-z][a-z0-9-]{0,8}", fullmatch=True),
+    operator=COMPARISONS,
+    literal=LITERALS,
+)
+def test_a_comparison_expression_is_refused(
+    field: str, operator: str, literal: str
+) -> None:
+    """Refuse bodies outside the two supported forms, whatever their parts.
+
+    The refusal set is unbounded, so no table can enumerate it; generating
+    the parts and building an unsupported shape is what shows the renderer
+    reports what it cannot read instead of copying it through.
+    """
+    body = f"matrix.{field} {operator} '{literal}'"
+    with pytest.raises(AssertionError, match="cannot resolve"):
+        renderer.render_template(f"${{{{ {body} }}}}", {}, subject="property")

@@ -818,6 +818,19 @@ by `true`, runs one leg at a time under `act` in host mode, and asserts which
 steps ran: none for 3.15.2 on a pull request, the work but no saves for 3.12,
 and the work and the saves for both on a push.
 
+The check names are rendered rather than compared as templates.
+`tests/helpers/ci_job_name.py` holds the renderer: `render_name` renders one
+job's name for one leg, `rendered_names` pairs every declared leg with the name
+GitHub would display for it, and `render_template` does the work. It models
+exactly the two expression forms the name uses — a bare `matrix.<field>` value,
+and a `matrix.<field> && '<literal>' || ''` choice — and refuses any other
+expression by naming it, because a renderer that copied an unread expression
+through would compare the template with itself. The choice applies GitHub's
+boolean coercion rather than Python's, so a value such as an empty array takes
+the branch the runner takes. Legs come from `tests/helpers/ci_leg_matrix.py`,
+the same expansion the other CI contracts read, so the names a contract asserts
+and the legs it reasons about cannot disagree.
+
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
 `RUSTFLAGS=-D warnings`, followed by the doctest pass that `llvm-cov nextest`
