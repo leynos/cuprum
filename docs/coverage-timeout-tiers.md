@@ -165,9 +165,28 @@ After ADR-027 the binaries and the `binary(compile_tests)` override are gone.
 No nextest test target named `compile_tests` remains, and the compile-fail
 contracts run as doctests against the workspace build.
 `cuprum/unittests/test_compile_contracts_build_graph.py` refuses a `trybuild`
-dependency, a `compile_tests` test target, and a nextest override that names
-one, so the allowance cannot drift back up in place of a shape that no longer
-exists.
+dependency, either Cargo integration-test entry point for a `compile_tests`
+target, and a nextest override that names one in any profile, so the allowance
+cannot drift back up in place of a shape that no longer exists.
+
+The upstream request that would let a `trybuild` consumer share the workspace's
+artefacts already exists. [trybuild #330](https://github.com/dtolnay/trybuild/issues/330)
+proposes seeding the private target from the parent workspace under an opt-in
+feature, and remains open. Its earlier form,
+[#328](https://github.com/dtolnay/trybuild/issues/328), was closed as not
+planned because sharing the parent target directory reintroduced Cargo's build
+lock contention. Cuprum no longer depends on `trybuild`, so it does not wait on
+either outcome; the request stays relevant to projects that still do.
+
+Two limits are recorded rather than inferred. The requested per-crate seconds
+split between the required closure and the dev-dependency tail is not
+available: neither the gate log nor `trybuild` reports per-crate timings, so
+graph composition is the recorded substitute and is not presented as a timing
+measurement. And [#653](https://github.com/leynos/cuprum/issues/653)'s
+requirement to preserve the exact `.stderr` snapshots is superseded by
+ADR-027, which pins each compile-fail case to its named error code beside a
+positive control. Those snapshots were removed rather than loosened, and this
+branch does not restore them.
 
 ## Boundary harness compile tier
 
