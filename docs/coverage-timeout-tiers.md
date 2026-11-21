@@ -191,9 +191,10 @@ requirement to preserve the exact `.stderr` snapshots is superseded by ADR-027,
 which pins each compile-fail case to its named error code beside a positive
 control. Only nightly rustdoc checks the named code; stable rustdoc accepts any
 compile error, and the Windows-only doctests run on stable, so their codes are
-not checked in CI. The positive control is what stops those cases from passing
-for the wrong reason. Those snapshots were removed rather than loosened, and
-this branch does not restore them.
+not checked in CI. The positive control reduces that risk but does not remove
+it: an unrelated error specific to a negative case can still make it pass on
+stable rustdoc, as ADR-027 records. Those snapshots were removed rather than
+loosened, and this branch does not restore them.
 
 ## Boundary harness compile tier
 
