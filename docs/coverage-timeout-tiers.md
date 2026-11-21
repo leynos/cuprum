@@ -173,11 +173,14 @@ The upstream request that would let a `trybuild` consumer share the workspace's
 artefacts already exists.
 [trybuild #330](https://github.com/dtolnay/trybuild/issues/330) proposes
 seeding the private target from the parent workspace under an opt-in feature,
-and remains open. Its earlier form,
-[#328](https://github.com/dtolnay/trybuild/issues/328), was closed as not
-planned because sharing the parent target directory reintroduced Cargo's build
-lock contention. Cuprum no longer depends on `trybuild`, so it does not wait on
-either outcome; the request stays relevant to projects that still do.
+and remains open. It supersedes
+[#328](https://github.com/dtolnay/trybuild/issues/328), which carried the
+problem statement for sharing the target. The draft pull request that
+implemented that sharing, [#329](https://github.com/dtolnay/trybuild/pull/329),
+was closed because a shared target reintroduced Cargo's build-lock contention
+between the parent workspace and the spawned build. Cuprum no longer depends on
+`trybuild`, so it does not wait on any of these outcomes; the request stays
+relevant to projects that still do.
 
 Two limits are recorded rather than inferred. The requested per-crate seconds
 split between the required closure and the dev-dependency tail is not
@@ -186,8 +189,11 @@ graph composition is the recorded substitute and is not presented as a timing
 measurement. And [#653](https://github.com/leynos/cuprum/issues/653)'s
 requirement to preserve the exact `.stderr` snapshots is superseded by ADR-027,
 which pins each compile-fail case to its named error code beside a positive
-control. Those snapshots were removed rather than loosened, and this branch
-does not restore them.
+control. Only nightly rustdoc checks the named code; stable rustdoc accepts any
+compile error, and the Windows-only doctests run on stable, so their codes are
+not checked in CI. The positive control is what stops those cases from passing
+for the wrong reason. Those snapshots were removed rather than loosened, and
+this branch does not restore them.
 
 ## Boundary harness compile tier
 
