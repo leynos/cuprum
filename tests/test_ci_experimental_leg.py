@@ -20,10 +20,19 @@ flag, or the skipped leg still pays for whichever step forgot it. The job must
 still have its steps, because a rule over "every step" passes on an empty
 list. And the names must render the policy from the matrix entry, so the
 suffix cannot leak onto a required context or follow the event.
+
+Two further links carry that policy into effect. The leg's matrix values must
+reach `actions/setup-python`, or the action installs its default interpreter
+and the version assertions describe a request the runner never made. And the
+verification step must reject a mismatched interpreter, or it compares
+nothing and every leg passes it.
 """
 
 from __future__ import annotations
 
+import re
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the checked-in verification program.
+import sys
 import typing as typ
 
 import pytest
@@ -62,6 +71,10 @@ EXPECTED_NAMES: typ.Final = {
     "3.14": "Typecheck and test (Python 3.14)",
     "3.15.2": "Typecheck and test (Python 3.15.2, not run on pull requests)",
 }
+#: The verification step's embedded program, between its quoted heredoc marks.
+#: The quoting is what stops the runner expanding the program's `$` characters,
+#: so only a quoted heredoc is accepted.
+_HEREDOC: typ.Final = re.compile(r"<<'PY'\n(?P<program>.*?)\nPY\s*\Z", re.DOTALL)
 
 
 def _step(name: str) -> dict[str, object]:
@@ -71,6 +84,30 @@ def _step(name: str) -> dict[str, object]:
             return typ.cast("dict[str, object]", step)
     message = f"{GATED_LEG_JOB[1]} must keep the step {name!r}"
     raise AssertionError(message)
+
+
+def _verification_program() -> str:
+    """Return the Python program the verification step runs."""
+    script = _step("Verify project interpreter").get("run")
+    assert isinstance(script, str), "the verification step must run a script"
+    found = _HEREDOC.search(script)
+    assert found is not None, (
+        "the verification step must embed its program in a quoted heredoc, got "
+        f"{script!r}"
+    )
+    return found.group("program")
+
+
+def _run_verification(program: str, expected: str) -> subprocess.CompletedProcess[str]:
+    """Run the verification program with one interpreter expectation."""
+    return subprocess.run(
+        [sys.executable, "-"],
+        capture_output=True,
+        check=False,
+        env={"EXPECTED_PYTHON": expected},
+        input=program,
+        text=True,
+    )
 
 
 def test_the_leg_flag_is_false_only_for_the_experimental_leg_on_a_pull_request() -> (
@@ -220,6 +257,53 @@ def test_the_verification_step_proves_the_interpreter_after_typecheck() -> None:
     assert normalized(step.get("if")) == "env.LEG_RUNS == 'true'", (
         "the verification step's guard must end with the leg flag, got "
         f"{normalized(step.get('if'))!r}"
+    )
+
+
+def test_the_setup_step_requests_the_matrix_interpreter() -> None:
+    """The leg's declaration only counts if `actions/setup-python` reads it.
+
+    A step that declares `3.15.2` in the matrix but passes no `python-version`
+    to the action installs the action's default, and the version assertions
+    would then describe a request the runner never made.
+    """
+    declared = _step("Set up Python").get("with")
+    assert isinstance(declared, dict), "Set up Python must declare with:"
+    assert declared.get("python-version") == "${{ matrix.python-version }}", (
+        "Set up Python must install the matrix interpreter, got "
+        f"{declared.get('python-version')!r}"
+    )
+    assert declared.get("allow-prereleases") == "${{ matrix.allow-prereleases }}", (
+        "Set up Python must honour the leg's prerelease refusal, got "
+        f"{declared.get('allow-prereleases')!r}"
+    )
+
+
+def test_the_verification_step_rejects_a_mismatched_interpreter() -> None:
+    """Exercise the comparison, not only the placement and environment.
+
+    The step exists to fail a leg whose `.venv` is not the interpreter that
+    leg requested. Running its embedded program with an expectation the
+    running interpreter cannot satisfy is what shows it does: a program that
+    merely printed the version would satisfy every assertion above and never
+    fail a leg.
+    """
+    program = _verification_program()
+    matching = f"{sys.version_info.major}.{sys.version_info.minor}"
+    accepted = _run_verification(program, matching)
+    assert accepted.returncode == 0, (
+        f"the verification must accept the running interpreter {matching}, got "
+        f"{accepted.returncode}: {accepted.stderr}"
+    )
+    mismatched = f"{sys.version_info.major + 1}.0"
+    rejected = _run_verification(program, mismatched)
+    assert rejected.returncode != 0, (
+        "the verification must fail a leg whose interpreter is not the one "
+        f"requested ({mismatched}), got {rejected.stdout!r}"
+    )
+    assert "but this leg requested" in rejected.stderr, (
+        "a rejected verification must say which interpreter was requested, got "
+        f"{rejected.stderr!r}"
     )
 
 
