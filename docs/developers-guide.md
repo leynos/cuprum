@@ -8475,6 +8475,14 @@ same doc comment, and a control that imports every name its negative case does.
 It also pins the inventory of compile-fail doctests, so add a contract and its
 inventory entry in the same change.
 
+The same test keeps the retired `compile_tests` shape from returning. Compile
+time contracts run as doctests in the ordinary build graph: do not add a
+`[[test]]` target named `compile_tests`, a `tests/compile_tests.rs` or
+`tests/compile_tests/main.rs` entry point, or a nextest override whose filter
+names `compile_tests` in `[profile.default]` or any named profile.
+`docs/coverage-timeout-tiers.md`, "Retired trybuild compile tier", records the
+cost history behind the rule.
+
 Doctests in a module compiled only under `cfg(windows)`, such as the
 synchronous-handle cases on `read_once` and `write_once` in
 `rust/cuprum-native-io/src/windows.rs`, are collected only on Windows. The
