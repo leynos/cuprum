@@ -30,8 +30,8 @@ nothing and every leg passes it.
 
 from __future__ import annotations
 
-import re
-import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the checked-in verification program.
+import os
+import shlex
 import sys
 import typing as typ
 
@@ -47,6 +47,10 @@ from tests.helpers.ci_leg_gate import (
 )
 from tests.helpers.ci_leg_matrix import admits_event, matrix_legs
 from tests.helpers.ci_runners import job, steps
+from tests.helpers.composite_actions import StepResult, run_step
+
+if typ.TYPE_CHECKING:
+    import pathlib as pth
 
 #: The suffix the experimental entry appends to its check name.
 POLICY_SUFFIX: typ.Final = ", not run on pull requests"
@@ -71,10 +75,6 @@ EXPECTED_NAMES: typ.Final = {
     "3.14": "Typecheck and test (Python 3.14)",
     "3.15.2": "Typecheck and test (Python 3.15.2, not run on pull requests)",
 }
-#: The verification step's embedded program, between its quoted heredoc marks.
-#: The quoting is what stops the runner expanding the program's `$` characters,
-#: so only a quoted heredoc is accepted.
-_HEREDOC: typ.Final = re.compile(r"<<'PY'\n(?P<program>.*?)\nPY\s*\Z", re.DOTALL)
 
 
 def _step(name: str) -> dict[str, object]:
@@ -86,27 +86,32 @@ def _step(name: str) -> dict[str, object]:
     raise AssertionError(message)
 
 
-def _verification_program() -> str:
-    """Return the Python program the verification step runs."""
-    script = _step("Verify project interpreter").get("run")
-    assert isinstance(script, str), "the verification step must run a script"
-    found = _HEREDOC.search(script)
-    assert found is not None, (
-        "the verification step must embed its program in a quoted heredoc, got "
-        f"{script!r}"
+def _run_verification(script: str, expected: str, workdir: pth.Path) -> StepResult:
+    """Run the verification step's body under Bash with a stand-in `uv`.
+
+    The real step asks uv for the project interpreter. A stub named `uv` that
+    executes this test's interpreter on the heredoc standard input exercises
+    the whole body — `set -euo pipefail`, the heredoc and the comparison —
+    without needing the project environment or a network.
+
+    Returns
+    -------
+    StepResult
+        The exit status and captured streams of the executed step.
+    """
+    workdir.mkdir(parents=True, exist_ok=True)
+    stub = workdir / "uv"
+    stub.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -\n", encoding="utf-8"
     )
-    return found.group("program")
-
-
-def _run_verification(program: str, expected: str) -> subprocess.CompletedProcess[str]:
-    """Run the verification program with one interpreter expectation."""
-    return subprocess.run(
-        [sys.executable, "-"],
-        capture_output=True,
-        check=False,
-        env={"EXPECTED_PYTHON": expected},
-        input=program,
-        text=True,
+    stub.chmod(0o755)
+    return run_step(
+        script,
+        workdir=workdir,
+        environment={
+            "EXPECTED_PYTHON": expected,
+            "PATH": f"{workdir}:{os.defpath}",
+        },
     )
 
 
@@ -279,32 +284,37 @@ def test_the_setup_step_requests_the_matrix_interpreter() -> None:
     )
 
 
-def test_the_verification_step_rejects_a_mismatched_interpreter() -> None:
-    """Exercise the comparison, not only the placement and environment.
+def test_the_verification_step_rejects_a_mismatched_interpreter(
+    tmp_path: pth.Path,
+) -> None:
+    """Execute the step, not only its name, environment and placement.
 
     The step exists to fail a leg whose `.venv` is not the interpreter that
-    leg requested. Running its embedded program with an expectation the
-    running interpreter cannot satisfy is what shows it does: a program that
-    merely printed the version would satisfy every assertion above and never
-    fail a leg.
+    leg requested. Running its body is what shows it does: a body that merely
+    printed the version, or compared a fixed slice, would satisfy every
+    assertion above and never fail a leg. The patch-differing case is what
+    requires the comparison to honour the precision the leg asked for, since
+    a hardcoded two-part slice would accept it.
     """
-    program = _verification_program()
-    matching = f"{sys.version_info.major}.{sys.version_info.minor}"
-    accepted = _run_verification(program, matching)
+    script = _step("Verify project interpreter").get("run")
+    assert isinstance(script, str), "the verification step must run a script"
+    major, minor, micro = sys.version_info[:3]
+    matching = f"{major}.{minor}"
+    accepted = _run_verification(script, matching, tmp_path / "matching")
     assert accepted.returncode == 0, (
         f"the verification must accept the running interpreter {matching}, got "
         f"{accepted.returncode}: {accepted.stderr}"
     )
-    mismatched = f"{sys.version_info.major + 1}.0"
-    rejected = _run_verification(program, mismatched)
-    assert rejected.returncode != 0, (
-        "the verification must fail a leg whose interpreter is not the one "
-        f"requested ({mismatched}), got {rejected.stdout!r}"
-    )
-    assert "but this leg requested" in rejected.stderr, (
-        "a rejected verification must say which interpreter was requested, got "
-        f"{rejected.stderr!r}"
-    )
+    for expected in (f"{major + 1}.0", f"{major}.{minor}.{micro + 1}"):
+        rejected = _run_verification(script, expected, tmp_path / expected)
+        assert rejected.returncode != 0, (
+            "the verification must fail a leg whose interpreter is not the one "
+            f"requested ({expected}), got {rejected.stdout!r}"
+        )
+        assert "but this leg requested" in rejected.stderr, (
+            "a rejected verification must say which interpreter was requested, "
+            f"got {rejected.stderr!r}"
+        )
 
 
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
