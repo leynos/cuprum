@@ -157,6 +157,10 @@ extend-ignore = [
 # behalf of the behaviour tests that call it, so its failures are test
 # assertions just as they were before the parser moved out of the test module.
 "tests/behaviour/_documentation_examples_support.py" = ["assert"]
+# The tool-pin fixture edits assert the shape of the copied files, so a case
+# that no longer matches its fixture fails where the mismatch is, before the
+# command under test runs.
+"scripts/tests/*_support.py" = ["assert"]
 
 [tool.ruff.lint.flake8-import-conventions]
 # Declare the banned `from` imports.

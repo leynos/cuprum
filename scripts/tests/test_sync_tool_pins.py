@@ -4,6 +4,9 @@ The command's whole job is to make a small, deterministic edit, so these tests
 drive it against a scratch copy of the six pin-bearing files rather than
 asserting on its source text. Each case advances only the canonical
 ``pyproject.toml`` pin and then checks what the command reports and writes.
+The fixture edits and their versions live in :mod:`tool_pin_support`, which
+derives them from the copied files, so a live pin bump does not leave a case
+failing in its setup before it has exercised anything.
 """
 
 from __future__ import annotations
@@ -15,67 +18,29 @@ from pathlib import Path
 import pytest
 
 from scripts import sync_tool_pins, tool_pins
+from scripts.tests import tool_pin_support as pins
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: The six files whose pins the command reads or derives.
-_PIN_FILES = (
-    "pyproject.toml",
-    "uv.lock",
-    "Makefile",
-    ".github/workflows/ci.yml",
-    ".github/workflows/build-wheels.yml",
-    ".github/actions/build-wheels/action.yml",
-)
-
 
 @pytest.fixture
 def repository(tmp_path: Path) -> Path:
     """Return a scratch repository holding copies of the pin-bearing files."""
-    for relative in _PIN_FILES:
+    for relative in pins.PIN_FILES:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes((_REPO_ROOT / relative).read_bytes())
     return tmp_path
 
 
-def _text(repository: Path, relative: str) -> str:
-    """Return one fixture file's decoded text."""
-    return (repository / relative).read_text(encoding="utf-8")
-
-
-def _replace(repository: Path, relative: str, old: str, new: str) -> None:
-    """Replace one unique occurrence in a fixture file."""
-    text = _text(repository, relative)
-    assert text.count(old) == 1, f"{relative} must hold exactly one {old!r}"
-    (repository / relative).write_text(text.replace(old, new), encoding="utf-8")
-
-
-def _bump(
-    repository: Path,
-    tool: str,
-    old: str,
-    new: str,
-    *,
-    lock: bool = True,
-) -> None:
-    """Advance a canonical pin, and the lock entry unless asked not to."""
-    _replace(repository, "pyproject.toml", f"{tool}=={old}", f"{tool}=={new}")
-    if lock:
-        _replace(
-            repository,
-            "uv.lock",
-            f'name = "{tool}"\nversion = "{old}"',
-            f'name = "{tool}"\nversion = "{new}"',
-        )
-
-
 def _snapshot(repository: Path) -> dict[str, bytes]:
     """Return every fixture file's bytes."""
-    return {relative: (repository / relative).read_bytes() for relative in _PIN_FILES}
+    return {
+        relative: (repository / relative).read_bytes() for relative in pins.PIN_FILES
+    }
 
 
 def _check(repository: Path) -> tuple[int, str]:
@@ -103,7 +68,7 @@ def test_check_accepts_a_synchronized_repository(repository: Path) -> None:
 
 def test_check_never_writes(repository: Path) -> None:
     """Reporting drift leaves every byte in place."""
-    _bump(repository, "maturin", "1.15.0", "1.16.0")
+    pins.bump(repository, "maturin")
     before = _snapshot(repository)
     status, output = _check(repository)
     assert status == 1, "a stale derived input must fail the check"
@@ -125,21 +90,21 @@ def test_sync_is_a_no_op_when_pins_are_synchronized(repository: Path) -> None:
 
 def test_a_maturin_bump_rewrites_both_derived_literals(repository: Path) -> None:
     """The workflow env pin and action default follow the canonical version."""
-    _bump(repository, "maturin", "1.15.0", "1.16.0")
-    before_lock = _text(repository, "uv.lock")
+    _, new = pins.bump(repository, "maturin")
+    before_lock = pins.text(repository, "uv.lock")
 
     changed, output = _sync(repository)
     assert {path.relative_to(repository).as_posix() for path in changed} == {
         ".github/workflows/build-wheels.yml",
         ".github/actions/build-wheels/action.yml",
     }, output
-    assert 'MATURIN_VERSION: "1.16.0"' in _text(
+    assert f'MATURIN_VERSION: "{new}"' in pins.text(
         repository, ".github/workflows/build-wheels.yml"
     ), "the workflow env pin must follow the canonical bump"
-    assert '    default: "1.16.0"' in _text(
+    assert f'    default: "{new}"' in pins.text(
         repository, ".github/actions/build-wheels/action.yml"
     ), "the action default must follow the canonical bump"
-    assert _text(repository, "uv.lock") == before_lock, "uv.lock is uv-owned"
+    assert pins.text(repository, "uv.lock") == before_lock, "uv.lock is uv-owned"
 
     after = _snapshot(repository)
     assert not _sync(repository)[0], "a second sync must change nothing"
@@ -147,8 +112,8 @@ def test_a_maturin_bump_rewrites_both_derived_literals(repository: Path) -> None
 
 
 def test_a_ruff_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None:
-    """Both Ruff selectors follow the canonical 0.16.9 pin."""
-    _bump(repository, "ruff", "0.16.4", "0.16.9")
+    """Both Ruff selectors follow the canonical bump."""
+    old, new = pins.bump(repository, "ruff")
     status, output = _check(repository)
     assert status == 1, output
     assert "Makefile RUFF_VERSION" in output, (
@@ -159,13 +124,13 @@ def test_a_ruff_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None
     )
 
     _sync(repository)
-    assert "RUFF_VERSION ?= 0.16.9" in _text(repository, "Makefile"), (
+    assert f"RUFF_VERSION ?= {new}" in pins.text(repository, "Makefile"), (
         "sync must rewrite the Makefile Ruff default"
     )
-    assert "RUFF_VERSION: '0.16.9'" in _text(repository, ".github/workflows/ci.yml"), (
-        "sync must rewrite the ci.yml Ruff pin"
-    )
-    assert "RUFF_VERSION ?= 0.16.4" not in _text(repository, "Makefile"), (
+    assert f"RUFF_VERSION: '{new}'" in pins.text(
+        repository, ".github/workflows/ci.yml"
+    ), "sync must rewrite the ci.yml Ruff pin"
+    assert f"RUFF_VERSION ?= {old}" not in pins.text(repository, "Makefile"), (
         "the old Ruff default must not survive in the Makefile"
     )
 
@@ -174,16 +139,18 @@ def test_a_commented_makefile_default_is_still_synchronized(
     repository: Path,
 ) -> None:
     """A trailing comment is preserved while the value is rewritten."""
-    _replace(
+    old = pins.pin(repository, "ruff")
+    new = pins.next_patch(old)
+    pins.replace(
         repository,
         "Makefile",
-        "RUFF_VERSION ?= 0.16.4\n",
-        "RUFF_VERSION ?= 0.16.4  # keep in step with the dev group\n",
+        f"RUFF_VERSION ?= {old}\n",
+        f"RUFF_VERSION ?= {old}  # keep in step with the dev group\n",
     )
     status, output = _check(repository)
     assert status == 0, f"a commented default must still match, got {output!r}"
 
-    _bump(repository, "ruff", "0.16.4", "0.16.9")
+    pins.bump(repository, "ruff")
     status, output = _check(repository)
     assert status == 1, output
     assert "Makefile RUFF_VERSION" in output, (
@@ -191,14 +158,14 @@ def test_a_commented_makefile_default_is_still_synchronized(
     )
 
     _sync(repository)
-    assert "RUFF_VERSION ?= 0.16.9  # keep in step with the dev group" in _text(
+    assert f"RUFF_VERSION ?= {new}  # keep in step with the dev group" in pins.text(
         repository, "Makefile"
     ), "sync must rewrite the value and keep the comment"
 
 
 def test_an_empty_makefile_default_is_drift_and_is_repaired(repository: Path) -> None:
     """Make defines the variable on an empty ``?=``, so it must not be skipped."""
-    _empty_makefile_declaration(repository)
+    pins.empty_makefile_declaration(repository)
     status, output = _check(repository)
     assert status == 1, output
     assert "Makefile RUFF_VERSION" in output, (
@@ -211,24 +178,26 @@ def test_an_empty_makefile_default_is_drift_and_is_repaired(repository: Path) ->
 
 
 def test_a_ty_bump_rewrites_the_makefile_and_ci_pins(repository: Path) -> None:
-    """Both ty selectors follow the canonical 0.0.84 pin."""
-    _bump(repository, "ty", "0.0.74", "0.0.84")
+    """Both ty selectors follow the canonical bump."""
+    _, new = pins.bump(repository, "ty")
     _sync(repository)
-    assert "TY_VERSION ?= 0.0.84" in _text(repository, "Makefile"), (
+    assert f"TY_VERSION ?= {new}" in pins.text(repository, "Makefile"), (
         "sync must rewrite the Makefile ty default"
     )
-    assert "TY_VERSION: '0.0.84'" in _text(repository, ".github/workflows/ci.yml"), (
-        "sync must rewrite the ci.yml ty pin"
-    )
+    assert f"TY_VERSION: '{new}'" in pins.text(
+        repository, ".github/workflows/ci.yml"
+    ), "sync must rewrite the ci.yml ty pin"
 
 
 def test_a_stale_lock_is_reported_for_uv_and_left_alone(repository: Path) -> None:
     """Lock drift is uv's work, not this command's."""
-    _bump(repository, "ruff", "0.16.4", "0.16.9", lock=False)
-    before_lock = _text(repository, "uv.lock")
+    pins.bump(repository, "ruff", lock=False)
+    before_lock = pins.text(repository, "uv.lock")
     _, output = _sync(repository)
     assert "uv lock" in output, f"sync must direct lock drift to uv, got {output!r}"
-    assert _text(repository, "uv.lock") == before_lock, "sync must leave uv.lock alone"
+    assert pins.text(repository, "uv.lock") == before_lock, (
+        "sync must leave uv.lock alone"
+    )
 
     status, check_output = _check(repository)
     assert status == 1, f"a stale lock must fail the check, got {check_output!r}"
@@ -240,123 +209,27 @@ def test_a_stale_lock_is_reported_for_uv_and_left_alone(repository: Path) -> Non
     )
 
 
-def _remove_ruff_requirement(repository: Path) -> None:
-    """Drop the canonical Ruff declaration."""
-    _replace(repository, "pyproject.toml", '    "ruff==0.16.4",\n', "")
-
-
-def _range_ruff_requirement(repository: Path) -> None:
-    """Turn the canonical Ruff pin into a range."""
-    _replace(repository, "pyproject.toml", '"ruff==0.16.4"', '"ruff>=0.16.4"')
-
-
-def _suffix_ruff_requirement(repository: Path) -> None:
-    """Append an environment marker to the canonical Ruff pin."""
-    _replace(
-        repository,
-        "pyproject.toml",
-        '"ruff==0.16.4"',
-        "\"ruff==0.16.4; python_version < '3.14'\"",
-    )
-
-
-def _duplicate_ruff_requirement(repository: Path) -> None:
-    """Declare Ruff a second time."""
-    _replace(
-        repository,
-        "pyproject.toml",
-        '    "ruff==0.16.4",\n',
-        '    "ruff==0.16.4",\n    "ruff==0.16.4",\n',
-    )
-
-
-def _remove_makefile_declaration(repository: Path) -> None:
-    """Drop the Makefile Ruff default."""
-    _replace(repository, "Makefile", "RUFF_VERSION ?= 0.16.4\n", "")
-
-
-def _duplicate_makefile_declaration(repository: Path) -> None:
-    """Declare the Makefile ty default twice."""
-    _replace(
-        repository,
-        "Makefile",
-        "TY_VERSION ?= 0.0.74\n",
-        "TY_VERSION ?= 0.0.74\nTY_VERSION ?= 0.0.74\n",
-    )
-
-
-def _empty_leading_makefile_declaration(repository: Path) -> None:
-    """Define the Makefile Ruff default empty ahead of the real assignment."""
-    _replace(
-        repository,
-        "Makefile",
-        "RUFF_VERSION ?= 0.16.4\n",
-        "RUFF_VERSION ?=\nRUFF_VERSION ?= 0.16.4\n",
-    )
-
-
-def _empty_makefile_declaration(repository: Path) -> None:
-    """Empty the Makefile Ruff default."""
-    _replace(repository, "Makefile", "RUFF_VERSION ?= 0.16.4\n", "RUFF_VERSION ?=\n")
-
-
-def _malformed_leading_makefile_declaration(repository: Path) -> None:
-    """Give the first Makefile Ruff default a multi-token value."""
-    _replace(
-        repository,
-        "Makefile",
-        "RUFF_VERSION ?= 0.16.4\n",
-        "RUFF_VERSION ?= 0.1.0 stale\nRUFF_VERSION ?= 0.16.4\n",
-    )
-
-
-def _multi_token_makefile_declaration(repository: Path) -> None:
-    """Give the Makefile Ruff default a multi-token value."""
-    _replace(
-        repository,
-        "Makefile",
-        "RUFF_VERSION ?= 0.16.4\n",
-        "RUFF_VERSION ?= 0.16.4 stale\n",
-    )
-
-
-def _unquoted_workflow_declaration(repository: Path) -> None:
-    """Remove the quoting the workflow site depends on."""
-    _replace(
-        repository,
-        ".github/workflows/ci.yml",
-        "RUFF_VERSION: '0.16.4'",
-        "RUFF_VERSION: 0.16.4",
-    )
-
-
-def _ambiguous_action_default(repository: Path) -> None:
-    """Add a second version-shaped default to the composite action."""
-    _replace(
-        repository,
-        ".github/actions/build-wheels/action.yml",
-        '    default: "1.15.0"\n',
-        '    default: "1.15.0"\n    default: "9.9.9"\n',
-    )
-
-
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (_remove_ruff_requirement, "exactly one ruff requirement"),
-        (_range_ruff_requirement, "exact 'ruff==X.Y.Z' release"),
-        (_suffix_ruff_requirement, "exact 'ruff==X.Y.Z' release"),
-        (_duplicate_ruff_requirement, "exactly one ruff requirement"),
-        (_remove_makefile_declaration, "Makefile RUFF_VERSION"),
-        (_duplicate_makefile_declaration, "exactly one Makefile TY_VERSION"),
-        (_empty_leading_makefile_declaration, "exactly one Makefile RUFF_VERSION"),
+        (pins.remove_ruff_requirement, "exactly one ruff requirement"),
+        (pins.range_ruff_requirement, "exact 'ruff==X.Y.Z' release"),
+        (pins.suffix_ruff_requirement, "exact 'ruff==X.Y.Z' release"),
+        (pins.duplicate_ruff_requirement, "exactly one ruff requirement"),
+        (pins.remove_makefile_declaration, "Makefile RUFF_VERSION"),
+        (pins.duplicate_makefile_declaration, "exactly one Makefile TY_VERSION"),
+        (pins.empty_leading_makefile_declaration, "exactly one Makefile RUFF_VERSION"),
         (
-            _malformed_leading_makefile_declaration,
+            pins.indented_leading_makefile_declaration,
             "exactly one Makefile RUFF_VERSION",
         ),
-        (_multi_token_makefile_declaration, "must be one token"),
-        (_unquoted_workflow_declaration, "ci.yml RUFF_VERSION"),
-        (_ambiguous_action_default, "maturin-version default"),
+        (
+            pins.malformed_leading_makefile_declaration,
+            "exactly one Makefile RUFF_VERSION",
+        ),
+        (pins.multi_token_makefile_declaration, "must be one token"),
+        (pins.unquoted_workflow_declaration, "ci.yml RUFF_VERSION"),
+        (pins.ambiguous_action_default, "maturin-version default"),
     ],
     ids=lambda value: getattr(value, "__name__", str(value)),
 )
@@ -378,7 +251,7 @@ def test_a_failed_replace_keeps_the_original_bytes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An atomic write that cannot replace leaves no partial or temp file."""
-    _bump(repository, "maturin", "1.15.0", "1.16.0")
+    pins.bump(repository, "maturin")
     before = _snapshot(repository)
 
     def _fail_replace(_self: Path, _destination: object) -> None:

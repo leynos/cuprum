@@ -97,3 +97,28 @@ def test_a_multi_token_default_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(AssertionError, match="single-token default"):
         read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_an_indented_first_default_still_counts_as_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    """Make ignores spaces before the name, so the assignment still counts."""
+    root = _repository(
+        tmp_path,
+        " RUFF_VERSION ?= 0.9.0\nRUFF_VERSION ?= 0.16.4\n",
+    )
+
+    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
+        read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_a_tab_indented_line_is_not_a_default(tmp_path: Path) -> None:
+    """A leading tab begins a recipe line, which Make never reads as a default."""
+    root = _repository(
+        tmp_path,
+        "\tRUFF_VERSION ?= 0.9.0\nRUFF_VERSION ?= 0.16.4\n",
+    )
+
+    assert read_makefile_pin(root, "RUFF_VERSION") == "0.16.4", (
+        "a tab-indented recipe line must not be read as a Make default"
+    )

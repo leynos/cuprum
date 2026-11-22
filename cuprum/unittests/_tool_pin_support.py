@@ -307,8 +307,10 @@ def read_makefile_pin(root: pth.Path, name: str) -> str:
     # right-hand side is captured, even when it is empty or malformed, because
     # Make counts every such assignment; matching only well-formed values would
     # let an earlier default hide while a later line was read as the pin.
+    # Leading spaces are allowed because Make reads an assignment from any line
+    # that does not start with a tab, and a tab begins a recipe line instead.
     pattern = re.compile(
-        rf"^{re.escape(name)}[ \t]*\?=[ \t]*(?P<value>[^#\n]*?)[ \t]*(?:#.*)?$",
+        rf"^[ ]*{re.escape(name)}[ \t]*\?=[ \t]*(?P<value>[^#\n]*?)[ \t]*(?:#.*)?$",
         re.MULTILINE,
     )
     value = read_single_match(
