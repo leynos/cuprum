@@ -30,7 +30,13 @@ import typing as typ
 from tests.helpers.ci_documents import require
 from tests.helpers.ci_leg_matrix import admits, matrix_legs
 from tests.helpers.ci_placement import placement
-from tests.helpers.ci_workflows import job_env, save_steps, step_inputs, steps
+from tests.helpers.ci_workflows import (
+    job_env,
+    restore_steps,
+    save_steps,
+    step_inputs,
+    steps,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -288,4 +294,63 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
                 message=f"{message}: publishes {family} more than once",
             )
             families.add(family)
+    return families
+
+
+def reader_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
+    """Resolve every compiler-cache family a job restores from.
+
+    Parameters
+    ----------
+    workflow_name:
+        Workflow file name, such as ``ci.yml``.
+    job_name:
+        Job key within that workflow.
+
+    Returns
+    -------
+    set[CacheFamily]
+        One entry per compiler-cache family the job can restore, with matrix
+        legs expanded and legs excluded by a matrix-valued guard omitted. The
+        lane is the job's owned lane; a fork arm resolves to the hosted lane
+        and is deliberately cold, so it has no writer to join to.
+
+    Notes
+    -----
+    Fails the contract, through :func:`require`, when the job renders its keys
+    other than exactly once through the shared renderer, when a restore names
+    a key with no declared scope, or when a scoping input is left to the
+    action's default. The writer path refuses a default for the same reason:
+    a family whose scope the job does not spell cannot be checked for an
+    owner by reading the job.
+    """
+    inputs = _renderer_inputs(workflow_name, job_name)
+    families: set[CacheFamily] = set()
+    for step in restore_steps(workflow_name, job_name):
+        message = f"{workflow_name}:{job_name} restore must declare inputs"
+        key_name = _key_name(step, message)
+        if key_name != "SCCACHE_CACHE_KEY":
+            continue
+        require(
+            condition=key_name in KEY_SCOPES,
+            message=f"{message}: {key_name} has no declared scope",
+        )
+        missing = [name for name in KEY_SCOPES[key_name] if name not in inputs]
+        require(
+            condition=not missing,
+            message=f"{message}: must declare {missing}",
+        )
+        for leg in matrix_legs(workflow_name, job_name):
+            if not admits(step.get("if"), leg):
+                continue
+            scope = tuple(
+                _resolve(inputs[name], leg, message) for name in KEY_SCOPES[key_name]
+            )
+            scope += _compiler_version_scope(
+                inputs,
+                leg,
+                message,
+                job_identity=(workflow_name, job_name),
+            )
+            families.add(CacheFamily(key_name, _lane(workflow_name, job_name), scope))
     return families
