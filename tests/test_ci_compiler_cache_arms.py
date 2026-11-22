@@ -48,23 +48,55 @@ if typ.TYPE_CHECKING:
 
 HOSTED_LABEL = "ubuntu-latest"
 OWNED_LABEL = "ubicloud-standard-2"
+
+
+class Scenario(typ.NamedTuple):
+    """One truth assignment and the three values it must produce.
+
+    Attributes
+    ----------
+    name:
+        The event class, such as ``fork`` or ``owned``.
+    values:
+        The identifiers the expressions read, with their assigned values.
+    label:
+        The runner label the assignment must select.
+    backend:
+        The store the assignment must select.
+    credentials:
+        Whether the credentials step must run.
+    """
+
+    name: str
+    values: dict[str, object]
+    label: str
+    backend: str
+    credentials: bool
+
+
 #: The three events the predicate has to separate: a fork pull request, a
 #: Dependabot pull request, and a run on the owned arm.
 SCENARIOS: typ.Final = (
-    ("fork", {FORK_FIELD: True, AUTHOR_FIELD: ""}, HOSTED_LABEL, "local", False),
-    (
+    Scenario(
+        "fork",
+        {FORK_FIELD: True, AUTHOR_FIELD: ""},
+        HOSTED_LABEL,
+        "local",
+        credentials=False,
+    ),
+    Scenario(
         "dependabot",
         {FORK_FIELD: False, AUTHOR_FIELD: "dependabot[bot]"},
         HOSTED_LABEL,
         "local",
-        False,
+        credentials=False,
     ),
-    (
+    Scenario(
         "owned",
         {FORK_FIELD: False, AUTHOR_FIELD: "leynos"},
         OWNED_LABEL,
         "gha",
-        True,
+        credentials=True,
     ),
 )
 
@@ -144,17 +176,9 @@ def _outcome(
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), FORK_REACHABLE_CASES)
-@pytest.mark.parametrize(
-    ("scenario", "values", "label", "backend", "credentials"), SCENARIOS
-)
+@pytest.mark.parametrize("scenario", SCENARIOS)
 def test_the_backend_and_credentials_follow_the_runner_predicate(
-    workflow_name: str,
-    job_name: str,
-    scenario: str,
-    values: cabc.Mapping[str, object],
-    label: str,
-    backend: str,
-    credentials: bool,
+    workflow_name: str, job_name: str, scenario: Scenario
 ) -> None:
     """One predicate decides all three, so a swapped arm cannot pass."""
     runner_condition = _bare(_predicate(workflow_name, job_name))
@@ -166,17 +190,11 @@ def test_the_backend_and_credentials_follow_the_runner_predicate(
         f"{workflow_name}:{job_name} guards its credentials with a different "
         f"predicate than its runner; runner {runner_condition!r}"
     )
-    observed_label, observed_backend, observed_credentials = _outcome(
-        workflow_name, job_name, values
-    )
-    assert (observed_label, observed_backend, observed_credentials) == (
-        label,
-        backend,
-        credentials,
-    ), (
-        f"{workflow_name}:{job_name} on {scenario} must select "
-        f"{(label, backend, credentials)!r}, got "
-        f"{(observed_label, observed_backend, observed_credentials)!r}"
+    observed = _outcome(workflow_name, job_name, scenario.values)
+    expected = (scenario.label, scenario.backend, scenario.credentials)
+    assert observed == expected, (
+        f"{workflow_name}:{job_name} on {scenario.name} must select "
+        f"{expected!r}, got {observed!r}"
     )
 
 

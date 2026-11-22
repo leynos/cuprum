@@ -291,7 +291,7 @@ inventory are:
 - The experimental matrix leg names the exact patch `3.15.2` and is skipped on
   pull requests; it therefore has no pull-request consumer at all.
 - The `modern-stable` route exists with its own `1.99.1` compiler family.
-- Cranelift is disabled; the dev-fast routes use LLVM and the mold linker.
+- Cranelift is disabled; the dev-fast routes use LLVM and the `mold` linker.
 - MSRV is `1.87.0`, and Dependabot pull requests take the hosted arm.
 
 ### Families and their routes
