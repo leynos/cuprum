@@ -35,51 +35,36 @@ def _safe_close(fd: int) -> None:
 class _OwnedDescriptor:
     """Close one owned descriptor number at most once.
 
-    A test must not close a number it no longer owns. Once the test, the
-    feeder, or the native boundary has closed or adopted a descriptor, another
-    thread can reuse that number, and a suppressed second close would then
-    close an unrelated resource. Ownership is therefore tracked against the
-    resource identity recorded when the descriptor was opened, not against
-    whether the number happens to open: a reused number names something else.
+    Ownership is decided by the contract of the call the descriptor is handed
+    to, never by inspecting the number: descriptor metadata cannot distinguish
+    an owned descriptor from a number another thread has reused, and on
+    Windows pipe metadata is zeroed entirely. A caller that transfers
+    ownership calls :meth:`disarm` as part of that transfer; a caller that
+    keeps it leaves the owner armed so the cleanup closes it exactly once.
     """
 
     def __init__(self, fd: int) -> None:
-        """Take ownership of ``fd`` and record what it names."""
+        """Take ownership of ``fd``."""
         self.fd = fd
-        self._identity = _descriptor_identity(fd)
         self._is_owned = True
 
     def disarm(self) -> None:
-        """Stop closing ``fd`` because another owner has it, or has closed it."""
+        """Stop closing ``fd`` because ownership has transferred or ended."""
         self._is_owned = False
-
-    def disarm_if_adopted(self) -> None:
-        """Disarm once ``fd`` no longer names the resource this owner opened.
-
-        The native boundary closes what it adopts, so a closed number is the
-        adoption signal. A number that was closed and then reused reports a
-        different identity and disarms too, which stops the cleanup from
-        closing a resource another thread now holds. A number that still names
-        the owned resource means the call failed before adoption, so this
-        owner keeps responsibility for closing it.
-        """
-        if _descriptor_identity(self.fd) != self._identity:
-            self.disarm()
 
     def close(self) -> None:
-        """Close ``fd`` once, and only while it still names the owned resource."""
-        if not self._is_owned:
-            return
-        self._is_owned = False
-        if _descriptor_identity(self.fd) == self._identity:
+        """Close ``fd`` once if this owner still holds it."""
+        if self._is_owned:
+            self._is_owned = False
             _safe_close(self.fd)
 
 
 def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
     """Open a pipe write end for a native pump, keeping its read end open.
 
-    A pipe has a unique resource identity, so an owner can tell adoption apart
-    from a descriptor number another thread has reused.
+    The read end stays open so the pump's writes cannot block and the stack
+    closes both ends. The owner is disarmed where the native entry adopts the
+    writer, and left armed where the call rejects it first.
 
     Returns
     -------
@@ -89,15 +74,6 @@ def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
     reader_fd, writer_fd = os.pipe()
     stack.callback(_safe_close, reader_fd)
     return _OwnedDescriptor(writer_fd)
-
-
-def _descriptor_identity(fd: int) -> tuple[int, int, int] | None:
-    """Return the resource identity behind ``fd``, or ``None`` when closed."""
-    try:
-        status = os.fstat(fd)
-    except OSError:
-        return None
-    return (status.st_dev, status.st_ino, status.st_mode)
 
 
 def _is_descriptor_open(fd: int) -> bool:

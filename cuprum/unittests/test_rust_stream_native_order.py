@@ -170,11 +170,12 @@ def test_pump_adopts_and_closes_the_writer_on_success(
             )
         except OSError:
             # A native I/O failure happens after adoption, so the pump has
-            # already closed the writer; an OSError here cannot mean the test
-            # still owns it. Disarm rather than probe a number Rust released.
+            # already closed the writer; disarm rather than close a number
+            # Rust released.
             writer.disarm()
             raise
-        writer.disarm_if_adopted()
+        # The pump returned, so it adopted and closed the writer.
+        writer.disarm()
 
         assert moved == len(payload), "the pump must transfer every payload byte"
         assert _descriptor_state(writer.fd) == "closed", (
@@ -182,16 +183,16 @@ def test_pump_adopts_and_closes_the_writer_on_success(
         )
 
 
-@_unix_only
-def test_owner_disarms_before_a_failure_and_after_a_reused_number(
+def test_owner_closes_only_while_the_contract_leaves_it_armed(
     native_streams: ModuleType,
 ) -> None:
-    """Ownership follows the resource, not merely whether the number opens.
+    """Cleanup follows the call's ownership contract, never descriptor state.
 
-    Two directions are pinned. A pump rejected before adoption leaves the
-    writer open, so the owner stays armed and closes it once. A writer the
-    native side released, whose number another open then took, reports a
-    different resource, so the owner disarms and leaves that number alone.
+    A pump rejected before adoption leaves the writer with the test, so the
+    armed owner closes it once. A pump that adopted the writer leaves the owner
+    disarmed; if that number is later reused, the owner must not close it.
+    Both directions are decided by which call was made, so they hold on every
+    platform without inspecting descriptor metadata.
     """
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
@@ -207,30 +208,26 @@ def test_owner_disarms_before_a_failure_and_after_a_reused_number(
         assert _descriptor_state(writer.fd) == "open", (
             "a rejected buffer must not adopt the writer"
         )
-        writer.disarm_if_adopted()
         writer.close()
         assert _descriptor_state(writer.fd) == "closed", (
             "the owner must still close a writer the native side never took"
         )
 
-        # Simulate the native side releasing the next writer without telling
-        # the owner, then let another open reclaim the number. The owner's
-        # probe must see a different resource and leave the new one alone.
+    # A disarmed owner is inert: let another open reclaim the number and check
+    # that the owner's close leaves it alone.
+    with contextlib.ExitStack() as stack:
         adopted = _open_pipe_sink(stack)
-        stack.callback(adopted.close)
         released_number = adopted.fd
+        adopted.disarm()
         _safe_close(released_number)
-        # Keep every descriptor opened while the released number is free, so
-        # the allocator's lowest free slot is the one the owner still names.
         reclaimed = os.open(os.devnull, os.O_WRONLY)
         stack.callback(_safe_close, reclaimed)
         assert reclaimed == released_number, (
             "the scenario needs the released number to be reclaimed"
         )
-        adopted.disarm_if_adopted()
         adopted.close()
         assert _descriptor_state(reclaimed) == "open", (
-            "cleanup must not close a number another owner has reused"
+            "a disarmed owner must not close a number another owner has reused"
         )
 
 
@@ -547,7 +544,9 @@ def test_native_pump_transfers_with_the_declared_default_buffer(
         try:
             moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
         finally:
-            sink.disarm_if_adopted()
+            # The native entry adopts and closes the writer on return or on a
+            # post-adoption I/O failure, so the test never closes it again.
+            sink.disarm()
 
         assert moved == len(payload), (
             "the native default buffer must transfer the whole stream"
@@ -583,7 +582,9 @@ def test_native_extracts_index_like_arguments_once(
                 reader, sink_argument, buffer_size=size
             )
         finally:
-            sink.disarm_if_adopted()
+            # Conversion and transfer succeeded, so the native entry owns the
+            # writer from here on.
+            sink.disarm()
 
         assert moved == len(payload), "the index-like writer must receive every byte"
         assert _descriptor_state(sink.fd) == "closed", (

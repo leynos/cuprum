@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
 import typing as typ
 
 import pytest
@@ -52,14 +51,10 @@ _I32_MAX = (1 << 31) - 1
 _I64_MAX = (1 << 63) - 1
 _I64_MIN = -(1 << 63)
 
-# The descriptor properties assert the Unix i32 file-descriptor conversion
-# contract. On Windows the wrapper routes fds through msvcrt.get_osfhandle and
-# the native path accepts pointer-sized handles, so those assertions do not
-# hold; skip them there rather than encode platform-specific error semantics.
-_pump_unix_only = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pump still requires the Unix descriptor contract",
-)
+# The shared Python policy rejects a negative or above-i32 reader on both
+# platforms before any platform step, so the reader-range property holds
+# everywhere. This marker exists only for properties whose subject is a
+# platform step that differs by design.
 
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
@@ -277,7 +272,6 @@ def test_consume_out_of_i64_descriptor_stays_an_extraction_error(
         rust_streams.rust_consume_stream(beyond_i64)
 
 
-@_pump_unix_only
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
@@ -293,6 +287,8 @@ def test_pump_rejects_invalid_reader_descriptor(
 
     The writer is a genuinely valid descriptor, so the ``ValueError`` can only
     originate from the invalid reader, not from a coincidentally invalid writer.
+    The shared Python policy decides this before the Windows handle conversion,
+    so the property runs on both platforms.
     """
     writer_fd = os.open(os.devnull, os.O_WRONLY)
     # The wrapper closes the writer on this rejection; a second close here
