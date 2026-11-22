@@ -78,8 +78,8 @@ class ToolPin:
 def _makefile_site(name: str) -> Site:
     """Return the Makefile ``NAME ?= value`` site for one variable."""
 
-    # Capture the whole right-hand side, malformed or not: Make keeps the first.
     def _refuse_multi_token(match: re.Match[str]) -> None:
+        """Refuse a multi-token default; Make keeps the first assignment."""
         value = match.group("value")
         if any(character.isspace() for character in value):
             msg = f"Makefile {name}: a default must be one token, found {value!r}"

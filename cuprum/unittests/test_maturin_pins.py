@@ -3,10 +3,14 @@
 This module owns the maturin pin-synchronization checks. The version is read
 from ``pyproject.toml`` and ``uv.lock`` through the shared structured readers
 in `_tool_pin_support.py`, so maturin is checked exactly the way every other
-tool pin is: one declaration, one lock entry, one exact release. The container
-reference pattern has a second consumer and sits in `_maturin_pin_support.py`,
-which documents why. Wheel building and inspection keep their helpers, because
-those wrap `subprocess` and `zipfile` work that does not inline cleanly.
+tool pin is: one declaration, one lock entry, one exact release. The two YAML
+pins are read through `tests.helpers.strict_yaml`, which refuses a document
+declaring one key twice; a text pattern would accept the first of a duplicated
+``MATURIN_VERSION`` and leave the parity assertion passing on a pin the file no
+longer means. The container reference pattern has a second consumer and sits
+in `_maturin_pin_support.py`, which documents why. Wheel building and
+inspection keep their helpers, because those wrap `subprocess` and `zipfile`
+work that does not inline cleanly.
 """
 
 from __future__ import annotations
@@ -17,23 +21,21 @@ import re
 import typing as typ
 
 import pytest
-import yaml
 
 from cuprum.unittests._maturin_pin_support import MANYLINUX_CONTAINER_SHA256_RE
 from cuprum.unittests._tool_pin_support import (
+    VERSION_RE,
     read_lock_pin,
     read_pyproject_pin,
-    read_single_match,
     read_text,
 )
+from tests.helpers import strict_yaml
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-_WORKFLOW_PIN_RE = re.compile(r'MATURIN_VERSION:\s*"(\d+\.\d+\.\d+)"')
-_ACTION_PIN_RE = re.compile(r'default:\s*"(\d+\.\d+\.\d+)"')
 _AARCH64_CONTAINER_COMMENT_RE = re.compile(
     r"^\s*MANYLINUX_AARCH64_CONTAINER:\s*>-\s+#\s*\S.*$",
     re.MULTILINE,
@@ -44,22 +46,35 @@ _AARCH64_CONTAINER_USAGE_RE = re.compile(
 )
 
 
+def _yaml_pin(root: pth.Path, relative: str, *path: str) -> str:
+    """Read one exact-release pin from a CI document's nested mapping."""
+    document: object = strict_yaml.load(read_text(root, relative), relative)
+    for key in path:
+        assert isinstance(document, dict), f"{relative} must parse to a mapping"
+        document = typ.cast("dict[str, object]", document).get(key)
+    assert isinstance(document, str), (
+        f"{relative} must declare {'/'.join(path)} as a string"
+    )
+    assert VERSION_RE.fullmatch(document), (
+        f"{relative} must pin {'/'.join(path)} to an exact release, found {document!r}"
+    )
+    return document
+
+
 def _read_maturin_pins(root: pth.Path) -> dict[str, str]:
     """Read the maturin version pins from every synchronized location."""
     return {
         "pyproject.toml": read_pyproject_pin(root, "maturin"),
         "uv.lock": read_lock_pin(root, "maturin"),
-        "build-wheels.yml": read_single_match(
-            read_text(root, ".github/workflows/build-wheels.yml"),
-            _WORKFLOW_PIN_RE,
-            location=".github/workflows/build-wheels.yml",
-            subject="MATURIN_VERSION pin",
+        "build-wheels.yml": _yaml_pin(
+            root, ".github/workflows/build-wheels.yml", "env", "MATURIN_VERSION"
         ),
-        "build-wheels/action.yml": read_single_match(
-            read_text(root, ".github/actions/build-wheels/action.yml"),
-            _ACTION_PIN_RE,
-            location=".github/actions/build-wheels/action.yml",
-            subject="maturin-version default",
+        "build-wheels/action.yml": _yaml_pin(
+            root,
+            ".github/actions/build-wheels/action.yml",
+            "inputs",
+            "maturin-version",
+            "default",
         ),
     }
 
@@ -71,7 +86,7 @@ def _read_manylinux_aarch64_container_ref(root: pth.Path) -> str:
     assert _AARCH64_CONTAINER_COMMENT_RE.search(workflow_text), (
         "MANYLINUX_AARCH64_CONTAINER must retain the source-tag comment"
     )
-    workflow = yaml.safe_load(workflow_text)
+    workflow = strict_yaml.load(workflow_text, workflow_path)
     assert isinstance(workflow, dict), f"{workflow_path} must parse to a mapping"
     environment = workflow.get("env")
     assert isinstance(environment, dict), f"{workflow_path} must declare env"

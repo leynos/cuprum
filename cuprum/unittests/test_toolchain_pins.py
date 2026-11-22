@@ -33,7 +33,6 @@ import tomllib
 import typing as typ
 
 import pytest
-import yaml
 
 from cuprum.unittests._timeout_lane_support import (
     EXPECTED_NEXTEST_MIN_VERSION,
@@ -46,6 +45,7 @@ from cuprum.unittests._tool_pin_support import (
     read_pyproject_pin,
 )
 from cuprum.unittests.test_doctest_warning_contract import DEV_FAST_TOOLCHAIN
+from tests.helpers import strict_yaml
 from tests.helpers.docs import repo_root
 
 if typ.TYPE_CHECKING:
@@ -102,8 +102,12 @@ class Workflow(typ.TypedDict, total=False):
 
 def _ci_workflow(root: pth.Path) -> Workflow:
     """Read the CI workflow after verifying its outer mapping shape."""
-    workflow = yaml.safe_load(
-        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    # The strict loader refuses a document declaring one key twice, which a
+    # plain `safe_load` would silently resolve to the last value; a pinned
+    # variable in the discarded half would then never be scanned.
+    workflow = strict_yaml.load(
+        (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        "ci.yml",
     )
     assert isinstance(workflow, dict), "ci.yml must parse to a mapping"
     return typ.cast("Workflow", workflow)
