@@ -293,8 +293,9 @@ def test_the_verification_step_rejects_a_mismatched_interpreter(
     leg requested. Running its body is what shows it does: a body that merely
     printed the version would satisfy every assertion above and never fail a
     leg. Accepting the exact three-part version requires the comparison to
-    honour the precision a leg asks for, and rejecting a request that differs
-    only in its patch requires it to compare every part it was given.
+    honour the precision a leg asks for; rejecting a minor-only, a major-only
+    and a patch-only difference requires it to compare every part it was
+    given, and each rejection must name the version it refused.
     """
     script = _step("Verify project interpreter").get("run")
     assert isinstance(script, str), "the verification step must run a script"
@@ -305,15 +306,22 @@ def test_the_verification_step_rejects_a_mismatched_interpreter(
             f"the verification must accept the running interpreter {matching}, "
             f"got {accepted.returncode}: {accepted.stderr}"
         )
-    for expected in (f"{major + 1}.0", f"{major}.{minor}.{micro + 1}"):
+    for expected in (
+        f"{major}.{minor + 1}",
+        f"{major + 1}.0",
+        f"{major}.{minor}.{micro + 1}",
+    ):
         rejected = _run_verification(script, expected, tmp_path / expected)
         assert rejected.returncode != 0, (
             "the verification must fail a leg whose interpreter is not the one "
             f"requested ({expected}), got {rejected.stdout!r}"
         )
         assert "but this leg requested" in rejected.stderr, (
-            "a rejected verification must say which interpreter was requested, "
-            f"got {rejected.stderr!r}"
+            f"a rejected verification must say why it refused, got {rejected.stderr!r}"
+        )
+        assert expected in rejected.stderr, (
+            "a rejected verification must name the version it requested, got "
+            f"{rejected.stderr!r}"
         )
 
 
