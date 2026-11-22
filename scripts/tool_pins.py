@@ -58,13 +58,13 @@ class Site:
     pattern:
         Multiline pattern whose ``value`` group is the literal to compare.
     validator:
-        Optional extra structural check run once the pattern has matched.
+        Optional extra structural check run on the one matched declaration.
     """
 
     relative_path: str
     label: str
     pattern: re.Pattern[str]
-    validator: cabc.Callable[[str], None] | None = None
+    validator: cabc.Callable[[re.Match[str]], None] | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -77,17 +77,23 @@ class ToolPin:
 
 def _makefile_site(name: str) -> Site:
     """Return the Makefile ``NAME ?= value`` site for one variable."""
-    # The value may be empty, and must still be counted: Make defines the
-    # variable on such a line, so a later `?=` never takes effect and the
-    # empty assignment is the declaration in force.
+
+    # Capture the whole right-hand side, malformed or not: Make keeps the first.
+    def _refuse_multi_token(match: re.Match[str]) -> None:
+        value = match.group("value")
+        if any(character.isspace() for character in value):
+            msg = f"Makefile {name}: a default must be one token, found {value!r}"
+            raise PinError(msg)
+
     return Site(
         relative_path="Makefile",
         label=f"Makefile {name}",
         pattern=re.compile(
             rf"^(?P<prefix>{re.escape(name)}[ \t]*\?=[ \t]*)"
-            rf"(?P<value>[^\s#]*)(?P<suffix>[ \t]*(?:#.*)?)$",
+            rf"(?P<value>[^#\n]*?)(?P<suffix>[ \t]*(?:#.*)?)$",
             re.MULTILINE,
         ),
+        validator=_refuse_multi_token,
     )
 
 
@@ -123,9 +129,9 @@ _ACTION_INPUT_BLOCK_RE = re.compile(
 )
 
 
-def _require_one_action_default(text: str) -> None:
+def _require_one_action_default(match: re.Match[str]) -> None:
     """Refuse a ``maturin-version`` block carrying more than one default."""
-    block = _ACTION_INPUT_BLOCK_RE.search(text)
+    block = _ACTION_INPUT_BLOCK_RE.search(match.string)
     if block is None:
         return
     defaults = re.findall(r'^    default: "', block.group(0), re.MULTILINE)
@@ -311,7 +317,7 @@ def match_site(text: str, site: Site) -> re.Match[str]:
         )
         raise PinError(msg)
     if site.validator is not None:
-        site.validator(text)
+        site.validator(matches[0])
     return matches[0]
 
 

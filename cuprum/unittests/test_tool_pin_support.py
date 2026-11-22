@@ -76,3 +76,24 @@ def test_an_empty_first_default_still_counts_as_a_duplicate(tmp_path: Path) -> N
 
     with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
         read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_a_malformed_first_default_still_counts_as_a_duplicate(
+    tmp_path: Path,
+) -> None:
+    """A value carrying whitespace is still an assignment Make keeps."""
+    root = _repository(
+        tmp_path,
+        "RUFF_VERSION ?= 0.1.0 unexpected\nRUFF_VERSION ?= 0.15.0\n",
+    )
+
+    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
+        read_makefile_pin(root, "RUFF_VERSION")
+
+
+def test_a_multi_token_default_is_refused(tmp_path: Path) -> None:
+    """A default no single pin can mirror is not a pin."""
+    root = _repository(tmp_path, "RUFF_VERSION ?= 0.16.4 0.16.5\n")
+
+    with pytest.raises(AssertionError, match="single-token default"):
+        read_makefile_pin(root, "RUFF_VERSION")

@@ -15,6 +15,7 @@ rather than asserted from the recipe text.
 from __future__ import annotations
 
 import os
+import shlex
 import typing as typ
 
 import pytest
@@ -43,9 +44,9 @@ def _run_maturin(
         (
             f"printf '%s\\n' "
             f'"${{MATURIN_NO_MISSING_BUILD_BACKEND_WARNING-}}" '
-            f'> "{environment_record}"\n'
+            f"> {shlex.quote(str(environment_record))}\n"
             f'for arg in "$@"; do printf \'%s\\n\' "$arg" '
-            f'>> "{record}"; done\n'
+            f">> {shlex.quote(str(record))}; done\n"
         ),
     )
     build_step = find_step(action=ACTION, name=STEP)
@@ -141,12 +142,14 @@ def _install_python_stub(tools: Path, *, record: Path, installed: str) -> None:
     the argument boundaries itself; a quoting regression therefore fails the
     invocation instead of reaching a permissive ``"$*"`` match.
     """
+    record_path = shlex.quote(str(record))
     install_tool(
         tools,
         "python",
         (
-            f"printf '%s\\n' '{_CALL_BOUNDARY}' >> '{record}'\n"
-            f"for arg in \"$@\"; do printf '%s\\n' \"$arg\" >> '{record}'; done\n"
+            f"printf '%s\\n' '{_CALL_BOUNDARY}' >> {record_path}\n"
+            f'for arg in "$@"; do printf \'%s\\n\' "$arg" '
+            f">> {record_path}; done\n"
             'if [ "$#" -eq 5 ] && [ "$1" = "-m" ] && [ "$2" = "pip" ] &&\n'
             '   [ "$3" = "install" ] && [ "$4" = "--upgrade" ]; then\n'
             '  case "$5" in\n'
@@ -155,7 +158,7 @@ def _install_python_stub(tools: Path, *, record: Path, installed: str) -> None:
             "fi\n"
             'if [ "$#" -eq 3 ] && [ "$1" = "-m" ] && [ "$2" = "maturin" ] &&\n'
             '   [ "$3" = "--version" ]; then\n'
-            f"  printf 'maturin %s\\n' '{installed}'\n"
+            f"  printf 'maturin %s\\n' {shlex.quote(installed)}\n"
             "  exit 0\n"
             "fi\n"
             "printf 'unexpected python invocation: %s\\n' \"$*\" >&2\n"
@@ -248,4 +251,22 @@ def test_a_different_installed_release_fails_the_step(tmp_path: Path) -> None:
     )
     assert "maturin 1.15.0" in result.stderr, (
         f"the failure must name the requested pin, got {result.stderr!r}"
+    )
+
+
+def test_both_recorders_survive_a_workspace_path_with_an_apostrophe(
+    tmp_path: Path,
+) -> None:
+    """A quote in the temporary directory must not break the stand-ins."""
+    workspace = tmp_path / "O'Brien"
+    workspace.mkdir()
+
+    argv, warning_setting = _run_maturin(workspace, target="", wheelhouse="wheelhouse")
+    assert warning_setting == "1", "the build recorder must survive a quoted path"
+    assert "--out" in argv, f"the build must still record argv, got {argv!r}"
+
+    result, invocations, _ = _run_install(workspace, requested="1.15.0")
+    assert result.returncode == 0, result.stderr
+    assert invocations == [_EXPECTED_INSTALL_ARGV, _EXPECTED_VERSION_ARGV], (
+        f"the install recorder must survive a quoted path, got {invocations!r}"
     )

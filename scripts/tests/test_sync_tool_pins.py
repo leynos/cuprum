@@ -300,6 +300,26 @@ def _empty_makefile_declaration(repository: Path) -> None:
     _replace(repository, "Makefile", "RUFF_VERSION ?= 0.16.4\n", "RUFF_VERSION ?=\n")
 
 
+def _malformed_leading_makefile_declaration(repository: Path) -> None:
+    """Give the first Makefile Ruff default a multi-token value."""
+    _replace(
+        repository,
+        "Makefile",
+        "RUFF_VERSION ?= 0.16.4\n",
+        "RUFF_VERSION ?= 0.1.0 stale\nRUFF_VERSION ?= 0.16.4\n",
+    )
+
+
+def _multi_token_makefile_declaration(repository: Path) -> None:
+    """Give the Makefile Ruff default a multi-token value."""
+    _replace(
+        repository,
+        "Makefile",
+        "RUFF_VERSION ?= 0.16.4\n",
+        "RUFF_VERSION ?= 0.16.4 stale\n",
+    )
+
+
 def _unquoted_workflow_declaration(repository: Path) -> None:
     """Remove the quoting the workflow site depends on."""
     _replace(
@@ -330,6 +350,11 @@ def _ambiguous_action_default(repository: Path) -> None:
         (_remove_makefile_declaration, "Makefile RUFF_VERSION"),
         (_duplicate_makefile_declaration, "exactly one Makefile TY_VERSION"),
         (_empty_leading_makefile_declaration, "exactly one Makefile RUFF_VERSION"),
+        (
+            _malformed_leading_makefile_declaration,
+            "exactly one Makefile RUFF_VERSION",
+        ),
+        (_multi_token_makefile_declaration, "must be one token"),
         (_unquoted_workflow_declaration, "ci.yml RUFF_VERSION"),
         (_ambiguous_action_default, "maturin-version default"),
     ],
