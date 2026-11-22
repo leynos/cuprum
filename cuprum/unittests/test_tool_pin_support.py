@@ -41,12 +41,19 @@ def test_a_trailing_comment_does_not_hide_the_default(tmp_path: Path) -> None:
     )
 
 
-def test_two_defaults_are_refused_when_one_is_commented(tmp_path: Path) -> None:
-    """A commented duplicate still counts, because Make keeps the first one."""
-    root = _repository(
-        tmp_path,
+@pytest.mark.parametrize(
+    "body",
+    [
         "RUFF_VERSION ?= 9.9.9  # stale\nRUFF_VERSION ?= 0.16.4\n",
-    )
+        "RUFF_VERSION ?=\nRUFF_VERSION ?= 0.16.4\n",
+        "RUFF_VERSION ?= 0.1.0 unexpected\nRUFF_VERSION ?= 0.15.0\n",
+        " RUFF_VERSION ?= 0.9.0\nRUFF_VERSION ?= 0.16.4\n",
+    ],
+    ids=["commented", "empty", "malformed", "indented"],
+)
+def test_a_duplicate_default_is_refused(tmp_path: Path, body: str) -> None:
+    """Make keeps the first assignment whatever its value looks like."""
+    root = _repository(tmp_path, body)
 
     with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
         read_makefile_pin(root, "RUFF_VERSION")
@@ -70,45 +77,11 @@ def test_an_empty_default_is_refused(tmp_path: Path) -> None:
         read_makefile_pin(root, "RUFF_VERSION")
 
 
-def test_an_empty_first_default_still_counts_as_a_duplicate(tmp_path: Path) -> None:
-    """Make defines the variable on the first ``?=``, even with no value."""
-    root = _repository(tmp_path, "RUFF_VERSION ?=\nRUFF_VERSION ?= 0.16.4\n")
-
-    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
-        read_makefile_pin(root, "RUFF_VERSION")
-
-
-def test_a_malformed_first_default_still_counts_as_a_duplicate(
-    tmp_path: Path,
-) -> None:
-    """A value carrying whitespace is still an assignment Make keeps."""
-    root = _repository(
-        tmp_path,
-        "RUFF_VERSION ?= 0.1.0 unexpected\nRUFF_VERSION ?= 0.15.0\n",
-    )
-
-    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
-        read_makefile_pin(root, "RUFF_VERSION")
-
-
 def test_a_multi_token_default_is_refused(tmp_path: Path) -> None:
     """A default no single pin can mirror is not a pin."""
     root = _repository(tmp_path, "RUFF_VERSION ?= 0.16.4 0.16.5\n")
 
     with pytest.raises(AssertionError, match="single-token default"):
-        read_makefile_pin(root, "RUFF_VERSION")
-
-
-def test_an_indented_first_default_still_counts_as_a_duplicate(
-    tmp_path: Path,
-) -> None:
-    """Make ignores spaces before the name, so the assignment still counts."""
-    root = _repository(
-        tmp_path,
-        " RUFF_VERSION ?= 0.9.0\nRUFF_VERSION ?= 0.16.4\n",
-    )
-
-    with pytest.raises(AssertionError, match="exactly one RUFF_VERSION default"):
         read_makefile_pin(root, "RUFF_VERSION")
 
 
