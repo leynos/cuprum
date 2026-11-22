@@ -1169,6 +1169,87 @@ entries ignore the pair, and no other ecosystem joins a group. The pull-request
 bound test for every plain stanza lives there too, and
 `tests/test_ci_dependabot_config.py` leaves the group entries to it.
 
+## Tool pin updates
+
+Ruff, ty and maturin are each declared once. The `[dependency-groups] dev`
+entry in `pyproject.toml` (`ruff==X.Y.Z`, and so on) is that declaration and
+the only one a contributor edits by hand. Several executable inputs cannot read
+it — the Makefile defaults, the workflow-level `env` selectors, and the
+composite action's `maturin-version` default are plain Make or YAML text — so
+each of them repeats the literal:
+
+- `Makefile`: the `RUFF_VERSION` and `TY_VERSION` defaults.
+- `.github/workflows/ci.yml`: the `RUFF_VERSION` and `TY_VERSION` `env`
+  selectors.
+- `.github/workflows/build-wheels.yml`: `MATURIN_VERSION`.
+- `.github/actions/build-wheels/action.yml`: the `maturin-version` input
+  default.
+
+Dependabot cannot rewrite any of those literals; it updates the manifest and
+the lock. Two Make targets keep them in step, and `scripts/tool_pins.py` owns
+the site table and the structural rules:
+
+- `make check-tool-pins` reads every site, writes nothing, and exits non-zero
+  with the file and value named for each drifted site. Continuous Integration
+  runs it before lint, so a stale literal fails the pull request with a
+  deterministic diagnosis rather than a lint failure at a different version.
+- `make sync-tool-pins` rewrites only the literal values, preserving quoting,
+  comments, and surrounding formatting. It is idempotent: a second run changes
+  no bytes.
+
+A pin declaration must appear exactly once and be an exact `name==X.Y.Z`
+requirement. A range, an environment marker, a duplicate, an absent
+declaration, or a second `NAME ?=` default raises a named error rather than
+being interpreted. An empty Make default counts as a declaration, because Make
+defines the variable on such a line and a later `?=` never takes effect; `sync`
+repairs a lone empty default, and both readers refuse a multi-token one. The
+readers capture the whole right-hand side before validating, so a malformed
+earlier default cannot let a later line pass as the pin.
+
+`uv.lock` is uv-owned. `check` reports a lock entry that disagrees with the
+canonical pin, and `sync` leaves the file untouched and prints the `uv lock`
+command instead; resolving the lock can also move unrelated transitive
+packages, which belongs in uv's diff and a reviewer's attention, not in a
+literal rewrite.
+
+The built wheel's `Generator` header is asserted against the workflow's
+`MATURIN_VERSION` by the `verify-wheel-install` job before any wheel is
+installed, so a wheel built by a different maturin fails there. The pin tests
+therefore need no wheel snapshot regeneration, and a generator mismatch is
+never normalized away.
+
+The composite action accepts an explicit `maturin-version` override. The
+override is validated against the same exact `X.Y.Z` form before it reaches
+`pip`, and the step reads the installed release back, so an override is
+supported without accepting arbitrary requirement text as shell input. Only the
+default must mirror the canonical pin.
+
+### maturin and PyO3 advance independently
+
+maturin and PyO3 are versioned independently and do not move in lockstep. Pull
+request #593 (<https://github.com/leynos/cuprum/pull/593>) advanced the
+resolved PyO3 family to 0.29.3 with maturin unchanged at 1.15.0, built the
+cp312-abi3 manylinux wheel, ran the required-extension suites on Linux and
+Windows, and loaded the built wheel in a fresh CPython 3.14 environment. A
+maturin bump therefore needs no PyO3 change by itself, and a PyO3 bump needs no
+maturin change; what either bump does need is the native tests actually
+executing, so the extension suites set `CUPRUM_REQUIRE_RUST_EXTENSION=1` rather
+than being satisfied by the Python fallback.
+
+maturin 1.15.0 declares Rust 1.89 for a source build, above the workspace's
+1.87.0 MSRV. The wheel builder and the extension jobs install their own Rust
+toolchain, so that requirement applies to the builder, not to the library's
+consumers. Do not raise the workspace MSRV to satisfy the builder's toolchain.
+
+### Ruff and ty updates
+
+The parity check proves which version is selected, not that the selected tool
+behaves like the old one. The formatting and typecheck routes also probe the
+pinned binaries, so a stale `uv tool` environment cannot satisfy a green run.
+When a bump passes parity but the new release changes rules, formatter output,
+or type behaviour, treat that as a tool migration with its own review; it is
+not pin drift, and the fix is not to widen the parity check.
+
 ## Linux debug-build acceleration
 
 [ADR-012](adrs/adr-0012-linux-dev-fast-routing.md) records the routing boundary
