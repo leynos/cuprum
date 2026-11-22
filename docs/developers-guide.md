@@ -2547,6 +2547,36 @@ a member of its own group. Without that, a signal sent down the wrong route
 presents as a hang rather than as a failed assertion, and the diagnostic is
 lost.
 
+### Observing that a descendant has exited
+
+A teardown test that kills a process tree must not decide a descendant's fate
+with `kill(pid, 0)`. That probe succeeds for a zombie as it does for a running
+process, and an orphaned descendant is reaped by whichever process adopts it,
+on that process's schedule. A test waiting for the probe to fail is therefore
+timing the host's reaper, and fails on a slow one even though `SIGKILL` worked.
+
+`tests/helpers/process_exit.py` owns the zombie-aware question.
+`observe_exit(pid)` reads the scheduler state from Linux procfs through
+`tests/helpers/process_state.py`, and asks `ps -o stat= -p PID` where procfs
+cannot be read, which is the only route on macOS. `ps` printing no row is not
+taken as an exit, because a failing `ps` prints nothing too: the pid is
+reported exited only once a null signal confirms that no process holds it. The
+probe returns one of three `ExitObservation` members:
+
+- `EXITED` for a zombie or a pid with no process behind it;
+- `RUNNING` for a process in any other state;
+- `UNOBSERVABLE` when neither route could answer.
+
+A caller must act on `UNOBSERVABLE` rather than fold it into either answer:
+reading it as running fails a teardown that worked, and reading it as exited
+passes one that did not.
+`cuprum/unittests/test_cancelled_run_descendant_tree.py` skips on it. New tests
+that assert a descendant was killed, or that it survived, should use this
+helper; `process_is_running` in `tests/helpers/timeouts.py` remains correct
+only for a process the test itself reaps.
+`cuprum/unittests/test_process_exit_probe.py` pins the three states on both
+routes by withholding procfs from the probe.
+
 ## Detached command launch internals
 
 `SafeCmd.launch_detached()` and `launch_detached_sync()` transfer a child's
