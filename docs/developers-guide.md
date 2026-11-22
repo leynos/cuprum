@@ -6567,6 +6567,30 @@ Behavioural tests in the module cover full pipe-to-pipe transfer, the fallback
 signal for regular files, broken-pipe draining, the drain's EOF termination,
 and the syscall-level `EINTR` retry.
 
+Those tests exercise the two strategies, not the choice between them: the
+module's own tests call `try_splice_pump` directly, and `lib_tests` calls
+`pump_stream_files_readwrite` directly, so neither would notice an inverted
+dispatch. `pump_stream_files` is the only place that decides, and
+`rust/cuprum-streams/src/dispatch_tests.rs` is what holds it to account. The
+module is Linux-only, matching the `#[cfg(target_os = "linux")]` splice arm, and
+excluded under Miri, which cannot run the unshimmed splice syscall on real
+descriptors. Its three scenarios enter through the public `pump_stream` and
+assert the selected path from the trace as well as from the bytes delivered,
+because either branch moves the payload:
+
+- a pipe pair splices, so neither the support-detection event nor the fallback's
+  operation span appears;
+- two regular files cannot splice, so the event fires exactly once and the
+  `pump_stream_readwrite` span opens;
+- a pipe write end used as the reader fails with `EBADF`, which is not
+  `EINVAL`, so the error propagates and neither fallback signal appears.
+
+Exact event cardinality comes from `Captured::event_count`, which counts direct
+events whose level and message both match and ignores fields inherited from
+enclosing spans. The span check is `Captured::span_field` on the
+`operation` field. Keep both signals in any new dispatcher scenario: a
+byte-count assertion alone passes on either path.
+
 The read/write fallback's write half routes through `io_utils::write_all_unix`,
 whose partial-write loop is factored into `write_all_unix_with` — the
 injectable write seam mirroring `read_raw_fd_with`. Unit tests drive it over a
