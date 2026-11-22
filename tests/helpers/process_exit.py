@@ -10,7 +10,9 @@ its host's reaper rather than the teardown it meant to check.
 :func:`observe_exit` asks the scheduler state instead, by one of two routes.
 Linux procfs is preferred because it needs no child process. Where procfs
 cannot be read — macOS and the BSDs have none — it asks ``ps`` for the same
-state letter. A zombie counts as exited on both routes.
+state letter. A zombie counts as exited on both routes. ``ps`` printing nothing
+is not taken as an exit, because a failing ``ps`` prints nothing too: the pid
+is reported exited only once a null signal confirms no process holds it.
 
 The answer has three values, not two, because a host that can answer neither
 way has said nothing about the process. Folding that into ``RUNNING`` would
@@ -22,6 +24,7 @@ caller to act on.
 from __future__ import annotations
 
 import enum
+import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed ps argv.
 
 from tests.helpers.process_state import process_state
@@ -31,9 +34,6 @@ __all__ = ["ExitObservation", "observe_exit"]
 # ``ps`` answers from the process table at once; the bound only keeps a wedged
 # host from hanging the test that asked.
 _PS_TIMEOUT_S = 5.0
-# What ``ps`` exits with when no process matched the selection, on both procps
-# and the BSD implementation macOS ships.
-_PS_NO_MATCH = 1
 
 
 class ExitObservation(enum.Enum):
@@ -42,6 +42,17 @@ class ExitObservation(enum.Enum):
     RUNNING = enum.auto()
     EXITED = enum.auto()
     UNOBSERVABLE = enum.auto()
+
+
+def _pid_is_absent(pid: int) -> bool:
+    """Return whether the kernel reports no process, zombie or not, for *pid*."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
 
 
 def _observe_exit_through_ps(pid: int) -> ExitObservation:
@@ -60,7 +71,11 @@ def _observe_exit_through_ps(pid: int) -> ExitObservation:
     if completed.returncode == 0 and state:
         is_zombie = state.startswith("Z")
         return ExitObservation.EXITED if is_zombie else ExitObservation.RUNNING
-    if completed.returncode == _PS_NO_MATCH and not state:
+    # ``ps`` printing nothing is not evidence of exit: it reports "no such
+    # process" and its own failure the same way, sometimes on both streams.
+    # Only the kernel refusing a null signal establishes that the pid is gone;
+    # a pid that still answers is a process ``ps`` could not describe.
+    if _pid_is_absent(pid):
         return ExitObservation.EXITED
     return ExitObservation.UNOBSERVABLE
 

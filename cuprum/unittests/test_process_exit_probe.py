@@ -125,3 +125,36 @@ def test_a_host_that_cannot_answer_is_unobservable(
         "a host that can answer by neither procfs nor ps has said nothing "
         f"about the process, got {observed}"
     )
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        pytest.param("", id="silent"),
+        pytest.param("ps: cannot open the process table\n", id="with-stderr"),
+    ],
+)
+def test_a_failing_ps_does_not_report_a_live_process_exited(
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    """``ps`` failing as it does for a missing pid is not evidence of exit.
+
+    ``ps`` exits 1 with nothing on stdout both when no process matched and
+    when it could not read the process table, so that result alone must not
+    turn a live process into an exited one.
+    """
+    _withhold_procfs(monkeypatch)
+
+    def fail_like_no_match(
+        argv: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        """Return what ``ps`` returns when it prints no row."""
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+    monkeypatch.setattr(process_exit.subprocess, "run", fail_like_no_match)
+    observed = observe_exit(os.getpid())
+    assert observed is ExitObservation.UNOBSERVABLE, (
+        "a live process that ps printed no row for must be UNOBSERVABLE, "
+        f"never EXITED, got {observed}"
+    )

@@ -92,6 +92,22 @@ def _observe_exit_within(pid: int, seconds: float) -> ExitObservation:
     return observed
 
 
+def _assert_descendant_fate(
+    observed: ExitObservation,
+    policy: ProcessGroupPolicy,
+) -> None:
+    """Require the fate *policy* promises, skipping where it cannot be seen."""
+    if observed is ExitObservation.UNOBSERVABLE:
+        pytest.skip("this host cannot report whether a process has exited")
+    is_owned = policy is ProcessGroupPolicy.OWN_GROUP
+    expected = ExitObservation.EXITED if is_owned else ExitObservation.RUNNING
+    assert observed is expected, (
+        f"under {policy.value} the pipe-holding descendant must be "
+        f"{expected.name} after a cancelled run's teardown, but it "
+        f"was observed {observed.name}"
+    )
+
+
 async def _cancel_at_caller_deadline(
     command: SafeCmd,
     policy: ProcessGroupPolicy,
@@ -184,15 +200,23 @@ def test_cancelled_run_returns_while_a_descendant_holds_its_pipes(
                 descendant_pid,
                 _EXIT_OBSERVATION_S if is_owned else 0.0,
             )
-            if observed is ExitObservation.UNOBSERVABLE:
-                pytest.skip("this host cannot report whether a process has exited")
-            expected = ExitObservation.EXITED if is_owned else ExitObservation.RUNNING
-            assert observed is expected, (
-                f"under {policy.value} the pipe-holding descendant must be "
-                f"{expected.name} after a cancelled run's teardown, but it "
-                f"was observed {observed.name}"
-            )
+            _assert_descendant_fate(observed, policy)
         finally:
             reap_descendant(pid_file, descendant_pid)
 
     asyncio.run(run_case())
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        pytest.param(ProcessGroupPolicy.INHERIT, id="inherit"),
+        pytest.param(ProcessGroupPolicy.OWN_GROUP, id="own-group"),
+    ],
+)
+def test_an_unobservable_descendant_is_skipped_not_passed(
+    policy: ProcessGroupPolicy,
+) -> None:
+    """A host that cannot report the descendant's fate proves neither promise."""
+    with pytest.raises(pytest.skip.Exception):
+        _assert_descendant_fate(ExitObservation.UNOBSERVABLE, policy)

@@ -2531,8 +2531,10 @@ timing the host's reaper, and fails on a slow one even though `SIGKILL` worked.
 `tests/helpers/process_exit.py` owns the zombie-aware question.
 `observe_exit(pid)` reads the scheduler state from Linux procfs through
 `tests/helpers/process_state.py`, and asks `ps -o stat= -p PID` where procfs
-cannot be read, which is the only route on macOS. It returns one of three
-`ExitObservation` members:
+cannot be read, which is the only route on macOS. `ps` printing no row is not
+taken as an exit, because a failing `ps` prints nothing too: the pid is
+reported exited only once a null signal confirms that no process holds it. The
+probe returns one of three `ExitObservation` members:
 
 - `EXITED` for a zombie or a pid with no process behind it;
 - `RUNNING` for a process in any other state;
