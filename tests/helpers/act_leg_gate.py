@@ -101,7 +101,7 @@ def run_leg(repository: pth.Path, event: Event, label: str) -> ActRun:
     event : Event
         Event to replay.
     label : str
-        The leg's `python-label` matrix value, such as ``"3.15a"``.
+        The leg's `python-label` matrix value, such as ``"3.15.2"``.
 
     Returns
     -------

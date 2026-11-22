@@ -353,11 +353,11 @@ key and its restore-key prefix as environment values. A restore and its save
 cannot disagree, and the rendered key is printed into the run summary so any
 miss can be explained from the run alone.
 
-| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                         |
-| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                              |
-| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test` (3.12, 3.14, 3.15a), `extension-tests` (3.13) |
-| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs    |
+| Key family | Paths                                                                                        | Key inputs                                                                                                                          | Writer                                                          |
+| ---------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `cargo-`   | `~/.cargo/registry`, `~/.cargo/git`                                                          | generation, OS, arch, runner environment, hash of `rust/Cargo.lock` and `rust/rust-toolchain.toml`                                  | `extension-tests`                                               |
+| `tool-`    | `~/.cargo/bin`, `~/.local/bin`, `~/.cache/uv`, `~/.local/share/uv`, `.uv-cache`, `.uv-tools` | the above plus Ubuntu release, Python version, nextest pin, hash of `uv.lock`, `pyproject.toml`, `Makefile`, and the sccache action | `typecheck-test` (3.12, 3.14, 3.15.2), `extension-tests` (3.13) |
+| `sccache-` | `~/.cache/sccache`                                                                           | generation, OS, arch, runner environment, Ubuntu release, run identifier                                                            | `typecheck-test`, `lint-test`, and the other compiling jobs     |
 
 Compiler-cache writers remove the unused preinstalled Android SDK and .NET
 installation before their first cache operation. The cleanup step in
@@ -586,7 +586,7 @@ Every job that compiles Rust installs the wrapper and reports its counters:
 `lint-test`, `extension-tests`, `coverage`, `benchmark-ratchet`,
 `coverage-upload`, and every `typecheck-test` leg. The matrix has no 3.13 leg:
 the coverage job runs that interpreter's suite and `extension-tests` runs its
-`make typecheck`, so no leg is gated by `python-suite`. The 3.15a leg still
+`make typecheck`, so no leg is gated by `python-suite`. The 3.15.2 leg still
 skips every step on pull requests through `LEG_RUNS`, so each other leg
 compiles on every event and that one compiles when it runs. A job that installs
 sccache and then reports zero compile requests looks exactly like one whose
@@ -770,29 +770,66 @@ Table 2: CI suite execution by job and interpreter
 | `coverage` (pull requests)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `coverage-upload` (`main`)  | 3.13   | **the only run**, instrumented | full collection                          | absent    |
 | `typecheck-test` 3.12, 3.14 | each   | none                           | `make test-python`                       | absent    |
-| `typecheck-test` 3.15a      | 3.15   | none                           | `make test-python`, not on pull requests | absent    |
+| `typecheck-test` 3.15.2     | 3.15.2 | none                           | `make test-python`, not on pull requests | absent    |
 | `extension-tests`           | 3.13   | none                           | 16 gated modules, then `make typecheck`  | **built** |
 | `extension-tests-windows`   | 3.13   | none                           | 16 gated modules                         | **built** |
 
-The 3.15a leg is experimental: it may fail without failing the run, and its
-check, `Typecheck and test (Python 3.15a)`, is not a required context. On a
-pull request it could only spend, so it does no work there. GitHub cannot skip
-one matrix leg: a job-level `if:` cannot read `matrix`, and `exclude` runs
-before `include`, so it cannot remove an include-only leg. Instead the job sets
+The 3.15.2 leg is experimental: it may fail without failing the run, and its
+check is not a required context. It names an exact stable patch rather than a
+minor version, and refuses prereleases, so a request for a patch that has not
+been released fails to set up instead of installing a pre-release of some other
+patch. The label is the check context and the version is part of both cache
+keys, so a bump moves the version, the label, and `CACHE_FAMILY_WRITERS` in
+`tests/helpers/ci_runners.py` together. On a pull request it could only spend,
+so it does no work there. GitHub cannot skip one matrix leg: a job-level `if:`
+cannot read `matrix`, and `exclude` runs before `include`, so it cannot remove
+an include-only leg. Instead the job sets
 `LEG_RUNS: ${{ !(matrix.experimental && github.event_name == 'pull_request') }}`
 and every step carries `env.LEG_RUNS == 'true'` as its last conjunct. On a
 pull request the leg starts, skips every step, and reports success having done
-nothing; its green check means "not run", not "3.15a passed". On push to `main`
-and on dispatch it runs in full, and on the push it also writes its compiler
-family; a dispatch saves nothing, because every save requires a push.
-`tests/test_ci_experimental_leg.py` holds the flag's exact expression, the flag
-on every step, and the steps' presence, and `tests/helpers/ci_leg_gate.py` lets
-the other contracts read a step's own guard without the flag. Those read text;
+nothing.
+
+That green check has been read as evidence that a pull request was validated on
+the experimental interpreter, so the name itself states the policy:
+`Typecheck and test (Python 3.15.2, not run on pull requests)`. The suffix is
+rendered from the matrix entry, not from `github.event_name`: an
+event-dependent name would rename the required 3.12 and 3.14 contexts on a pull
+request and leave no single context for a required check. Those two keep their
+exact contexts.
+
+`Run typechecker`, `Verify project interpreter` and `Run tests` all set
+`UV_PYTHON` to the leg's `python-version`. The interpreter and tool caches are
+shared across legs, so uv's own discovery could otherwise select a different
+patch than the one the leg requested. `Verify project interpreter` then reads
+`sys.version_info` from `uv run python` after `make typecheck` has built
+`.venv`, and fails the leg when the environment is not the interpreter it asked
+for: a `3.12` request accepts any 3.12 patch, while `3.15.2` accepts only
+3.15.2.
+
+On push to `main` and on dispatch the leg runs in full, and on the push it also
+writes its compiler family; a dispatch saves nothing, because every save
+requires a push. `tests/test_ci_experimental_leg.py` holds the flag's exact
+expression, the flag on every step, the steps' presence, the rendered check
+names and the interpreter binding, and `tests/helpers/ci_leg_gate.py` lets the
+other contracts read a step's own guard without the flag. Those read text;
 `tests/integration/test_experimental_leg_integration.py`, part of
 `make test-act`, executes it. It projects the job with every step body replaced
 by `true`, runs one leg at a time under `act` in host mode, and asserts which
-steps ran: none for 3.15a on a pull request, the work but no saves for 3.12,
+steps ran: none for 3.15.2 on a pull request, the work but no saves for 3.12,
 and the work and the saves for both on a push.
+
+The check names are rendered rather than compared as templates.
+`tests/helpers/ci_job_name.py` holds the renderer: `render_name` renders one
+job's name for one leg, `rendered_names` pairs every declared leg with the name
+GitHub would display for it, and `render_template` does the work. It models
+exactly the two expression forms the name uses — a bare `matrix.<field>` value,
+and a `matrix.<field> && '<literal>' || ''` choice — and refuses any other
+expression by naming it, because a renderer that copied an unread expression
+through would compare the template with itself. The choice applies GitHub's
+boolean coercion rather than Python's, so a value such as an empty array takes
+the branch the runner takes. Legs come from `tests/helpers/ci_leg_matrix.py`,
+the same expansion the other CI contracts read, so the names a contract asserts
+and the legs it reasons about cannot disagree.
 
 The coverage jobs run
 `cargo llvm-cov nextest --workspace --all-targets --all-features` under
@@ -835,7 +872,7 @@ Two jobs survive that look like duplicates and are not:
   3.13 suite, so a 3.13 leg would only start a runner to typecheck. The move is
   safe because the typechecker stands alone: `make typecheck` depends on
   `build`, the dependency sync, and on nothing the test run produces. The
-  `typecheck-test` legs, 3.12, 3.14 and 3.15a, keep their Python run because
+  `typecheck-test` legs, 3.12, 3.14 and 3.15.2, keep their Python run because
   coverage does not run those interpreters.
 
 The nextest installer is gone from this repository. Nothing here runs nextest
