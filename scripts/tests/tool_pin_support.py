@@ -35,7 +35,9 @@ def text(repository: Path, relative: str) -> str:
 def replace(repository: Path, relative: str, old: str, new: str) -> None:
     """Replace one unique occurrence in a fixture file."""
     body = text(repository, relative)
-    assert body.count(old) == 1, f"{relative} must hold exactly one {old!r}"
+    if body.count(old) != 1:
+        msg = f"{relative} must hold exactly one {old!r}"
+        raise AssertionError(msg)
     (repository / relative).write_text(body.replace(old, new), encoding="utf-8")
 
 
