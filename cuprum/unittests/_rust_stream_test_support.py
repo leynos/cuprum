@@ -50,11 +50,31 @@ class _OwnedDescriptor:
         """Stop closing ``fd`` because another owner has it, or has closed it."""
         self._is_owned = False
 
+    def disarm_if_adopted(self) -> None:
+        """Disarm only when the native boundary has taken ``fd`` and closed it.
+
+        Probing the number is the ownership signal: after adoption the native
+        side closes it, so it no longer opens. If the call failed before
+        adoption it is still open, and this owner keeps responsibility for
+        closing it.
+        """
+        if not _is_descriptor_open(self.fd):
+            self.disarm()
+
     def close(self) -> None:
         """Close ``fd`` once if this owner still owns it."""
         if self._is_owned:
             self._is_owned = False
             _safe_close(self.fd)
+
+
+def _is_descriptor_open(fd: int) -> bool:
+    """Return whether ``fd`` still names an open descriptor."""
+    try:
+        os.fstat(fd)
+    except OSError:
+        return False
+    return True
 
 
 def _descriptor_state(fd: int) -> str:
@@ -70,11 +90,7 @@ def _descriptor_state(fd: int) -> str:
         ``"open"`` when the descriptor is still usable, ``"closed"`` when it
         is not.
     """
-    try:
-        os.fstat(fd)
-    except OSError:
-        return "closed"
-    return "open"
+    return "open" if _is_descriptor_open(fd) else "closed"
 
 
 def _set_binary_mode(fd: int) -> None:

@@ -95,7 +95,7 @@ def _call_with_descriptor(
                 entry_point(*args, buffer_size=buffer_size)
         finally:
             if writer is not None:
-                writer.disarm()
+                writer.disarm_if_adopted()
     return excinfo.value
 
 

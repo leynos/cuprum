@@ -162,16 +162,44 @@ def test_pump_adopts_and_closes_the_writer_on_success(
         # disarmed with the close, so the number cannot be closed twice.
         upstream.close()
 
-        try:
-            moved = native_streams.rust_pump_stream(
-                reader_fd, writer.fd, buffer_size=1024
-            )
-        finally:
-            writer.disarm()
+        moved = native_streams.rust_pump_stream(reader_fd, writer.fd, buffer_size=1024)
+        writer.disarm_if_adopted()
 
         assert moved == len(payload), "the pump must transfer every payload byte"
         assert _descriptor_state(writer.fd) == "closed", (
             "a completed pump must have adopted the writer"
+        )
+
+
+@_unix_only
+def test_successful_pump_arms_no_cleanup_over_a_reused_number(
+    native_streams: ModuleType,
+) -> None:
+    """A failed pump keeps ownership, so cleanup still closes the writer.
+
+    The success test above proves adoption by probing the number. That probe
+    must drive the cleanup decision itself: if the call fails before adoption
+    the writer is still open, and the owner has to close it rather than assume
+    a transfer that never happened.
+    """
+    with contextlib.ExitStack() as stack:
+        reader_fd, writer_fd = os.pipe()
+        stack.callback(_safe_close, reader_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        writer = _OwnedDescriptor(_open_writer())
+        stack.callback(writer.close)
+
+        with pytest.raises(ValueError, match="buffer_size"):
+            native_streams.rust_pump_stream(reader_fd, writer.fd, buffer_size=0)
+
+        assert _descriptor_state(writer.fd) == "open", (
+            "a rejected buffer must not adopt the writer"
+        )
+        writer.disarm_if_adopted()
+        writer.close()
+        assert _descriptor_state(writer.fd) == "closed", (
+            "the owner must still close a writer the native side never took"
         )
 
 
@@ -450,10 +478,8 @@ def test_native_pump_transfers_with_the_declared_default_buffer(
         os.write(upstream.fd, payload)
         upstream.close()
 
-        try:
-            moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
-        finally:
-            sink.disarm()
+        moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
+        sink.disarm_if_adopted()
 
         assert moved == len(payload), (
             "the native default buffer must transfer the whole stream"
@@ -484,12 +510,8 @@ def test_native_extracts_index_like_arguments_once(
         reader = _IndexOnly(reader_fd)
         sink_argument = _IndexOnly(sink.fd)
         size = _IndexOnly(1024)
-        try:
-            moved = native_streams.rust_pump_stream(
-                reader, sink_argument, buffer_size=size
-            )
-        finally:
-            sink.disarm()
+        moved = native_streams.rust_pump_stream(reader, sink_argument, buffer_size=size)
+        sink.disarm_if_adopted()
 
         assert moved == len(payload), "the index-like writer must receive every byte"
         assert _descriptor_state(sink.fd) == "closed", (
