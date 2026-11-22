@@ -38,12 +38,15 @@ class _OwnedDescriptor:
     A test must not close a number it no longer owns. Once the test, the
     feeder, or the native boundary has closed or adopted a descriptor, another
     thread can reuse that number, and a suppressed second close would then
-    close an unrelated resource. Disarm the owner as soon as ownership ends.
+    close an unrelated resource. Ownership is therefore tracked against the
+    resource identity recorded when the descriptor was opened, not against
+    whether the number happens to open: a reused number names something else.
     """
 
     def __init__(self, fd: int) -> None:
-        """Take ownership of ``fd``."""
+        """Take ownership of ``fd`` and record what it names."""
         self.fd = fd
+        self._identity = _descriptor_identity(fd)
         self._is_owned = True
 
     def disarm(self) -> None:
@@ -51,21 +54,34 @@ class _OwnedDescriptor:
         self._is_owned = False
 
     def disarm_if_adopted(self) -> None:
-        """Disarm only when the native boundary has taken ``fd`` and closed it.
+        """Disarm once ``fd`` no longer names the resource this owner opened.
 
-        Probing the number is the ownership signal: after adoption the native
-        side closes it, so it no longer opens. If the call failed before
-        adoption it is still open, and this owner keeps responsibility for
-        closing it.
+        The native boundary closes what it adopts, so a closed number is the
+        adoption signal. A number that was closed and then reused reports a
+        different identity and disarms too, which stops the cleanup from
+        closing a resource another thread now holds. A number that still names
+        the owned resource means the call failed before adoption, so this
+        owner keeps responsibility for closing it.
         """
-        if not _is_descriptor_open(self.fd):
+        if _descriptor_identity(self.fd) != self._identity:
             self.disarm()
 
     def close(self) -> None:
-        """Close ``fd`` once if this owner still owns it."""
-        if self._is_owned:
-            self._is_owned = False
+        """Close ``fd`` once, and only while it still names the owned resource."""
+        if not self._is_owned:
+            return
+        self._is_owned = False
+        if _descriptor_identity(self.fd) == self._identity:
             _safe_close(self.fd)
+
+
+def _descriptor_identity(fd: int) -> tuple[int, int, int] | None:
+    """Return the resource identity behind ``fd``, or ``None`` when closed."""
+    try:
+        status = os.fstat(fd)
+    except OSError:
+        return None
+    return (status.st_dev, status.st_ino, status.st_mode)
 
 
 def _is_descriptor_open(fd: int) -> bool:

@@ -111,6 +111,22 @@ def _open_writer() -> int:
     return os.open(os.devnull, os.O_WRONLY)
 
 
+def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
+    """Open a pipe write end for the pump to adopt, keeping the read end open.
+
+    A pipe has a unique resource identity, so the owner can tell adoption
+    apart from a descriptor number another thread has reused.
+
+    Returns
+    -------
+    _OwnedDescriptor
+        The write end, owned until the pump adopts it or the stack closes it.
+    """
+    reader_fd, writer_fd = os.pipe()
+    stack.callback(_safe_close, reader_fd)
+    return _OwnedDescriptor(writer_fd)
+
+
 @_unix_only
 def test_pump_reports_a_rejected_buffer_before_touching_the_writer(
     native_streams: ModuleType,
@@ -147,22 +163,37 @@ def test_pump_adopts_and_closes_the_writer_on_success(
     This is the contrast that makes the preceding test's ``"open"`` result
     meaningful: the identical probe reports ``"closed"`` once the ownership
     boundary has been crossed.
+
+    Raises
+    ------
+    OSError
+        If the pump fails its I/O after adoption. The ownership guard catches
+        it to disarm cleanup and re-raises, so the failure is never hidden.
     """
     payload = b"native-order-payload"
     with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(_open_writer())
-        stack.callback(writer.close)
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
         upstream = _OwnedDescriptor(upstream_fd)
         stack.callback(upstream.close)
+        writer = _open_pipe_sink(stack)
+        stack.callback(writer.close)
 
         os.write(upstream.fd, payload)
         # Close the source writer so the pump observes EOF. The owner is
         # disarmed with the close, so the number cannot be closed twice.
         upstream.close()
 
-        moved = native_streams.rust_pump_stream(reader_fd, writer.fd, buffer_size=1024)
+        try:
+            moved = native_streams.rust_pump_stream(
+                reader_fd, writer.fd, buffer_size=1024
+            )
+        except OSError:
+            # A native I/O failure happens after adoption, so the pump has
+            # already closed the writer; an OSError here cannot mean the test
+            # still owns it. Disarm rather than probe a number Rust released.
+            writer.disarm()
+            raise
         writer.disarm_if_adopted()
 
         assert moved == len(payload), "the pump must transfer every payload byte"
@@ -187,7 +218,7 @@ def test_successful_pump_arms_no_cleanup_over_a_reused_number(
         stack.callback(_safe_close, reader_fd)
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
-        writer = _OwnedDescriptor(_open_writer())
+        writer = _open_pipe_sink(stack)
         stack.callback(writer.close)
 
         with pytest.raises(ValueError, match="buffer_size"):
@@ -200,6 +231,15 @@ def test_successful_pump_arms_no_cleanup_over_a_reused_number(
         writer.close()
         assert _descriptor_state(writer.fd) == "closed", (
             "the owner must still close a writer the native side never took"
+        )
+        # The number is now free for reuse, which is exactly the case the
+        # owner must not act on again.
+        reused = os.open(os.devnull, os.O_WRONLY)
+        stack.callback(_safe_close, reused)
+        assert reused == writer.fd, "the probe needs the freed number back"
+        writer.close()
+        assert _descriptor_state(reused) == "open", (
+            "cleanup must not close a number another owner has reused"
         )
 
 
@@ -473,13 +513,15 @@ def test_native_pump_transfers_with_the_declared_default_buffer(
         stack.callback(_safe_close, reader_fd)
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
-        sink = _OwnedDescriptor(_open_writer())
+        sink = _open_pipe_sink(stack)
         stack.callback(sink.close)
         os.write(upstream.fd, payload)
         upstream.close()
 
-        moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
-        sink.disarm_if_adopted()
+        try:
+            moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
+        finally:
+            sink.disarm_if_adopted()
 
         assert moved == len(payload), (
             "the native default buffer must transfer the whole stream"
@@ -502,7 +544,7 @@ def test_native_extracts_index_like_arguments_once(
         stack.callback(_safe_close, reader_fd)
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
-        sink = _OwnedDescriptor(_open_writer())
+        sink = _open_pipe_sink(stack)
         stack.callback(sink.close)
         os.write(upstream.fd, payload)
         upstream.close()
@@ -510,8 +552,12 @@ def test_native_extracts_index_like_arguments_once(
         reader = _IndexOnly(reader_fd)
         sink_argument = _IndexOnly(sink.fd)
         size = _IndexOnly(1024)
-        moved = native_streams.rust_pump_stream(reader, sink_argument, buffer_size=size)
-        sink.disarm_if_adopted()
+        try:
+            moved = native_streams.rust_pump_stream(
+                reader, sink_argument, buffer_size=size
+            )
+        finally:
+            sink.disarm_if_adopted()
 
         assert moved == len(payload), "the index-like writer must receive every byte"
         assert _descriptor_state(sink.fd) == "closed", (

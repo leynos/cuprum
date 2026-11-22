@@ -37,7 +37,10 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import (
+    _OwnedDescriptor,
+    _safe_close,
+)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -116,9 +119,14 @@ def _pump_with_open_reader(
         instead.
     """
     with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
-        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
+        stack.callback(writer.close)
+        try:
+            return streams.rust_pump_stream(
+                reader_fd, writer.fd, buffer_size=buffer_size
+            )
+        finally:
+            writer.disarm_if_adopted()
 
 
 @pytest.mark.parametrize(
@@ -137,9 +145,10 @@ def test_rejects_out_of_range_buffer_with_open_reader(
 ) -> None:
     """Both entry points reject an out-of-range buffer for an open reader.
 
-    The native reader is never read because buffer validation raises. Windows
-    consume still duplicates the valid CRT descriptor before native entry; the
-    property verifies the native argument error survives that setup.
+    The native reader is never read because the shared Python buffer check
+    raises before the platform step, so on Windows consume never duplicates the
+    CRT descriptor for this example. The property pins that wrapper-level
+    precedence rather than a native recheck.
     """
     with contextlib.ExitStack() as stack:
         reader = os.open(os.devnull, os.O_RDONLY)
@@ -185,9 +194,14 @@ def _pump_with_reader_and_buffer(
         instead.
     """
     with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
-        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
+        stack.callback(writer.close)
+        try:
+            return streams.rust_pump_stream(
+                reader_fd, writer.fd, buffer_size=buffer_size
+            )
+        finally:
+            writer.disarm_if_adopted()
 
 
 class _ReaderAndBufferEntryPoint(typ.Protocol):
@@ -288,10 +302,13 @@ def test_pump_rejects_invalid_reader_descriptor(
     originate from the invalid reader, not from a coincidentally invalid writer.
     """
     with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
-        with pytest.raises(ValueError, match="file descriptor"):
-            rust_streams.rust_pump_stream(bad_fd, writer_fd)
+        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
+        stack.callback(writer.close)
+        try:
+            with pytest.raises(ValueError, match="file descriptor"):
+                rust_streams.rust_pump_stream(bad_fd, writer.fd)
+        finally:
+            writer.disarm_if_adopted()
 
 
 @pytest.mark.parametrize(
@@ -323,8 +340,8 @@ def test_out_of_i64_buffer_size_stays_an_extraction_error(
     ``ValueError``, so ``pytest.raises(ValueError)`` would not mask a
     regression here.
 
-    The reader is a real read end so Windows consume's CRT duplication succeeds
-    and this property isolates extraction of the oversized buffer argument.
+    The reader is a real read end, so the only failure available to the call is
+    the oversized buffer's extraction; no platform step runs for it.
     """
     with contextlib.ExitStack() as stack:
         reader = os.open(os.devnull, os.O_RDONLY)

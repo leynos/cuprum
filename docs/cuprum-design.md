@@ -4054,30 +4054,39 @@ dispatcher routes a consume through it.
 
 #### Compatibility decision: unified adapter validation (2026-11-19)
 
-Before this reconciliation only the pump enforced the descriptor policy in
-Python. Unix consume delegated it to the native entry, and Windows consume
-validated after deciding to duplicate; the two wrappers also used different
-buffer-validation paths. Issue #659 unified the order. The observable changes
-for callers of `rust_pump_stream` and `rust_consume_stream` are:
+Before this reconciliation the two wrappers prepared arguments in different
+orders. The pump validated `buffer_size` in Python, normalized the reader, and
+converted it for the platform. Consume converted the reader first: on Windows
+that step is `msvcrt.get_osfhandle`, which already rejected a negative or
+closed descriptor with `OSError` before any duplication, and on Unix it is the
+identity. The native entry then validated the buffer, so Unix consume already
+reported a buffer error ahead of an invalid descriptor for any value PyO3 could
+extract. Issue #659 unified the order in Python. The observable changes for
+callers of `rust_pump_stream` and `rust_consume_stream` are:
 
-1. On Unix, consume now reports an invalid `buffer_size` before an invalid
-   descriptor, and reports descriptor failures with the wrapper's messages
-   rather than the native entry's. Both values were already rejected; only the
-   competing-failure precedence and the message source changed.
-2. A pump reader below `i64::MIN` now raises `OverflowError` from the wrapper
+1. On Unix, a `buffer_size` error now precedes PyO3's extraction errors for the
+   reader: `buffer_size=0` paired with a non-index-like or out-of-`i64` reader
+   raises the buffer `ValueError` rather than `TypeError` or `OverflowError`.
+   In-range descriptor failures also carry the wrapper's messages rather than
+   the native entry's. Integers that extract cleanly already saw the buffer
+   error first.
+2. On Windows, consume raises `ValueError` for a negative or above-`i32::MAX`
+   reader instead of the `OSError` that `msvcrt.get_osfhandle` produced, and it
+   rejects those values before `os.dup` can see them.
+3. A pump reader below `i64::MIN` now raises `OverflowError` from the wrapper
    rather than `ValueError`. Values anywhere inside the `i64` range keep
    `ValueError`, so this affects integers no descriptor API accepts.
-3. A Windows pump reader below zero now reports
+4. A Windows pump reader below zero now reports
    `file descriptor must be non-negative` rather than
    `file handle must be non-negative`. The class stays `ValueError`; only the
    wording becomes platform-independent.
-4. A Windows pump reader above `i32::MAX` now raises
+5. A Windows pump reader above `i32::MAX` now raises
    `ValueError: file descriptor out of range` before conversion; previously it
    reached `msvcrt.get_osfhandle` and surfaced as `OSError`.
 
-The first change follows from validating in Python on both platforms; the other
-three remove platform-dependent classification. No successful call changes
-behaviour, and the native boundary is unchanged.
+These changes follow from validating in Python on both platforms; they remove
+platform-dependent classification and extraction-order dependence. No
+successful call changes behaviour, and the native boundary is unchanged.
 
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
