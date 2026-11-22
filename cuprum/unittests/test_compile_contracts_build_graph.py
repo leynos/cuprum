@@ -27,17 +27,23 @@ from __future__ import annotations
 import re
 import tomllib
 import typing as typ
+from pathlib import Path
 
 import pytest
 
+from cuprum.unittests._compile_contract_guards import (
+    RETIRED_TEST_TARGET,
+    declared_test_targets,
+    is_integration_test_entry_point,
+    nextest_override_filters,
+    retired_override_offenders,
+    retired_target_offenders,
+)
 from cuprum.unittests._rust_doctest_support import (
     compile_fail_count,
     compile_fail_defects,
 )
 from tests.helpers.docs import repo_root
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 #: The dependency tables a manifest can declare, at the top level, under
 #: ``[workspace]``, or under ``[target.'cfg(...)']``.
@@ -142,6 +148,185 @@ def test_no_rust_source_starts_a_nested_build() -> None:
         f"these sources start a nested Cargo or compiler: {offenders}. Its "
         f"queue wait on the shared compiler pool is charged to one test's "
         f"allowance, which no timeout can bound (ADR-027)"
+    )
+
+
+def test_no_compile_tests_target_remains() -> None:
+    """The retired UI harness must not return as a timed test target."""
+    offenders = [
+        _relative(path)
+        for path in retired_target_offenders(
+            (
+                (manifest, tomllib.loads(manifest.read_text()))
+                for manifest in _workspace_files("Cargo.toml")
+            ),
+            _workspace_files("*.rs"),
+        )
+    ]
+    assert not offenders, (
+        f"{offenders} restore the retired `{RETIRED_TEST_TARGET}` target. It ran "
+        f"a `trybuild` scratch build inside one test's allowance, which no "
+        f"timeout can bound (ADR-027); keep the contract in the build graph"
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative", "expected"),
+    [
+        pytest.param("tests/compile_tests.rs", True, id="single-file"),
+        pytest.param("tests/compile_tests/main.rs", True, id="directory"),
+        pytest.param("tests/compile_tests/other.rs", False, id="directory-sibling"),
+        pytest.param("tests/other/main.rs", False, id="other-directory"),
+        pytest.param("src/compile_tests.rs", False, id="source-file"),
+        pytest.param("compile_tests.rs", False, id="repository-root"),
+    ],
+)
+def test_the_entry_point_scanner_reads_both_target_shapes(
+    *, relative: str, expected: bool
+) -> None:
+    """Cargo infers a target from a file or a directory with a ``main.rs``."""
+    assert is_integration_test_entry_point(Path(relative)) is expected, (
+        "the scanner must reject both Cargo integration-test entry points, not "
+        "only the single-file form that a [[test]] table also names"
+    )
+
+
+@pytest.mark.parametrize(
+    ("manifest", "files", "expected"),
+    [
+        pytest.param(
+            '[[test]]\nname = "compile_tests"\n',
+            (),
+            ("rust/example/Cargo.toml",),
+            id="declared-target",
+        ),
+        pytest.param(
+            "",
+            ("rust/cuprum-rust/tests/compile_tests.rs",),
+            ("rust/cuprum-rust/tests/compile_tests.rs",),
+            id="single-file-entry-point",
+        ),
+        pytest.param(
+            "",
+            ("rust/cuprum-rust/tests/compile_tests/main.rs",),
+            ("rust/cuprum-rust/tests/compile_tests/main.rs",),
+            id="directory-entry-point",
+        ),
+        pytest.param(
+            '[lib]\nname = "compile_tests"\n',
+            ("rust/cuprum-rust/tests/other.rs",),
+            (),
+            id="clean",
+        ),
+    ],
+)
+def test_the_retired_target_scan_reports_each_reintroduced_shape(
+    *, manifest: str, files: tuple[str, ...], expected: tuple[str, ...]
+) -> None:
+    """A reintroduced target shape is reported, not only one on the live tree."""
+    manifest_path = repo_root() / "rust" / "example" / "Cargo.toml"
+    offenders = retired_target_offenders(
+        [(manifest_path, tomllib.loads(manifest))],
+        (repo_root() / relative for relative in files),
+    )
+    assert [_relative(path) for path in offenders] == list(expected), (
+        "the offender scan must report a declared target and either Cargo "
+        "entry-point form, and nothing for clean input"
+    )
+
+
+def test_no_nextest_override_names_the_retired_binary() -> None:
+    """A per-binary allowance must not return in place of the retired shape."""
+    config = tomllib.loads((_rust_root() / ".config" / "nextest.toml").read_text())
+    matching = retired_override_offenders(config)
+    assert not matching, (
+        f"the nextest profile overrides {matching}, restoring an allowance for "
+        f"a build that no longer exists; the retired tier was raised four "
+        f"times without changing the shape (ADR-027)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("manifest", "expected"),
+    [
+        pytest.param(
+            '[[test]]\nname = "compile_tests"\n',
+            {"compile_tests"},
+            id="declared",
+        ),
+        pytest.param('[lib]\nname = "compile_tests"\n', set(), id="library"),
+        pytest.param("test = 1\n", set(), id="malformed"),
+        pytest.param("", set(), id="absent"),
+    ],
+)
+def test_the_test_target_scanner_reads_binary_targets(
+    *, manifest: str, expected: set[str]
+) -> None:
+    """Only ``[[test]]`` targets count, not a library of the same name."""
+    assert declared_test_targets(tomllib.loads(manifest)) == expected, (
+        "the scanner must read [[test]] targets and ignore unrelated tables"
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="named",
+        ),
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(other)"\n',
+            ["binary(other)"],
+            id="other",
+        ),
+        pytest.param(
+            '[[profile.ci.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="named-profile",
+        ),
+        pytest.param("", [], id="absent"),
+        pytest.param("profile = 1\n", [], id="malformed"),
+    ],
+)
+def test_the_override_scanner_reads_every_filter(
+    *, config: str, expected: list[str]
+) -> None:
+    """An override's filter is read in the default and every named profile."""
+    assert nextest_override_filters(tomllib.loads(config)) == expected, (
+        "every nextest override filter must be read, or a per-binary "
+        "allowance could hide in the one table the scanner skipped"
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="default-profile",
+        ),
+        pytest.param(
+            '[[profile.ci.overrides]]\nfilter = "binary(compile_tests)"\n',
+            ["binary(compile_tests)"],
+            id="named-profile",
+        ),
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(other)"\n',
+            [],
+            id="clean",
+        ),
+    ],
+)
+def test_the_retired_override_scan_reports_each_profile(
+    *, config: str, expected: list[str]
+) -> None:
+    """An override naming the retired target is reported in any profile."""
+    assert retired_override_offenders(tomllib.loads(config)) == expected, (
+        "the override scan must report a reintroduced allowance in the default "
+        "or a named profile, and nothing for unrelated filters"
     )
 
 

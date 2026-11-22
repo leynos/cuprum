@@ -106,6 +106,96 @@ The coverage action uses `language: mixed`, so nextest does not bound the
 Python half of the suite. `pytest-timeout` sets that per-test budget separately
 through `timeout = 30` in `pyproject.toml`.
 
+## Retired trybuild compile tier
+
+`trybuild` held the compile-time contracts until
+[ADR-027](adrs/adr-0027-compile-contracts-in-the-build-graph.md) moved them
+into the ordinary build graph. Its scratch crate could never share the
+workspace's artefacts: it forced a private target directory, added
+`--cfg trybuild` to every crate, and folded the host crate's whole
+`[dev-dependencies]` table into the scratch graph. This section records what
+that shape cost, because the allowance history above is only intelligible with
+it.
+
+The gate log of `make test` against `c711ac95d`, recorded in
+[#653](https://github.com/leynos/cuprum/issues/653), measured the two UI
+binaries at 1300.050 s (`compile_time_ui`) and 433.030 s (`transition_privacy`)
+inside a 1735.071 s nextest window. The other 165 tests summed to 1.963 s and
+none exceeded 0.144 s, so the two binaries accounted for 1733.080 s of the
+1735.043 s summed test duration, or 99.887 %. A green log cannot show the
+nested build directly: nextest captures a passing test's output and prints it
+only on failure, and that log held no `Compiling`, `build-limits`, or
+`rustc-heartbeat` line.
+
+The cold build's composition is reconstructible from the dependency graph even
+though its per-crate seconds are not. At `c711ac95d`, a kind-aware
+`cargo metadata` walk resolves the scratch manifest trybuild would have
+generated as the host crate's `[dependencies]` plus its `[dev-dependencies]`,
+both as ordinary dependencies, and then the normal and build closure beneath
+them. The host crate's own build needs only the first table's closure. Counted
+in package instances, with distinct crate names in parentheses:
+
+_Table 2: Composition of the retired scratch graph at `c711ac95d`._
+
+| Host crate       | Required closure | Scratch closure | Inherited-only | Inherited share |
+| ---------------- | ---------------: | --------------: | -------------: | --------------: |
+| `cuprum-rust`    | 82 (69)          | 222 (197)       | 140 (135)      | 63.1 %          |
+| `cuprum-streams` | 50 (38)          | 116 (101)       | 66 (64)        | 56.9 %          |
+
+The inherited-only set is the dev-dependency tail the UI fixtures never
+imported: `proptest`, `rstest`, `rstest-bdd`, `rstest-bdd-macros` and
+`trybuild` for `cuprum-rust`, and `cap-std`, `insta`, `proptest`, `rstest`,
+`tempfile` and `trybuild` for `cuprum-streams`, together with their transitive
+dependencies. It is the majority of both scratch graphs, and the observed cold
+run is consistent with that share: when the 1800 s allowance expired on
+2026-10-20, the nested build had produced 122 dependency libraries with between
+66 and 382 admission requests queued ahead (ADR-027). The attribution is by
+graph composition because the gate log retained no per-crate timings; it does
+not claim a split in seconds.
+
+A green `make test` on `2ad7f393b` shows the result. Nextest started 196 tests
+and ran them in 7.654 s; the slowest was 2.433 s
+(`generated_payloads_round_trip_and_reach_eof`) and the next 2.272 s, with
+every other test under 0.3 s. The recipe recorded
+`rust_test_workload: 454.1 s`, which spans the test-profile build, the nextest
+run, and the doctests, so the dominant cost is now compilation in the ordinary
+build rather than a timer charged to one test.
+
+After ADR-027 the binaries and the `binary(compile_tests)` override are gone.
+No nextest test target named `compile_tests` remains, and the compile-fail
+contracts run as doctests against the workspace build.
+`cuprum/unittests/test_compile_contracts_build_graph.py` refuses a `trybuild`
+dependency, either Cargo integration-test entry point for a `compile_tests`
+target, and a nextest override that names one in any profile, so the allowance
+cannot drift back up in place of a shape that no longer exists.
+
+The upstream request that would let a `trybuild` consumer share the workspace's
+artefacts already exists.
+[trybuild #330](https://github.com/dtolnay/trybuild/issues/330) proposes
+seeding the private target from the parent workspace under an opt-in feature,
+and remains open. It supersedes
+[#328](https://github.com/dtolnay/trybuild/issues/328), which carried the
+problem statement for sharing the target. The draft pull request that
+implemented that sharing, [#329](https://github.com/dtolnay/trybuild/pull/329),
+was closed because a shared target reintroduced Cargo's build-lock contention
+between the parent workspace and the spawned build. Cuprum no longer depends on
+`trybuild`, so it does not wait on any of these outcomes; the request stays
+relevant to projects that still do.
+
+Two limits are recorded rather than inferred. The requested per-crate seconds
+split between the required closure and the dev-dependency tail is not
+available: neither the gate log nor `trybuild` reports per-crate timings, so
+graph composition is the recorded substitute and is not presented as a timing
+measurement. And [#653](https://github.com/leynos/cuprum/issues/653)'s
+requirement to preserve the exact `.stderr` snapshots is superseded by ADR-027,
+which pins each compile-fail case to its named error code beside a positive
+control. Only nightly rustdoc checks the named code; stable rustdoc accepts any
+compile error, and the Windows-only doctests run on stable, so their codes are
+not checked in CI. The positive control reduces that risk but does not remove
+it: an unrelated error specific to a negative case can still make it pass on
+stable rustdoc, as ADR-027 records. Those snapshots were removed rather than
+loosened, and this branch does not restore them.
+
 ## Boundary harness compile tier
 
 This pytest-only tier sits outside the Rust and coverage tiers in Table 1 and
@@ -159,7 +249,7 @@ snapshot and fresh run-local Cargo homes. A second Maturin wheel build used a
 new Cargo home and the same configuration-keyed target as the first, so the
 target was cold for the first build and warm for the second.
 
-_Table 2: Local packaging route timing observations._
+_Table 3: Local packaging route timing observations._
 
 | Phase                       | Duration    | Conditions                                      |
 | --------------------------- | ----------: | ----------------------------------------------- |
