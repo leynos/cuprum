@@ -57,6 +57,25 @@ impl Captured {
             .any(|event| event.level == level && fields.iter().all(|f| event.fields.contains(*f)))
     }
 
+    /// How many events at `level` carried exactly `message` themselves.
+    ///
+    /// Only the event's own `message` field counts, never one inherited from an
+    /// enclosing span, so the answer is the number of times this diagnostic
+    /// fired. Callers use exact cardinality to distinguish "emitted once" from
+    /// "never" or "repeatedly", which a boolean matcher cannot.
+    ///
+    /// Run the code under test inside the same [`capture`] closure and on the
+    /// same thread, because the returned value describes only that run.
+    pub(crate) fn event_count(&self, level: Level, message: &str) -> usize {
+        self.events
+            .iter()
+            .filter(|event| {
+                event.level == level
+                    && event.values.get("message").map(String::as_str) == Some(message)
+            })
+            .count()
+    }
+
     /// True when some event at `level` carried exactly `message` and every
     /// listed field/value pair.
     ///
