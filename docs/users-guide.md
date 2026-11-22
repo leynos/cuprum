@@ -2732,12 +2732,20 @@ if os.name == "posix":
     assert asyncio.run(run_with_deadline())
 ```
 
-The call returns once the group has been torn down, so it can outlast the
-caller's deadline by `cancel_grace`, plus up to one second spent waiting for a
-forcibly killed group to disappear. A cancelled run under `INHERIT` returns
-just as promptly, because a reader still waiting on a pipe is cancelled rather
-than awaited to end of file; the descendant is not signalled, though, and goes
-on running with the pipe it inherited.
+The call returns once the teardown has finished or has stopped waiting, not
+once the group is known to be empty. A signal the kernel refuses, or a forcibly
+killed group that still holds a member when the bounded settlement wait
+expires, ends the teardown with something left behind; the
+[cleanup diagnostics](#cleanup-diagnostics) record each such outcome. The call
+therefore outlasts the caller's deadline: by `cancel_grace` when a member
+ignores `SIGTERM`, by up to one second more while a forcibly killed group
+disappears, and by whatever reaping the direct child and releasing the run's
+other resources takes. Those are separate allowances, not one total deadline.
+
+A cancelled run under `INHERIT` returns just as promptly, because a reader
+still waiting on a pipe is cancelled rather than awaited to end of file; the
+descendant is not signalled, though, and goes on running with the pipe it
+inherited.
 
 Session leadership also detaches the child from the controlling terminal, and
 that trade-off is worth stating because it is not obvious from the name.

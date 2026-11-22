@@ -11,7 +11,8 @@ Two separate promises answer that, and each test arm isolates one of them:
 
 - Under ``OWN_GROUP`` the teardown signals the whole group, so the descendant
   is reclaimed — escalated to ``SIGKILL`` after ``cancel_grace``, because the
-  descendant here ignores ``SIGTERM``.
+  descendant here ignores ``SIGTERM``. "Reclaimed" means killed: an exited
+  descendant that its adopting process has not yet reaped counts.
 - Under ``INHERIT`` no group signal exists to close the pipes, so the call's
   prompt return can only come from the drain being bounded. The descendant is
   asserted to survive, which is what proves the bound and not a signal ended
@@ -38,11 +39,11 @@ from cuprum.unittests._post_exit_teardown_support import (
     owned_builder,
     reap_descendant,
 )
+from tests.helpers.process_state import process_state
 from tests.helpers.timeouts import (
     pipe_holding_child_argv,
     process_is_running,
     wait_for_pid_file,
-    wait_for_process_death,
 )
 
 if typ.TYPE_CHECKING:
@@ -73,6 +74,43 @@ _RETURN_BOUND_S = (
     + _POST_KILL_SETTLEMENT_S
     + _SCHEDULING_MARGIN_S
 )
+
+
+# How long the descendant is given to be observed as exited after the call
+# returns. The group's ``SIGKILL`` has been sent by then; this only covers the
+# kernel acting on it under load.
+_EXIT_OBSERVATION_S = 5.0
+
+
+def _has_exited(pid: int) -> bool:
+    """Return whether *pid* has exited, counting an unreaped zombie as exited.
+
+    The descendant is orphaned when its parent is killed, so it is reaped by
+    whichever process adopts it and on that process's schedule, not this
+    run's. ``kill(pid, 0)`` still succeeds for a zombie, so it would report a
+    descendant the teardown had already killed as running. Procfs reports the
+    scheduler state directly; the signal probe is the fallback only where
+    procfs cannot be read.
+
+    Returns
+    -------
+    bool
+        ``True`` once the process has exited, reaped or not.
+    """
+    state = process_state(pid)
+    if state.available:
+        return state.exited
+    return not process_is_running(pid)
+
+
+def _exits_within(pid: int, seconds: float) -> bool:
+    """Poll until *pid* has exited; report whether it did within *seconds*."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if _has_exited(pid):
+            return True
+        time.sleep(0.05)
+    return _has_exited(pid)
 
 
 async def _cancel_at_caller_deadline(
@@ -161,17 +199,16 @@ def test_cancelled_run_returns_while_a_descendant_holds_its_pipes(
                 "a cancelled run must not wait on pipes a descendant holds "
                 f"open: returned after {elapsed:.3f}s, bound {_RETURN_BOUND_S:.3f}s"
             )
-            if policy is ProcessGroupPolicy.OWN_GROUP:
-                await asyncio.to_thread(
-                    wait_for_process_death,
-                    descendant_pid,
-                    context="a cancelled owned run's group teardown",
-                )
-            is_running = process_is_running(descendant_pid)
-            assert is_running is (policy is ProcessGroupPolicy.INHERIT), (
+            is_owned = policy is ProcessGroupPolicy.OWN_GROUP
+            has_exited = await asyncio.to_thread(
+                _exits_within,
+                descendant_pid,
+                _EXIT_OBSERVATION_S if is_owned else 0.0,
+            )
+            assert has_exited is is_owned, (
                 f"under {policy.value} the pipe-holding descendant must "
-                f"{'survive' if policy is ProcessGroupPolicy.INHERIT else 'die'}"
-                f" a cancelled run, but running={is_running}"
+                f"{'be killed by' if is_owned else 'survive'} a cancelled "
+                f"run's teardown, but exited={has_exited}"
             )
         finally:
             reap_descendant(pid_file, descendant_pid)
