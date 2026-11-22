@@ -14,6 +14,9 @@ mod consume_snapshot_tests;
 #[cfg(test)]
 pub(crate) mod consume_tests;
 
+#[cfg(all(test, target_os = "linux", not(miri)))]
+mod dispatch_tests;
+
 mod errors;
 
 mod io_utils;
@@ -185,6 +188,7 @@ impl BufferSize {
     const fn value(self) -> usize { self.0 }
 }
 
+
 /// Pump from a borrowed reader, consuming the uniquely owned writer.
 ///
 /// The writer drops on success, error, and unwind. The reader's owner must
@@ -202,6 +206,7 @@ pub fn pump_stream(
         pump_stream_files(source, sink, buffer_size)
     })
 }
+
 
 /// Pump from a synchronous Windows reader, consuming the synchronous writer.
 ///
@@ -221,6 +226,9 @@ pub fn pump_stream(
     })
 }
 
+
+
+
 #[cfg(unix)]
 fn pump_stream_files(
     reader: &impl AsStream,
@@ -237,6 +245,7 @@ fn pump_stream_files(
     pump_stream_files_readwrite(reader, writer, buffer_size)
 }
 
+
 #[cfg(windows)]
 fn pump_stream_files(
     reader: SynchronousBorrowedStream<'_>,
@@ -245,6 +254,10 @@ fn pump_stream_files(
 ) -> Result<u64, PumpError> {
     pump_stream_files_readwrite(reader, writer, buffer_size)
 }
+
+
+// @codescene(disable:"Code Duplication") This Windows adapter mirrors the Unix adapter to preserve
+// its capability-typed stream contract; both forward to the shared executable loop.
 
 /// Read/write loop fallback for pumping bytes between file descriptors.
 ///
@@ -277,6 +290,7 @@ fn pump_stream_files_readwrite(
         buffer_size,
     )
 }
+
 
 /// Run the shared pump loop while platform adapters retain their typed I/O.
 fn pump_stream_with_io(
@@ -328,3 +342,6 @@ fn pump_stream_with_io(
     span.record("write_retries", io_utils::write_retry_count());
     Ok(total_written)
 }
+
+
+
