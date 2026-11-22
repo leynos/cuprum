@@ -55,6 +55,23 @@ fn pipe() -> io::Result<PipePair> {
 /// The buffer size every dispatcher scenario pumps with.
 fn buffer_size() -> BufferSize { unwrap_ok(BufferSize::new(65_536)) }
 
+/// Run one pump inside a `DEBUG` capture and return its outcome with the trace.
+///
+/// [`capture`] takes a closure with no return value, so the pump's result
+/// travels out through an `Option` the closure fills exactly once.
+fn pump_under_capture(
+    pump: impl FnOnce() -> Result<u64, PumpError>,
+) -> (Result<u64, PumpError>, Captured) {
+    let mut outcome = None;
+    let captured = capture(Level::DEBUG, || {
+        outcome = Some(pump());
+    });
+    let Some(result) = outcome else {
+        panic!("the pump must run inside the capture closure");
+    };
+    (result, captured)
+}
+
 /// Assert which strategy the dispatcher selected, naming the scenario.
 ///
 /// `fallback_events` is the exact number of support-detection diagnostics the
@@ -96,14 +113,8 @@ fn pipe_pair_pumps_through_splice(
     // Close the source's write end so the splice loop reaches EOF.
     drop(source_write);
 
-    let mut outcome = None;
-    let captured = capture(Level::DEBUG, || {
-        outcome = Some(pump_stream(&source_read, sink_write, buffer_size()));
-    });
-    let outcome = match outcome {
-        Some(outcome) => outcome,
-        None => panic!("the pump must run inside the capture closure"),
-    };
+    let (outcome, captured) =
+        pump_under_capture(|| pump_stream(&source_read, sink_write, buffer_size()));
 
     match outcome {
         Ok(total) => assert_eq!(
@@ -132,14 +143,7 @@ fn regular_files_pump_through_the_fallback() {
     let reader = OwnedFd::from(unwrap_ok(source_file.reopen()));
     let writer = OwnedFd::from(unwrap_ok(destination_file.reopen()));
 
-    let mut outcome = None;
-    let captured = capture(Level::DEBUG, || {
-        outcome = Some(pump_stream(&reader, writer, buffer_size()));
-    });
-    let outcome = match outcome {
-        Some(outcome) => outcome,
-        None => panic!("the pump must run inside the capture closure"),
-    };
+    let (outcome, captured) = pump_under_capture(|| pump_stream(&reader, writer, buffer_size()));
 
     match outcome {
         Ok(total) => assert_eq!(
@@ -169,14 +173,8 @@ fn bad_descriptor_propagates_without_the_fallback() {
     let (_source_read, source_write) = unwrap_ok(make_pipe());
     let (sink_read, sink_write) = unwrap_ok(make_pipe());
 
-    let mut outcome = None;
-    let captured = capture(Level::DEBUG, || {
-        outcome = Some(pump_stream(&source_write, sink_write, buffer_size()));
-    });
-    let outcome = match outcome {
-        Some(outcome) => outcome,
-        None => panic!("the pump must run inside the capture closure"),
-    };
+    let (outcome, captured) =
+        pump_under_capture(|| pump_stream(&source_write, sink_write, buffer_size()));
 
     match outcome {
         Ok(total) => panic!("splice must reject a write-end reader, moved {total} bytes"),
