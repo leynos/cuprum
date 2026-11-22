@@ -291,20 +291,20 @@ def test_the_verification_step_rejects_a_mismatched_interpreter(
 
     The step exists to fail a leg whose `.venv` is not the interpreter that
     leg requested. Running its body is what shows it does: a body that merely
-    printed the version, or compared a fixed slice, would satisfy every
-    assertion above and never fail a leg. The patch-differing case is what
-    requires the comparison to honour the precision the leg asked for, since
-    a hardcoded two-part slice would accept it.
+    printed the version would satisfy every assertion above and never fail a
+    leg. Accepting the exact three-part version requires the comparison to
+    honour the precision a leg asks for, and rejecting a request that differs
+    only in its patch requires it to compare every part it was given.
     """
     script = _step("Verify project interpreter").get("run")
     assert isinstance(script, str), "the verification step must run a script"
     major, minor, micro = sys.version_info[:3]
-    matching = f"{major}.{minor}"
-    accepted = _run_verification(script, matching, tmp_path / "matching")
-    assert accepted.returncode == 0, (
-        f"the verification must accept the running interpreter {matching}, got "
-        f"{accepted.returncode}: {accepted.stderr}"
-    )
+    for matching in (f"{major}.{minor}", f"{major}.{minor}.{micro}"):
+        accepted = _run_verification(script, matching, tmp_path / f"accept-{matching}")
+        assert accepted.returncode == 0, (
+            f"the verification must accept the running interpreter {matching}, "
+            f"got {accepted.returncode}: {accepted.stderr}"
+        )
     for expected in (f"{major + 1}.0", f"{major}.{minor}.{micro + 1}"):
         rejected = _run_verification(script, expected, tmp_path / expected)
         assert rejected.returncode != 0, (
