@@ -308,7 +308,7 @@ def test_the_verification_step_rejects_a_mismatched_interpreter(
         )
     for expected in (
         f"{major}.{minor + 1}",
-        f"{major + 1}.0",
+        f"{major + 1}.{minor}",
         f"{major}.{minor}.{micro + 1}",
     ):
         rejected = _run_verification(script, expected, tmp_path / expected)
