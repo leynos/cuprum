@@ -564,17 +564,19 @@ matches, and the save therefore carries no cache-hit guard.
 The key also names the interpreter and the build shape, so there is one family
 per compile shape and one writer for each:
 [CI cache ownership](ci-cache-ownership.md) lists them and records the
-measurement that forced the split. In outline, `extension-tests` writes the
-3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
-own interpreter's, `benchmark-ratchet` writes the 3.13 release family, and
-`lint-test` writes the dev-fast lint family, which moves to the Ubicloud lane
-with it. The instrumented coverage shape has no family: both coverage lanes use
-the `gha` backend described above, so there is no archive for a job to publish.
-The scheduled `loom.yml` job writes its separate model family only on
-`refs/heads/main`, and stays on the GitHub-hosted lane because its writer does,
-while manual dispatches and `loom-smoke` restore it without saving. Apart from
-that Loom family, a fork's pull request reads a `github-hosted` scope that
-nothing writes, so it compiles cold.
+measurement that forced the split, and
+[CI compiler-cache evidence](ci-compiler-cache-evidence.md) records the bounded
+per-job observations that the backend experiment reads. In outline,
+`extension-tests` writes the 3.13 unoptimized family, each `typecheck-test` leg
+that runs a suite writes its own interpreter's, `benchmark-ratchet` writes the
+3.13 release family, and `lint-test` writes the dev-fast lint family, which
+moves to the Ubicloud lane with it. The instrumented coverage shape has no
+family: both coverage lanes use the `gha` backend described above, so there is
+no archive for a job to publish. The scheduled `loom.yml` job writes its
+separate model family only on `refs/heads/main`, and stays on the GitHub-hosted
+lane because its writer does, while manual dispatches and `loom-smoke` restore
+it without saving. Apart from that Loom family, a fork's pull request reads a
+`github-hosted` scope that nothing writes, so it compiles cold.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged

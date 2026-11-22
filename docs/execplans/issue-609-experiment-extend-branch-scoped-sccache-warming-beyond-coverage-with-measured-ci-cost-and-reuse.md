@@ -5,10 +5,11 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — the branch is based on `87de64c2c`, the implementation
-baseline recorded on 22 November 2026. No candidate family is adopted by this
-change; the deliverable is the measured-qualification apparatus plus a
-reviewable adopt/reject record.
+Status: IN PROGRESS — M1 is committed and M2 and M3 are implemented in the
+working tree, based on `87de64c2c`, the implementation baseline recorded on
+22 November 2026. No candidate family is adopted by this change; the
+deliverable is the measured-qualification apparatus plus a reviewable
+adopt/reject record.
 
 ## Purpose / big picture
 
@@ -141,13 +142,16 @@ its own evidence and decision.
       experiment inventory and gate in `docs/ci-cache-ownership.md`, the
       leg-aware `typecheck-test` sccache contract, the restore-to-writer join,
       and the evaluated runner/backend/credentials predicate test.
-- [ ] M2: evidence script, composite action, workflow brackets, aggregator,
-      tests, and `docs/ci-compiler-cache-evidence.md`.
-- [ ] M3: setup-sccache namespace and backend output, mutation tests, executable
-      propagation tests.
-- [ ] M4: predeclared gate and adopt/reject record in
-      `docs/ci-cache-ownership.md`; control observations from existing ordinary
-      runs where available.
+- [x] 23 November 2026: M2 implemented — the evidence schema, writer, reader,
+      report, composite action, workflow brackets, tests, and the evidence
+      document.
+- [x] 23 November 2026: M3 implemented — `setup-sccache` namespace and backend
+      output, mutation tests, and the executable wrapper-propagation tests.
+- [x] 23 November 2026: M4 record drafted — every candidate family is
+      explicitly not adopted, and the gate, owner, review date, rollback, and
+      refresh trigger are recorded in `docs/ci-cache-ownership.md`.
+      Comparable warm pairs cannot exist until the instrumentation has run on
+      ordinary activity, which this change does not manufacture.
 - [ ] M5: full gates, CodeRabbit review, draft pull request.
 
 ## Surprises & Discoveries
@@ -173,6 +177,26 @@ its own evidence and decision.
   default so a GitHub-hosted caller cannot silently reach GitHub's quota.
 - 22 November 2026: evidence records carry a fixed schema version and a closed
   vocabulary. Missing evidence is `unknown`, never zero.
+- 23 November 2026: the evidence writer is split across `schema`, `probe`,
+  `evidence`, `records`, `summary`, and `report` modules, each below the
+  400-line budget. The split follows responsibility, not file size alone: the
+  schema is shared vocabulary, the probe is the only I/O, and the report owns
+  the CLI.
+- 23 November 2026: the matrix job's `make typecheck` bracket declares that it
+  invokes no rustc. `make typecheck` is `uv sync` plus `ty check`, which builds
+  no PyO3 extension, so a zero there is honest; the `make test-python` bracket
+  declares that it does compile, through the selected doctest and cargo-warning
+  contracts.
+- 23 November 2026: the mutation rules treat `pull_request_target` as unsafe
+  only when the privileged workflow also carries the experiment's evidence or
+  compiler-cache restore. The trigger is legitimate in
+  `dependabot-automerge.yml`, which runs no repository code.
+- 23 November 2026: the original size tolerance (1,200 code lines, 250
+  configuration, 500 documentation) was exceeded. The apparatus needs six
+  writer/reader modules, one composite action, the workflow brackets, and the
+  contract suites that keep each of them honest; the estimate assumed a single
+  script and a smaller test surface. The deviation is recorded rather than
+  hidden, and no existing gate or runtime behaviour was traded away for it.
 - 22 November 2026: the restore-to-writer join lives in
   `tests/test_ci_compiler_cache_readers.py`, and the evaluated predicate test
   lives in `tests/test_ci_compiler_cache_arms.py`, rather than in the two

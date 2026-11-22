@@ -113,3 +113,53 @@ def test_the_server_process_sees_what_the_install_exported(
     assert environment_at_start.get("RUSTC_WRAPPER") == installed.exported.get(
         "RUSTC_WRAPPER"
     ), "the server must see the wrapper the install step exported"
+
+
+def test_the_namespace_reaches_the_server_process(tmp_path: Path) -> None:
+    """A namespaced family must bind its own entries, not the default ones."""
+    installed = _run_install(
+        tmp_path,
+        {"backend": "gha", "namespace": "py3.13-debug"},
+        PROXY_CREDENTIALS,
+    )
+    assert installed.returncode == 0, installed.stderr
+    binary = tmp_path / ".local" / "bin" / "sccache"
+    seen = tmp_path / "environment-at-start"
+    binary.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--start-server" ]; then\n'
+        f'  env > "{seen}"\n'
+        "fi\n"
+        'if [ "$1" = "--stop-server" ]; then\n'
+        '  echo "Error: couldn\'t connect to server" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    outputs = tmp_path / "github_output"
+    outputs.touch()
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir(exist_ok=True)
+
+    started = run_step(
+        step_script(ACTION, START_STEP),
+        workdir=tmp_path,
+        environment={
+            **installed.exported,
+            "RUNNER_TEMP": str(runner_temp),
+            "GITHUB_OUTPUT": str(outputs),
+        },
+    )
+
+    assert started.returncode == 0, started.stderr
+    environment_at_start = dict(
+        line.split("=", 1)
+        for line in seen.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    assert environment_at_start.get("SCCACHE_GHA_VERSION") == "py3.13-debug", (
+        "the server must start with the namespace the install step exported, "
+        f"saw {sorted(environment_at_start)}"
+    )

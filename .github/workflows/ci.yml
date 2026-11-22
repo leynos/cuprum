@@ -122,6 +122,13 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: lint
 
+      - name: Start the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
+
       # Every `CARGO_CACHE_KEY` and `SCCACHE_CACHE_KEY` family carries
       # `runner.environment`, so the owned arm and the fork arm cannot restore
       # each other's entries even though they share a family name. Nothing
@@ -259,6 +266,22 @@ jobs:
         id: sccache
         uses: ./.github/actions/setup-sccache
 
+      - name: Snapshot the compiler cache before the Rust lint build
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: lint
+          phase: pre
+          family: py3.13-lint
+          matrix-leg: none
+          compiler-shape: lint
+          python-version: '3.13'
+          toolchain: 1.87.0
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+
       - name: Install CLI tools
         run: |
           uv tool install "mbake==${MBAKE_VERSION}"
@@ -372,6 +395,22 @@ jobs:
       - name: Lint the Windows cfg branches
         run: make lint-windows
 
+      - name: Snapshot the compiler cache after the Rust lint build
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: lint
+          phase: post
+          family: py3.13-lint
+          matrix-leg: none
+          compiler-shape: lint
+          python-version: '3.13'
+          toolchain: 1.87.0
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+
       - name: Record compiler-cache effectiveness
         if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
@@ -385,6 +424,13 @@ jobs:
             cat sccache-stats.txt
             printf '%s\n' "${fence}"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Start the compiler-cache save timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save
 
       # This job restores the Cargo registry and no longer saves it. On the
       # owned arm it now runs on the Ubicloud lane, where `runner.environment`
@@ -412,6 +458,29 @@ jobs:
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      - name: Record the lint bracket
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: record
+          bracket: lint
+          family: py3.13-lint
+          matrix-leg: none
+          compiler-shape: lint
+          python-version: '3.13'
+          toolchain: 1.87.0
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+          setup-status: ${{ steps.sccache.outputs.status }}
+
+      - name: Upload the compiler-cache evidence
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: upload
+          pr-number: ${{ github.event.pull_request.number }}
 
       - name: Report peak resource use
         if: always()
@@ -520,6 +589,13 @@ jobs:
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: debug
+
+      - name: Start the compiler-cache restore timer
+        if: env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
 
       - name: Restore the Cargo registry
         if: env.LEG_RUNS == 'true'
@@ -635,6 +711,22 @@ jobs:
         with:
           version: ${{ env.MDTABLEFIX_VERSION }}
 
+      - name: Snapshot the compiler cache before the typecheck
+        if: env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: typecheck
+          phase: pre
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'false'
+          pr-number: ${{ github.event.pull_request.number }}
+
       # `UV_PYTHON` binds uv to this leg's interpreter. The registry and tool
       # caches are shared across legs, so uv's own discovery could otherwise
       # select a different patch than the one this leg asked for, and the leg
@@ -649,6 +741,22 @@ jobs:
       # supplied one. Prove the environment the suites below will use is the
       # interpreter this leg requested: `3.12` accepts any 3.12 patch, while
       # `3.15.2` accepts only 3.15.2.
+      - name: Snapshot the compiler cache after the typecheck
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: typecheck
+          phase: post
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'false'
+          pr-number: ${{ github.event.pull_request.number }}
+
       - name: Verify project interpreter
         if: env.LEG_RUNS == 'true'
         shell: bash
@@ -680,6 +788,22 @@ jobs:
         if: env.LEG_RUNS == 'true'
         run: rustup toolchain install "$DEV_FAST_TOOLCHAIN" --profile minimal
 
+      - name: Snapshot the compiler cache before the Python tests
+        if: env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: python-tests
+          phase: pre
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+
       # `make test-python`, not `make test`: the Rust suite runs exactly once
       # per event, inside the coverage job, under instrumentation. The matrix
       # has no leg on the interpreter the coverage job already runs, because
@@ -697,6 +821,22 @@ jobs:
           UV_PYTHON: ${{ matrix.python-version }}
         run: |
           CARGO_BUILD_JOBS="${LINUX_RUNNER_VCPUS}" make test-python
+
+      - name: Snapshot the compiler cache after the Python tests
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: python-tests
+          phase: post
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
 
       - name: Record compiler-cache effectiveness
         if: always() && steps.sccache.outputs.status != 'fallback' && env.LEG_RUNS == 'true'
@@ -733,6 +873,13 @@ jobs:
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
 
+      - name: Start the compiler-cache save timer
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save
+
       - name: Save the compiler cache
         # Each leg compiles the extension against its own interpreter, and
         # `pyo3` is built without `abi3`, so those objects serve no other leg.
@@ -752,6 +899,45 @@ jobs:
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      - name: Record the typecheck bracket
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: record
+          bracket: typecheck
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'false'
+          pr-number: ${{ github.event.pull_request.number }}
+          setup-status: ${{ steps.sccache.outputs.status }}
+
+      - name: Record the Python-test bracket
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: record
+          bracket: python-tests
+          family: py${{ matrix.python-version }}-debug
+          matrix-leg: ${{ matrix.python-version }}
+          compiler-shape: debug
+          python-version: ${{ matrix.python-version }}
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+          setup-status: ${{ steps.sccache.outputs.status }}
+
+      - name: Upload the compiler-cache evidence
+        if: always() && env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: upload
+          pr-number: ${{ github.event.pull_request.number }}
 
       # Last, and unconditional, so a job that failed on disk still reports the
       # high-water mark that explains why.
@@ -809,6 +995,13 @@ jobs:
           generation: ${{ env.CACHE_GENERATION }}
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: debug
+
+      - name: Start the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
 
       - name: Restore the Cargo registry
         id: cargo-cache
@@ -868,6 +1061,22 @@ jobs:
       - name: Set up sccache
         id: sccache
         uses: ./.github/actions/setup-sccache
+
+      - name: Snapshot the compiler cache before the extension build
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: extension
+          phase: pre
+          family: py3.13-debug
+          matrix-leg: none
+          compiler-shape: debug
+          python-version: '3.13'
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -930,6 +1139,22 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
+      - name: Snapshot the compiler cache after the extension build
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: snapshot
+          bracket: extension
+          phase: post
+          family: py3.13-debug
+          matrix-leg: none
+          compiler-shape: debug
+          python-version: '3.13'
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+
       - name: Record compiler-cache effectiveness
         if: always() && steps.sccache.outputs.status != 'fallback'
         shell: bash
@@ -976,6 +1201,13 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
 
+      - name: Start the compiler-cache save timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save
+
       - name: Save the compiler cache
         # This job is the only one that builds the unoptimized extension
         # against Python 3.13, so it owns the `py3.13-debug` compiler-cache
@@ -994,6 +1226,29 @@ jobs:
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      - name: Record the extension bracket
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: record
+          bracket: extension
+          family: py3.13-debug
+          matrix-leg: none
+          compiler-shape: debug
+          python-version: '3.13'
+          toolchain: ${{ env.DEV_FAST_TOOLCHAIN }}
+          dev-fast: 'true'
+          expects-rustc: 'true'
+          pr-number: ${{ github.event.pull_request.number }}
+          setup-status: ${{ steps.sccache.outputs.status }}
+
+      - name: Upload the compiler-cache evidence
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: upload
+          pr-number: ${{ github.event.pull_request.number }}
 
       # Last, and unconditional, so a job that failed on disk still reports the
       # high-water mark that explains why.

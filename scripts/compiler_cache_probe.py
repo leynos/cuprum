@@ -1,0 +1,197 @@
+"""Probe the local compiler cache and report only allowlisted facts.
+
+The evidence writer needs four things the runner can observe directly: the
+sccache statistics document, the compiler's identity, the size of the local
+cache directory a migration would remove, and the wall time since a restore or
+save marker. Each probe fails open and returns ``None`` or an ``unknown``
+marker, so a job that compiled correctly is never failed by a missing probe.
+
+The statistics document is reduced to the allowlisted counters and durations
+before it leaves this module. The raw document also carries the cache location,
+which can name a runner path or a service address; that value is classified by
+``scripts.compiler_cache_schema`` and never returned.
+
+Examples
+--------
+>>> count({"counts": {"Rust": 3}, "adv_counts": {}})
+3
+>>> duration({"secs": 1, "nanos": 500_000_000})
+1.5
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
+import time
+import typing as typ
+from pathlib import Path
+
+from scripts import compiler_cache_schema as schema
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+_EMPTY: dict[str, object] = {}
+
+
+def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str]:
+    """Run sccache and return its statistics and version; fail open.
+
+    Returns
+    -------
+    tuple[dict[str, object], str]
+        The parsed ``stats`` object and the reported version. Both are empty
+        when sccache is absent or cannot be run, which the caller records as
+        unavailable rather than as zeroes.
+    """
+    binary = environ.get("SCCACHE_BINARY", "sccache")
+    try:
+        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+            [binary, "--show-stats", "--stats-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return {}, ""
+        document = json.loads(completed.stdout)
+        stats = document.get("stats", _EMPTY)
+        version = str(document.get("version", ""))
+        if not isinstance(stats, dict):
+            return {}, version
+        return typ.cast("dict[str, object]", stats), version
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        return {}, ""
+
+
+def count(mapping: object) -> int | None:
+    """Sum the ``counts`` and ``adv_counts`` maps sccache reports per language."""
+    if not isinstance(mapping, dict):
+        return None
+    total = 0
+    for key in ("counts", "adv_counts"):
+        values = typ.cast("dict[str, object]", mapping).get(key, {})
+        if not isinstance(values, dict):
+            continue
+        for value in typ.cast("dict[str, object]", values).values():
+            if isinstance(value, int) and not isinstance(value, bool):
+                total += value
+    return total
+
+
+def counter(stats: cabc.Mapping[str, object], name: str) -> int | None:
+    """Return one counter, summing the per-language maps sccache uses."""
+    if name in {"cache_hits", "cache_misses"}:
+        return count(stats.get(name))
+    value = stats.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def duration(value: object) -> float | None:
+    """Return one ``{secs, nanos}`` duration in seconds."""
+    if not isinstance(value, dict):
+        return None
+    seconds = typ.cast("dict[str, object]", value).get("secs")
+    nanos = typ.cast("dict[str, object]", value).get("nanos")
+    if not isinstance(seconds, int) or isinstance(seconds, bool):
+        return None
+    fraction = nanos if isinstance(nanos, int) and not isinstance(nanos, bool) else 0
+    return float(seconds) + fraction / 1_000_000_000
+
+
+def not_cached(stats: cabc.Mapping[str, object]) -> dict[str, int]:
+    """Return the non-cacheable reasons with their counts, bounded by name."""
+    reasons = stats.get("not_cached")
+    if not isinstance(reasons, dict):
+        return {}
+    result: dict[str, int] = {}
+    for name, value in typ.cast("dict[str, object]", reasons).items():
+        if not schema.REASON.fullmatch(str(name)):
+            continue
+        if isinstance(value, int) and not isinstance(value, bool):
+            result[str(name)] = value
+    return result
+
+
+def directory_bytes(environ: cabc.Mapping[str, str]) -> int | None:
+    """Return the local compiler directory's size in bytes, or ``None``.
+
+    The directory is the archive the direct backend would replace, so its size
+    is the transfer the migration removes. An absent directory, as on a
+    ``gha`` backend or a fork run, has no size to report.
+
+    Returns
+    -------
+    int | None
+        The summed file sizes, or ``None`` when the directory is absent or
+        unreadable.
+    """
+    root = Path(environ.get("HOME", "")) / ".cache" / "sccache"
+    if not root.is_dir():
+        return None
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            if path.is_file():
+                total += path.stat().st_size
+    except OSError:
+        return None
+    return total
+
+
+def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
+    """Return the compiler's release, commit, and host, or ``unknown``."""
+    binary = environ.get("RUSTC_BINARY", "rustc")
+    values = {"release": "unknown", "commit": "unknown", "host": "unknown"}
+    try:
+        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+            [binary, "-vV"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return values
+    if completed.returncode != 0:
+        return values
+    for line in completed.stdout.splitlines():
+        name, _, value = line.partition(": ")
+        if name in values and value:
+            values[name] = value
+    return values
+
+
+def mark_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
+    """Return the path a timing marker is stored at."""
+    return Path(environ["EVIDENCE_DIR"]) / "marks" / f"{marker}-start"
+
+
+def seconds_since(environ: cabc.Mapping[str, str], marker: str) -> float | None:
+    """Return seconds elapsed since a marker, or ``None`` when it is absent."""
+    try:
+        started = float(mark_path(environ, marker).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    elapsed = time.time() - started
+    return round(elapsed, 3) if elapsed >= 0 else None
+
+
+def write_mark(environ: cabc.Mapping[str, str], marker: str) -> bool:
+    """Write one wall-clock marker.
+
+    Returns
+    -------
+    bool
+        Whether the marker was persisted. A failure leaves one timing field
+        unknown, which never fails the step that measures a paid transfer.
+    """
+    path = mark_path(environ, marker)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{time.time():.6f}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True

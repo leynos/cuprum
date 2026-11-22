@@ -377,14 +377,66 @@ adopted only when all of the following hold, measured over ordinary CI activity:
 A family that fails or cannot satisfy the gate keeps archived caching. A higher
 hit rate alone does not satisfy it.
 
+### Adopt/reject record
+
+The gate is evaluated per family from ordinary CI activity. No family is
+adopted by the change that introduced this record.
+
+| Family           | Decision       | Owner  | Review date | Evidence | Rollback                       |
+| ---------------- | -------------- | ------ | ----------- | -------- | ------------------------------ |
+| `py3.12-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.14-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.15.2-debug` | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.13-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.13-lint`    | Inventory only | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+
+_Table 5: The experiment's decisions at this revision. "None yet" is a
+statement about this change, not about the repository's history: the
+instrumentation that produces the evidence lands with this record, so no
+comparable control/candidate pair exists at the review date._
+
+Reasons, per family:
+
+- The matrix legs and `extension-tests` are not adopted because the issue
+  forbids synthetic pushes and extra dispatches, and the gate requires at least
+  five comparable warm control/candidate pairs from ordinary activity. Those
+  pairs can only accumulate after the instrumentation has run on `main` and on
+  ordinary pull requests. Adopting first would invert the experiment.
+- `lint-test` is not a candidate yet. Its build shape spans four toolchains and
+  a Windows cross-target check, so its inventory has to be read before a gate
+  decision is meaningful.
+- `benchmark-ratchet`, the scheduled proof and model lanes, Windows, and macOS
+  remain out of scope.
+
+Rollback, for a family that is later adopted: revert the single trial commit
+that swapped the archived restore and save for the credentials export and
+`backend: gha`. The next writing run on `main` then publishes the first archive
+of the restored local family; one cold generation is accepted, and no data is
+migrated. No cache is purged.
+
+Refresh trigger: re-derive the baseline after any material change to the
+toolchain, the PyO3 or Cargo build shape, the sccache release, the runner
+image, or the cache backend, and after any change that alters which jobs
+compile.
+
+Branch protection and storage terms: Ubicloud documents 30 GB of free cache
+storage per repository, a seven-day eviction of entries not accessed in that
+window, and branch protection on by default, under which a run reads the
+current branch or the default branch. This repository's coverage lanes already
+depend on that default. A dated, redacted console observation for the
+experiment period is not available from the runner and is therefore recorded as
+`unknown`; it must be attached before any family is adopted. Disabling branch
+protection is never an option.
+
 ### Storage and protection terms
 
-Ubicloud's cache store is documented at 30 GB per repository with a seven-day
-eviction window, and branch protection is on by default. This repository's
-coverage lanes already depend on that protection. Direct console observations
-for the experiment period, including storage, transfer, eviction, and verified
-billing rounding, must be attached to the decision record; where they are
-missing the field is `unknown`, never zero.
+Ubicloud's cache store is documented at 30 GB of free storage per repository,
+with the oldest entries removed when the limit is exceeded and entries not
+accessed for seven days removed automatically. Branch protection is on by
+default. This repository's coverage lanes already depend on that protection.
+Direct console observations for the experiment period, including storage,
+transfer, eviction, and verified billing rounding, must be attached to the
+decision record; where they are missing the field is `unknown`, never zero.
 
 [issue-609]: https://github.com/leynos/cuprum/issues/609
 
