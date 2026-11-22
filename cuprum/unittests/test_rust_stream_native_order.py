@@ -107,11 +107,6 @@ def fixture_native_streams() -> ModuleType:
     return importlib.import_module("cuprum._rust_backend_native")
 
 
-def _open_writer() -> int:
-    """Open a writable descriptor for the pump to adopt."""
-    return os.open(os.devnull, os.O_WRONLY)
-
-
 @_unix_only
 def test_pump_reports_a_rejected_buffer_before_touching_the_writer(
     native_streams: ModuleType,
@@ -124,7 +119,7 @@ def test_pump_reports_a_rejected_buffer_before_touching_the_writer(
     would have been adopted — which the state probe rules out.
     """
     with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(_open_writer())
+        writer = _open_pipe_sink(stack)
         stack.callback(writer.close)
 
         with pytest.raises(ValueError, match="buffer_size") as excinfo:
@@ -338,14 +333,14 @@ def test_wrong_argument_types_keep_pyo3_extraction_errors(
         reader_fd, reader_writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
         stack.callback(_safe_close, reader_writer_fd)
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _open_pipe_sink(stack)
+        stack.callback(writer.close)
 
         with pytest.raises(TypeError):
             native_streams.rust_consume_stream(wrong)
 
         with pytest.raises(TypeError):
-            native_streams.rust_pump_stream(wrong, writer_fd)
+            native_streams.rust_pump_stream(wrong, writer.fd)
 
         with pytest.raises(TypeError):
             native_streams.rust_pump_stream(reader_fd, wrong)
@@ -354,12 +349,12 @@ def test_wrong_argument_types_keep_pyo3_extraction_errors(
             native_streams.rust_consume_stream(reader_fd, buffer_size=wrong)
 
         with pytest.raises(TypeError):
-            native_streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=wrong)
+            native_streams.rust_pump_stream(reader_fd, writer.fd, buffer_size=wrong)
 
         assert _descriptor_state(reader_fd) == "open", (
             "PyO3 extraction failure must leave the borrowed reader open"
         )
-        assert _descriptor_state(writer_fd) == "open", (
+        assert _descriptor_state(writer.fd) == "open", (
             "PyO3 extraction failure must happen before writer adoption"
         )
 
@@ -384,21 +379,21 @@ def test_out_of_i64_buffer_keeps_pyo3_overflow_error(
     with contextlib.ExitStack() as stack:
         reader_fd = os.open(os.devnull, os.O_RDONLY)
         stack.callback(_safe_close, reader_fd)
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _open_pipe_sink(stack)
+        stack.callback(writer.close)
         with pytest.raises(OverflowError):
             native_streams.rust_consume_stream(reader_fd, buffer_size=beyond_i64)
         with pytest.raises(OverflowError):
             native_streams.rust_pump_stream(
                 reader_fd,
-                writer_fd,
+                writer.fd,
                 buffer_size=beyond_i64,
             )
 
         assert _descriptor_state(reader_fd) == "open", (
             "PyO3 extraction failure must leave the borrowed reader open"
         )
-        assert _descriptor_state(writer_fd) == "open", (
+        assert _descriptor_state(writer.fd) == "open", (
             "PyO3 extraction failure must happen before writer adoption"
         )
 
@@ -416,16 +411,16 @@ def test_out_of_i64_descriptors_keep_pyo3_overflow_error(
 ) -> None:
     """Descriptor extraction outside ``i64`` stays ``OverflowError``."""
     with contextlib.ExitStack() as stack:
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _open_pipe_sink(stack)
+        stack.callback(writer.close)
 
         with pytest.raises(OverflowError):
             native_streams.rust_consume_stream(beyond_i64)
 
         with pytest.raises(OverflowError):
-            native_streams.rust_pump_stream(beyond_i64, writer_fd)
+            native_streams.rust_pump_stream(beyond_i64, writer.fd)
 
-        assert _descriptor_state(writer_fd) == "open", (
+        assert _descriptor_state(writer.fd) == "open", (
             "descriptor extraction failure must happen before writer adoption"
         )
 
@@ -469,7 +464,7 @@ def test_pump_maps_an_invalid_reader_descriptor_to_value_error(
     the pump export's mapping unpinned.
     """
     with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(_open_writer())
+        writer = _open_pipe_sink(stack)
         stack.callback(writer.close)
 
         with pytest.raises(ValueError, match="file descriptor"):

@@ -17,11 +17,12 @@ The accepted arguments — where the default applies and the transfer actually
 completes — are covered by ``test_rust_streams_roundtrip_property.py``.
 
 Both adapters run the same Python checks before entering native code: buffer
-size first, then the raw reader's sign and signed 32-bit range, then the
-platform step. On Windows that step duplicates the validated CRT descriptor;
-Unix passes the raw descriptor through, and the native entry rechecks the same
-policy. The descriptor properties use the default buffer so the reader is the
-value that fails.
+size first, then the raw reader's sign and signed 32-bit range, then their
+platform step. On Windows the pump converts the validated reader to a handle
+before the writer transfer, while consume duplicates the validated CRT
+descriptor into binary mode; Unix passes the raw descriptor through, and the
+native entry rechecks the same policy. The descriptor properties use the
+default buffer so the reader is the value that fails.
 
 Windows consume accepts CRT descriptors in the same signed 32-bit range as
 Unix descriptors and duplicates the validated descriptor, changing only the
@@ -76,9 +77,10 @@ class _BufferSizeEntryPoint(typ.Protocol):
 
 # Both bounds span the whole signed 64-bit range, so the failure is the
 # documented buffer-size rejection rather than an integer-conversion overflow.
-# The negative bound reaches ``i64::MIN``: PyO3 extracts ``buffer_size`` as an
-# ``i64``, so every value in this range is a well-formed argument that the
-# native validator must classify itself rather than reject at extraction.
+# The negative bound reaches ``i64::MIN``: the shared Python policy extracts
+# ``buffer_size`` with ``operator.index`` and then applies its own range and
+# positivity checks, so every value in this range reaches the wrapper's buffer
+# validator instead of failing extraction.
 _OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
     st.integers(min_value=_I64_MIN, max_value=0),
     st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=_I64_MAX),
