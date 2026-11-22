@@ -192,7 +192,9 @@ def when_pump_index_like(adapters: ModuleType) -> _IndexEvidence:
                 buffer_size=typ.cast("int", size),
             )
         finally:
-            sink.disarm_if_adopted()
+            # A successful wrapper pump has already adopted and closed the
+            # sink, so the test must not close that number again.
+            sink.disarm()
 
     assert moved == len(payload), f"the pump must transfer every byte, found {moved!r}"
     return _IndexEvidence(moved, (reader.calls, sink_argument.calls, size.calls))
@@ -282,8 +284,9 @@ def when_non_index_like(
             _entry_point(adapters, operation)(*args, buffer_size=buffer_argument)
     finally:
         if writer is not None:
-            # Every pre-native failure closes the writer the wrapper owns.
-            writer.disarm_if_adopted()
+            # Every pre-native failure closes the writer the wrapper owns, so
+            # the test must not close that number again.
+            writer.disarm()
     return _ExtractionEvidence(
         excinfo.value,
         reader_fd,

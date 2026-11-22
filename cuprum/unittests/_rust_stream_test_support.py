@@ -75,6 +75,22 @@ class _OwnedDescriptor:
             _safe_close(self.fd)
 
 
+def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
+    """Open a pipe write end for a native pump, keeping its read end open.
+
+    A pipe has a unique resource identity, so an owner can tell adoption apart
+    from a descriptor number another thread has reused.
+
+    Returns
+    -------
+    _OwnedDescriptor
+        The write end, owned until the pump adopts it or the stack closes it.
+    """
+    reader_fd, writer_fd = os.pipe()
+    stack.callback(_safe_close, reader_fd)
+    return _OwnedDescriptor(writer_fd)
+
+
 def _descriptor_identity(fd: int) -> tuple[int, int, int] | None:
     """Return the resource identity behind ``fd``, or ``None`` when closed."""
     try:

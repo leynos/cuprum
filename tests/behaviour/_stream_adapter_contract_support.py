@@ -95,7 +95,10 @@ def _call_with_descriptor(
                 entry_point(*args, buffer_size=buffer_size)
         finally:
             if writer is not None:
-                writer.disarm_if_adopted()
+                # The wrapper closes a writer that never reaches native
+                # ownership on every failure path, so this test must not close
+                # that number again.
+                writer.disarm()
     return excinfo.value
 
 

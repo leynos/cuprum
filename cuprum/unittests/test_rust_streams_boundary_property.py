@@ -8,7 +8,10 @@ seam:
 
 - Non-positive and over-cap ``buffer_size`` values raise ``ValueError``.
 - Negative and out-of-``i32``-range descriptors raise ``ValueError``.
-- Values beyond ``i64`` stay PyO3 extraction errors.
+- Values beyond ``i64`` raise ``OverflowError``. Through the wrappers that
+  error comes from the shared Python policy, which enforces the range before
+  any native call; a direct native call still reports PyO3's own extraction
+  error, which ``test_rust_stream_native_order.py`` pins separately.
 
 The accepted arguments — where the default applies and the transfer actually
 completes — are covered by ``test_rust_streams_roundtrip_property.py``.
@@ -37,10 +40,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests._rust_stream_test_support import (
-    _OwnedDescriptor,
-    _safe_close,
-)
+from cuprum.unittests._rust_stream_test_support import _safe_close
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -118,15 +118,11 @@ def _pump_with_open_reader(
         Whatever the entry point returns; the property expects it to raise
         instead.
     """
-    with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
-        stack.callback(writer.close)
-        try:
-            return streams.rust_pump_stream(
-                reader_fd, writer.fd, buffer_size=buffer_size
-            )
-        finally:
-            writer.disarm_if_adopted()
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    # No cleanup callback: the wrapper closes a writer that never reaches the
+    # native ownership boundary, so registering a second close here would be
+    # the double close this issue rules out.
+    return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
 
 
 @pytest.mark.parametrize(
@@ -193,15 +189,10 @@ def _pump_with_reader_and_buffer(
         Whatever the entry point returns; the property expects it to raise
         instead.
     """
-    with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
-        stack.callback(writer.close)
-        try:
-            return streams.rust_pump_stream(
-                reader_fd, writer.fd, buffer_size=buffer_size
-            )
-        finally:
-            writer.disarm_if_adopted()
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    # The wrapper owns this writer: it closes one that never reaches native
+    # ownership, so the test registers no second close for the number.
+    return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
 
 
 class _ReaderAndBufferEntryPoint(typ.Protocol):
@@ -239,10 +230,10 @@ def test_buffer_validation_precedes_descriptor_conversion(
 
     Both wrappers validate the buffer before the raw reader, and consume does so
     before duplicating its CRT descriptor on Windows, which is also the order
-    that keeps an unusable descriptor away from ``_read``. Unix consume repeats
-    the same order in Python before the native entry rechecks it. Both values
-    are deliberately interior ``i64``, so PyO3 extracts them successfully and
-    classification is the boundary's own rather than an extraction error.
+    that keeps an unusable descriptor away from ``_read``. Both values are
+    deliberately interior ``i64``, so the wrapper's own buffer check decides the
+    competing failure; PyO3's extraction runs only after that check, and no
+    platform step or native call is reached.
     """
     with pytest.raises(ValueError, match="buffer_size") as excinfo:
         entry_point(rust_streams, reader_fd=bad_fd, buffer_size=bad_size)
@@ -301,14 +292,11 @@ def test_pump_rejects_invalid_reader_descriptor(
     The writer is a genuinely valid descriptor, so the ``ValueError`` can only
     originate from the invalid reader, not from a coincidentally invalid writer.
     """
-    with contextlib.ExitStack() as stack:
-        writer = _OwnedDescriptor(os.open(os.devnull, os.O_WRONLY))
-        stack.callback(writer.close)
-        try:
-            with pytest.raises(ValueError, match="file descriptor"):
-                rust_streams.rust_pump_stream(bad_fd, writer.fd)
-        finally:
-            writer.disarm_if_adopted()
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    # The wrapper closes the writer on this rejection; a second close here
+    # would act on a number the test no longer owns.
+    with pytest.raises(ValueError, match="file descriptor"):
+        rust_streams.rust_pump_stream(bad_fd, writer_fd)
 
 
 @pytest.mark.parametrize(
@@ -324,24 +312,25 @@ def test_pump_rejects_invalid_reader_descriptor(
         st.integers(min_value=1 << 63), st.integers(max_value=-((1 << 63) + 1))
     )
 )
-def test_out_of_i64_buffer_size_stays_an_extraction_error(
+def test_out_of_i64_buffer_size_raises_overflow_error(
     rust_streams: ModuleType,
     entry_point: _OpenReaderEntryPoint,
     beyond_i64: int,
 ) -> None:
-    """Values outside ``i64`` keep PyO3's ``OverflowError``, not ``ValueError``.
+    """Values outside ``i64`` raise ``OverflowError``, not ``ValueError``.
 
-    The typed boundary classifies what PyO3 successfully extracted. An
-    out-of-range integer never reaches it, so this stays an extraction error:
-    reclassifying it as a stream-validation failure would claim the boundary
-    saw an argument it never received.
+    The wrapper's shared policy enforces the range in Python and raises
+    ``OverflowError`` with PyO3's message before any native call, so this is a
+    wrapper error rather than a native classification. A direct native caller
+    still gets PyO3's own extraction error; the native-order module pins that
+    separately.
 
     ``OverflowError`` is a subclass of ``ArithmeticError``, not of
     ``ValueError``, so ``pytest.raises(ValueError)`` would not mask a
     regression here.
 
-    The reader is a real read end, so the only failure available to the call is
-    the oversized buffer's extraction; no platform step runs for it.
+    The reader is a real read end, so the only failing argument available to
+    the wrapper is the oversized buffer; no platform step or native call runs.
     """
     with contextlib.ExitStack() as stack:
         reader = os.open(os.devnull, os.O_RDONLY)

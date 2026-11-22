@@ -52,6 +52,7 @@ from cuprum import _rust_backend
 from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
 from cuprum.unittests._rust_stream_test_support import (
     _descriptor_state,
+    _open_pipe_sink,
     _OwnedDescriptor,
     _safe_close,
 )
@@ -109,22 +110,6 @@ def fixture_native_streams() -> ModuleType:
 def _open_writer() -> int:
     """Open a writable descriptor for the pump to adopt."""
     return os.open(os.devnull, os.O_WRONLY)
-
-
-def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
-    """Open a pipe write end for the pump to adopt, keeping the read end open.
-
-    A pipe has a unique resource identity, so the owner can tell adoption
-    apart from a descriptor number another thread has reused.
-
-    Returns
-    -------
-    _OwnedDescriptor
-        The write end, owned until the pump adopts it or the stack closes it.
-    """
-    reader_fd, writer_fd = os.pipe()
-    stack.callback(_safe_close, reader_fd)
-    return _OwnedDescriptor(writer_fd)
 
 
 @_unix_only
@@ -203,15 +188,15 @@ def test_pump_adopts_and_closes_the_writer_on_success(
 
 
 @_unix_only
-def test_successful_pump_arms_no_cleanup_over_a_reused_number(
+def test_owner_disarms_before_a_failure_and_after_a_reused_number(
     native_streams: ModuleType,
 ) -> None:
-    """A failed pump keeps ownership, so cleanup still closes the writer.
+    """Ownership follows the resource, not merely whether the number opens.
 
-    The success test above proves adoption by probing the number. That probe
-    must drive the cleanup decision itself: if the call fails before adoption
-    the writer is still open, and the owner has to close it rather than assume
-    a transfer that never happened.
+    Two directions are pinned. A pump rejected before adoption leaves the
+    writer open, so the owner stays armed and closes it once. A writer the
+    native side released, whose number another open then took, reports a
+    different resource, so the owner disarms and leaves that number alone.
     """
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
@@ -232,14 +217,60 @@ def test_successful_pump_arms_no_cleanup_over_a_reused_number(
         assert _descriptor_state(writer.fd) == "closed", (
             "the owner must still close a writer the native side never took"
         )
-        # The number is now free for reuse, which is exactly the case the
-        # owner must not act on again.
-        reused = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, reused)
-        assert reused == writer.fd, "the probe needs the freed number back"
-        writer.close()
-        assert _descriptor_state(reused) == "open", (
+
+        # Simulate the native side releasing the next writer without telling
+        # the owner, then let another open reclaim the number. The owner's
+        # probe must see a different resource and leave the new one alone.
+        adopted = _open_pipe_sink(stack)
+        stack.callback(adopted.close)
+        released_number = adopted.fd
+        _safe_close(released_number)
+        # Keep every descriptor opened while the released number is free, so
+        # the allocator's lowest free slot is the one the owner still names.
+        reclaimed = os.open(os.devnull, os.O_WRONLY)
+        stack.callback(_safe_close, reclaimed)
+        assert reclaimed == released_number, (
+            "the scenario needs the released number to be reclaimed"
+        )
+        adopted.disarm_if_adopted()
+        adopted.close()
+        assert _descriptor_state(reclaimed) == "open", (
             "cleanup must not close a number another owner has reused"
+        )
+
+
+@_unix_only
+def test_native_pump_io_failure_after_adoption_releases_the_writer(
+    native_streams: ModuleType,
+) -> None:
+    """A read that fails after adoption still leaves the adopted writer closed.
+
+    The reader is the write end of a pipe, so descriptor conversion succeeds
+    and the native entry adopts the writer before the read fails. This is the
+    post-adoption failure the ownership probe alone cannot classify.
+    """
+    with contextlib.ExitStack() as stack:
+        read_end, write_end = os.pipe()
+        stack.callback(_safe_close, read_end)
+        # A pipe's write end opens and converts like any descriptor, but a
+        # read from it fails with EBADF once the pump has adopted the writer.
+        reader = _OwnedDescriptor(write_end)
+        stack.callback(reader.close)
+        sink = _open_pipe_sink(stack)
+        stack.callback(sink.close)
+
+        with pytest.raises(OSError, match=r"\[Errno 9\]|\[WinError (6|87)\]"):
+            native_streams.rust_pump_stream(reader.fd, sink.fd, buffer_size=1024)
+
+        # The pump failed inside native I/O, which is only reachable after the
+        # writer was adopted and closed there.
+        sink.disarm()
+
+        assert _descriptor_state(reader.fd) == "open", (
+            "a failed read must leave the borrowed reader open"
+        )
+        assert _descriptor_state(sink.fd) == "closed", (
+            "the adopted writer must be closed even when the pump fails"
         )
 
 
