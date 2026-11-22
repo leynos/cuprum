@@ -122,13 +122,6 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: lint
 
-      - name: Start the compiler-cache restore timer
-        if: always()
-        uses: ./.github/actions/compiler-cache-evidence
-        with:
-          mode: mark
-          marker: restore
-
       # Every `CARGO_CACHE_KEY` and `SCCACHE_CACHE_KEY` family carries
       # `runner.environment`, so the owned arm and the fork arm cannot restore
       # each other's entries even though they share a family name. Nothing
@@ -146,6 +139,13 @@ jobs:
             ~/.cargo/git
           key: ${{ env.CARGO_CACHE_KEY }}
           restore-keys: ${{ env.CARGO_CACHE_PREFIX }}
+
+      - name: Start the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
 
       - name: Restore the compiler cache
         id: sccache-dir
@@ -426,7 +426,7 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Start the compiler-cache save timer
-        if: always()
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: mark
@@ -474,12 +474,15 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
+          restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
       - name: Upload the compiler-cache evidence
         if: always()
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: upload
+          matrix-leg: none
           pr-number: ${{ github.event.pull_request.number }}
 
       - name: Report peak resource use
@@ -590,13 +593,6 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: debug
 
-      - name: Start the compiler-cache restore timer
-        if: env.LEG_RUNS == 'true'
-        uses: ./.github/actions/compiler-cache-evidence
-        with:
-          mode: mark
-          marker: restore
-
       - name: Restore the Cargo registry
         if: env.LEG_RUNS == 'true'
         id: cargo-cache
@@ -622,6 +618,13 @@ jobs:
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
+
+      - name: Start the compiler-cache restore timer
+        if: env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
 
       - name: Restore the compiler cache
         id: sccache-dir
@@ -874,7 +877,9 @@ jobs:
           key: ${{ env.TOOL_CACHE_KEY }}
 
       - name: Start the compiler-cache save timer
-        if: always() && env.LEG_RUNS == 'true'
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          env.LEG_RUNS == 'true'
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: mark
@@ -915,6 +920,8 @@ jobs:
           expects-rustc: 'false'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
+          restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
       - name: Record the Python-test bracket
         if: always() && env.LEG_RUNS == 'true'
@@ -931,12 +938,15 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
+          restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
       - name: Upload the compiler-cache evidence
         if: always() && env.LEG_RUNS == 'true'
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: upload
+          matrix-leg: ${{ matrix.python-version }}
           pr-number: ${{ github.event.pull_request.number }}
 
       # Last, and unconditional, so a job that failed on disk still reports the
@@ -996,13 +1006,6 @@ jobs:
           ubuntu-release: ${{ env.UBUNTU_RELEASE }}
           compiler-shape: debug
 
-      - name: Start the compiler-cache restore timer
-        if: always()
-        uses: ./.github/actions/compiler-cache-evidence
-        with:
-          mode: mark
-          marker: restore
-
       - name: Restore the Cargo registry
         id: cargo-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
@@ -1026,6 +1029,13 @@ jobs:
             .uv-tools
           key: ${{ env.TOOL_CACHE_KEY }}
           restore-keys: ${{ env.TOOL_CACHE_PREFIX }}
+
+      - name: Start the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore
 
       - name: Restore the compiler cache
         id: sccache-dir
@@ -1202,7 +1212,7 @@ jobs:
           key: ${{ env.CARGO_CACHE_KEY }}
 
       - name: Start the compiler-cache save timer
-        if: always()
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: mark
@@ -1242,12 +1252,15 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
+          restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
       - name: Upload the compiler-cache evidence
         if: always()
         uses: ./.github/actions/compiler-cache-evidence
         with:
           mode: upload
+          matrix-leg: none
           pr-number: ${{ github.event.pull_request.number }}
 
       # Last, and unconditional, so a job that failed on disk still reports the

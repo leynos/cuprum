@@ -76,8 +76,10 @@ def _observation_label(
 ) -> str:
     """Return the experiment case one record witnesses.
 
-    ``first_for_pr`` is updated in place when the record is a pull request's
-    first observation, so a later record for the same PR is a subsequent push.
+    ``first_for_pr`` stores the run that first observed a pull request. A
+    later bracket of that same run is still that PR's first consumer; only a
+    later run is a subsequent push. A push run, or the writer's ``unknown``
+    sentinel, never enters the PR classes.
 
     Returns
     -------
@@ -85,6 +87,7 @@ def _observation_label(
         One of the five closed observation classes.
     """
     pr_number = str(record["pr_number"])
+    is_pr = record["event_class"] == "pull_request" and pr_number.isdecimal()
     hits = typ.cast("dict[str, object]", record["counters"]).get("cache_hits")
     cold = (
         record["backend"] == "local" and record["restore_hit"] is not True and not hits
@@ -93,12 +96,12 @@ def _observation_label(
         return "fallback-or-misconfiguration"
     if cold:
         return "cold-or-new-family"
-    if pr_number and pr_number not in first_for_pr:
-        first_for_pr[pr_number] = str(record["run_id"])
+    if not is_pr:
+        return "fresh-consumer"
+    first_run = first_for_pr.setdefault(pr_number, str(record["run_id"]))
+    if first_run == str(record["run_id"]):
         return "first-pr-consumer"
-    if pr_number:
-        return "subsequent-pr-push"
-    return "fresh-consumer"
+    return "subsequent-pr-push"
 
 
 def classify_observations(
@@ -135,45 +138,87 @@ def classify_observations(
     return classified
 
 
+def _unique_jobs(
+    records: cabc.Sequence[cabc.Mapping[str, object]],
+) -> list[cabc.Mapping[str, object]]:
+    """Collapse a bracket list to one observation per job and matrix leg."""
+    seen: set[tuple[str, str, str, str]] = set()
+    unique: list[cabc.Mapping[str, object]] = []
+    for record in records:
+        key = (
+            str(record["run_id"]),
+            str(record["run_attempt"]),
+            str(record["job"]),
+            str(record["matrix_leg"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(record)
+    return unique
+
+
+def _transfer_total(record: cabc.Mapping[str, object]) -> float | None:
+    """Return one job's restore-plus-save seconds, or ``None`` if incomplete."""
+    restore = records_reader.number_or_none(record.get("restore_seconds"))
+    save = records_reader.number_or_none(record.get("save_seconds"))
+    if restore is None or save is None:
+        return None
+    return round(restore + save, 3)
+
+
+def _paired_savings(
+    controls: cabc.Sequence[cabc.Mapping[str, object]],
+    candidates: cabc.Sequence[cabc.Mapping[str, object]],
+    jobs: cabc.Sequence[cabc.Mapping[str, object]],
+    names: cabc.Mapping[str, str],
+) -> dict[str, object]:
+    """Return the usable pairs, the failures, and the independent pair count."""
+    count = min(len(controls), len(candidates))
+    savings: list[float] = []
+    control_times: list[float] = []
+    candidate_times: list[float] = []
+    failures = 0
+    for index in range(count):
+        control_time, control_result = jobs_reader.seconds_and_result(
+            controls[index], jobs, names
+        )
+        candidate_time, candidate_result = jobs_reader.seconds_and_result(
+            candidates[index], jobs, names
+        )
+        failures += sum(
+            result == "failed" for result in (control_result, candidate_result)
+        )
+        if control_result != "passed" or candidate_result != "passed":
+            continue
+        if control_time is None or candidate_time is None:
+            continue
+        control_times.append(control_time)
+        candidate_times.append(candidate_time)
+        savings.append(round(control_time - candidate_time, 3))
+    return {
+        "savings": savings,
+        "controls": control_times,
+        "candidates": candidate_times,
+        "failures": failures,
+        "job_pairs": count,
+    }
+
+
 def _pair_evidence(
     arms: cabc.Mapping[str, list[dict[str, object]]],
     jobs: cabc.Sequence[cabc.Mapping[str, object]],
     names: cabc.Mapping[str, str],
 ) -> dict[str, object]:
-    """Return one family's paired savings, failure count, and transfer time."""
-    count = min(len(arms["control"]), len(arms["candidate"]))
-    savings: list[float] = []
-    controls: list[float] = []
-    candidates: list[float] = []
-    failures = 0
-    for index in range(count):
-        control_seconds, control_result = jobs_reader.seconds_and_result(
-            arms["control"][index], jobs, names
-        )
-        candidate_seconds, candidate_result = jobs_reader.seconds_and_result(
-            arms["candidate"][index], jobs, names
-        )
-        failures += sum(
-            result == "failed" for result in (control_result, candidate_result)
-        )
-        if control_seconds is None or candidate_seconds is None:
-            continue
-        controls.append(control_seconds)
-        candidates.append(candidate_seconds)
-        savings.append(round(control_seconds - candidate_seconds, 3))
-    timings = [
-        value
-        for record in arms["control"]
-        for name in ("restore_seconds", "save_seconds")
-        if (value := records_reader.number_or_none(record.get(name))) is not None
+    """Return one family's independent job pairs, failures, and transfer time."""
+    controls = _unique_jobs(arms["control"])
+    candidates = _unique_jobs(arms["candidate"])
+    evidence = _paired_savings(controls, candidates, jobs, names)
+    transfers = [
+        total for record in controls if (total := _transfer_total(record)) is not None
     ]
-    return {
-        "savings": savings,
-        "controls": controls,
-        "candidates": candidates,
-        "failures": failures,
-        "transfer": median(timings),
-    }
+    evidence["transfer"] = median(transfers)
+    return evidence
 
 
 def family_summary(
@@ -197,6 +242,7 @@ def family_summary(
         "control_observations": len(arms["control"]),
         "candidate_observations": len(arms["candidate"]),
         "pairs": len(savings),
+        "independent_job_pairs": evidence["job_pairs"],
         "failures": evidence["failures"],
         "median_control_seconds": median(typ.cast("list[float]", evidence["controls"])),
         "median_candidate_seconds": median(

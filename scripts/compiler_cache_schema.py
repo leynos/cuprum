@@ -232,13 +232,20 @@ def boolean(value: object) -> bool | None:
 
 def delta_value(post: object, pre: object) -> int | float | None:
     """Subtract two allowlisted counters, preserving ``unknown``."""
-    if isinstance(post, bool) or isinstance(pre, bool):
-        return None
-    if isinstance(post, int):
-        return post - pre if isinstance(pre, int) else None
-    if isinstance(post, float) and isinstance(pre, (int, float)):
-        return round(post - float(pre), 6)
-    return None
+    # `bool` must be matched before `int`: Python's `True` is an `int`, and a
+    # boolean in a counter field means the document is malformed, not that the
+    # bracket compiled one unit of work.
+    match post, pre:
+        case bool(), _:
+            return None
+        case _, bool():
+            return None
+        case int(), int():
+            return post - pre
+        case float(), int() | float():
+            return round(post - float(pre), 6)
+        case _:
+            return None
 
 
 def delta_map(

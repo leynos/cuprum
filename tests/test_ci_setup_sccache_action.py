@@ -239,7 +239,9 @@ def test_the_directory_backend_refuses_a_namespace(tmp_path: Path) -> None:
     assert not DIRECTORY_VARIABLES & result.exported.keys(), (
         f"a refused namespace must not bind a directory, got {sorted(result.exported)}"
     )
-    assert "SCCACHE_GHA_VERSION" not in result.exported
+    assert "SCCACHE_GHA_VERSION" not in result.exported, (
+        "a refused namespace must not export a cache version"
+    )
 
 
 @pytest.mark.parametrize("namespace", ["Bad_Namespace!", "UPPER", "-leading", ""])
@@ -250,7 +252,9 @@ def test_the_actions_backend_refuses_a_malformed_namespace(
     if not namespace:
         result = _run_install(tmp_path, {"backend": "gha"}, PROXY_CREDENTIALS)
         assert result.returncode == 0, result.stderr
-        assert "SCCACHE_GHA_VERSION" not in result.exported
+        assert "SCCACHE_GHA_VERSION" not in result.exported, (
+            "an unset namespace must not export a cache version"
+        )
         return
     result = _run_install(
         tmp_path,
@@ -259,7 +263,9 @@ def test_the_actions_backend_refuses_a_malformed_namespace(
     )
     assert result.returncode != 0, f"the step accepted namespace {namespace!r}"
     assert "namespace must match" in result.stderr, result.stderr
-    assert "SCCACHE_GHA_VERSION" not in result.exported
+    assert "SCCACHE_GHA_VERSION" not in result.exported, (
+        "a refused namespace must not export a cache version"
+    )
 
 
 def test_the_action_publishes_the_backend_it_bound() -> None:

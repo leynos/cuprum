@@ -86,7 +86,7 @@ def _cost(
             str(record["workflow"]),
             str(record["run_id"]),
             str(record["run_attempt"]),
-            f"{record['job']}/{record['matrix_leg']}/{record['bracket']}",
+            f"{record['job']}/{record['matrix_leg']}",
         )
         seconds = jobs_reader.job_seconds(job)
         if seconds is not None:
@@ -107,7 +107,7 @@ def _cost(
             console, "incremental_transfer_seconds"
         ),
         "incremental_cost_seconds": _console_number(
-            console, "incremental_cost_seconds"
+            console, "incremental_cost_seconds", signed=True
         ),
     }
 
@@ -150,22 +150,33 @@ def _critical_paths(
 
 
 def _console_number(
-    console: cabc.Mapping[str, object] | None, name: str
+    console: cabc.Mapping[str, object] | None, name: str, *, signed: bool = False
 ) -> float | None:
-    """Return one numeric console field.
+    """Return one finite numeric console field.
+
+    Parameters
+    ----------
+    console : collections.abc.Mapping[str, object] | None
+        The dated console observation, or ``None``.
+    name : str
+        The field to read.
+    signed : bool
+        Accept a negative value. Durations are non-negative; an incremental
+        cost may be negative when the change saves money.
 
     Returns
     -------
     float | None
-        The non-negative field, or ``None`` when the console is absent, the
-        field is absent, or the value is not a number.
+        The field, or ``None`` when the console is absent, the field is absent,
+        or the value is not a finite number.
     """
     if console is None:
         return None
     value = console.get(name)
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if not records_reader.number(value):
         return None
-    return float(value) if value >= 0 else None
+    number = float(typ.cast("float", value))
+    return number if signed or number >= 0 else None
 
 
 def _gate(
@@ -267,7 +278,7 @@ def _decision(
     transfer = records_reader.number_or_none(family["median_transfer_seconds"])
     floor = round(MINIMUM_FRACTION * occupancy, 3) if occupancy is not None else None
     minimum = _minimum_worthwhile(floor, transfer)
-    incremental = _console_number(console, "incremental_cost_seconds")
+    incremental = _console_number(console, "incremental_cost_seconds", signed=True)
     enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
     worth_it = saving is not None and minimum is not None and saving > minimum
     break_even = _break_even(

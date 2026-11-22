@@ -126,7 +126,9 @@ def test_a_privileged_workflow_carrying_the_experiment_is_detected() -> None:
         "jobs": {"x": {"steps": [{"uses": EVIDENCE_ACTION_PATH}]}},
     }
     sources = [("ci.yml", typ.cast("dict[object, object]", document))]
-    assert privileged_cache_workflows(sources) == ["ci.yml"]
+    assert privileged_cache_workflows(sources) == ["ci.yml"], (
+        "a privileged workflow carrying the experiment must be reported"
+    )
     unprivileged = typ.cast(
         "dict[object, object]", {"on": {"pull_request": {}}, "jobs": document["jobs"]}
     )
@@ -261,3 +263,17 @@ def test_dropping_a_job_from_the_sccache_manifest_is_rejected(
     )
     with pytest.raises(AssertionError, match="SCCACHE_JOBS must name exactly"):
         test_the_sccache_manifest_names_every_job_that_installs_the_wrapper()
+
+
+def test_a_sequence_trigger_form_is_detected() -> None:
+    """`on: [push, pull_request_target]` is the same privileged trigger."""
+    document = typ.cast(
+        "dict[object, object]",
+        {
+            "on": ["push", "pull_request_target"],
+            "jobs": {"x": {"steps": [{"uses": EVIDENCE_ACTION_PATH}]}},
+        },
+    )
+    assert privileged_cache_workflows([("ci.yml", document)]) == ["ci.yml"], (
+        "the sequence trigger form must be treated as privileged"
+    )

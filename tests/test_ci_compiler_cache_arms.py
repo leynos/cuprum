@@ -214,3 +214,16 @@ def test_a_three_arm_expression_is_refused() -> None:
     """Refuse a shape with a third arm rather than reading the wrong branch."""
     with pytest.raises(ExpressionError, match="final arm"):
         arm_condition("a && 'local' || 'gha' || 's3'", "local", "gha")
+
+
+def test_actions_equality_ignores_case_and_coerces_null() -> None:
+    """GitHub compares strings without case and treats null and false as equal."""
+    assert evaluate(
+        f"{AUTHOR_FIELD} == 'DEPENDABOT[BOT]'", {AUTHOR_FIELD: "dependabot[bot]"}
+    ), "a case-insensitive comparison must match"
+    assert evaluate("a == b", {"a": None, "b": False}), (
+        "null and false are equal under Actions semantics"
+    )
+    assert not evaluate(
+        f"{AUTHOR_FIELD} != 'dependabot[bot]'", {AUTHOR_FIELD: "Dependabot[Bot]"}
+    ), "the negation must follow the same equality"

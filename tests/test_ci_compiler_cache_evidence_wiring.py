@@ -38,11 +38,28 @@ def _bracket_calls(workflow_name: str, job_name: str, bracket: str) -> dict[str,
     return positions
 
 
+WORKLOAD_STEPS: typ.Final = {
+    ("ci.yml", "lint-test", "lint"): (
+        "Run lint, including Skylos dead-code detection",
+        "Verify Rust MSRV",
+        "Lint the Windows cfg branches",
+    ),
+    ("ci.yml", "typecheck-test", "typecheck"): ("Run typechecker",),
+    ("ci.yml", "typecheck-test", "python-tests"): ("Run tests",),
+    ("ci.yml", "extension-tests", "extension"): (
+        "Build the native extension",
+        "Run extension-gated tests",
+        "Run typechecker",
+    ),
+}
+
+
 @pytest.mark.parametrize(("workflow_name", "job_name"), sorted(BRACKETS))
 def test_every_bracket_snapshots_before_and_after_its_work(
     workflow_name: str, job_name: str
 ) -> None:
     """A bracket's two snapshots must surround the work they measure."""
+    names = [str(step.get("name", "")) for step in steps(workflow_name, job_name)]
     for bracket in BRACKETS[workflow_name, job_name]:
         positions = _bracket_calls(workflow_name, job_name, bracket)
         assert set(positions) == {"pre", "post", "record"}, (
@@ -53,6 +70,13 @@ def test_every_bracket_snapshots_before_and_after_its_work(
             f"{workflow_name}:{job_name} must order {bracket} as pre < post < "
             f"record, got {positions}"
         )
+        for workload in WORKLOAD_STEPS[workflow_name, job_name, bracket]:
+            index = names.index(workload)
+            assert positions["pre"] < index < positions["post"], (
+                f"{workflow_name}:{job_name} bracket {bracket} must enclose "
+                f"{workload!r}, which sits at {index} outside "
+                f"{(positions['pre'], positions['post'])}"
+            )
 
 
 def test_the_brackets_do_not_overlap() -> None:
@@ -122,26 +146,37 @@ def test_the_action_invokes_the_checked_in_writer() -> None:
     )
 
 
-def test_the_restore_timer_precedes_the_first_restore() -> None:
-    """The restore window must include every cache download in the job."""
-    job_steps = steps("ci.yml", "typecheck-test")
-    marks = [
-        index
-        for index, step in enumerate(job_steps)
-        if isinstance(step.get("with"), dict)
-        and step_inputs(step, "mark inputs").get("marker") == "restore"
-    ]
-    restores = [
-        index
-        for index, step in enumerate(job_steps)
-        if step.get("uses") == CACHE_RESTORE
-    ]
-    assert marks, "the job must mark the restore window"
-    assert restores, "the job must restore a cache"
-    assert min(marks) < min(restores), (
-        f"the restore timer must precede the first restore, got marks {marks} "
-        f"and restores {restores}"
-    )
+def test_each_restore_timer_immediately_precedes_the_compiler_restore() -> None:
+    """The restore span must measure the transfer, not the setup before it.
+
+    A marker placed before the registry and tool restores would charge their
+    download time to the compiler cache, which a migration does not remove.
+    The marker therefore sits immediately before the job's compiler restore.
+    """
+    for workflow_name, job_name, _bracket in WORKLOAD_STEPS:
+        job_steps = steps(workflow_name, job_name)
+        marks = [
+            index
+            for index, step in enumerate(job_steps)
+            if isinstance(step.get("with"), dict)
+            and step_inputs(step, "mark inputs").get("marker") == "restore"
+        ]
+        compiler_restores = [
+            index
+            for index, step in enumerate(job_steps)
+            if step.get("uses") == CACHE_RESTORE
+            and "~/.cache/sccache"
+            in str(typ.cast("dict[str, object]", step.get("with", {})).get("path", ""))
+        ]
+        assert len(marks) == 1, f"{workflow_name}:{job_name} must mark one restore"
+        assert len(compiler_restores) == 1, (
+            f"{workflow_name}:{job_name} must restore the compiler cache once"
+        )
+        assert compiler_restores[0] == marks[0] + 1, (
+            f"{workflow_name}:{job_name} must mark the restore immediately "
+            f"before the compiler cache, got mark {marks[0]} and restore "
+            f"{compiler_restores[0]}"
+        )
 
 
 def test_only_the_three_candidate_jobs_are_instrumented() -> None:
@@ -164,3 +199,41 @@ def test_only_the_three_candidate_jobs_are_instrumented() -> None:
             if step.get("uses") == EVIDENCE_ACTION_PATH
         ]
         assert not calls, f"{workflow_name}:{job_name} must not carry evidence steps"
+
+
+def test_every_record_call_receives_the_restore_result() -> None:
+    """A record with no restore result can never count as a warm control."""
+    for workflow_name, job_name, _bracket in WORKLOAD_STEPS:
+        for step in steps(workflow_name, job_name):
+            if step.get("uses") != EVIDENCE_ACTION_PATH:
+                continue
+            inputs = step_inputs(step, f"{workflow_name}:{job_name} evidence inputs")
+            if inputs.get("mode") != "record":
+                continue
+            assert "matched-key" in inputs, (
+                f"{workflow_name}:{job_name} record must pass the matched key"
+            )
+            assert "restore-hit" in inputs, (
+                f"{workflow_name}:{job_name} record must pass the restore result"
+            )
+            assert "cache-matched-key" in str(inputs["matched-key"]), (
+                "the matched key must come from the restore output, not cache-hit"
+            )
+            assert "cache-matched-key" in str(inputs["restore-hit"]), (
+                "the rolling key never exact-matches; use cache-matched-key"
+            )
+
+
+def test_the_upload_name_carries_the_matrix_leg() -> None:
+    """Two matrix legs of one job must not collide on one artefact name."""
+    document = action_document(EVIDENCE_ACTION)
+    runs = typ.cast("dict[str, object]", document["runs"])
+    uploads = [
+        step
+        for step in typ.cast("list[dict[str, object]]", runs["steps"])
+        if str(step.get("uses", "")).startswith("actions/upload-artifact@")
+    ]
+    name = str(typ.cast("dict[str, object]", uploads[0]["with"])["name"])
+    assert "inputs.matrix-leg" in name, (
+        f"the artefact name must include the matrix leg, got {name!r}"
+    )

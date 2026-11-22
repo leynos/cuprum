@@ -126,11 +126,12 @@ composite action warns with a fixed annotation title when a write or upload
 fails. A job that compiled correctly is not failed because its telemetry could
 not be stored.
 
-The reader is the opposite. `aggregate` validates strictly and exits non-zero
-on a missing key, an extra key, an unsupported schema version, a boolean where
-an integer belongs, a closed-vocabulary violation, or a duplicate
-`(run_id, run_attempt, job, bracket)`. A malformed artefact must not be able to
-flatten into a plausible summary.
+The reader is the opposite. It validates strictly and exits non-zero on a
+missing key, an extra key, an unsupported schema version, a boolean where an
+integer belongs, a non-finite number, a field of the wrong type or shape, a
+closed-vocabulary violation, or a duplicate
+`(run_id, run_attempt, job, bracket, matrix_leg)`. A malformed artefact must
+not be able to flatten into a plausible summary.
 
 ## Reading the evidence
 

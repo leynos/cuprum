@@ -97,11 +97,10 @@ def privileged_cache_workflows(
     offenders: list[str] = []
     for name, document in sources:
         triggers = document.get("on", document.get(True))
-        privileged = (
-            NEGATIVE_TRIGGER in triggers
-            if isinstance(triggers, dict)
-            else triggers == NEGATIVE_TRIGGER
-        )
+        if isinstance(triggers, (dict, list, tuple)):
+            privileged = NEGATIVE_TRIGGER in triggers
+        else:
+            privileged = triggers == NEGATIVE_TRIGGER
         if not privileged:
             continue
         text = str(document)

@@ -231,15 +231,21 @@ def test_an_invalid_bracket_omits_the_record_without_failing(
 )
 def test_a_counter_delta_is_arithmetic(post: int, pre: int) -> None:
     """Any pair of counters subtracts, so the bracket arithmetic is checked."""
-    assert schema.delta_value(post, pre) == post - pre
+    assert schema.delta_value(post, pre) == post - pre, (
+        f"the delta of {post} and {pre} must be their difference"
+    )
 
 
 @HYPOTHESIS
 @given(value=st.one_of(st.none(), st.text(), st.booleans()))
 def test_an_unknown_counter_delta_stays_unknown(value: object) -> None:
     """Never invent a delta from a value the server did not report."""
-    assert schema.delta_value(value, 1) is None
-    assert schema.delta_value(None, value) is None
+    assert schema.delta_value(value, 1) is None, (
+        f"a post value of {value!r} must not produce a delta"
+    )
+    assert schema.delta_value(None, value) is None, (
+        f"a pre value of {value!r} must not produce a delta"
+    )
 
 
 def test_a_valid_record_passes_validation() -> None:

@@ -33,6 +33,7 @@ True
 
 from __future__ import annotations
 
+import math
 import re
 import typing as typ
 
@@ -147,6 +148,44 @@ def _depth_after(depth: int, kind: str, spelling: str) -> int:
     return depth - 1
 
 
+def _coerce(value: object) -> object:
+    """Coerce one operand the way GitHub compares it."""
+    if value is None or value is False:
+        return 0
+    if value is True:
+        return 1
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+def actions_equal(left: object, right: object) -> bool:
+    """Compare two values with GitHub Actions equality.
+
+    GitHub coerces ``null`` and ``false`` to zero, compares strings without
+    case, and coerces a numeric string to its number. Matching those rules is
+    what keeps the evaluator from answering differently from the expression it
+    validates.
+
+    Returns
+    -------
+    bool
+        Whether GitHub would consider the operands equal.
+    """
+    first, second = _coerce(left), _coerce(right)
+    if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+        return math.isclose(float(first), float(second))
+    if isinstance(first, (int, float)) or isinstance(second, (int, float)):
+        numeric, other = (
+            (first, second) if isinstance(first, (int, float)) else (second, first)
+        )
+        try:
+            return math.isclose(float(typ.cast("float", numeric)), float(str(other)))
+        except ValueError:
+            return False
+    return first == second
+
+
 def _top_level(tokens: list[Token], operator: str) -> list[int]:
     """Return the indices of ``operator`` tokens outside every group."""
     found: list[int] = []
@@ -217,7 +256,7 @@ class _Parser:
             return value
         self._take()
         right = self._unary()
-        equal = value == right
+        equal = actions_equal(value, right)
         return equal if operator == "==" else not equal
 
     def _unary(self) -> object:

@@ -24,6 +24,8 @@ False
 from __future__ import annotations
 
 import json
+import math
+import re
 import typing as typ
 
 from scripts import compiler_cache_schema as schema
@@ -102,8 +104,10 @@ def integer(value: object) -> bool:
 
 
 def number(value: object) -> bool:
-    """Report whether ``value`` is an int or float and not a boolean."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """Report whether ``value`` is a finite int or float and not a boolean."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
 
 
 def number_or_none(value: object) -> float | None:
@@ -122,6 +126,46 @@ def _mapping(value: object, keys: frozenset[str], where: str) -> dict:
     return mapping
 
 
+IDENTITY_STRINGS = (
+    "bracket",
+    "run_id",
+    "run_attempt",
+    "job",
+    "workflow",
+    "event_class",
+    "pr_number",
+    "recorded_at",
+    "setup_status",
+    "backend",
+    "cache_host_class",
+    "sccache_version",
+    "family",
+    "matrix_leg",
+    "compiler_shape",
+    "python_version",
+    "toolchain",
+    "checkout_sha",
+    "head_sha",
+    "base_sha",
+    "matched_key",
+    "zero_requests",
+    "state",
+)
+#: Fields that may carry the writer's `unknown` sentinel instead of a value.
+_UNKNOWN_OK = frozenset({
+    "workflow",
+    "sccache_version",
+    "family",
+    "matrix_leg",
+    "python_version",
+    "toolchain",
+    "checkout_sha",
+    "head_sha",
+    "base_sha",
+    "matched_key",
+})
+
+
 def _run_identity(record: dict[str, object]) -> None:
     """Require the run identity fields to be decimal strings."""
     for name in ("run_id", "run_attempt"):
@@ -129,6 +173,45 @@ def _run_identity(record: dict[str, object]) -> None:
         _require(
             condition=isinstance(value, str) and value.isascii() and value.isdecimal(),
             message=f"{name} must be a decimal string",
+        )
+    _require(
+        condition=type(record["schema_version"]) is int,
+        message="schema_version must be an integer",
+    )
+
+
+def _strings(record: dict[str, object]) -> None:
+    """Require every identity field to be a string of its declared shape."""
+    for name in IDENTITY_STRINGS:
+        _require(
+            condition=isinstance(record[name], str),
+            message=f"{name} must be a string",
+        )
+    _require(
+        condition=schema.BRACKET.fullmatch(str(record["bracket"])) is not None,
+        message="bracket must be a lowercase identifier",
+    )
+    _require(
+        condition=str(record["pr_number"]) in {"", "unknown"}
+        or str(record["pr_number"]).isdecimal(),
+        message="pr_number must be decimal, empty, or unknown",
+    )
+    timestamp = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+    _require(
+        condition=timestamp.fullmatch(str(record["recorded_at"])) is not None,
+        message="recorded_at must be a UTC ISO 8601 timestamp",
+    )
+    for name in ("checkout_sha", "head_sha", "base_sha"):
+        value = str(record[name])
+        _require(
+            condition=value == "unknown" or schema.HEX40.fullmatch(value) is not None,
+            message=f"{name} must be a lowercase 40-character SHA or unknown",
+        )
+    for name in _UNKNOWN_OK:
+        value = str(record[name])
+        _require(
+            condition=value == "unknown" or schema.BOUNDED.fullmatch(value) is not None,
+            message=f"{name} must be a bounded identifier or unknown",
         )
 
 
@@ -232,6 +315,7 @@ def validate_record(record: object) -> dict[str, object]:
     """
     mapping = _mapping(record, RECORD_KEYS, "record")
     _run_identity(mapping)
+    _strings(mapping)
     _labels(mapping)
     _flags(mapping)
     _nested(mapping)
@@ -256,12 +340,12 @@ def load_records(paths: cabc.Iterable[Path]) -> list[dict[str, object]]:
     ------
     InvalidEvidenceError
         When a line is not the declared schema, or a
-        ``(run_id, run_attempt, job, bracket)`` repeats.
+        ``(run_id, run_attempt, job, bracket, matrix_leg)`` repeats.
     """
     files: list[Path] = []
     for path in paths:
         files.extend(sorted(path.rglob("*.jsonl")) if path.is_dir() else [path])
-    seen: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    seen: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     for file in files:
         try:
             lines = file.read_text(encoding="utf-8").splitlines()
@@ -282,6 +366,7 @@ def load_records(paths: cabc.Iterable[Path]) -> list[dict[str, object]]:
                 str(record["run_attempt"]),
                 str(record["job"]),
                 str(record["bracket"]),
+                str(record["matrix_leg"]),
             )
             _require(
                 condition=key not in seen,
