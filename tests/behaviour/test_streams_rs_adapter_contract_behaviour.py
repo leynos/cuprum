@@ -20,58 +20,25 @@ import typing as typ
 import pytest
 from pytest_bdd import given, parsers, scenario, then, when
 
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import (
+    _descriptor_state,
+    _OwnedDescriptor,
+    _safe_close,
+)
+from tests.behaviour._stream_adapter_contract_support import (
+    _call_with_descriptor,
+    _entry_point,
+    _ExtractionEvidence,
+    _feed_pipe,
+    _IndexEvidence,
+    _IndexOnly,
+    _open_writer,
+    _PlatformEvidence,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from types import ModuleType
-
-
-class _IndexOnly:
-    """Expose an integer through ``__index__`` and count conversions."""
-
-    def __init__(self, value: int) -> None:
-        """Wrap ``value`` with a fresh conversion count."""
-        self.value = value
-        self.calls = 0
-
-    def __index__(self) -> int:
-        """Return the wrapped integer, recording the conversion."""
-        self.calls += 1
-        return self.value
-
-
-class _IndexEvidence(typ.NamedTuple):
-    """The result and conversion counts of one index-like call."""
-
-    result: object
-    calls: tuple[int, ...]
-
-
-class _DescriptorOwner:
-    """Close one owned descriptor number at most once.
-
-    A descriptor the test hands to the pump is closed there, and a pipe's
-    writing end is closed by the feeder. Closing either number again later
-    could close an unrelated resource if another thread has since reused it,
-    so the owner is disarmed as soon as its descriptor leaves this test's
-    keeping.
-    """
-
-    def __init__(self, fd: int) -> None:
-        """Take ownership of ``fd``."""
-        self.fd = fd
-        self._is_active = True
-
-    def disarm(self) -> None:
-        """Stop closing ``fd`` because another owner now has it, or closed it."""
-        self._is_active = False
-
-    def close(self) -> None:
-        """Close ``fd`` if this owner still holds it."""
-        if self._is_active:
-            self._is_active = False
-            _safe_close(self.fd)
 
 
 @scenario(
@@ -92,10 +59,42 @@ def test_shared_raw_descriptor_policy() -> None:
 
 @scenario(
     "../features/rust_streams.feature",
-    "Index-like stream arguments are accepted by both entry points",
+    "Non-index-like stream arguments raise TypeError",
 )
-def test_index_like_arguments_are_accepted() -> None:
-    """Each adapter converts every index-like argument exactly once."""
+def test_non_index_like_arguments_raise_type_error() -> None:
+    """An argument that refuses the index protocol fails before native I/O."""
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "A Windows writer transfer failure raises OSError",
+)
+def test_windows_writer_transfer_failure() -> None:
+    """A closed writer is rejected by the Windows transfer step."""
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "A Windows reader setup failure raises OSError",
+)
+def test_windows_reader_setup_failure() -> None:
+    """A closed reader is rejected by the Windows conversion step."""
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "Index-like stream arguments are accepted by the Rust pump",
+)
+def test_pump_accepts_index_like_arguments() -> None:
+    """The pump converts each index-like argument exactly once."""
+
+
+@scenario(
+    "../features/rust_streams.feature",
+    "Index-like stream arguments are accepted by consume",
+)
+def test_consume_accepts_index_like_arguments() -> None:
+    """Consume converts each index-like argument exactly once."""
 
 
 @given(
@@ -109,43 +108,6 @@ def given_adapters_available(rust_streams: ModuleType) -> ModuleType:
             f"the stream adapter module must expose {name}"
         )
     return rust_streams
-
-
-def _entry_point(adapters: ModuleType, operation: str) -> cabc.Callable[..., object]:
-    """Return the named adapter entry point."""
-    calls = {
-        "pump": adapters.rust_pump_stream,
-        "consume": adapters.rust_consume_stream,
-    }
-    entry_point = calls.get(operation)
-    assert entry_point is not None, f"unknown operation {operation!r}"
-    return typ.cast("cabc.Callable[..., object]", entry_point)
-
-
-def _call_with_descriptor(
-    adapters: ModuleType,
-    operation: str,
-    descriptor: int,
-    buffer_size: int,
-) -> BaseException:
-    """Call the entry point so its argument validation raises."""
-    entry_point = _entry_point(adapters, operation)
-    with contextlib.ExitStack() as stack:
-        args: tuple[int, ...] = (descriptor,)
-        writer: _DescriptorOwner | None = None
-        if operation == "pump":
-            # The wrapper closes a writer that never reaches native ownership,
-            # so the test must not close that number again on the way out.
-            writer = _DescriptorOwner(os.open(os.devnull, os.O_WRONLY))
-            stack.callback(writer.close)
-            args = (descriptor, writer.fd)
-        try:
-            with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
-                entry_point(*args, buffer_size=buffer_size)
-        finally:
-            if writer is not None:
-                writer.disarm()
-    return excinfo.value
 
 
 @when(
@@ -185,10 +147,20 @@ def then_raises_exactly(
     )
 
 
-def _feed_pipe(reader_fd: int, writer_fd: int, payload: bytes) -> None:
-    """Write the payload and close the source so the reader observes EOF."""
-    os.write(writer_fd, payload)
-    _safe_close(writer_fd)
+@pytest.fixture(name="owned_descriptors")
+def fixture_owned_descriptors() -> cabc.Iterator[list[_OwnedDescriptor]]:
+    """Close every descriptor a scenario opens, once each, after it ends."""
+    owners: list[_OwnedDescriptor] = []
+    yield owners
+    for owner in reversed(owners):
+        owner.close()
+
+
+@given("the Windows platform adapter is in use")
+def given_windows_platform() -> None:
+    """Require the Windows CRT-handle platform step for the scenario."""
+    if os.name != "nt":
+        pytest.skip("the platform step exists only on Windows")
 
 
 @when(
@@ -204,12 +176,11 @@ def when_pump_index_like(adapters: ModuleType) -> _IndexEvidence:
     with contextlib.ExitStack() as stack:
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        upstream = _DescriptorOwner(upstream_fd)
+        upstream = _OwnedDescriptor(upstream_fd)
         stack.callback(upstream.close)
-        sink = _DescriptorOwner(os.open(os.devnull, os.O_WRONLY))
+        sink = _open_writer()
         stack.callback(sink.close)
-        _feed_pipe(reader_fd, upstream_fd, payload)
-        upstream.disarm()
+        _feed_pipe(reader_fd, upstream, payload)
 
         reader = _IndexOnly(reader_fd)
         sink_argument = _IndexOnly(sink.fd)
@@ -237,10 +208,9 @@ def when_consume_index_like(adapters: ModuleType) -> _IndexEvidence:
     with contextlib.ExitStack() as stack:
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        upstream = _DescriptorOwner(upstream_fd)
+        upstream = _OwnedDescriptor(upstream_fd)
         stack.callback(upstream.close)
-        _feed_pipe(reader_fd, upstream_fd, payload)
-        upstream.disarm()
+        _feed_pipe(reader_fd, upstream, payload)
 
         reader = _IndexOnly(reader_fd)
         size = _IndexOnly(8)
@@ -255,23 +225,138 @@ def when_consume_index_like(adapters: ModuleType) -> _IndexEvidence:
     return _IndexEvidence(output, (reader.calls, size.calls))
 
 
-@then("each entry point returns its payload and converted every argument once")
-def then_index_like_evidence(
-    pump_evidence: _IndexEvidence,
-    consume_evidence: _IndexEvidence,
-) -> None:
-    """Both adapters normalized each index-like argument exactly once."""
+@then("the pump returns its payload and converted every argument once")
+def then_pump_index_like(pump_evidence: _IndexEvidence) -> None:
+    """Assert the pump converted each index-like argument exactly once."""
     assert pump_evidence.calls == (1, 1, 1), (
         "the pump must convert reader, writer, and buffer once each; found "
         f"{pump_evidence.calls}"
     )
+    assert pump_evidence.result == len(b"index-like-pump"), (
+        "the pump must report the transferred byte count"
+    )
+
+
+@then("consume returns its payload and converted every argument once")
+def then_consume_index_like(consume_evidence: _IndexEvidence) -> None:
+    """Assert consume converted each index-like argument exactly once."""
     assert consume_evidence.calls == (1, 1), (
         "consume must convert reader and buffer once each; found "
         f"{consume_evidence.calls}"
     )
-    assert pump_evidence.result == len(b"index-like-pump"), (
-        "the pump must report the transferred byte count"
-    )
     assert consume_evidence.result == b"index-like-consume".decode(), (
         "consume must return the decoded payload"
+    )
+
+
+@when(
+    parsers.parse("the {operation} entry point receives a non-index-like {argument}"),
+    target_fixture="extraction_evidence",
+)
+def when_non_index_like(
+    adapters: ModuleType,
+    owned_descriptors: list[_OwnedDescriptor],
+    operation: str,
+    argument: str,
+) -> _ExtractionEvidence:
+    """Call one adapter with a value that refuses the index protocol."""
+    payload = b"unread after an extraction failure"
+    reader_fd, upstream_fd = os.pipe()
+    reader = _OwnedDescriptor(reader_fd)
+    upstream = _OwnedDescriptor(upstream_fd)
+    owned_descriptors.extend([reader, upstream])
+    _feed_pipe(reader_fd, upstream, payload)
+
+    writer: _OwnedDescriptor | None = None
+    if operation == "pump":
+        writer = _open_writer()
+        owned_descriptors.append(writer)
+    not_index = object()
+    reader_argument: object = not_index if argument == "reader" else reader_fd
+    buffer_argument: object = not_index if argument == "buffer" else 1024
+    args: tuple[object, ...] = (
+        (reader_argument, writer.fd) if writer is not None else (reader_argument,)
+    )
+    try:
+        with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
+            _entry_point(adapters, operation)(*args, buffer_size=buffer_argument)
+    finally:
+        if writer is not None:
+            # Every pre-native failure closes the writer the wrapper owns.
+            writer.disarm()
+    return _ExtractionEvidence(
+        excinfo.value,
+        reader_fd,
+        payload,
+        writer.fd if writer is not None else None,
+    )
+
+
+@then("it raises TypeError leaving the caller's reader unread")
+def then_type_error(extraction_evidence: _ExtractionEvidence) -> None:
+    """Assert a refused argument fails before native I/O or writer adoption."""
+    assert isinstance(extraction_evidence.error, TypeError), (
+        "expected TypeError, found "
+        f"{type(extraction_evidence.error).__name__}: {extraction_evidence.error}"
+    )
+    assert (
+        os.read(extraction_evidence.reader_fd, len(extraction_evidence.payload))
+        == extraction_evidence.payload
+    ), "the reader must hold its whole payload after an extraction failure"
+    if extraction_evidence.writer_fd is not None:
+        assert _descriptor_state(extraction_evidence.writer_fd) == "closed", (
+            "the wrapper must close a writer that never reached native ownership"
+        )
+
+
+@when(
+    "the pump receives a closed writer descriptor", target_fixture="platform_evidence"
+)
+def when_pump_closed_writer(
+    adapters: ModuleType,
+    owned_descriptors: list[_OwnedDescriptor],
+) -> _PlatformEvidence:
+    """Pump into a descriptor number that was closed before the call."""
+    payload = b"still in the pipe"
+    reader_fd, upstream_fd = os.pipe()
+    reader = _OwnedDescriptor(reader_fd)
+    upstream = _OwnedDescriptor(upstream_fd)
+    owned_descriptors.extend([reader, upstream])
+    _feed_pipe(reader_fd, upstream, payload)
+
+    closed_writer = _open_writer()
+    closed_writer.close()
+    with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
+        adapters.rust_pump_stream(reader_fd, closed_writer.fd, buffer_size=1024)
+    return _PlatformEvidence(excinfo.value, reader_fd, payload)
+
+
+@when("consume receives a closed reader descriptor", target_fixture="platform_error")
+def when_consume_closed_reader(adapters: ModuleType) -> BaseException:
+    """Consume from a descriptor number that was closed before the call."""
+    closed_reader = _OwnedDescriptor(os.open(os.devnull, os.O_RDONLY))
+    closed_reader.close()
+    with pytest.raises(BaseException) as excinfo:  # ruff: ignore[pytest-raises-too-broad] - the Then step asserts the class.
+        adapters.rust_consume_stream(closed_reader.fd, buffer_size=1024)
+    return excinfo.value
+
+
+@then("it raises OSError and the payload remains unread")
+def then_transfer_failure(platform_evidence: _PlatformEvidence) -> None:
+    """Assert a failed writer transfer leaves the caller's reader untouched."""
+    assert isinstance(platform_evidence.error, OSError), (
+        "expected OSError, found "
+        f"{type(platform_evidence.error).__name__}: {platform_evidence.error}"
+    )
+    assert (
+        os.read(platform_evidence.reader_fd, len(platform_evidence.payload))
+        == platform_evidence.payload
+    ), "a failed writer transfer must not consume the reader"
+
+
+@then("it raises OSError")
+def then_os_error(platform_error: BaseException) -> None:
+    """Assert the platform step reports its failure as ``OSError``."""
+    assert isinstance(platform_error, OSError), (
+        f"expected OSError, found {type(platform_error).__name__}: {platform_error}"
     )

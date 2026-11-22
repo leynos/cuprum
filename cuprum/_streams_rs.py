@@ -173,6 +173,37 @@ def _prepare_rust_pump_call(
     )
 
 
+def _pump_through_transferred_writer(
+    prepared: _PreparedRustPumpCall,
+    writer_fd: int,
+) -> int:
+    """Transfer the writer, pump through it, and observe either failure."""
+    try:
+        writer = _transfer_writer_fd_for_platform(writer_fd)
+    except BaseException as error:
+        _pump_obs._log_native_pump_handoff_failed(
+            _LOGGER,
+            "platform_writer_transfer",
+            error,
+        )
+        _close_writer_after_pre_native_failure(writer_fd)
+        _emit_rust_pump_handoff_outcome(
+            RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED
+        )
+        raise
+    try:
+        return int(
+            prepared.native_pump(
+                prepared.reader,
+                writer,
+                buffer_size=prepared.buffer_size,
+            )
+        )
+    except OSError:
+        _emit_native_pump_io_failure(_LOGGER, is_windows=os.name == "nt")
+        raise
+
+
 def rust_pump_stream(
     reader_fd: int,
     writer_fd: int,
@@ -237,30 +268,7 @@ def rust_pump_stream(
         writer_fd=writer_fd,
         buffer_size=buffer_size,
     )
-    try:
-        writer = _transfer_writer_fd_for_platform(writer_fd)
-    except BaseException as error:
-        _pump_obs._log_native_pump_handoff_failed(
-            _LOGGER,
-            "platform_writer_transfer",
-            error,
-        )
-        _close_writer_after_pre_native_failure(writer_fd)
-        _emit_rust_pump_handoff_outcome(
-            RustPumpHandoffOutcome.PLATFORM_WRITER_TRANSFER_FAILED
-        )
-        raise
-    try:
-        return int(
-            prepared.native_pump(
-                prepared.reader,
-                writer,
-                buffer_size=prepared.buffer_size,
-            )
-        )
-    except OSError:
-        _emit_native_pump_io_failure(_LOGGER, is_windows=os.name == "nt")
-        raise
+    return _pump_through_transferred_writer(prepared, writer_fd)
 
 
 def rust_consume_stream(

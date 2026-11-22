@@ -32,6 +32,51 @@ def _safe_close(fd: int) -> None:
         os.close(fd)
 
 
+class _OwnedDescriptor:
+    """Close one owned descriptor number at most once.
+
+    A test must not close a number it no longer owns. Once the test, the
+    feeder, or the native boundary has closed or adopted a descriptor, another
+    thread can reuse that number, and a suppressed second close would then
+    close an unrelated resource. Disarm the owner as soon as ownership ends.
+    """
+
+    def __init__(self, fd: int) -> None:
+        """Take ownership of ``fd``."""
+        self.fd = fd
+        self._is_owned = True
+
+    def disarm(self) -> None:
+        """Stop closing ``fd`` because another owner has it, or has closed it."""
+        self._is_owned = False
+
+    def close(self) -> None:
+        """Close ``fd`` once if this owner still owns it."""
+        if self._is_owned:
+            self._is_owned = False
+            _safe_close(self.fd)
+
+
+def _descriptor_state(fd: int) -> str:
+    """Return ``"open"`` or ``"closed"`` for a descriptor.
+
+    ``os.fstat`` is the cheapest probe that distinguishes the two without
+    disturbing the descriptor, which is what lets a test assert whether a
+    writer was adopted.
+
+    Returns
+    -------
+    str
+        ``"open"`` when the descriptor is still usable, ``"closed"`` when it
+        is not.
+    """
+    try:
+        os.fstat(fd)
+    except OSError:
+        return "closed"
+    return "open"
+
+
 def _set_binary_mode(fd: int) -> None:
     """Keep pipe payload bytes unchanged when writing on Windows."""
     if os.name == "nt":

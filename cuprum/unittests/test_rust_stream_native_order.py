@@ -50,7 +50,11 @@ from hypothesis import strategies as st
 
 from cuprum import _rust_backend
 from cuprum._constants import DEFAULT_NATIVE_BUFFER_SIZE
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import (
+    _descriptor_state,
+    _OwnedDescriptor,
+    _safe_close,
+)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -102,31 +106,6 @@ def fixture_native_streams() -> ModuleType:
     return importlib.import_module("cuprum._rust_backend_native")
 
 
-def _descriptor_state(fd: int) -> str:
-    """Return ``"open"`` or ``"closed"`` for a descriptor.
-
-    ``os.fstat`` is the cheapest probe that distinguishes the two without
-    disturbing the descriptor, which is what lets a test assert whether a
-    writer was adopted.
-
-    Parameters
-    ----------
-    fd : int
-        The descriptor to probe.
-
-    Returns
-    -------
-    str
-        ``"open"`` when the descriptor is still usable, ``"closed"`` when it
-        is not.
-    """
-    try:
-        os.fstat(fd)
-    except OSError:
-        return "closed"
-    return "open"
-
-
 def _open_writer() -> int:
     """Open a writable descriptor for the pump to adopt."""
     return os.open(os.devnull, os.O_WRONLY)
@@ -144,17 +123,17 @@ def test_pump_reports_a_rejected_buffer_before_touching_the_writer(
     would have been adopted — which the state probe rules out.
     """
     with contextlib.ExitStack() as stack:
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _OwnedDescriptor(_open_writer())
+        stack.callback(writer.close)
 
         with pytest.raises(ValueError, match="buffer_size") as excinfo:
-            native_streams.rust_pump_stream(-1, writer_fd, buffer_size=0)
+            native_streams.rust_pump_stream(-1, writer.fd, buffer_size=0)
 
         assert "file descriptor" not in str(excinfo.value), (
             "buffer validation must precede descriptor conversion; found "
             f"{str(excinfo.value)!r}"
         )
-        assert _descriptor_state(writer_fd) == "open", (
+        assert _descriptor_state(writer.fd) == "open", (
             "a rejected buffer size must not adopt the writer"
         )
 
@@ -171,21 +150,27 @@ def test_pump_adopts_and_closes_the_writer_on_success(
     """
     payload = b"native-order-payload"
     with contextlib.ExitStack() as stack:
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _OwnedDescriptor(_open_writer())
+        stack.callback(writer.close)
         reader_fd, upstream_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, upstream_fd)
+        upstream = _OwnedDescriptor(upstream_fd)
+        stack.callback(upstream.close)
 
-        os.write(upstream_fd, payload)
-        # Close the source writer so the pump observes EOF; the ExitStack's
-        # second close of the same descriptor is a harmless no-op.
-        _safe_close(upstream_fd)
+        os.write(upstream.fd, payload)
+        # Close the source writer so the pump observes EOF. The owner is
+        # disarmed with the close, so the number cannot be closed twice.
+        upstream.close()
 
-        moved = native_streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=1024)
+        try:
+            moved = native_streams.rust_pump_stream(
+                reader_fd, writer.fd, buffer_size=1024
+            )
+        finally:
+            writer.disarm()
 
         assert moved == len(payload), "the pump must transfer every payload byte"
-        assert _descriptor_state(writer_fd) == "closed", (
+        assert _descriptor_state(writer.fd) == "closed", (
             "a completed pump must have adopted the writer"
         )
 
@@ -216,9 +201,10 @@ def test_consume_buffer_error_leaves_borrowed_reader_usable(
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, writer_fd)
-        os.write(writer_fd, payload)
-        _safe_close(writer_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        os.write(upstream.fd, payload)
+        upstream.close()
 
         with pytest.raises(ValueError, match="buffer_size"):
             native_streams.rust_consume_stream(reader_fd, buffer_size=0)
@@ -384,13 +370,17 @@ def test_pump_maps_an_invalid_reader_descriptor_to_value_error(
     the pump export's mapping unpinned.
     """
     with contextlib.ExitStack() as stack:
-        writer_fd = _open_writer()
-        stack.callback(_safe_close, writer_fd)
+        writer = _OwnedDescriptor(_open_writer())
+        stack.callback(writer.close)
 
         with pytest.raises(ValueError, match="file descriptor"):
             native_streams.rust_pump_stream(
-                -1, writer_fd, buffer_size=_VALID_BUFFER_SIZE
+                -1, writer.fd, buffer_size=_VALID_BUFFER_SIZE
             )
+
+        assert _descriptor_state(writer.fd) == "open", (
+            "an invalid reader stops the call before the writer is adopted"
+        )
 
 
 def _default_buffer_size(native: ModuleType, name: str) -> int | None:
@@ -434,9 +424,10 @@ def test_native_consume_reads_with_the_declared_default_buffer(
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, writer_fd)
-        os.write(writer_fd, payload)
-        _safe_close(writer_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        os.write(upstream.fd, payload)
+        upstream.close()
 
         assert native_streams.rust_consume_stream(reader_fd) == payload.decode(), (
             "the native default buffer must consume the whole stream"
@@ -452,13 +443,19 @@ def test_native_pump_transfers_with_the_declared_default_buffer(
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, writer_fd)
-        sink_fd = _open_writer()
-        stack.callback(_safe_close, sink_fd)
-        os.write(writer_fd, payload)
-        _safe_close(writer_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        sink = _OwnedDescriptor(_open_writer())
+        stack.callback(sink.close)
+        os.write(upstream.fd, payload)
+        upstream.close()
 
-        assert native_streams.rust_pump_stream(reader_fd, sink_fd) == len(payload), (
+        try:
+            moved = native_streams.rust_pump_stream(reader_fd, sink.fd)
+        finally:
+            sink.disarm()
+
+        assert moved == len(payload), (
             "the native default buffer must transfer the whole stream"
         )
 
@@ -477,24 +474,31 @@ def test_native_extracts_index_like_arguments_once(
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, writer_fd)
-        sink_fd = _open_writer()
-        stack.callback(_safe_close, sink_fd)
-        os.write(writer_fd, payload)
-        _safe_close(writer_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        sink = _OwnedDescriptor(_open_writer())
+        stack.callback(sink.close)
+        os.write(upstream.fd, payload)
+        upstream.close()
 
         reader = _IndexOnly(reader_fd)
-        sink = _IndexOnly(sink_fd)
+        sink_argument = _IndexOnly(sink.fd)
         size = _IndexOnly(1024)
-        moved = native_streams.rust_pump_stream(reader, sink, buffer_size=size)
+        try:
+            moved = native_streams.rust_pump_stream(
+                reader, sink_argument, buffer_size=size
+            )
+        finally:
+            sink.disarm()
 
         assert moved == len(payload), "the index-like writer must receive every byte"
-        assert _descriptor_state(sink_fd) == "closed", (
+        assert _descriptor_state(sink.fd) == "closed", (
             "the extracted writer must have been adopted by the native pump"
         )
-        assert (reader.calls, sink.calls, size.calls) == (1, 1, 1), (
+        assert (reader.calls, sink_argument.calls, size.calls) == (1, 1, 1), (
             "each index-like argument must be converted exactly once; found "
-            f"reader={reader.calls}, writer={sink.calls}, buffer={size.calls}"
+            f"reader={reader.calls}, writer={sink_argument.calls}, "
+            f"buffer={size.calls}"
         )
 
 
@@ -520,9 +524,10 @@ def test_native_consume_rejects_a_buffer_without_consuming_the_reader(
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()
         stack.callback(_safe_close, reader_fd)
-        stack.callback(_safe_close, writer_fd)
-        os.write(writer_fd, payload)
-        _safe_close(writer_fd)
+        upstream = _OwnedDescriptor(writer_fd)
+        stack.callback(upstream.close)
+        os.write(upstream.fd, payload)
+        upstream.close()
 
         with pytest.raises(ValueError, match="buffer_size"):
             native_streams.rust_consume_stream(reader_fd, buffer_size=bad_size)

@@ -363,7 +363,7 @@ def test_pump_rejects_raw_windows_handles(rust_streams: ModuleType) -> None:
     ("reader_fd", "buffer_size", "error_message"),
     [
         (0, 0, "buffer_size must be greater than zero"),
-        (-1, 65536, "file descriptor must be non-negative"),
+        (-1, 65536, "file handle must be non-negative"),
     ],
     ids=("buffer-size", "reader-handle"),
 )

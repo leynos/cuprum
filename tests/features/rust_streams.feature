@@ -62,8 +62,36 @@ Feature: Optional Rust stream operations
       | pump      | 9223372036854775808 | 65536       | OverflowError | Python int too large to convert to C long |
       | consume   | 9223372036854775808 | 65536       | OverflowError | Python int too large to convert to C long |
 
-  Scenario: Index-like stream arguments are accepted by both entry points
+  Scenario Outline: Non-index-like stream arguments raise TypeError
+    Given the stream adapter entry points are available
+    When the <operation> entry point receives a non-index-like <argument>
+    Then it raises TypeError leaving the caller's reader unread
+
+    Examples:
+      | operation | argument |
+      | pump      | reader   |
+      | pump      | buffer   |
+      | consume   | reader   |
+      | consume   | buffer   |
+
+  Scenario: A Windows writer transfer failure raises OSError
+    Given the stream adapter entry points are available
+    And the Windows platform adapter is in use
+    When the pump receives a closed writer descriptor
+    Then it raises OSError and the payload remains unread
+
+  Scenario: A Windows reader setup failure raises OSError
+    Given the stream adapter entry points are available
+    And the Windows platform adapter is in use
+    When consume receives a closed reader descriptor
+    Then it raises OSError
+
+  Scenario: Index-like stream arguments are accepted by the Rust pump
     Given the stream adapter entry points are available
     When I pump a payload with index-like stream arguments
-    And I consume a payload with index-like stream arguments
-    Then each entry point returns its payload and converted every argument once
+    Then the pump returns its payload and converted every argument once
+
+  Scenario: Index-like stream arguments are accepted by consume
+    Given the stream adapter entry points are available
+    When I consume a payload with index-like stream arguments
+    Then consume returns its payload and converted every argument once
