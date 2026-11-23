@@ -19,6 +19,7 @@ from scripts import compiler_cache_schema as schema
 from scripts.compiler_cache_validation import (
     CONSOLE_KEYS,
     InvalidEvidenceError,
+    number,
     require,
     require_mapping,
     validate_record,
@@ -113,6 +114,18 @@ def load_console(path: Path | None) -> dict[str, object] | None:
         condition=mapping["test_fidelity"] in {"matched", "mismatch", "unknown"},
         message="test_fidelity must be matched, mismatch, or unknown",
     )
+    for name in (
+        "storage_gb",
+        "eviction_days",
+        "initial_population_seconds",
+        "incremental_transfer_seconds",
+        "incremental_cost_seconds",
+    ):
+        value = mapping[name]
+        require(
+            condition=value is None or number(value),
+            message=f"{name} must be a finite number or null",
+        )
     return mapping
 
 

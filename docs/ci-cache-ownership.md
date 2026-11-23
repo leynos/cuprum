@@ -365,8 +365,10 @@ adopted only when all of the following hold, measured over ordinary CI activity:
    migration removes, and is at least 5 % of the median control occupancy.
 3. The incremental paid cost across the repository's observed
    pull-request/default-branch workload, including cold starts, is
-   non-positive. Runner-seconds are labelled a proxy unless verified billing
-   rounding is attached.
+   non-positive, and the console observation's billing rounding is `verified`.
+   An unverified cost is unknown, not free, so it cannot satisfy the gate.
+   Runner-seconds are labelled a proxy until the charge terms are read and
+   recorded.
 4. Cache isolation is unchanged: branch protection stays enabled, and no
    pull-request entry reaches `main`, a sibling pull request, or a release.
 5. Test fidelity is unchanged: node IDs, parametrizations, required outcomes,

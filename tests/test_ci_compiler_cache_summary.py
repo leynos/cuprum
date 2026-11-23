@@ -195,3 +195,41 @@ def test_the_markdown_output_directory_is_created(tmp_path: Path) -> None:
     ])
     assert status == 0, f"the report command must succeed, got {status}"
     assert markdown.is_file(), "the report must be written where it was asked"
+
+
+def test_a_malformed_console_number_is_rejected(tmp_path: Path) -> None:
+    """A present numeric field must be finite, not a string or boolean."""
+    path = tmp_path / "console.json"
+    document = console(incremental_cost_seconds="free")
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(
+        records_reader.InvalidEvidenceError, match="incremental_cost_seconds"
+    ):
+        records_reader.load_console(path)
+
+
+def test_a_multi_family_summary_cannot_use_one_console_cost() -> None:
+    """One paid-cost figure cannot be attributed to several families."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4, family="py3.12-debug"),
+        Observation(
+            run_id="200",
+            backend="gha",
+            hits=6,
+            restore=None,
+            save=None,
+            family="py3.12-debug",
+        ),
+        Observation(run_id="300", backend="local", hits=4, family="py3.14-debug"),
+        Observation(
+            run_id="400",
+            backend="gha",
+            hits=6,
+            restore=None,
+            save=None,
+            family="py3.14-debug",
+        ),
+    ]
+    job_documents = jobs([100, 200, 300, 400], 240)
+    with pytest.raises(records_reader.InvalidEvidenceError, match="family-scoped"):
+        summary(records, job_documents, console(incremental_cost_seconds=0))

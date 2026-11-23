@@ -178,8 +178,16 @@ coverage settings. The aggregator will not adopt a family whose fidelity is
 
 `billing_rounding` is `verified` only when the applicable charge terms have
 been read and recorded. Otherwise every runner-second figure is labelled a
-proxy, and the break-even calculation stays `unknown` rather than assuming
-hit-rate economics.
+proxy, the break-even calculation stays `unknown`, and no family is adopted: an
+unverified paid cost is not evidence that the change is free.
+
+Each numeric field may be `null` (unknown) or a finite number. A present value
+that is not finite, including a numeric string, fails the read rather than
+flattening to `null`.
+
+`incremental_cost_seconds` is family-scoped. The reader refuses a console
+observation that carries one while the records span more than one family,
+because a single figure cannot be attributed to each family's gate.
 
 A family that moves to the proxy also needs its own namespace. `setup-sccache`
 accepts an optional `namespace` and exports it as `SCCACHE_GHA_VERSION` for the

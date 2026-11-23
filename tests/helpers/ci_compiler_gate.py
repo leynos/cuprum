@@ -40,6 +40,7 @@ class Observation:
     pr_number: str = "42"
     event_class: str = "pull_request"
     toolchain: str = "nightly-2026-08-23"
+    family: str = "py3.13-debug"
 
     def as_record(self) -> dict[str, object]:
         """Return the observation as a record the validator accepts."""
@@ -60,6 +61,7 @@ class Observation:
             pr_number=self.pr_number,
             event_class=self.event_class,
             toolchain=self.toolchain,
+            family=self.family,
         )
 
 

@@ -114,6 +114,8 @@ def critical_paths(
             spans[workflow, identity[0], identity[1]].extend([started, completed])
     critical: dict[str, float] = {}
     for (workflow, _run, _attempt), instants in spans.items():
+        if not instants:
+            continue
         span = (max(instants) - min(instants)).total_seconds()
         critical[workflow] = round(max(critical.get(workflow, 0.0), span), 3)
     return critical

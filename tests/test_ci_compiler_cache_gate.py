@@ -135,7 +135,11 @@ def test_a_negative_incremental_cost_is_accepted() -> None:
     built = summary(
         records,
         job_documents,
-        console(incremental_cost_seconds=-10, test_fidelity="matched"),
+        console(
+            incremental_cost_seconds=-10,
+            test_fidelity="matched",
+            billing_rounding="verified",
+        ),
     )
     decision = decisions(built)[0]
     assert decision["incremental_cost_seconds"] == pytest.approx(-10.0), decision
@@ -293,4 +297,54 @@ def test_the_critical_path_includes_jobs_without_evidence() -> None:
     cost = typ.cast("dict[str, object]", built["cost"])
     assert cost["critical_path_seconds_by_workflow"] == {"ci.yml": 1200.0}, (
         f"the unrecorded prerequisite must be included, got {cost}"
+    )
+
+
+def test_unverified_billing_blocks_adoption() -> None:
+    """A paid cost is unestablished while its rounding rule is unknown."""
+    records = [
+        Observation(run_id=str(100 + index), backend="local", hits=4)
+        for index in range(5)
+    ]
+    records += [
+        Observation(
+            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
+        )
+        for index in range(5)
+    ]
+    job_documents = jobs([*range(100, 105)], 240)
+    job_documents += jobs([*range(200, 205)], 195)
+    built = summary(
+        records,
+        job_documents,
+        console(
+            incremental_cost_seconds=0,
+            test_fidelity="matched",
+            billing_rounding="unknown",
+        ),
+    )
+    assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
+        "an unverified cost must not reach adopt"
+    )
+
+
+def test_an_unknown_backend_never_pairs() -> None:
+    """Only an identified local control or gha candidate may pair."""
+    records = [
+        Observation(run_id="100", backend="unknown", hits=4),
+        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    assert family(built)["pairs"] == 0, (
+        f"an unidentified backend must not become a control, got {built['families']}"
+    )
+
+
+def test_a_run_without_timestamps_reports_an_unknown_critical_path() -> None:
+    """A missing jobs document leaves the span unknown, not a crash."""
+    records = [Observation(run_id="100", backend="local", hits=4)]
+    built = summary(records, [])
+    cost = typ.cast("dict[str, object]", built["cost"])
+    assert cost["critical_path_seconds_by_workflow"] is None, (
+        f"a run without timestamps must stay unknown, got {cost}"
     )

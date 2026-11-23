@@ -48,6 +48,7 @@ import typing as typ
 
 from scripts import compiler_cache_cost as cost_reader
 from scripts import compiler_cache_pairs as pairs_reader
+from scripts import compiler_cache_records as records_reader
 from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_validation as validation
 
@@ -56,6 +57,10 @@ if typ.TYPE_CHECKING:
 
 PAIRS_REQUIRED = 5
 MINIMUM_FRACTION = 0.05
+_SCOPE_MESSAGE = (
+    "incremental_cost_seconds is family-scoped; a multi-family summary "
+    "cannot attribute one value"
+)
 
 
 def _gate(
@@ -229,7 +234,7 @@ def _decision(
             console is not None and console.get("test_fidelity") == "matched"
         ),
         protected=protected,
-        incremental=incremental,
+        incremental=incremental if verified else None,
     )
     return {
         "family": family["family"],
@@ -246,6 +251,18 @@ def _decision(
     }
 
 
+def _check_console_scope(
+    families: cabc.Mapping[str, object],
+    console: cabc.Mapping[str, object] | None,
+) -> None:
+    """Refuse a console cost that cannot be attributed to one family."""
+    has_cost = (
+        console is not None and console.get("incremental_cost_seconds") is not None
+    )
+    if len(families) > 1 and has_cost:
+        raise records_reader.InvalidEvidenceError(_SCOPE_MESSAGE)
+
+
 def build_summary(
     records: cabc.Sequence[dict[str, object]],
     jobs: cabc.Sequence[cabc.Mapping[str, object]],
@@ -255,6 +272,7 @@ def build_summary(
     """Compute the experiment summary, leaving unsupported fields ``unknown``."""
     grouped = pairs_reader.pairs_for(records)
     every = pairs_reader.records_by_family(records)
+    _check_console_scope(every, console)
     context = pairs_reader.JoinContext(jobs, names)
     families = [
         pairs_reader.family_summary(
