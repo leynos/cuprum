@@ -247,6 +247,10 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
+# Standard `make` idioms for emitting a literal space, needed to join and split
+# selector lists into the layout's `|`- and `+`-separated form.
+empty :=
+space := $(empty) $(empty)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 UV ?= uv
 
@@ -627,6 +631,31 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 	if [ "$$#" -gt 0 ]; then \
 	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
 	fi
+
+# The layout runner expresses the same selection as `test-python`, so #607 can
+# compare groupings without changing what runs. `PYTEST_LAYOUT_BASELINE` is the
+# recipe above written as data: one `+`-joined group per individual entry, each
+# carrying the grouped modules' deselections, then one group for the grouped
+# command. `PYTEST_LAYOUT_GROUPS` is empty until a candidate is qualified.
+#
+# Both are rendered from the existing selectors rather than restated, so this
+# cannot drift into a second source of truth for what the suite collects.
+PYTEST_LAYOUT ?= baseline
+PYTEST_LAYOUT_RUNNER ?= scripts/pytest_batches.py
+PYTEST_LAYOUT_BASELINE ?= $(subst $(space),|,$(strip   $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),    $(target)$(subst $(space),,$(foreach skip,$(PYTEST_GROUPED_TARGETS),+-$(skip))))  $(if $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)),    $(subst $(space),+,$(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS))))))
+PYTEST_LAYOUT_GROUPS ?=
+PYTEST_PARALLEL_TARGETS ?=
+PYTEST_PARALLEL_WORKERS ?= 2
+
+# The opt-in route. It exists so a candidate layout can be run on the same
+# commit as its control; it is not part of `test` or of any default target.
+test-python-layout: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite in $(PYTEST_LAYOUT)
+	CUPRUM_PYTEST_LAYOUT_BASELINE="$(PYTEST_LAYOUT_BASELINE)" \
+	 CUPRUM_PYTEST_LAYOUT_GROUPS="$(PYTEST_LAYOUT_GROUPS)" \
+	 RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(UV_RUN_ENV) uv run python $(PYTEST_LAYOUT_RUNNER) run \
+	  --layout $(call shell_quote,$(PYTEST_LAYOUT)) \
+	  --workers $(PYTEST_WORKERS) \
+	  $(if $(strip $(PYTEST_PARALLEL_TARGETS)),--parallel $(call shell_quote,$(PYTEST_PARALLEL_TARGETS)))
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
 # every assertion about it lives in a module *that selector collects* — and a
