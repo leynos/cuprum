@@ -218,16 +218,23 @@ pub fn pipe() -> io::Result<(OwnedStream, OwnedStream)> {
 
 /// Observe whether a descriptor is currently open, for native regressions.
 ///
-/// This observation grants no ownership or lifetime guarantee and must never
-/// be used to justify subsequent raw-resource reconstruction. It is test
-/// support, so it is neither exported nor compiled into the shipped library.
+/// The answer is momentary: it reports whether the descriptor number was bound
+/// at the instant of the call. It grants no ownership or lifetime guarantee and
+/// must never be used to justify subsequent raw-resource reconstruction — a
+/// check-then-use sequence is inherently racy.
+///
+/// This is test support, not API. It is compiled out of the default library;
+/// sibling crates enable the `test-support` feature through a dev-dependency.
+/// A `--all-features` build exposes it as well, which is why it is
+/// `#[doc(hidden)] pub` rather than ordinary public surface.
 ///
 /// # Errors
 /// Returns the kernel's error for any failure that is neither an interruption
 /// nor the closed-descriptor condition. Folding those into "closed" would
 /// report an ownership verdict the observation never established.
-#[cfg(all(test, unix))]
-pub(crate) fn fd_is_open(fd: i32) -> io::Result<bool> {
+#[cfg(all(unix, any(test, feature = "test-support")))]
+#[doc(hidden)]
+pub fn fd_is_open(fd: i32) -> io::Result<bool> {
     loop {
         // SAFETY: F_GETFD accepts arbitrary descriptor integers, has no pointer
         // argument, and reports EBADF without touching memory for closed FDs.

@@ -7,6 +7,12 @@ license = "ISC"
 description = "Audited native resource and syscall boundary for Cuprum"
 publish = false
 
+[features]
+# Exposes the descriptor observer to sibling crates' behavioural tests. It is
+# off by default so the shipped library exports no test-only syscall wrapper;
+# `cuprum-streams` enables it through a Unix dev-dependency.
+test-support = []
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
 

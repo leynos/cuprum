@@ -245,6 +245,8 @@ dependencies = [
  "libc",
  "proptest",
  "rstest",
+ "rstest-bdd",
+ "rstest-bdd-macros",
  "tempfile",
  "thiserror 2.0.20",
  "tracing",
