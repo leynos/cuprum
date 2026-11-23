@@ -120,18 +120,7 @@ def test_job_cost_is_charged_once_for_several_brackets() -> None:
 
 def test_a_negative_incremental_cost_is_accepted() -> None:
     """The gate requires non-positive cost, not exactly zero."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4)
-        for index in range(5)
-    ]
-    records += [
-        Observation(
-            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
-        )
-        for index in range(5)
-    ]
-    job_documents = jobs([*range(100, 105)], 240)
-    job_documents += jobs([*range(200, 205)], 195)
+    records, job_documents = _five_pairs()
     built = summary(
         records,
         job_documents,
@@ -192,20 +181,25 @@ def test_break_even_stays_unknown_until_billing_is_verified() -> None:
 
 def test_unknown_test_fidelity_blocks_adoption() -> None:
     """The gate cannot adopt a candidate whose tests were not compared."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4)
-        for index in range(5)
-    ]
-    records += [
-        Observation(
-            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
-        )
-        for index in range(5)
-    ]
-    job_documents = jobs([*range(100, 105)], 240)
-    job_documents += jobs([*range(200, 205)], 195)
-    built = summary(records, job_documents, console(incremental_cost_seconds=0))
-    assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
+    records, job_documents = _five_pairs()
+    matched = summary(
+        records,
+        job_documents,
+        console(
+            incremental_cost_seconds=0,
+            test_fidelity="matched",
+            billing_rounding="verified",
+        ),
+    )
+    assert decisions(matched)[0]["verdict"] == "adopt", (
+        f"the same evidence with matched fidelity must adopt, got {decisions(matched)}"
+    )
+    unknown = summary(
+        records,
+        job_documents,
+        console(incremental_cost_seconds=0, billing_rounding="verified"),
+    )
+    assert decisions(unknown)[0]["verdict"] == "insufficient-evidence", (
         "unknown test fidelity must not reach adopt"
     )
 
@@ -302,18 +296,7 @@ def test_the_critical_path_includes_jobs_without_evidence() -> None:
 
 def test_unverified_billing_blocks_adoption() -> None:
     """A paid cost is unestablished while its rounding rule is unknown."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4)
-        for index in range(5)
-    ]
-    records += [
-        Observation(
-            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
-        )
-        for index in range(5)
-    ]
-    job_documents = jobs([*range(100, 105)], 240)
-    job_documents += jobs([*range(200, 205)], 195)
+    records, job_documents = _five_pairs()
     built = summary(
         records,
         job_documents,

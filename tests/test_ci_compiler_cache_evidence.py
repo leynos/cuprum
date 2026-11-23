@@ -283,9 +283,17 @@ def test_an_invalid_bracket_omits_the_record_without_failing(
     pre=st.integers(min_value=0, max_value=10**6),
 )
 def test_a_counter_delta_is_arithmetic(post: int, pre: int) -> None:
-    """Any pair of counters subtracts, so the bracket arithmetic is checked."""
-    assert schema.delta_value(post, pre) == post - pre, (
-        f"the delta of {post} and {pre} must be their difference"
+    """A rising counter subtracts; a falling one is unknown, never negative."""
+    expected = post - pre if post >= pre else None
+    assert schema.delta_value(post, pre) == expected, (
+        f"the delta of {post} and {pre} must be {expected!r}"
+    )
+
+
+def test_a_restarted_server_leaves_the_counter_delta_unknown() -> None:
+    """A zeroed statistics document says nothing about this bracket's work."""
+    assert schema.delta_value(0, 5) is None, (
+        "a counter that fell must be unknown rather than negative"
     )
 
 

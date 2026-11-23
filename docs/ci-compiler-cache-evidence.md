@@ -76,6 +76,11 @@ and rejects this object as a complete record.
 }
 ```
 
+An empty identity input is recorded as `unknown`, never as a blank. That
+includes `matched_key` on a restore miss: `restore_hit` is the field that
+records the miss, so `matched_key` is unknown rather than empty, and the
+validator accepts `unknown` there.
+
 `counters` holds exactly the allowlisted statistics names the writer copies:
 `compile_requests`, `requests_executed`, `requests_unsupported_compiler`,
 `requests_not_compile`, `requests_not_cacheable`, `cache_hits`, `cache_misses`,
@@ -84,6 +89,9 @@ and rejects this object as a complete record.
 `dist_errors`. `durations` holds `cache_write_duration`,
 `cache_read_hit_duration` and `compiler_write_duration`, in seconds. A counter
 the server did not report is `null`, which reads as unknown and never as zero.
+A counter that falls between the two snapshots is also `null`: sccache zeroes
+its statistics when the server restarts, so a negative difference describes the
+restart, not the bracket.
 
 `state` is one of three values:
 
@@ -186,7 +194,9 @@ unverified paid cost is not evidence that the change is free.
 
 Each numeric field may be `null` (unknown) or a finite number. A present value
 that is not finite, including a numeric string, fails the read rather than
-flattening to `null`.
+flattening to `null`. The record's `restore_seconds` and `save_seconds` must
+also be non-negative; a negative transfer duration would understate the cost a
+migration removes and lower the gate's threshold.
 
 `incremental_cost_seconds` is family-scoped. The reader refuses a console
 observation that carries one while the records span more than one family,

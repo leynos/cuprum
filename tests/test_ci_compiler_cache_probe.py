@@ -83,6 +83,24 @@ def test_the_compiler_commit_field_is_mapped(monkeypatch: pytest.MonkeyPatch) ->
     }, f"the commit hash must reach the commit field, got {values}"
 
 
+def test_compiler_identity_text_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hostile compiler banner must not reach the artefact raw."""
+    version = "release: 1.87.0 extra words\ncommit-hash: abc123\nhost: unknown\n"
+    monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(version))
+    values = probe.rustc({})
+    assert values["release"] == "unknown", (
+        f"unbounded compiler text must be dropped, got {values}"
+    )
+    assert values["commit"] == "abc123", "a bounded value must be preserved"
+
+
+def test_an_unset_value_is_bounded_to_unknown() -> None:
+    """An empty environment value is missing, not a blank label."""
+    assert schema.bounded("") == "unknown", (
+        "an empty value must reach the record as unknown, not as a blank"
+    )
+
+
 def test_an_ambiguous_job_mapping_is_unknown() -> None:
     """A shared substring must not charge an arbitrary job's seconds."""
     record = {"run_id": "1", "run_attempt": "1", "job": "x", "matrix_leg": "none"}

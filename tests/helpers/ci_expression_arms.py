@@ -15,7 +15,13 @@ Examples
 
 from __future__ import annotations
 
-from tests.helpers.ci_expressions import ExpressionError, Token, _tokens, unwrap
+from tests.helpers.ci_expressions import (
+    ExpressionError,
+    Token,
+    _tokens,
+    _top_level,
+    unwrap,
+)
 
 
 def _literal_at(tokens: list[Token], index: int, expected: str) -> None:
@@ -26,32 +32,18 @@ def _literal_at(tokens: list[Token], index: int, expected: str) -> None:
         raise ExpressionError(message)
 
 
-def _top_level(tokens: list[Token], operator: str) -> list[int]:
-    """Return the indices of ``operator`` tokens outside every group."""
-    found: list[int] = []
-    depth = 0
-    for index, (kind, spelling) in enumerate(tokens):
-        if depth == 0 and (kind, spelling) == ("operator", operator):
-            found.append(index)
-        depth = _depth_after(depth, kind, spelling)
-    if depth != 0:
-        message = "unbalanced parenthesis"
+def _arm_split(tokens: list[Token], operator: str, arm: str, expression: str) -> int:
+    """Return the index of the top-level ``operator`` that introduces ``arm``."""
+    splits = _top_level(tokens, operator)
+    if not splits:
+        message = f"expected `{operator} '{arm}'`, got {expression!r}"
         raise ExpressionError(message)
-    return found
-
-
-def _depth_after(depth: int, kind: str, spelling: str) -> int:
-    """Return the group depth after one token, refusing an unmatched closer."""
-    if kind != "operator":
-        return depth
-    if spelling == "(":
-        return depth + 1
-    if spelling != ")":
-        return depth
-    if depth == 0:
-        message = "unbalanced parenthesis"
+    split = splits[-1]
+    if len(tokens) != split + 2:
+        message = f"extra tokens after the `{arm}` arm: {expression!r}"
         raise ExpressionError(message)
-    return depth - 1
+    _literal_at(tokens, split + 1, arm)
+    return split
 
 
 def arm_condition(expression: str, hosted: str, owned: str) -> str:
@@ -81,29 +73,18 @@ def arm_condition(expression: str, hosted: str, owned: str) -> str:
         is not split at its own operator.
     """
     tokens = _tokens(expression)
-    alternations = _top_level(tokens, "||")
-    if not alternations:
-        message = f"expected `|| '{owned}'`, got {expression!r}"
-        raise ExpressionError(message)
-    split = alternations[-1]
-    if len(tokens) != split + 2:
-        message = f"extra tokens after the `{owned}` arm: {expression!r}"
-        raise ExpressionError(message)
-    _literal_at(tokens, split + 1, owned)
+    split = _arm_split(tokens, "||", owned, expression)
     left = tokens[:split]
-    conjunctions = _top_level(left, "&&")
-    if not conjunctions:
-        message = f"expected `&& '{hosted}'`, got {expression!r}"
-        raise ExpressionError(message)
-    and_index = conjunctions[-1]
-    if len(left) != and_index + 2:
-        message = f"extra tokens after the `{hosted}` arm: {expression!r}"
-        raise ExpressionError(message)
-    _literal_at(left, and_index + 1, hosted)
+    and_index = _arm_split(left, "&&", hosted, expression)
     if _top_level(left[:and_index], "||"):
         message = f"the condition before the {hosted!r} arm is an ungrouped alternation"
         raise ExpressionError(message)
-    condition = " ".join(spelling for _, spelling in left[:and_index])
+    return _condition_text(left[:and_index], expression)
+
+
+def _condition_text(tokens: list[Token], expression: str) -> str:
+    """Return the tokens as one whitespace-normalized condition."""
+    condition = " ".join(spelling for _, spelling in tokens)
     if not condition:
         message = f"empty condition in {expression!r}"
         raise ExpressionError(message)

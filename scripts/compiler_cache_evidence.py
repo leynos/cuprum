@@ -116,18 +116,7 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
 def _not_cached_delta(
     pre: cabc.Mapping[str, object], post: cabc.Mapping[str, object]
 ) -> dict[str, int]:
-    """Return per-reason deltas, treating an absent reason as zero.
-
-    A reason that first appears in the post snapshot is a real count for this
-    bracket, not an unknown value. Only an unavailable snapshot leaves the map
-    unknown, which the caller represents as an empty mapping.
-
-    Returns
-    -------
-    dict[str, int]
-        One delta per reason seen in either snapshot, or an empty mapping when
-        a snapshot is unavailable.
-    """
+    """Return per-reason deltas, treating an absent reason as zero."""
     if not pre.get("available") or not post.get("available"):
         return {}
     before = typ.cast("dict[str, object]", pre.get("not_cached", {}))
@@ -190,14 +179,7 @@ def snapshot(environ: cabc.Mapping[str, str]) -> int:
 
 
 def _read_snapshot(path: Path) -> dict[str, object] | None:
-    """Return one snapshot.
-
-    Returns
-    -------
-    dict[str, object] | None
-        The parsed snapshot, or ``None`` when the file is absent, unreadable,
-        or not a JSON object.
-    """
+    """Return the parsed snapshot, or ``None`` when it is unusable."""
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -208,18 +190,19 @@ def _read_snapshot(path: Path) -> dict[str, object] | None:
 
 
 def _state(record: dict[str, object]) -> str:
-    """Classify one record as ok, degraded, or noncompliant.
+    """Classify one record, degrading a fallback and refusing a wrong store."""
+    store_state = _store_state(record)
+    if store_state is not None:
+        return store_state
+    if record["setup_status"] != "started" or not record["wrapper_present"]:
+        return "degraded"
+    if record["zero_requests"] == "unexplained":
+        return "degraded"
+    return "ok"
 
-    A fallback or an absent wrapper means the job compiled without the cache,
-    which is degraded but not a wiring fault. A ``gha`` backend reached while
-    the v2 service flag is set, or through a GitHub-hosted cache address, is
-    the wrong store and is noncompliant.
 
-    Returns
-    -------
-    str
-        One of ``ok``, ``degraded``, or ``noncompliant``.
-    """
+def _store_state(record: dict[str, object]) -> str | None:
+    """Return the verdict the record's store warrants, or ``None`` when sound."""
     if record["backend"] not in {"local", "gha"}:
         return "degraded"
     if record["selected_backend"] != record["backend"]:
@@ -230,11 +213,7 @@ def _state(record: dict[str, object]) -> str:
     }
     if record["backend"] == "gha" and wrong_store:
         return "noncompliant"
-    if record["setup_status"] != "started" or not record["wrapper_present"]:
-        return "degraded"
-    if record["zero_requests"] == "unexplained":
-        return "degraded"
-    return "ok"
+    return None
 
 
 def _identity_fields(
@@ -280,6 +259,66 @@ def _identity_fields(
     }
 
 
+def _load_bracket(
+    environ: cabc.Mapping[str, str],
+) -> tuple[str, dict[str, object], dict[str, object]]:
+    """Return the bracket label and its two snapshots."""
+    bracket = schema.bounded(environ.get("EVIDENCE_BRACKET"), schema.BRACKET)
+    if bracket == "unknown":
+        msg = "invalid bracket"
+        raise ValueError(msg)
+    pre = _read_snapshot(_snapshot_path(environ, bracket, "pre"))
+    post = _read_snapshot(_snapshot_path(environ, bracket, "post"))
+    if pre is None or post is None:
+        msg = "missing snapshot"
+        raise ValueError(msg)
+    return bracket, pre, post
+
+
+def _run_identity(environ: cabc.Mapping[str, str]) -> tuple[str, str, str]:
+    """Return the run, attempt, and job, refusing a malformed identity."""
+    run_id = environ.get("GITHUB_RUN_ID", "")
+    run_attempt = environ.get("GITHUB_RUN_ATTEMPT", "")
+    job = schema.bounded(environ.get("GITHUB_JOB"))
+    if not schema.is_decimal(run_id) or not schema.is_decimal(run_attempt):
+        msg = "invalid run identity"
+        raise ValueError(msg)
+    if job == "unknown":
+        msg = "invalid job"
+        raise ValueError(msg)
+    return run_id, run_attempt, job
+
+
+def _observed_fields(
+    environ: cabc.Mapping[str, str],
+    pre: cabc.Mapping[str, object],
+    post: cabc.Mapping[str, object],
+) -> dict[str, object]:
+    """Return the counts, timings, and zero-request classification."""
+    counters = schema.delta_map(
+        typ.cast("dict[str, object]", post["counters"]),
+        typ.cast("dict[str, object]", pre["counters"]),
+    )
+    requests = counters.get("compile_requests")
+    return {
+        "restore_seconds": pre.get("restore_seconds"),
+        "restore_bytes": pre.get("restore_bytes"),
+        "save_seconds": probe.elapsed_between(environ, "save", "save-end"),
+        "save_bytes": probe.directory_bytes(environ),
+        "counters": counters,
+        "durations": schema.delta_map(
+            typ.cast("dict[str, object]", post["durations"]),
+            typ.cast("dict[str, object]", pre["durations"]),
+        ),
+        "not_cached": _not_cached_delta(pre, post),
+        "zero_requests": schema.zero_requests_kind(
+            requests if isinstance(requests, int) else None,
+            expects_rustc=schema.boolean(environ.get("EVIDENCE_EXPECTS_RUSTC")),
+            target_present=schema.boolean(environ.get("EVIDENCE_TARGET_PRESENT")),
+        ),
+    }
+
+
 def build_record(environ: cabc.Mapping[str, str]) -> dict[str, object]:
     """Combine a bracket's snapshots and identity into one evidence record.
 
@@ -298,48 +337,11 @@ def build_record(environ: cabc.Mapping[str, str]) -> dict[str, object]:
     ValueError
         If a snapshot is missing, the run identity is malformed, or a declared
         closed-vocabulary field is outside its vocabulary.
-    """
-    bracket = schema.bounded(environ.get("EVIDENCE_BRACKET"), schema.BRACKET)
-    if bracket == "unknown":
-        msg = "invalid bracket"
-        raise ValueError(msg)
-    pre = _read_snapshot(_snapshot_path(environ, bracket, "pre"))
-    post = _read_snapshot(_snapshot_path(environ, bracket, "post"))
-    if pre is None or post is None:
-        msg = "missing snapshot"
-        raise ValueError(msg)
-    run_id = environ.get("GITHUB_RUN_ID", "")
-    run_attempt = environ.get("GITHUB_RUN_ATTEMPT", "")
-    job = schema.bounded(environ.get("GITHUB_JOB"))
-    if not schema.is_decimal(run_id) or not schema.is_decimal(run_attempt):
-        msg = "invalid run identity"
-        raise ValueError(msg)
-    if job == "unknown":
-        msg = "invalid job"
-        raise ValueError(msg)
-    counters = schema.delta_map(
-        typ.cast("dict[str, object]", post["counters"]),
-        typ.cast("dict[str, object]", pre["counters"]),
-    )
-    requests = counters.get("compile_requests")
-    record = _identity_fields(environ, bracket, (run_id, run_attempt, job), post)
-    record.update({
-        "restore_seconds": pre.get("restore_seconds"),
-        "restore_bytes": pre.get("restore_bytes"),
-        "save_seconds": probe.elapsed_between(environ, "save", "save-end"),
-        "save_bytes": probe.directory_bytes(environ),
-        "counters": counters,
-        "durations": schema.delta_map(
-            typ.cast("dict[str, object]", post["durations"]),
-            typ.cast("dict[str, object]", pre["durations"]),
-        ),
-        "not_cached": _not_cached_delta(pre, post),
-        "zero_requests": schema.zero_requests_kind(
-            requests if isinstance(requests, int) else None,
-            expects_rustc=schema.boolean(environ.get("EVIDENCE_EXPECTS_RUSTC")),
-            target_present=schema.boolean(environ.get("EVIDENCE_TARGET_PRESENT")),
-        ),
-    })
+    """  # ruff: ignore[docstring-extraneous-exception] - `_load_bracket` and `_run_identity` raise ValueError.
+    bracket, pre, post = _load_bracket(environ)
+    identity = _run_identity(environ)
+    record = _identity_fields(environ, bracket, identity, post)
+    record.update(_observed_fields(environ, pre, post))
     _normalize(record)
     record["state"] = _state(record)
     return record

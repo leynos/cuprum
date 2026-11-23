@@ -5,9 +5,11 @@ This module owns the filesystem and JSON boundaries around it: reading a JSONL
 artefact, a console observation, a jobs response, or the declared job-name map,
 and turning each into the validated shape the summary consumes.
 
-A names the mapping omits, a malformed line, a duplicate record, or an
-unreadable file fails loudly. The reader is the fail-closed half of the
-experiment; only the writer in a paid job fails open.
+A malformed line or an unreadable file fails loudly, and a record whose job is
+absent from the declared name mapping is reported as an unjoined job rather
+than failing the read: the join is best effort, and a missing mapping costs
+that record its whole-job seconds, not its existence. The reader is the
+fail-closed half of the experiment; only the writer in a paid job fails open.
 """
 
 from __future__ import annotations
@@ -49,39 +51,89 @@ def load_records(paths: cabc.Iterable[Path]) -> list[dict[str, object]]:
     InvalidEvidenceError
         When a line is not the declared schema, or a
         ``(run_id, run_attempt, job, bracket, matrix_leg)`` repeats.
-    """
-    files: list[Path] = []
-    for path in paths:
-        files.extend(sorted(path.rglob("*.jsonl")) if path.is_dir() else [path])
+    """  # ruff: ignore[docstring-extraneous-exception] - the per-line helper raises it through `_validated`.
+    files = _evidence_files(paths)
     seen: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     for file in files:
-        try:
-            lines = file.read_text(encoding="utf-8").splitlines()
-        except OSError as error:
-            message = f"{file} could not be read: {error}"
-            raise InvalidEvidenceError(message) from error
-        for number_, line in enumerate(lines, start=1):
-            if not line.strip():
-                continue
-            try:
-                document = json.loads(line)
-            except json.JSONDecodeError as error:
-                message = f"{file}:{number_} is not JSON: {error}"
-                raise InvalidEvidenceError(message) from error
-            record = validate_record(document)
-            key = (
-                str(record["run_id"]),
-                str(record["run_attempt"]),
-                str(record["job"]),
-                str(record["bracket"]),
-                str(record["matrix_leg"]),
-            )
-            require(
-                condition=key not in seen,
-                message=f"{file}:{number_} duplicates {key}",
-            )
-            seen[key] = record
+        _add_file(seen, file)
     return sorted(seen.values(), key=lambda item: str(item["recorded_at"]))
+
+
+def _evidence_files(paths: cabc.Iterable[Path]) -> list[Path]:
+    """Return every named file and every JSONL file beneath a named directory."""
+    return [file for path in paths for file in _files_under(path)]
+
+
+def _files_under(path: Path) -> list[Path]:
+    """Return the JSONL files a path names, whether it is a file or a directory."""
+    return sorted(path.rglob("*.jsonl")) if path.is_dir() else [path]
+
+
+def _read_lines(file: Path) -> list[str]:
+    """Return a file's lines, refusing an unreadable evidence file."""
+    try:
+        return file.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        message = f"{file} could not be read: {error}"
+        raise InvalidEvidenceError(message) from error
+
+
+def _add_file(
+    seen: dict[tuple[str, str, str, str, str], dict[str, object]], file: Path
+) -> None:
+    """Validate and store every non-blank line of one evidence file."""
+    for number_, line in enumerate(_read_lines(file), start=1):
+        _add_line(seen, file, number_, line)
+
+
+def _add_line(
+    seen: dict[tuple[str, str, str, str, str], dict[str, object]],
+    file: Path,
+    number_: int,
+    line: str,
+) -> None:
+    """Validate and store one line, refusing a duplicate bracket."""
+    document = _parse_line(file, number_, line)
+    if document is None:
+        return
+    record = _validated(file, number_, document)
+    key = _record_key(record)
+    require(
+        condition=key not in seen,
+        message=f"{file}:{number_} duplicates {key}",
+    )
+    seen[key] = record
+
+
+def _validated(file: Path, number_: int, document: object) -> dict[str, object]:
+    """Validate one line, naming its file and line when the schema refuses it."""
+    try:
+        return validate_record(document)
+    except InvalidEvidenceError as error:
+        message = f"{file}:{number_} is not a valid record: {error}"
+        raise InvalidEvidenceError(message) from error
+
+
+def _parse_line(file: Path, number_: int, line: str) -> object | None:
+    """Return one parsed line, or ``None`` when the line is blank."""
+    if not line.strip():
+        return None
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as error:
+        message = f"{file}:{number_} is not JSON: {error}"
+        raise InvalidEvidenceError(message) from error
+
+
+def _record_key(record: dict[str, object]) -> tuple[str, str, str, str, str]:
+    """Return the identity a duplicate line would collide on."""
+    return (
+        str(record["run_id"]),
+        str(record["run_attempt"]),
+        str(record["job"]),
+        str(record["bracket"]),
+        str(record["matrix_leg"]),
+    )
 
 
 def load_console(path: Path | None) -> dict[str, object] | None:

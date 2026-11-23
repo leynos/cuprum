@@ -234,8 +234,8 @@ def _labels(record: dict[str, object]) -> None:
         )
 
 
-def _flags(record: dict[str, object]) -> None:
-    """Require booleans, tri-state booleans, and numeric timings."""
+def _boolean_fields(record: dict[str, object]) -> None:
+    """Require the plain and tri-state boolean fields."""
     for name in ("wrapper_present", "cache_service_v2"):
         require(condition=isinstance(record[name], bool), message=name)
     for name in ("dev_fast", "restore_hit"):
@@ -243,21 +243,38 @@ def _flags(record: dict[str, object]) -> None:
             condition=record[name] is None or isinstance(record[name], bool),
             message=f"{name} must be a bool or null",
         )
+
+
+def _timing_fields(record: dict[str, object]) -> None:
+    """Require the timing and transfer-size fields."""
     for name in ("restore_seconds", "save_seconds"):
+        value = record[name]
+        seconds = number_or_none(value)
         require(
-            condition=record[name] is None or number(record[name]),
-            message=f"{name} must be a number or null",
+            condition=value is None or (seconds is not None and seconds >= 0),
+            message=f"{name} must be a non-negative number or null",
         )
     for name in ("restore_bytes", "save_bytes"):
         require(
             condition=record[name] is None or integer(record[name]),
             message=f"{name} must be an integer or null",
         )
+
+
+def _rustc_fields(record: dict[str, object]) -> None:
+    """Require the compiler identity to be an exact string mapping."""
     rustc = require_mapping(record["rustc"], RUSTC_KEYS, "rustc")
     require(
         condition=all(isinstance(value, str) for value in rustc.values()),
         message="rustc values must be strings",
     )
+
+
+def _flags(record: dict[str, object]) -> None:
+    """Require booleans, tri-state booleans, and numeric timings."""
+    _boolean_fields(record)
+    _timing_fields(record)
+    _rustc_fields(record)
 
 
 def _nested(record: dict[str, object]) -> None:

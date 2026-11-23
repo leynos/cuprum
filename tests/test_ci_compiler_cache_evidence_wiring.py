@@ -133,6 +133,32 @@ def test_no_evidence_step_can_fail_the_build() -> None:
         )
 
 
+def test_the_warning_covers_every_step_that_can_fail() -> None:
+    """A failed timer, write, or upload must announce itself, not pass silently.
+
+    Every evidence step is `continue-on-error`, so a step's failure is visible
+    only through its `outcome` and the warning that reads it. A warning listing
+    some steps but not others leaves the omitted failure completely unobserved.
+    """
+    document = action_document(EVIDENCE_ACTION)
+    runs = typ.cast("dict[str, object]", document["runs"])
+    action_steps = typ.cast("list[dict[str, object]]", runs["steps"])
+    warnings = [
+        step
+        for step in action_steps
+        if "::warning title=compiler-cache-evidence::" in str(step.get("run", ""))
+    ]
+    assert len(warnings) == 1, "the action must announce evidence failures once"
+    condition = str(warnings[0].get("if"))
+    fail_open = [step for step in action_steps if step is not warnings[0]]
+    for step in fail_open:
+        step_id = step.get("id")
+        assert f"steps.{step_id}.outcome == 'failure'" in condition, (
+            f"the warning must observe a failure of the {step_id!r} step, "
+            f"got {condition!r}"
+        )
+
+
 def test_the_evidence_action_uploads_with_bounded_retention() -> None:
     """Keep the artefact small and short-lived, as the telemetry precedent does."""
     document = action_document(EVIDENCE_ACTION)

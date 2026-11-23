@@ -93,6 +93,36 @@ class Adoption(typ.NamedTuple):
     incremental: float | None
 
 
+class ConsoleFacts(typ.NamedTuple):
+    """The console terms the gate consumes."""
+
+    verified: bool
+    fidelity_matched: bool
+    incremental: float | None
+
+
+def _console_facts(console: cabc.Mapping[str, object] | None) -> ConsoleFacts:
+    """Read the console's gate terms as reported, without promoting them."""
+    return ConsoleFacts(
+        verified=console is not None and console.get("billing_rounding") == "verified",
+        fidelity_matched=(
+            console is not None and console.get("test_fidelity") == "matched"
+        ),
+        incremental=cost_reader.console_number(
+            console, "incremental_cost_seconds", signed=True
+        ),
+    )
+
+
+def _adoption(facts: ConsoleFacts, *, protected: bool) -> Adoption:
+    """Return the gate's adoption terms; an unverified cost is not evidence."""
+    return Adoption(
+        fidelity_matched=facts.fidelity_matched,
+        protected=protected,
+        incremental=facts.incremental if facts.verified else None,
+    )
+
+
 def _verdict(*, enough: bool, worth_it: bool | None, adoption: Adoption) -> str:
     """Decide one family's verdict from its gate inputs.
 
@@ -203,7 +233,6 @@ def _decision(
     *,
     protected: bool,
 ) -> dict[str, object]:
-    """Evaluate the gate for one family."""
     """Evaluate the gate for one family.
 
     Returns
@@ -214,28 +243,19 @@ def _decision(
         the verdict.
     """
     measured = _measurements(family)
-    incremental = cost_reader.console_number(
-        console, "incremental_cost_seconds", signed=True
-    )
+    facts = _console_facts(console)
     enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
     worth_it = _worth_it(measured.saving, measured.floor, measured.transfer)
-    verified = console is not None and console.get("billing_rounding") == "verified"
     break_even = (
         _break_even(
             cost_reader.console_number(console, "initial_population_seconds"),
             measured.transfer,
             measured.saving,
         )
-        if verified
+        if facts.verified
         else None
     )
-    adoption = Adoption(
-        fidelity_matched=(
-            console is not None and console.get("test_fidelity") == "matched"
-        ),
-        protected=protected,
-        incremental=incremental if verified else None,
-    )
+    adoption = _adoption(facts, protected=protected)
     return {
         "family": family["family"],
         "pairs": family["pairs"],
@@ -244,7 +264,7 @@ def _decision(
         "five_percent_floor_seconds": measured.floor,
         "save_restore_seconds": measured.transfer,
         "minimum_worthwhile_seconds": measured.minimum,
-        "incremental_cost_seconds": incremental,
+        "incremental_cost_seconds": facts.incremental,
         "break_even_consumers": break_even,
         "branch_protection": "enabled" if protected else "unknown",
         "verdict": _verdict(enough=enough, worth_it=worth_it, adoption=adoption),

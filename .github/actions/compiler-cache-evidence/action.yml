@@ -172,7 +172,8 @@ runs:
       continue-on-error: true
       if: >-
         ${{ !cancelled() && (steps.snapshot.outcome == 'failure' ||
-        steps.record.outcome == 'failure' || steps.upload.outcome == 'failure') }}
+        steps.mark.outcome == 'failure' || steps.record.outcome == 'failure' ||
+        steps.upload.outcome == 'failure') }}
       shell: bash
       run: |
         echo '::warning title=compiler-cache-evidence::Evidence write or upload failed; the build result is unchanged.'

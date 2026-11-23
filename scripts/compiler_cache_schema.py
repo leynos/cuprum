@@ -213,9 +213,19 @@ def zero_requests_kind(
 
 
 def bounded(value: object, pattern: re.Pattern[str] = BOUNDED) -> str:
-    """Return ``value`` when it matches ``pattern``, else ``unknown``."""
+    """Return ``value`` when it matches ``pattern``, else ``unknown``.
+
+    An empty value is missing, not bounded: an unset environment variable must
+    reach the record as the ``unknown`` sentinel rather than as a blank that
+    every reader would have to special-case.
+
+    Returns
+    -------
+    str
+        The text, or ``unknown`` when it is empty or does not match.
+    """
     text = str(value or "")
-    return text if pattern.fullmatch(text) else "unknown"
+    return text if text and pattern.fullmatch(text) else "unknown"
 
 
 def sha(value: object) -> str:
@@ -235,7 +245,18 @@ def boolean(value: object) -> bool | None:
 
 
 def delta_value(post: object, pre: object) -> int | float | None:
-    """Subtract two allowlisted counters, preserving ``unknown``."""
+    """Subtract two allowlisted counters, preserving ``unknown``.
+
+    A counter that falls is unknown rather than negative: sccache zeroes its
+    statistics when the server restarts between the two snapshots, so a
+    negative difference says nothing about this bracket's work.
+
+    Returns
+    -------
+    int | float | None
+        The difference, or ``None`` when an operand is not a number or the
+        counter fell.
+    """
     # `bool` must be matched before `int`: Python's `True` is an `int`, and a
     # boolean in a counter field means the document is malformed, not that the
     # bracket compiled one unit of work.
@@ -245,11 +266,12 @@ def delta_value(post: object, pre: object) -> int | float | None:
         case _, bool():
             return None
         case int(), int():
-            return post - pre
+            value = post - pre
         case float(), int() | float():
-            return round(post - float(pre), 6)
+            value = round(post - float(pre), 6)
         case _:
             return None
+    return value if value >= 0 else None
 
 
 def delta_map(

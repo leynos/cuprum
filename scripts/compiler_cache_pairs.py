@@ -48,9 +48,14 @@ def _usable(record: cabc.Mapping[str, object]) -> bool:
     return record["state"] == "ok" and record["zero_requests"] == "nonzero"
 
 
+def _cache_hits(record: cabc.Mapping[str, object]) -> object:
+    """Return a record's cache-hit count, whatever the server reported."""
+    return typ.cast("dict[str, object]", record["counters"]).get("cache_hits")
+
+
 def _warm(record: cabc.Mapping[str, object]) -> bool:
     """Report whether a consumer actually reused compiler objects."""
-    hits = typ.cast("dict[str, object]", record["counters"]).get("cache_hits")
+    hits = _cache_hits(record)
     if record["backend"] == "local":
         return record["restore_hit"] is True and bool(hits)
     return bool(hits)
@@ -77,33 +82,52 @@ def pairs_for(
     return grouped
 
 
+def _register_first_run(
+    record: cabc.Mapping[str, object], first_for_pr: dict[str, str]
+) -> str | None:
+    """Record a pull request's first run and return it, or ``None`` off a PR.
+
+    Registration happens before the cold and degraded branches, so a cold
+    first run does not let a later warm run become ``first-pr-consumer``.
+
+    Returns
+    -------
+    str | None
+        The PR's first run id, or ``None`` when the record is not a pull
+        request with a decimal number.
+    """
+    pr_number = str(record["pr_number"])
+    if record["event_class"] != "pull_request" or not pr_number.isdecimal():
+        return None
+    return first_for_pr.setdefault(pr_number, str(record["run_id"]))
+
+
+def _cold_control(record: cabc.Mapping[str, object]) -> bool:
+    """Report whether a local archive consumer restored nothing usable."""
+    return (
+        record["backend"] == "local"
+        and record["restore_hit"] is not True
+        and not _cache_hits(record)
+    )
+
+
 def _observation_label(
     record: cabc.Mapping[str, object], first_for_pr: dict[str, str]
 ) -> str:
     """Return the experiment case one record witnesses.
 
-    A valid pull request's first run is registered before the cold and
-    degraded branches, so a cold first run does not let a later warm run
-    become ``first-pr-consumer``. The first run keeps its cold or degraded
-    label; every later run of that PR is a subsequent push.
+    The first run of a pull request keeps its cold or degraded label; every
+    later run of that PR is a subsequent push.
 
     Returns
     -------
     str
         One of the five closed observation classes.
     """
-    pr_number = str(record["pr_number"])
-    is_pr = record["event_class"] == "pull_request" and pr_number.isdecimal()
-    first_run = None
-    if is_pr:
-        first_run = first_for_pr.setdefault(pr_number, str(record["run_id"]))
-    hits = typ.cast("dict[str, object]", record["counters"]).get("cache_hits")
-    cold = (
-        record["backend"] == "local" and record["restore_hit"] is not True and not hits
-    )
+    first_run = _register_first_run(record, first_for_pr)
     if record["state"] != "ok":
         return "fallback-or-misconfiguration"
-    if cold:
+    if _cold_control(record):
         return "cold-or-new-family"
     if first_run is None:
         return "fresh-consumer"

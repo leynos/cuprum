@@ -176,8 +176,10 @@ def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
         name, _, value = line.partition(": ")
         if name == "commit-hash":
             name = "commit"
-        if name in values and value:
-            values[name] = value
+        if name in values:
+            # The compiler's own output is still untrusted text; bound it like
+            # every other free-form record field rather than persisting it raw.
+            values[name] = schema.bounded(value)
     return values
 
 
