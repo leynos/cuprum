@@ -227,3 +227,18 @@ def test_actions_equality_ignores_case_and_coerces_null() -> None:
     assert not evaluate(
         f"{AUTHOR_FIELD} != 'dependabot[bot]'", {AUTHOR_FIELD: "Dependabot[Bot]"}
     ), "the negation must follow the same equality"
+
+
+def test_an_empty_string_compares_equal_to_null_and_false() -> None:
+    """GitHub converts an empty string to zero when the types differ."""
+    assert evaluate("a == b", {"a": None, "b": ""}), "null must equal the empty string"
+    assert evaluate("a == b", {"a": False, "b": ""}), (
+        "false must equal the empty string"
+    )
+
+
+def test_numeric_equality_is_exact() -> None:
+    """GitHub applies no tolerance, so adjacent integers are unequal."""
+    assert not evaluate("a == b", {"a": 1000000000, "b": 1000000001}), (
+        "a numeric tolerance would disagree with the expression under test"
+    )

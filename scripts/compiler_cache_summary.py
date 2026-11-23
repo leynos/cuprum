@@ -204,20 +204,23 @@ def _gate(
 def _verdict(
     *,
     enough: bool,
-    worth_it: bool,
+    worth_it: bool | None,
     protected: bool,
     incremental: float | None,
 ) -> str:
     """Decide one family's verdict from its gate inputs.
 
+    A missing threshold input is not evidence that the saving is
+    insufficient, so it cannot produce ``reject``; only a known saving below
+    a known threshold does.
+
     Returns
     -------
     str
-        ``adopt`` when every gate term holds, ``reject`` when the sample is
-        large enough to show no worthwhile saving, and
-        ``insufficient-evidence`` otherwise.
+        ``adopt`` when every gate term holds, ``reject`` when known evidence
+        shows no worthwhile saving, and ``insufficient-evidence`` otherwise.
     """
-    if not enough:
+    if not enough or worth_it is None:
         return "insufficient-evidence"
     if not worth_it:
         return "reject"
@@ -280,9 +283,14 @@ def _decision(
     minimum = _minimum_worthwhile(floor, transfer)
     incremental = _console_number(console, "incremental_cost_seconds", signed=True)
     enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
-    worth_it = saving is not None and minimum is not None and saving > minimum
-    break_even = _break_even(
-        _console_number(console, "initial_population_seconds"), transfer, saving
+    worth_it = saving > minimum if saving is not None and minimum is not None else None
+    verified = console is not None and console.get("billing_rounding") == "verified"
+    break_even = (
+        _break_even(
+            _console_number(console, "initial_population_seconds"), transfer, saving
+        )
+        if verified
+        else None
     )
     return {
         "family": family["family"],
@@ -312,8 +320,14 @@ def build_summary(
 ) -> dict[str, object]:
     """Compute the experiment summary, leaving unsupported fields ``unknown``."""
     grouped = pairs_reader.pairs_for(records)
+    every = pairs_reader.records_by_family(records)
     families = [
-        pairs_reader.family_summary(family, arms, jobs, names)
+        pairs_reader.family_summary(
+            family,
+            arms,
+            pairs_reader.JoinContext(jobs, names),
+            every.get(family, []),
+        )
         for family, arms in sorted(grouped.items())
     ]
     return {

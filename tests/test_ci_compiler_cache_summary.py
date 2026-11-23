@@ -1,15 +1,12 @@
-"""Contracts for the gate arithmetic over paired compiler-cache evidence.
+"""Contracts for compiler-cache classification and the summary's edges.
 
-The reader's own records are validated in
-`tests/test_ci_compiler_cache_evidence.py`. These tests feed the summary
-deliberately chosen observations and assert the arithmetic that decides an
-adoption: independent job pairs, failed jobs excluded from savings, the
-restore-plus-save total, and the signed incremental cost.
+The gate arithmetic has its own module. These tests cover the labels the
+reader assigns to observations, the strict edges of its input contract, and the
+report it writes when no evidence exists.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import typing as typ
 
@@ -17,249 +14,20 @@ import pytest
 
 from scripts import compiler_cache_records as records_reader
 from scripts import compiler_cache_report as report
-from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_summary as summary_reader
 from tests.helpers.ci_compiler_evidence import record_fixture
+from tests.helpers.ci_compiler_gate import (
+    Observation,
+    console,
+    decisions,
+    family,
+    jobs,
+    observations,
+    summary,
+)
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
-
-JOB_NAME = "Extension-gated tests"
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class Observation:
-    """One scripted record with the fields the gate arithmetic reads."""
-
-    run_id: str
-    backend: str
-    hits: int = 4
-    restore: float | None = 20.0
-    save: float | None = 20.0
-    bracket: str = "extension"
-    leg: str = "none"
-    job: str = "extension-tests"
-    state: str = "ok"
-    restore_hit: bool | None = True
-    pr_number: str = "42"
-    event_class: str = "pull_request"
-
-    def as_record(self) -> dict[str, object]:
-        """Return the observation as a record the validator accepts."""
-        counters = dict.fromkeys(schema.COUNTERS, None)
-        counters["compile_requests"] = 5
-        counters["cache_hits"] = self.hits
-        return record_fixture(
-            run_id=self.run_id,
-            backend=self.backend,
-            counters=counters,
-            restore_hit=self.restore_hit,
-            restore_seconds=self.restore,
-            save_seconds=self.save,
-            bracket=self.bracket,
-            matrix_leg=self.leg,
-            job=self.job,
-            state=self.state,
-            pr_number=self.pr_number,
-            event_class=self.event_class,
-        )
-
-
-def _jobs(
-    run_ids: cabc.Iterable[int], seconds: float, *, conclusion: str = "success"
-) -> list[dict[str, object]]:
-    """Return one API job per run id, all lasting ``seconds``."""
-    return [
-        {
-            "run_id": run,
-            "run_attempt": 1,
-            "name": JOB_NAME,
-            "started_at": "2026-11-22T00:00:00Z",
-            "completed_at": (
-                f"2026-11-22T00:{int(seconds // 60):02d}:{int(seconds % 60):02d}Z"
-            ),
-            "conclusion": conclusion,
-        }
-        for run in run_ids
-    ]
-
-
-NAMES = {"extension-tests": JOB_NAME}
-
-
-def _family(summary: cabc.Mapping[str, object], index: int = 0) -> dict[str, object]:
-    """Return one family from a summary, narrowed for subscripting."""
-    families = typ.cast("list[dict[str, object]]", summary["families"])
-    return families[index]
-
-
-def _decisions(summary: cabc.Mapping[str, object]) -> list[dict[str, object]]:
-    """Return the gate decisions from a summary, narrowed for subscripting."""
-    gate = typ.cast("dict[str, object]", summary["gate"])
-    return typ.cast("list[dict[str, object]]", gate["decisions"])
-
-
-def _summary(
-    records: cabc.Sequence[Observation],
-    jobs: cabc.Sequence[dict[str, object]],
-    console: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Build a summary from fixtures through the real validator."""
-    validated = [records_reader.validate_record(item.as_record()) for item in records]
-    return summary_reader.build_summary(validated, jobs, NAMES, console)
-
-
-def _console(**overrides: object) -> dict[str, object]:
-    """Return a console observation with the gate fields set."""
-    document: dict[str, object] = {
-        "schema_version": schema.SCHEMA_VERSION,
-        "observed_at": "2026-11-22",
-        "branch_protection": "enabled",
-        "storage_gb": 30,
-        "eviction_days": 7,
-        "billing_rounding": "unknown",
-        "initial_population_seconds": 60,
-        "incremental_transfer_seconds": 5,
-        "incremental_cost_seconds": 0,
-        "note": "test",
-    }
-    document.update(overrides)
-    return document
-
-
-def test_the_transfer_is_the_sum_of_restore_and_save_per_job() -> None:
-    """A median of individual timings would halve the cost a migration removes."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4),
-        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
-    ]
-    summary = _summary(records, _jobs([100, 200], 240))
-    family = _family(summary)
-    assert family["median_transfer_seconds"] == pytest.approx(40.0), (
-        f"20 s restore plus 20 s save must report 40 s, got {family}"
-    )
-
-
-def test_a_control_without_a_save_time_keeps_the_transfer_unknown() -> None:
-    """A pull-request control never saves; inventing zero would understate cost."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, save=None),
-        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
-    ]
-    summary = _summary(records, _jobs([100, 200], 240))
-    family = _family(summary)
-    assert family["median_transfer_seconds"] is None, (
-        f"a missing save time must keep the total unknown, got {family}"
-    )
-
-
-def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
-    """A failing candidate must not satisfy the gate through a shorter job."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4)
-        for index in range(5)
-    ]
-    records += [
-        Observation(run_id=str(200 + index), backend="gha", hits=6)
-        for index in range(5)
-    ]
-    jobs = _jobs([*range(100, 105), *range(200, 205)], 240)
-    for job in jobs:
-        if int(typ.cast("str", job["run_id"])) >= 200:
-            job["conclusion"] = "failure"
-    summary = _summary(records, jobs)
-    family = _family(summary)
-    assert family["failures"] == 5, (
-        f"each failed candidate must be counted, got {family}"
-    )
-    assert family["pairs"] == 0, (
-        f"a failed candidate must contribute no saving pair, got {family}"
-    )
-    decision = _decisions(summary)[0]
-    assert decision["verdict"] == "insufficient-evidence", decision
-
-
-def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
-    """Bracket pairs would multiply the sample and satisfy the gate early."""
-    records: list[Observation] = [
-        Observation(run_id="100", backend="local", hits=4, bracket="typecheck"),
-        Observation(run_id="100", backend="local", hits=4, bracket="python-tests"),
-        Observation(
-            run_id="200",
-            backend="gha",
-            hits=6,
-            bracket="typecheck",
-            restore=None,
-            save=None,
-        ),
-        Observation(
-            run_id="200",
-            backend="gha",
-            hits=6,
-            bracket="python-tests",
-            restore=None,
-            save=None,
-        ),
-    ]
-    jobs: list[dict[str, object]] = [
-        {
-            "run_id": run,
-            "run_attempt": 1,
-            "name": JOB_NAME,
-            "started_at": "2026-11-22T00:00:00Z",
-            "completed_at": "2026-11-22T00:04:00Z",
-            "conclusion": "success",
-        }
-        for run in (100, 200)
-    ]
-    summary = _summary(records, jobs)
-    family = _family(summary)
-    assert family["pairs"] == 1, (
-        f"two brackets of one job are one independent pair, got {family}"
-    )
-    assert family["independent_job_pairs"] == 1, (
-        f"the independent pair must be recorded, got {family}"
-    )
-
-
-def test_job_cost_is_charged_once_for_several_brackets() -> None:
-    """Three brackets in a 100-second job must not report 300 job-seconds."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, bracket=name)
-        for name in ("typecheck", "python-tests", "extension")
-    ]
-    summary = _summary(records, _jobs([100], 100))
-    cost = typ.cast("dict[str, object]", summary["cost"])
-    assert cost["paid_job_seconds_by_workflow"] == {"ci.yml": 100.0}, (
-        f"one job with three brackets must be charged once, got {cost}"
-    )
-
-
-def test_a_negative_incremental_cost_is_accepted() -> None:
-    """The gate requires non-positive cost, not exactly zero."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4)
-        for index in range(5)
-    ]
-    records += [
-        Observation(
-            run_id=str(200 + index),
-            backend="gha",
-            hits=6,
-            restore=None,
-            save=None,
-        )
-        for index in range(5)
-    ]
-    jobs = _jobs([*range(100, 105), *range(200, 205)], 240)
-    for job in jobs:
-        if int(typ.cast("str", job["run_id"])) >= 200:
-            job["completed_at"] = "2026-11-22T00:03:15Z"
-    summary = _summary(records, jobs, _console(incremental_cost_seconds=-10))
-    decision = _decisions(summary)[0]
-    assert decision["incremental_cost_seconds"] == pytest.approx(-10.0), decision
-    assert decision["verdict"] == "adopt", decision
 
 
 def test_a_push_record_with_an_unknown_pr_is_not_a_pull_request_consumer() -> None:
@@ -274,9 +42,10 @@ def test_a_push_record_with_an_unknown_pr_is_not_a_pull_request_consumer() -> No
             event_class="push",
         ),
     ]
-    summary = _summary(records, _jobs([100, 200], 240))
-    observation = typ.cast("list[dict[str, object]]", summary["observations"])[0]
-    assert observation["observation_class"] == "fresh-consumer", observation
+    built = summary(records, jobs([100], 240))
+    assert observations(built)[0]["observation_class"] == "fresh-consumer", (
+        f"a push run must not be a pull request, got {observations(built)}"
+    )
 
 
 def test_brackets_of_one_pull_request_run_are_the_first_consumer() -> None:
@@ -285,19 +54,44 @@ def test_brackets_of_one_pull_request_run_are_the_first_consumer() -> None:
         Observation(run_id="100", backend="local", hits=4, bracket="typecheck"),
         Observation(run_id="100", backend="local", hits=4, bracket="python-tests"),
     ]
-    summary = _summary(records, _jobs([100, 200], 240))
-    observations = typ.cast("list[dict[str, object]]", summary["observations"])
-    classes = [observation["observation_class"] for observation in observations]
+    built = summary(records, jobs([100], 240))
+    classes = [item["observation_class"] for item in observations(built)]
     assert classes == ["first-pr-consumer", "first-pr-consumer"], (
         f"both brackets of the first run are that PR's first consumer, got {classes}"
     )
 
 
+def test_a_later_pull_request_run_is_a_subsequent_push() -> None:
+    """A second run for the same PR is the case the experiment needs."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4),
+        Observation(run_id="200", backend="local", hits=6),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    classes = [item["observation_class"] for item in observations(built)]
+    assert classes == ["first-pr-consumer", "subsequent-pr-push"], (
+        f"the second run of a PR must be a subsequent push, got {classes}"
+    )
+
+
+def test_a_cold_first_run_does_not_promote_the_next_warm_run() -> None:
+    """Registration happens before the cold label, so the next run is later."""
+    records = [
+        Observation(run_id="100", backend="local", hits=0, restore_hit=False),
+        Observation(run_id="200", backend="local", hits=6),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    classes = [item["observation_class"] for item in observations(built)]
+    assert classes == ["cold-or-new-family", "subsequent-pr-push"], (
+        f"a cold first run must not let the next run look first, got {classes}"
+    )
+
+
 def test_the_summary_reports_insufficient_evidence_without_pairs() -> None:
     """No records must not read as an adopt decision."""
-    summary = summary_reader.build_summary([], [], {}, None)
-    gate = typ.cast("dict[str, object]", summary["gate"])
-    cost = typ.cast("dict[str, object]", summary["cost"])
+    built = summary_reader.build_summary([], [], {}, None)
+    gate = typ.cast("dict[str, object]", built["gate"])
+    cost = typ.cast("dict[str, object]", built["cost"])
     assert gate["decisions"] == [], "no families means no decisions"
     assert cost["billing"] == "proxy", (
         "runner-seconds are a proxy unless billing is verified"
@@ -332,9 +126,16 @@ def test_an_identifier_of_the_wrong_type_is_rejected() -> None:
         records_reader.validate_record(document)
 
 
-def test_two_matrix_legs_of_one_bracket_are_distinct_records(
-    tmp_path: Path,
-) -> None:
+def test_a_multiline_job_is_rejected() -> None:
+    """A job key is a bounded identifier, not free text."""
+    document = record_fixture(job="line one\nline two")
+    with pytest.raises(
+        records_reader.InvalidEvidenceError, match="job must be a bounded"
+    ):
+        records_reader.validate_record(document)
+
+
+def test_two_matrix_legs_of_one_bracket_are_distinct_records(tmp_path: Path) -> None:
     """The matrix records the same job and bracket once per leg."""
     path = tmp_path / "records.jsonl"
     first = record_fixture(matrix_leg="3.12")
@@ -345,4 +146,26 @@ def test_two_matrix_legs_of_one_bracket_are_distinct_records(
     )
     assert len(records_reader.load_records([path])) == 2, (
         "records from distinct matrix legs must both load"
+    )
+
+
+def test_a_boolean_console_schema_version_is_rejected(tmp_path: Path) -> None:
+    """`true` equals 1 in Python, but not in the schema contract."""
+    path = tmp_path / "console.json"
+    document = console()
+    document["schema_version"] = True
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(records_reader.InvalidEvidenceError, match="must be an integer"):
+        records_reader.load_console(path)
+
+
+def test_the_gate_decisions_name_each_family() -> None:
+    """A decision that does not name its family cannot be reviewed."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4),
+        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    assert decisions(built)[0]["family"] == family(built)["family"], (
+        "the decision and its family must agree"
     )

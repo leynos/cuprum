@@ -76,10 +76,10 @@ def _observation_label(
 ) -> str:
     """Return the experiment case one record witnesses.
 
-    ``first_for_pr`` stores the run that first observed a pull request. A
-    later bracket of that same run is still that PR's first consumer; only a
-    later run is a subsequent push. A push run, or the writer's ``unknown``
-    sentinel, never enters the PR classes.
+    A valid pull request's first run is registered before the cold and
+    degraded branches, so a cold first run does not let a later warm run
+    become ``first-pr-consumer``. The first run keeps its cold or degraded
+    label; every later run of that PR is a subsequent push.
 
     Returns
     -------
@@ -88,6 +88,9 @@ def _observation_label(
     """
     pr_number = str(record["pr_number"])
     is_pr = record["event_class"] == "pull_request" and pr_number.isdecimal()
+    first_run = None
+    if is_pr:
+        first_run = first_for_pr.setdefault(pr_number, str(record["run_id"]))
     hits = typ.cast("dict[str, object]", record["counters"]).get("cache_hits")
     cold = (
         record["backend"] == "local" and record["restore_hit"] is not True and not hits
@@ -96,9 +99,8 @@ def _observation_label(
         return "fallback-or-misconfiguration"
     if cold:
         return "cold-or-new-family"
-    if not is_pr:
+    if first_run is None:
         return "fresh-consumer"
-    first_run = first_for_pr.setdefault(pr_number, str(record["run_id"]))
     if first_run == str(record["run_id"]):
         return "first-pr-consumer"
     return "subsequent-pr-push"
@@ -136,6 +138,46 @@ def classify_observations(
             "job_result": jobs_reader.seconds_and_result(record, jobs, names)[1],
         })
     return classified
+
+
+def records_by_family(
+    records: cabc.Sequence[cabc.Mapping[str, object]],
+) -> dict[str, list[cabc.Mapping[str, object]]]:
+    """Group every record by family and leg, whether or not it can pair."""
+    grouped: dict[str, list[cabc.Mapping[str, object]]] = {}
+    for record in records:
+        grouped.setdefault(pair_key(record), []).append(record)
+    return grouped
+
+
+def failure_count(
+    records: cabc.Sequence[cabc.Mapping[str, object]],
+    jobs: cabc.Sequence[cabc.Mapping[str, object]],
+    names: cabc.Mapping[str, str],
+) -> int:
+    """Count the distinct API jobs among ``records`` that did not pass.
+
+    Every record of the family is considered, including degraded fallbacks
+    and jobs that are not warm enough to pair: a compiler-only fallback must
+    not hide a failing job from the failure count.
+
+    Returns
+    -------
+    int
+        The number of distinct failed jobs among the family's records.
+    """
+    failed: set[tuple[str, str, str, str]] = set()
+    for record in records:
+        result = jobs_reader.seconds_and_result(record, jobs, names)[1]
+        if result != "failed":
+            continue
+        failed.add((
+            str(record["run_id"]),
+            str(record["run_attempt"]),
+            str(record["job"]),
+            str(record["matrix_leg"]),
+        ))
+    return len(failed)
 
 
 def _unique_jobs(
@@ -178,16 +220,12 @@ def _paired_savings(
     savings: list[float] = []
     control_times: list[float] = []
     candidate_times: list[float] = []
-    failures = 0
     for index in range(count):
         control_time, control_result = jobs_reader.seconds_and_result(
             controls[index], jobs, names
         )
         candidate_time, candidate_result = jobs_reader.seconds_and_result(
             candidates[index], jobs, names
-        )
-        failures += sum(
-            result == "failed" for result in (control_result, candidate_result)
         )
         if control_result != "passed" or candidate_result != "passed":
             continue
@@ -200,7 +238,6 @@ def _paired_savings(
         "savings": savings,
         "controls": control_times,
         "candidates": candidate_times,
-        "failures": failures,
         "job_pairs": count,
     }
 
@@ -221,11 +258,18 @@ def _pair_evidence(
     return evidence
 
 
+class JoinContext(typ.NamedTuple):
+    """The jobs document and the declared job-name mapping."""
+
+    jobs: cabc.Sequence[cabc.Mapping[str, object]]
+    names: cabc.Mapping[str, str]
+
+
 def family_summary(
     family: str,
     arms: cabc.Mapping[str, list[dict[str, object]]],
-    jobs: cabc.Sequence[cabc.Mapping[str, object]],
-    names: cabc.Mapping[str, str],
+    context: JoinContext,
+    all_records: cabc.Sequence[cabc.Mapping[str, object]],
 ) -> dict[str, object]:
     """Compute one family's paired saving and its failure evidence.
 
@@ -235,7 +279,7 @@ def family_summary(
         The family's observation counts, pair count, median and extreme
         savings, failures, and median restore-plus-save time.
     """
-    evidence = _pair_evidence(arms, jobs, names)
+    evidence = _pair_evidence(arms, context.jobs, context.names)
     savings = typ.cast("list[float]", evidence["savings"])
     return {
         "family": family,
@@ -243,7 +287,7 @@ def family_summary(
         "candidate_observations": len(arms["candidate"]),
         "pairs": len(savings),
         "independent_job_pairs": evidence["job_pairs"],
-        "failures": evidence["failures"],
+        "failures": failure_count(all_records, context.jobs, context.names),
         "median_control_seconds": median(typ.cast("list[float]", evidence["controls"])),
         "median_candidate_seconds": median(
             typ.cast("list[float]", evidence["candidates"])

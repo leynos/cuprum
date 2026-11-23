@@ -38,8 +38,22 @@ BEARER_URL = "https://cache-proxy.example.invalid/bearer?token=super-secret"
 SENTINEL_VALUE = "runtime-secret-value"
 
 
-def stats_document(**overrides: object) -> dict[str, object]:
-    """Return an sccache statistics document with a full counter set."""
+DEFAULT_LOCATION = 'Local disk: "/home/runner/.cache/sccache"'
+
+
+def stats_document(
+    cache_location: str = DEFAULT_LOCATION, **overrides: object
+) -> dict[str, object]:
+    """Return an sccache statistics document with a full counter set.
+
+    ``cache_location`` is a top-level field in sccache's JSON, not a counter;
+    ``overrides`` replace individual counters.
+
+    Returns
+    -------
+    dict[str, object]
+        A document shaped like ``sccache --show-stats --stats-format json``.
+    """
     stats: dict[str, object] = {
         "compile_requests": 10,
         "requests_executed": 9,
@@ -60,10 +74,13 @@ def stats_document(**overrides: object) -> dict[str, object]:
         "cache_read_hit_duration": {"secs": 0, "nanos": 0},
         "compiler_write_duration": {"secs": 2, "nanos": 0},
         "not_cached": {"crate_type": 3},
-        "cache_location": 'Local disk: "/home/runner/.cache/sccache"',
     }
     stats.update(overrides)
-    return {"stats": stats, "version": "0.12.0"}
+    return {
+        "stats": stats,
+        "cache_location": cache_location,
+        "version": "0.12.0",
+    }
 
 
 class FakeSccache:

@@ -94,6 +94,10 @@ def load_console(path: Path | None) -> dict[str, object] | None:
         raise InvalidEvidenceError(message) from error
     mapping = require_mapping(document, CONSOLE_KEYS, "console observation")
     require(
+        condition=type(mapping["schema_version"]) is int,
+        message="console schema_version must be an integer",
+    )
+    require(
         condition=mapping["schema_version"] == schema.SCHEMA_VERSION,
         message="unsupported console schema version",
     )

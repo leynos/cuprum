@@ -466,6 +466,13 @@ jobs:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
 
+      - name: Stop the compiler-cache save timer
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save-end
+
       - name: Record the lint bracket
         if: always()
         uses: ./.github/actions/compiler-cache-evidence
@@ -919,6 +926,15 @@ jobs:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
 
+      - name: Stop the compiler-cache save timer
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save-end
+
       - name: Record the typecheck bracket
         if: always() && env.LEG_RUNS == 'true'
         uses: ./.github/actions/compiler-cache-evidence
@@ -1257,6 +1273,13 @@ jobs:
         with:
           path: ~/.cache/sccache
           key: ${{ env.SCCACHE_CACHE_KEY }}
+
+      - name: Stop the compiler-cache save timer
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: save-end
 
       - name: Record the extension bracket
         if: always()

@@ -196,7 +196,7 @@ def _strings(record: dict[str, object]) -> None:
             condition=value == "unknown" or schema.HEX40.fullmatch(value) is not None,
             message=f"{name} must be a lowercase 40-character SHA or unknown",
         )
-    for name in _UNKNOWN_OK:
+    for name in (*_UNKNOWN_OK, "job"):
         value = str(record[name])
         require(
             condition=value == "unknown" or schema.BOUNDED.fullmatch(value) is not None,

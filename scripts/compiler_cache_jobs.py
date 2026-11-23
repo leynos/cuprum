@@ -64,15 +64,19 @@ def matching_job(
     if template is None:
         return None
     pattern = template.replace("{leg}", str(record["matrix_leg"]))
-    for job in jobs:
-        if str(job.get("run_id")) != str(record["run_id"]):
-            continue
-        attempt = job.get("run_attempt")
-        if attempt is not None and str(attempt) != str(record["run_attempt"]):
-            continue
-        if pattern in str(job.get("name", "")):
-            return job
-    return None
+    matches = [
+        job
+        for job in jobs
+        if str(job.get("run_id")) == str(record["run_id"])
+        and (
+            job.get("run_attempt") is None
+            or str(job.get("run_attempt")) == str(record["run_attempt"])
+        )
+        and pattern in str(job.get("name", ""))
+    ]
+    # An ambiguous mapping would charge an arbitrary job's seconds and
+    # conclusion to this record, so it is unknown rather than first-match.
+    return matches[0] if len(matches) == 1 else None
 
 
 def seconds_and_result(

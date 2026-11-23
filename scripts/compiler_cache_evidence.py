@@ -87,7 +87,7 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
     if phase not in {"pre", "post"}:
         msg = "phase must be pre or post"
         raise ValueError(msg)
-    stats, version = probe.read_stats(environ)
+    stats, version, backend = probe.read_stats(environ)
     available = bool(stats)
     return {
         "schema_version": schema.SCHEMA_VERSION,
@@ -98,9 +98,7 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
         "restore_seconds": probe.elapsed_between(environ, "restore", "restore-end"),
         "restore_bytes": probe.directory_bytes(environ),
         "sccache_version": version or None,
-        "cache_backend": (
-            schema.backend_of(stats.get("cache_location")) if available else "none"
-        ),
+        "cache_backend": backend if available else "none",
         "cache_service_v2": "ACTIONS_CACHE_SERVICE_V2" in environ,
         "cache_host_class": schema.cache_host_class(environ.get("ACTIONS_CACHE_URL")),
         "counters": {
@@ -112,6 +110,33 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
             for name in schema.DURATIONS
         },
         "not_cached": probe.not_cached(stats) if available else {},
+    }
+
+
+def _not_cached_delta(
+    pre: cabc.Mapping[str, object], post: cabc.Mapping[str, object]
+) -> dict[str, int]:
+    """Return per-reason deltas, treating an absent reason as zero.
+
+    A reason that first appears in the post snapshot is a real count for this
+    bracket, not an unknown value. Only an unavailable snapshot leaves the map
+    unknown, which the caller represents as an empty mapping.
+
+    Returns
+    -------
+    dict[str, int]
+        One delta per reason seen in either snapshot, or an empty mapping when
+        a snapshot is unavailable.
+    """
+    if not pre.get("available") or not post.get("available"):
+        return {}
+    before = typ.cast("dict[str, object]", pre.get("not_cached", {}))
+    after = typ.cast("dict[str, object]", post.get("not_cached", {}))
+    reasons = set(before) | set(after)
+    return {
+        str(reason): int(typ.cast("int", after.get(reason, 0)))
+        - int(typ.cast("int", before.get(reason, 0)))
+        for reason in reasons
     }
 
 
@@ -130,7 +155,7 @@ def mark(environ: cabc.Mapping[str, str]) -> int:
         must not fail the step that measures a paid transfer.
     """
     marker = environ.get("EVIDENCE_MARKER", "")
-    if marker not in {"restore", "restore-end", "save"}:
+    if marker not in {"restore", "restore-end", "save", "save-end"}:
         print(f"{_WARNING}Invalid timing marker; the marker was omitted.")
         return 0
     if not probe.write_mark(environ, marker):
@@ -296,17 +321,14 @@ def build_record(environ: cabc.Mapping[str, str]) -> dict[str, object]:
     record.update({
         "restore_seconds": pre.get("restore_seconds"),
         "restore_bytes": pre.get("restore_bytes"),
-        "save_seconds": probe.seconds_since(environ, "save"),
+        "save_seconds": probe.elapsed_between(environ, "save", "save-end"),
         "save_bytes": probe.directory_bytes(environ),
         "counters": counters,
         "durations": schema.delta_map(
             typ.cast("dict[str, object]", post["durations"]),
             typ.cast("dict[str, object]", pre["durations"]),
         ),
-        "not_cached": schema.delta_map(
-            typ.cast("dict[str, object]", post["not_cached"]),
-            typ.cast("dict[str, object]", pre["not_cached"]),
-        ),
+        "not_cached": _not_cached_delta(pre, post),
         "zero_requests": schema.zero_requests_kind(
             requests if isinstance(requests, int) else None,
             expects_rustc=schema.boolean(environ.get("EVIDENCE_EXPECTS_RUSTC")),

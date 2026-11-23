@@ -33,7 +33,6 @@ True
 
 from __future__ import annotations
 
-import math
 import re
 import typing as typ
 
@@ -155,7 +154,7 @@ def _coerce(value: object) -> object:
     if value is True:
         return 1
     if isinstance(value, str):
-        return value.lower()
+        return 0 if not value else value.lower()
     return value
 
 
@@ -174,13 +173,13 @@ def actions_equal(left: object, right: object) -> bool:
     """
     first, second = _coerce(left), _coerce(right)
     if isinstance(first, (int, float)) and isinstance(second, (int, float)):
-        return math.isclose(float(first), float(second))
+        return float(first) == float(second)  # ruff: ignore[float-equality-comparison] - exact by contract.
     if isinstance(first, (int, float)) or isinstance(second, (int, float)):
         numeric, other = (
             (first, second) if isinstance(first, (int, float)) else (second, first)
         )
         try:
-            return math.isclose(float(typ.cast("float", numeric)), float(str(other)))
+            return float(typ.cast("float", numeric)) == float(str(other))  # ruff: ignore[float-equality-comparison] - exact by contract.
         except ValueError:
             return False
     return first == second

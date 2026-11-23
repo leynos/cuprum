@@ -176,6 +176,63 @@ def test_zero_request_classification(
     )
 
 
+def test_a_reason_that_first_appears_in_the_bracket_is_counted(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An absent reason is zero, not unknown, while both snapshots are available."""
+    _two_snapshots(
+        evidence_environment,
+        monkeypatch,
+        (
+            stats_document(not_cached={}),
+            stats_document(not_cached={"unsupported": 3}),
+        ),
+    )
+    record = writer.build_record(evidence_environment)
+    assert record["not_cached"] == {"unsupported": 3}, (
+        f"the new reason's count must survive, got {record['not_cached']}"
+    )
+
+
+def test_the_save_span_ends_at_its_end_marker(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two records after one save must report the same save interval."""
+    import time
+
+    marks = tmp = (
+        __import__("pathlib").Path(evidence_environment["EVIDENCE_DIR"]) / "marks"
+    )
+    tmp.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    (marks / "save-start").write_text(f"{now - 8:.6f}\n", encoding="utf-8")
+    (marks / "save-end").write_text(f"{now - 3:.6f}\n", encoding="utf-8")
+    _two_snapshots(
+        evidence_environment, monkeypatch, (stats_document(), stats_document())
+    )
+    record = writer.build_record(evidence_environment)
+    assert record["save_seconds"] == pytest.approx(5.0, abs=1.0), (
+        f"the save span must be the interval between the markers, got {record}"
+    )
+
+
+def test_an_unidentified_backend_is_degraded(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store the reader cannot name must not become a healthy control."""
+    document = {
+        "stats": stats_document()["stats"],
+        "cache_location": "something else",
+        "version": "0.12.0",
+    }
+    _two_snapshots(evidence_environment, monkeypatch, (document, document))
+    record = writer.build_record(evidence_environment)
+    assert record["backend"] == "unknown", record["backend"]
+    assert record["state"] == "degraded", (
+        f"an unidentified backend must be degraded, got {record['state']}"
+    )
+
+
 def test_a_fallback_record_is_degraded_not_ok(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -263,9 +320,18 @@ def test_a_valid_record_passes_validation() -> None:
         ({"backend": "s3"}, "backend"),
         ({"zero_requests": "zero"}, "zero_requests"),
         ({"wrapper_present": 1}, "wrapper_present"),
-        ({"counters": {"cache_hits": True}}, "cache_hits"),
+        (
+            {
+                "counters": {
+                    **dict.fromkeys(schema.COUNTERS, None),
+                    "cache_hits": True,
+                }
+            },
+            "cache_hits",
+        ),
         ({"counters": {"cache_hits": 1}}, "counters"),
         ({"run_id": "one"}, "run_id"),
+        ({"job": "line one\nline two"}, "job"),
         ({"extra": 1}, "exactly"),
     ],
 )

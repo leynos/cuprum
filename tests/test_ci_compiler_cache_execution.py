@@ -69,7 +69,10 @@ def test_a_build_after_a_successful_start_runs_through_the_wrapper(
     environment = {**_installed(tmp_path), **_start(tmp_path, starts=True)}
     seen = tmp_path / "build-wrapper"
     result = run_step(
-        f'test -n "${{RUSTC_WRAPPER:-}}"\nprintf "%s" "${{RUSTC_WRAPPER}}" > "{seen}"',
+        (
+            f'test -n "${{RUSTC_WRAPPER:-}}" && '
+            f'printf "%s" "${{RUSTC_WRAPPER}}" > "{seen}"'
+        ),
         workdir=tmp_path,
         environment=environment,
     )

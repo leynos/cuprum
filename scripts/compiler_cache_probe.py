@@ -35,15 +35,19 @@ if typ.TYPE_CHECKING:
 _EMPTY: dict[str, object] = {}
 
 
-def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str]:
-    """Run sccache and return its statistics and version; fail open.
+def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str, str]:
+    """Run sccache and return its statistics, version, and classified store.
+
+    The statistics document's top-level ``cache_location`` can name a runner
+    path or a service address, so it is classified here and the raw value is
+    discarded before the caller sees it.
 
     Returns
     -------
-    tuple[dict[str, object], str]
-        The parsed ``stats`` object and the reported version. Both are empty
-        when sccache is absent or cannot be run, which the caller records as
-        unavailable rather than as zeroes.
+    tuple[dict[str, object], str, str]
+        The parsed ``stats`` object, the reported version, and the backend
+        label. All are empty or ``none`` when sccache is absent or cannot be
+        run, which the caller records as unavailable rather than as zeroes.
     """
     binary = environ.get("SCCACHE_BINARY", "sccache")
     try:
@@ -55,30 +59,41 @@ def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str]
             check=False,
         )
         if completed.returncode != 0:
-            return {}, ""
+            return {}, "", "none"
         document = json.loads(completed.stdout)
         stats = document.get("stats", _EMPTY)
         version = str(document.get("version", ""))
+        backend = schema.backend_of(document.get("cache_location"))
         if not isinstance(stats, dict):
-            return {}, version
-        return typ.cast("dict[str, object]", stats), version
+            return {}, version, backend
+        return typ.cast("dict[str, object]", stats), version, backend
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
-        return {}, ""
+        return {}, "", "none"
 
 
 def count(mapping: object) -> int | None:
-    """Sum the ``counts`` and ``adv_counts`` maps sccache reports per language."""
-    if not isinstance(mapping, dict):
+    """Sum the per-language ``counts`` map sccache reports.
+
+    sccache increments both ``counts`` and ``adv_counts`` for each event, so
+    adding both maps would double every hit and miss. Its own ``all()`` reads
+    ``counts`` alone, which is the count this writer records.
+
+    Returns
+    -------
+    int | None
+        The summed count, or ``None`` when the document has no per-language
+        counts map.
+    """
+    if not isinstance(mapping, dict) or "counts" not in mapping:
         return None
-    total = 0
-    for key in ("counts", "adv_counts"):
-        values = typ.cast("dict[str, object]", mapping).get(key, {})
-        if not isinstance(values, dict):
-            continue
-        for value in typ.cast("dict[str, object]", values).values():
-            if isinstance(value, int) and not isinstance(value, bool):
-                total += value
-    return total
+    values = typ.cast("dict[str, object]", mapping)["counts"]
+    if not isinstance(values, dict):
+        return None
+    return sum(
+        value
+        for value in typ.cast("dict[str, object]", values).values()
+        if isinstance(value, int) and not isinstance(value, bool)
+    )
 
 
 def counter(stats: cabc.Mapping[str, object], name: str) -> int | None:
@@ -159,6 +174,8 @@ def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
         return values
     for line in completed.stdout.splitlines():
         name, _, value = line.partition(": ")
+        if name == "commit-hash":
+            name = "commit"
         if name in values and value:
             values[name] = value
     return values
@@ -217,7 +234,7 @@ def write_mark(environ: cabc.Mapping[str, str], marker: str) -> bool:
     """
     path = (
         _marker_file(environ, marker)
-        if marker == "restore-end"
+        if marker in {"restore-end", "save-end"}
         else mark_path(environ, marker)
     )
     try:

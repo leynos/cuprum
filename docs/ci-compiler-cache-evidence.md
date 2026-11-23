@@ -31,8 +31,11 @@ brackets a compiling step with a `snapshot` before and after it, writes a
 `mark` before a cache restore or save, and appends the bracket's `record` after
 the save so the transfer it measures is inside the record. Each bracket
 contributes one line to `records.jsonl`, uploaded as the artefact
-`compiler-cache-evidence-${job}-${run_attempt}` with 90-day retention, matching
-the benchmark-gate and release telemetry convention.
+`compiler-cache-evidence-${job}-${matrix_leg}-${run_attempt}` with 90-day
+retention, matching the benchmark-gate and release telemetry convention.
+
+The example is abbreviated: the reader requires every counter and duration key,
+and rejects this object as a complete record.
 
 ```json
 {
