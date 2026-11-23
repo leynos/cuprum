@@ -22,8 +22,8 @@ producer does.
 Consumed by ``cuprum._streams`` (which re-exports this surface) and the pipeline
 execution layer. ``_pump_stream`` closes any supplied writer once relay
 completes or when no reader is supplied, so callers must not reuse the writer
-afterwards; a reader whose bounded post-close drain timed out is closed too, so
-callers must not reuse that reader either.
+afterwards; the close of a reader whose bounded post-close drain timed out is
+only attempted, so callers must not reuse that reader either.
 """
 
 from __future__ import annotations
@@ -264,9 +264,9 @@ def _release_stream_reader_transport(reader: asyncio.StreamReader) -> None:
     loop would have done at EOF, and it normally makes the producer's next write
     fail with a broken pipe so the stage exits and the pipeline settles. The
     release is best-effort: a close that is skipped or fails, or a producer that
-    handles the broken pipe without exiting, leaves the stage running, so a run
-    that must settle whatever the producer does needs its own pipeline timeout.
-    When the stage does exit on the broken pipe, that exit is an ordinary
+    handles the broken pipe without exiting, may leave the stage running, so a
+    run that must settle whatever the producer does needs its own pipeline
+    timeout. When the stage does exit on the broken pipe, that exit is an ordinary
     pipeline failure, so the fail-fast rule may then terminate other
     still-running stages, including a downstream stage that had stopped reading
     but had not yet finished.

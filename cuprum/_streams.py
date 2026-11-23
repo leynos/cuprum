@@ -22,8 +22,8 @@ reader is supplied, so callers must not reuse the writer afterwards. It also
 attempts to close the upstream reader when its bounded post-close drain times
 out, which normally releases the producer of an early-closed stage from a pipe
 that is never drained; the close is best-effort, so a missing transport, an
-already-closing one, or a failed close leaves the producer unreleased. Callers
-must not reuse that reader either.
+already-closing one, or a failed close may leave the producer unreleased.
+Callers must not reuse that reader either.
 """
 
 from __future__ import annotations
