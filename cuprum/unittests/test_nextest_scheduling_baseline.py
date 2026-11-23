@@ -9,15 +9,15 @@ therefore retains nextest's default scheduling and records why the experiment
 is superseded.
 
 This module pins the scheduling half of that decision. It refuses a top-level
-`test-groups` table, a `test-threads` setting on any profile, and a `priority`
-or `test-group` setting on any override, which are the mechanisms issue #606
-proposed to use. It deliberately does not refuse an override that declares only
-a timeout: an allowance is a timeout-tier concern, pinned by
-`test_nextest_timeout_tiers.py` and `test_termination_allowance.py`, and the
-filter that names a retired binary is pinned by
-`test_compile_contracts_build_graph.py` under ADR-027.
+`test-groups` table, a `test-threads` or `threads-required` setting on any
+profile, and a `priority`, `test-group` or `threads-required` setting on any
+override, which are the mechanisms issue #606 proposed to use. It deliberately
+does not refuse an override that declares only a timeout: an allowance is a
+timeout-tier concern, pinned by `test_nextest_timeout_tiers.py` and
+`test_termination_allowance.py`, and the filter that names a retired binary is
+pinned by `test_compile_contracts_build_graph.py` under ADR-027.
 
-A green suite cannot show that a configuration which serialises the whole run,
+A green suite cannot show that a configuration which serializes the whole run,
 or restores a per-binary priority, changes nothing today. Both are latent: the
 suite still passes, and the setting only matters once a test becomes slow. The
 scanner is therefore driven with synthetic configurations as well as the live
@@ -51,15 +51,23 @@ DECISION_RECORD: typ.Final[str] = (
     "docs/adrs/adr-0030-retain-default-nextest-scheduling.md"
 )
 
-#: The only profile-level key that changes the schedule. A `test-threads` here
-#: serialises every test in the run, which is the accidental global
-#: serialisation issue #606 warned a test group could cause.
-PROFILE_SCHEDULING_KEYS: typ.Final[tuple[str, ...]] = ("test-threads",)
+#: Profile-level keys that change the schedule. A `test-threads = 1` serializes
+#: every test in the run, and `threads-required = "num-test-threads"` reserves
+#: the whole pool for each test, which is the accidental global serialization
+#: issue #606 warned a test group could cause.
+PROFILE_SCHEDULING_KEYS: typ.Final[tuple[str, ...]] = (
+    "test-threads",
+    "threads-required",
+)
 
-#: Override-level keys, which nextest accepts only inside a per-test override.
-#: An override is the only place a priority or a test-group membership can be
-#: declared.
-OVERRIDE_SCHEDULING_KEYS: typ.Final[tuple[str, ...]] = ("priority", "test-group")
+#: Override-level keys, which nextest accepts inside a per-test override. An
+#: override is the only place a priority or a test-group membership can be
+#: declared, and the place a heavy test is given a wider `threads-required`.
+OVERRIDE_SCHEDULING_KEYS: typ.Final[tuple[str, ...]] = (
+    "priority",
+    "test-group",
+    "threads-required",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -183,7 +191,12 @@ def test_the_configuration_declares_a_profile_and_no_scheduling_control() -> Non
         pytest.param(
             "[profile.default]\ntest-threads = 1\n",
             ["profile.default.test-threads"],
-            id="global-serialisation",
+            id="global-serialization",
+        ),
+        pytest.param(
+            '[profile.default]\nthreads-required = "num-test-threads"\n',
+            ["profile.default.threads-required"],
+            id="global-thread-reservation",
         ),
         pytest.param(
             '[[profile.default.overrides]]\nfilter = "binary(slow)"\npriority = 100\n',
@@ -194,6 +207,12 @@ def test_the_configuration_declares_a_profile_and_no_scheduling_control() -> Non
             '[[profile.ci.overrides]]\nfilter = "binary(slow)"\ntest-group = "slow"\n',
             ["profile.ci.overrides[0].test-group"],
             id="named-profile-group",
+        ),
+        pytest.param(
+            '[[profile.default.overrides]]\nfilter = "binary(heavy)"\n'
+            "threads-required = 2\n",
+            ["profile.default.overrides[0].threads-required"],
+            id="heavy-test",
         ),
     ],
 )

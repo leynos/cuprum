@@ -3,9 +3,9 @@
 ## Status
 
 Accepted on 2026-11-22. Keep cargo-nextest's default scheduling for the Rust
-suite: no test priorities, no test groups, and no `test-threads` in any
-profile. The experiment in issue [#606] is closed as superseded because
-[ADR-027] removed the binaries it proposed to re-order.
+suite: no test priorities, no test groups, and no `test-threads` or
+`threads-required` in any profile. The experiment in issue [#606] is closed as
+superseded because [ADR-027] removed the binaries it proposed to re-order.
 
 ## Date
 
@@ -49,7 +49,7 @@ schedule could be changed.
 
 - A scheduling change must be measured on the work it re-orders, against the
   same tests, the same runner shape, and the same locked dependencies.
-- Issue [#606] authorises no paid shadow jobs, extra matrix legs, synthetic
+- Issue [#606] authorizes no paid shadow jobs, extra matrix legs, synthetic
   dispatch loops, scheduled benchmark lanes, or larger runners.
 - Timeouts, retry policy, warning enforcement, features, coverage
   instrumentation, and target layout are outside this decision.
@@ -72,9 +72,9 @@ schedule could be changed.
 
 | Option                 | Has a target | Paid runs needed | Fidelity risk     |
 | ---------------------- | ------------ | ---------------- | ----------------- |
-| Priority only          | No           | None authorised  | None, but vacuous |
-| One-slot group         | No           | None authorised  | None, but vacuous |
-| Combined               | No           | None authorised  | None, but vacuous |
+| Priority only          | No           | None authorized  | None, but vacuous |
+| One-slot group         | No           | None authorized  | None, but vacuous |
+| Combined               | No           | None authorized  | None, but vacuous |
 | Retain default and pin | Yes          | None             | None              |
 
 _Table 1: The candidate arms and the retained baseline._
@@ -85,9 +85,10 @@ Cuprum keeps cargo-nextest's default scheduling. `rust/.config/nextest.toml`
 declares the per-test allowance and the whole-run budget, and nothing about
 ordering, grouping, or concurrency.
 `cuprum/unittests/test_nextest_scheduling_baseline.py` refuses a top-level
-`test-groups` table, a `test-threads` setting on any profile, and a `priority`
-or `test-group` setting on any override. Each refusal names this ADR, so a
-future change must update the decision record rather than drifting past it.
+`test-groups` table, a `test-threads` or `threads-required` setting on any
+profile, and a `priority`, `test-group` or `threads-required` setting on any
+override. Each refusal names this ADR, so a future change must update the
+decision record rather than drifting past it.
 
 The guard permits an override that declares only a timeout, because an
 allowance is a timeout-tier concern and not a scheduling one. The tiers are
@@ -157,7 +158,7 @@ not remove, that risk.
 
 The retired binary's nested compile time, scratch-tree state, lock-wait
 attribution, and child-process overlap are not applicable rather than zero:
-nothing takes a second Cargo lock. Central processing unit (CPU) utilisation is
+nothing takes a second Cargo lock. Central processing unit (CPU) utilization is
 unknown, because the resource sampler records peak memory and disk, not
 processor time. The sampled runs are warm-cache runs: the Cargo registry and
 tool caches hit, and sccache reported an 83.41 % hit rate. A naturally
@@ -172,8 +173,9 @@ future reader does not read a missing measurement as a zero cost.
   within the first three seconds of the run.
 - No configuration claims a scheduling remedy for a binary that no longer
   exists.
-- The guard fails a future priority, group, or global `test-threads` change
-  until someone reopens this decision with fresh evidence.
+- The guard fails a future priority, group, `test-threads`, or
+  `threads-required` change until someone reopens this decision with fresh
+  evidence.
 - The experiment costs nothing: no runner, cache entry, artefact, dispatch, or
   matrix leg was added.
 

@@ -8597,8 +8597,8 @@ issue #606's priority and one-slot test-group candidates have no target, so
 nextest's default ordering, grouping, and concurrency stay, and the caller-owned
 `NEXTEST_TEST_THREADS` setting is the only concurrency control.
 `cuprum/unittests/test_nextest_scheduling_baseline.py` refuses a priority, a
-test group, or a profile `test-threads`; a legitimate future use must update
-the decision record first.
+test group, or a profile `test-threads` or `threads-required`; a legitimate
+future use must update the decision record first.
 
 Doctests in a module compiled only under `cfg(windows)`, such as the
 synchronous-handle cases on `read_once` and `write_once` in
