@@ -224,3 +224,38 @@ fn parity_reports_an_unexpected_binding() {
         "the failure must name the unexpected binding, found {error}",
     );
 }
+
+#[test]
+fn accepts_a_title_that_mentions_an_index_argument() {
+    let source = "#[scenario(\n    path = \"tests/features/demo.feature\",\n    name = \"Consume \
+                  handles index = 0\"\n)]\nfn case() {}\n";
+
+    let bound = bound_scenarios(source, PATH)
+        .expect("a title mentioning `index =` is a value, not an argument");
+
+    assert_eq!(
+        bound.first().map(|entry| entry.name.as_str()),
+        Some("Consume handles index = 0"),
+        "the binding must keep its complete title",
+    );
+}
+
+#[test]
+fn decodes_escaped_quotes_in_a_bound_name() {
+    let source = "#[scenario(\n    path = \"tests/features/demo.feature\",\n    name = \"Consume \
+                  preserves \\\"quoted\\\" text\"\n)]\nfn case() {}\n";
+    let declared = vec![Declared {
+        title: "Consume preserves \"quoted\" text".to_owned(),
+        line: 2,
+    }];
+    let table = ParityTable::from_rows(&[("Consume preserves \"quoted\" text", "case")]);
+
+    let bound = bound_scenarios(source, PATH).expect("the escaped title must parse");
+    let outcome = check_parity(&declared, &bound, &table);
+
+    assert_eq!(
+        outcome,
+        Ok(()),
+        "a decoded title must match the feature declaration exactly",
+    );
+}

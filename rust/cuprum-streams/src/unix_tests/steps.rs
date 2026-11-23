@@ -26,7 +26,6 @@ use super::{
         PanickingReader,
         UNWIND_MARKER,
         buffer_size,
-        in_isolated_child,
         observe_pump,
         payload_for,
         print_writer_probe_witness,
@@ -300,7 +299,7 @@ fn the_pump_closed_its_writer(context: &StreamContext, contents: String) -> Step
     // The liveness probe runs before any descriptor is duplicated below: the
     // sink read allocates a duplicate, which could reuse the closed writer's
     // number and turn a closed descriptor into a false open one.
-    if in_isolated_child() {
+    if context.isolated {
         let raw = recorded(&context.sink_writer_raw, "owned writer descriptor")?;
         match fd_is_open(raw) {
             Ok(false) => {}
@@ -325,7 +324,7 @@ fn the_pump_closed_its_writer(context: &StreamContext, contents: String) -> Step
         ));
     }
 
-    if in_isolated_child() {
+    if context.isolated {
         print_writer_probe_witness();
     }
     Ok(())

@@ -187,15 +187,6 @@ impl AsFd for PanickingReader<'_> {
     }
 }
 
-/// Whether the harness started this process for one instrumented scenario.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "The child fixture reads the marker its parent test supplied explicitly"
-)]
-pub(super) fn in_isolated_child() -> bool {
-    std::env::var_os(ISOLATED_CHILD_ENV).is_some_and(|value| value.to_str() == Some("1"))
-}
-
 /// Print the witness line an isolated guard run requires.
 ///
 /// This goes to standard error on purpose. With `--nocapture`, libtest writes

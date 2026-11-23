@@ -93,9 +93,28 @@ const SCENARIOS: &[ScenarioExpectation] = &[
     },
 ];
 
+/// Whether the harness started this process for one instrumented scenario.
+///
+/// This is the composition boundary for the isolation marker: it is resolved
+/// once, when the scenario fixture is built, and every step reads the resulting
+/// flag from [`StreamContext`] instead of reaching for the environment again.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "The scenario fixture reads the marker its parent test supplied explicitly"
+)]
+fn resolve_isolation() -> bool {
+    std::env::var_os(support::ISOLATED_CHILD_ENV).is_some_and(|value| value.to_str() == Some("1"))
+}
+
 /// Scenario state shared between steps through `rstest-bdd` slots.
 #[derive(Default)]
 struct StreamContext {
+    /// Whether this run is the guard's isolated re-run of one scenario.
+    ///
+    /// Only an isolated child may trust a raw descriptor-liveness probe: in
+    /// the shared suite binary another thread can reassign a freed number
+    /// before it is observed.
+    isolated: bool,
     /// The borrowed reader, held open across the public call.
     reader: Slot<OwnedFd>,
     /// Raw number of the borrowed reader, for liveness observation.
@@ -120,8 +139,12 @@ struct StreamContext {
 
 #[fixture]
 fn context() -> StreamContext {
-    // A fresh context per scenario; steps populate its slots as they run.
-    StreamContext::default()
+    // A fresh context per scenario; steps populate its slots as they run. The
+    // isolation flag is the one value known before the scenario starts.
+    StreamContext {
+        isolated: resolve_isolation(),
+        ..StreamContext::default()
+    }
 }
 
 mod steps;

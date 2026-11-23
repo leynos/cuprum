@@ -226,7 +226,7 @@ fn declares_unsupported_header(line: &str) -> bool {
 ///
 /// The source is rustfmt's output, so an attribute runs from the line that
 /// opens `#[scenario(` to the first line that closes it with `)]`. Each
-/// attribute must name its scenario, must name the expected feature path, and
+/// attribute must bind by `name`, must name the expected feature path, and
 /// must be followed by the `fn` item it decorates.
 pub(super) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<Bound>, String> {
     let lines: Vec<&str> = source.lines().collect();
@@ -241,22 +241,22 @@ pub(super) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<B
 
         let start_line = index.saturating_add(1);
         let mut attribute = String::new();
-        let mut closed = false;
         while let Some(current) = lines.get(index) {
             attribute.push_str(current.trim());
             index = index.saturating_add(1);
             if attribute.ends_with(")]") {
-                closed = true;
                 break;
             }
         }
-        if !closed {
+        if !attribute.ends_with(")]") {
             return Err(format!(
                 "line {start_line}: the scenario attribute is never closed"
             ));
         }
 
-        let path = quoted_value(&attribute, "path")
+        let args =
+            attribute_args(&attribute).map_err(|reason| format!("line {start_line}: {reason}"))?;
+        let path = argument_text(&args, "path")
             .map_err(|reason| format!("line {start_line}: {reason}"))?;
         if path != expected_path {
             return Err(format!(
@@ -264,14 +264,15 @@ pub(super) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<B
                  {path:?}"
             ));
         }
-        if names_index(&attribute) {
+        if args.iter().any(|arg| arg.is_key("index")) {
             return Err(format!(
                 "line {start_line}: bind every scenario by name; an index binding silently \
                  selects a declaration by position"
             ));
         }
-        let name = quoted_value(&attribute, "name")
-            .map_err(|reason| format!("line {start_line}: {reason}"))?;
+        let name = argument_text(&args, "name")
+            .map_err(|reason| format!("line {start_line}: {reason}"))?
+            .to_owned();
         let function = next_function_name(&lines, index)
             .map_err(|reason| format!("line {start_line}: {reason}"))?;
 
@@ -285,35 +286,11 @@ pub(super) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<B
     Ok(bound)
 }
 
-/// Extract the quoted value of `key = "..."` from an attribute body.
-fn quoted_value(attribute: &str, key: &str) -> Result<String, String> {
-    let needle = format!("{key} = \"");
-    let start = attribute
-        .find(&needle)
-        .ok_or_else(|| format!("the scenario attribute must name `{key}`"))?;
-    let rest = attribute
-        .get(start.saturating_add(needle.len())..)
-        .ok_or_else(|| format!("the `{key}` value is malformed"))?;
-    let end = rest
-        .find('"')
-        .ok_or_else(|| format!("the `{key}` value is unterminated"))?;
-    rest.get(..end)
-        .map(str::to_owned)
-        .ok_or_else(|| format!("the `{key}` value is malformed"))
-}
-
-/// Whether the attribute binds by `index` rather than by name.
-fn names_index(attribute: &str) -> bool {
-    let mut rest = attribute;
-    while let Some(position) = rest.find("index") {
-        rest = rest
-            .get(position.saturating_add("index".len())..)
-            .unwrap_or("");
-        if rest.trim_start().starts_with('=') {
-            return true;
-        }
-    }
-    false
+/// Read a required string argument from a parsed attribute.
+fn argument_text<'a>(args: &'a [AttributeArg], key: &str) -> Result<&'a str, String> {
+    args.iter()
+        .find_map(|arg| arg.text(key))
+        .ok_or_else(|| format!("the scenario attribute must name `{key}` as a string literal"))
 }
 
 /// Whether a source line cannot be the `fn` item an attribute decorates.
@@ -343,8 +320,10 @@ fn next_function_name(lines: &[&str], mut index: usize) -> Result<String, String
     Err("no `fn` item follows the scenario attribute".to_owned())
 }
 
+mod attribute;
 mod parity;
 
+use attribute::{AttributeArg, attribute_args};
 pub(crate) use parity::{ParityTable, check_parity};
 
 #[cfg(test)]
