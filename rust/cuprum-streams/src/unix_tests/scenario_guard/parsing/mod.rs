@@ -42,61 +42,118 @@ const UNSUPPORTED_HEADERS: [&str; 6] = [
 
 /// Parse the feature file's scenario declarations.
 pub(super) fn declared_scenarios(feature_text: &str) -> Result<Vec<Declared>, String> {
-    let mut declared = Vec::new();
-    let mut saw_feature = false;
+    let mut state = DeclarationState::default();
 
     for (index, raw_line) in feature_text.lines().enumerate() {
         let line_number = index.saturating_add(1);
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-
-        if let Some(rest) = line.strip_prefix("Feature:") {
-            if saw_feature {
-                return Err(format!(
-                    "line {line_number}: a feature file declares exactly one Feature header"
-                ));
-            }
-            if rest.trim().is_empty() {
-                return Err(format!(
-                    "line {line_number}: the Feature header needs a title"
-                ));
-            }
-            saw_feature = true;
-            continue;
-        }
-
-        if let Some(rest) = line.strip_prefix("Scenario:") {
-            if !saw_feature {
-                return Err(format!(
-                    "line {line_number}: a Scenario must follow the Feature header"
-                ));
-            }
-            declared.push(declared_scenario(rest, line_number)?);
-            continue;
-        }
-
-        if step_keyword(line).is_some() {
-            if declared.is_empty() {
-                return Err(format!(
-                    "line {line_number}: a step must belong to a Scenario"
-                ));
-            }
-            continue;
-        }
-
-        return Err(reject_line(line, line_number));
+        state.accept(classify_feature_line(raw_line.trim()), line_number)?;
     }
 
-    if !saw_feature {
-        return Err("the feature file declares no Feature header".to_owned());
-    }
-    if declared.is_empty() {
-        return Err("the feature file declares no scenarios".to_owned());
-    }
-    Ok(declared)
+    state.finish()
 }
+
+/// What one feature line contributes to the declaration list.
+#[derive(Clone, Copy)]
+enum FeatureLine<'a> {
+    /// A blank line or a comment.
+    Ignorable,
+    /// A `Feature:` header, carrying the text after the keyword.
+    Feature(&'a str),
+    /// A `Scenario:` declaration, carrying the text after the keyword.
+    Scenario(&'a str),
+    /// A step line.
+    Step,
+    /// A line this grammar refuses, carrying the trimmed text.
+    Rejected(&'a str),
+}
+
+/// Decide a line's role from its leading keyword alone.
+fn classify_feature_line(line: &str) -> FeatureLine<'_> {
+    if is_skippable_feature_line(line) {
+        return FeatureLine::Ignorable;
+    }
+    if let Some(rest) = line.strip_prefix("Feature:") {
+        return FeatureLine::Feature(rest);
+    }
+    if let Some(rest) = line.strip_prefix("Scenario:") {
+        return FeatureLine::Scenario(rest);
+    }
+    if step_keyword(line).is_some() {
+        return FeatureLine::Step;
+    }
+    FeatureLine::Rejected(line)
+}
+
+/// Declarations accepted so far, plus whether the Feature header was seen.
+#[derive(Default)]
+struct DeclarationState {
+    declared: Vec<Declared>,
+    saw_feature: bool,
+}
+
+impl DeclarationState {
+    /// Apply one classified line, or explain why it is refused.
+    fn accept(&mut self, line: FeatureLine<'_>, line_number: usize) -> Result<(), String> {
+        match line {
+            FeatureLine::Ignorable => Ok(()),
+            FeatureLine::Feature(rest) => self.accept_feature(rest, line_number),
+            FeatureLine::Scenario(rest) => self.accept_scenario(rest, line_number),
+            FeatureLine::Step => self.accept_step(line_number),
+            FeatureLine::Rejected(text) => Err(reject_line(text, line_number)),
+        }
+    }
+
+    /// Validate a `Feature:` header, refusing a second one.
+    fn accept_feature(&mut self, rest: &str, line_number: usize) -> Result<(), String> {
+        if self.saw_feature {
+            return Err(format!(
+                "line {line_number}: a feature file declares exactly one Feature header"
+            ));
+        }
+        if rest.trim().is_empty() {
+            return Err(format!(
+                "line {line_number}: the Feature header needs a title"
+            ));
+        }
+        self.saw_feature = true;
+        Ok(())
+    }
+
+    /// Record a declaration, refusing one that precedes the Feature header.
+    fn accept_scenario(&mut self, rest: &str, line_number: usize) -> Result<(), String> {
+        if !self.saw_feature {
+            return Err(format!(
+                "line {line_number}: a Scenario must follow the Feature header"
+            ));
+        }
+        self.declared.push(declared_scenario(rest, line_number)?);
+        Ok(())
+    }
+
+    /// Accept a step line only inside a scenario.
+    fn accept_step(&self, line_number: usize) -> Result<(), String> {
+        if self.declared.is_empty() {
+            return Err(format!(
+                "line {line_number}: a step must belong to a Scenario"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Require at least one Feature header and one declared scenario.
+    fn finish(self) -> Result<Vec<Declared>, String> {
+        if !self.saw_feature {
+            return Err("the feature file declares no Feature header".to_owned());
+        }
+        if self.declared.is_empty() {
+            return Err("the feature file declares no scenarios".to_owned());
+        }
+        Ok(self.declared)
+    }
+}
+
+/// Whether a feature line carries no grammar at all.
+fn is_skippable_feature_line(line: &str) -> bool { line.is_empty() || line.starts_with('#') }
 
 /// Build one declaration from the text after `Scenario:`.
 fn declared_scenario(rest: &str, line_number: usize) -> Result<Declared, String> {
@@ -259,11 +316,16 @@ fn names_index(attribute: &str) -> bool {
     false
 }
 
+/// Whether a source line cannot be the `fn` item an attribute decorates.
+fn is_skippable_source_line(line: &str) -> bool {
+    line.is_empty() || line.starts_with('#') || line.starts_with("//")
+}
+
 /// Return the identifier of the first `fn` item after `index`.
 fn next_function_name(lines: &[&str], mut index: usize) -> Result<String, String> {
     while let Some(line) = lines.get(index).map(|line| line.trim()) {
         index = index.saturating_add(1);
-        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+        if is_skippable_source_line(line) {
             continue;
         }
         let rest = line.strip_prefix("fn ").ok_or_else(|| {
