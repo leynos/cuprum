@@ -203,9 +203,8 @@ zero cost.
 ## Addendum (2026-11-23): a naturally cold observation
 
 The evidence limits above say the samples are warm-cache runs. The pull-request
-coverage job on this branch's first push supplies the missing cold observation,
-and it changes the comparison by an order of magnitude without changing the
-conclusion.
+coverage job at head `3808d1413` supplies the missing cold observation, and it
+changes the comparison by an order of magnitude without changing the conclusion.
 
 That job was a genuine cold compile rather than a warm one: sccache served 1 of
 725 compile requests, a 0.23 % hit rate, against 83.41 % in the warm samples.
