@@ -22,10 +22,13 @@ import pytest
 from tests.helpers.ci_runners import (
     GENERATE_COVERAGE,
     ROOT,
+    UBICLOUD_LABEL,
+    UBICLOUD_VCPUS,
     expand,
     job,
     step_inputs,
     steps,
+    workflow_env,
 )
 
 if typ.TYPE_CHECKING:
@@ -143,6 +146,25 @@ def test_coverage_keeps_the_warnings_posture_and_core_budget(
             f"{workflow_name}:{job_name} must bound {name} by {VCPU_EXPRESSION}, "
             f"got {environment.get(name)!r}"
         )
+
+
+@pytest.mark.parametrize(("workflow_name", "job_name"), COVERAGE_JOBS)
+def test_the_coverage_thread_budget_is_the_billed_vcpu_count(
+    workflow_name: str, job_name: str
+) -> None:
+    """Tie the coverage thread budget to the runner shape it is billed for.
+
+    Both coverage jobs derive `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`
+    from `LINUX_RUNNER_VCPUS`, so that binding is only meaningful while the
+    constant states the runner's real core count. `ci.yml`'s value is pinned by
+    `test_ci_worker_bounds.py`, which does not read `coverage-main.yml`; a
+    mismatch there would silently halve or double the trunk lane's parallelism.
+    """
+    declared = workflow_env(workflow_name).get("LINUX_RUNNER_VCPUS")
+    assert declared == str(UBICLOUD_VCPUS), (
+        f"{workflow_name}:{job_name} must derive its thread budget from the "
+        f"{UBICLOUD_VCPUS} vCPU of {UBICLOUD_LABEL}, got {declared!r}"
+    )
 
 
 def test_no_other_job_executes_the_rust_suite() -> None:

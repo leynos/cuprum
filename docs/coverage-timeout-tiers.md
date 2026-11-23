@@ -61,6 +61,10 @@ queued for the host-wide compiler admission pool. That override was raised from
 belongs to the host rather than the test, so no allowance could bound it. Those
 contracts are now ordinary and `compile_fail` doctests compiled against the
 workspace's existing artefacts, and the override is gone.
+[ADR-030](adrs/adr-0030-retain-default-nextest-scheduling.md) records the
+scheduling half of that outcome: with the long-running binaries removed, the
+priority and test-group candidates in issue #606 have no target, so nextest's
+default ordering, grouping, and concurrency are retained and pinned.
 
 `largest_per_test_allowance_seconds()` reads the maximum across the default
 profile and every override, not the profile alone. An override exists precisely
