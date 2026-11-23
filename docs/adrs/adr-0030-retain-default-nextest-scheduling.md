@@ -160,10 +160,11 @@ The retired binary's nested compile time, scratch-tree state, lock-wait
 attribution, and child-process overlap are not applicable rather than zero:
 nothing takes a second Cargo lock. Central processing unit (CPU) utilization is
 unknown, because the resource sampler records peak memory and disk, not
-processor time. The sampled runs are warm-cache runs: the Cargo registry and
-tool caches hit, and sccache reported an 83.41 % hit rate. A naturally
-occurring cold run is not represented. These limits are recorded so that a
-future reader does not read a missing measurement as a zero cost.
+processor time. The three samples in Table 2 are warm-cache runs: the Cargo
+registry and tool caches hit, and sccache reported an 83.41 % hit rate. A
+naturally occurring cold run is recorded in the addendum below. These limits
+are recorded so that a future reader does not read a missing measurement as a
+zero cost.
 
 ## Consequences
 
@@ -198,6 +199,28 @@ future reader does not read a missing measurement as a zero cost.
   repeat its Stage 1 and Stage 2 protocol against the new binary, using only
   the existing required CI executions. Do not reintroduce a priority or a test
   group as an unmeasured default.
+
+## Addendum (2026-11-23): a naturally cold observation
+
+The evidence limits above say the samples are warm-cache runs. The pull-request
+coverage job on this branch's first push supplies the missing cold observation,
+and it changes the comparison by an order of magnitude without changing the
+conclusion.
+
+That job was a genuine cold compile rather than a warm one: sccache served 1 of
+725 compile requests, a 0.23 % hit rate, against 83.41 % in the warm samples.
+Under that condition the outer test build took 2 m 31 s for the nextest phase
+and 2 m 29 s for the doctest phase, while the nextest run itself still took
+only 3.096 s across 196 tests and 30 skips. The coverage step ran from
+16:05:30Z to 16:28:50Z, 1 400 s, and the job from 16:02:38Z to 16:29:00Z, 1 582
+s, both inside the unchanged 3 300 s watchdog and 75-minute ceiling.
+
+The conclusion is unchanged and now better supported: a cold compile makes the
+compilation share of the critical path larger, not smaller, so no reordering of
+tests could have shortened it. The retired `trybuild` shape differed precisely
+because it paid a second cold compile inside one test's allowance; no
+scheduling control can recover that cost, which is why ADR-027 removed the
+shape rather than rescheduling it.
 
 ## Assumptions
 
