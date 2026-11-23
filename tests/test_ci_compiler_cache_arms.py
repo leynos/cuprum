@@ -257,3 +257,22 @@ def test_a_whitespace_only_string_compares_as_zero() -> None:
     assert evaluate("a == b", {"a": " ", "b": False}), (
         "a whitespace-only string must equal false"
     )
+
+
+def test_only_a_json_number_coerces_for_comparison() -> None:
+    """Python accepts `1_0`; GitHub does not."""
+    assert not evaluate("a == b", {"a": 10, "b": "1_0"}), (
+        "an invalid numeric string must compare unequal"
+    )
+    assert evaluate("a == b", {"a": 10, "b": "10"}), "a legal JSON number must coerce"
+
+
+def test_arrays_and_objects_compare_by_identity() -> None:
+    """Two distinct empty arrays are not equal under Actions semantics."""
+    assert not evaluate("a == b", {"a": [], "b": []}), (
+        "distinct arrays must not compare equal"
+    )
+    shared: list[object] = []
+    assert evaluate("a == b", {"a": shared, "b": shared}), (
+        "the same array must compare equal"
+    )

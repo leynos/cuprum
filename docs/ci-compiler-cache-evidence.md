@@ -49,6 +49,7 @@ and rejects this object as a complete record.
   "recorded_at": "2026-11-22T12:34:56Z",
   "setup_status": "started",
   "backend": "local",
+  "selected_backend": "local",
   "wrapper_present": true,
   "cache_service_v2": false,
   "cache_host_class": "absent",
@@ -150,7 +151,9 @@ Markdown report.
 Whole-job seconds come from the jobs API's `started_at` and `completed_at`,
 which are GitHub's timestamps and not the runner's clock. Where the API
 document is absent, or a record's job cannot be joined to it, the seconds are
-`null` and the family has fewer usable pairs; nothing is estimated.
+`null` and the family has fewer usable pairs; nothing is estimated. A
+workflow's paid-seconds total is `null` when any distinct recorded job in it
+cannot be priced, so a partial sum never reads as the complete cost.
 
 The console observation supplies what no runner can see:
 

@@ -121,3 +121,11 @@ def test_a_backend_label_outside_the_vocabulary_is_never_ok() -> None:
     assert schema.backend_of("something else") == "unknown", (
         "an unclassifiable store must be unknown, never local"
     )
+
+
+def test_the_ghac_scheme_classifies_as_the_actions_backend() -> None:
+    """The GHA store arrives through OpenDAL's `ghac` scheme."""
+    location = "ghac, name: actions-cache, prefix: repo/"
+    assert schema.backend_of(location) == "gha", (
+        f"a ghac location must classify as gha, got {schema.backend_of(location)!r}"
+    )

@@ -38,6 +38,10 @@ inputs:
     description: The setup-sccache output, such as `started` or `fallback`.
     required: false
     default: ''
+  selected-backend:
+    description: The backend output of setup-sccache, `local` or `gha`.
+    required: false
+    default: ''
   family:
     description: The rendered compiler-cache family this bracket observes.
     required: false
@@ -131,6 +135,7 @@ runs:
         EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
         EVIDENCE_BRACKET: ${{ inputs.bracket }}
         EVIDENCE_SETUP_STATUS: ${{ inputs.setup-status }}
+        EVIDENCE_SELECTED_BACKEND: ${{ inputs.selected-backend }}
         EVIDENCE_FAMILY: ${{ inputs.family }}
         EVIDENCE_MATRIX_LEG: ${{ inputs.matrix-leg }}
         EVIDENCE_COMPILER_SHAPE: ${{ inputs.compiler-shape }}

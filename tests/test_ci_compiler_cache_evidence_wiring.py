@@ -127,8 +127,6 @@ def test_no_evidence_step_can_fail_the_build() -> None:
     document = action_document(EVIDENCE_ACTION)
     runs = typ.cast("dict[str, object]", document["runs"])
     for step in typ.cast("list[dict[str, object]]", runs["steps"]):
-        if step.get("uses") is not None:
-            continue
         name = step.get("name")
         assert step.get("continue-on-error") is True, (
             f"the {name!r} step must be continue-on-error"

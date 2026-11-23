@@ -348,3 +348,17 @@ def test_a_run_without_timestamps_reports_an_unknown_critical_path() -> None:
     assert cost["critical_path_seconds_by_workflow"] is None, (
         f"a run without timestamps must stay unknown, got {cost}"
     )
+
+
+def test_a_recorded_job_without_a_duration_makes_the_total_unknown() -> None:
+    """A partial paid total must not read as the complete cost."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4),
+        Observation(run_id="200", backend="local", hits=4, bracket="python-tests"),
+    ]
+    job_documents = jobs([100], 100)
+    built = summary(records, job_documents)
+    cost = typ.cast("dict[str, object]", built["cost"])
+    assert cost["paid_job_seconds_by_workflow"] == {"ci.yml": None}, (
+        f"an unpriceable job must make that workflow's total unknown, got {cost}"
+    )

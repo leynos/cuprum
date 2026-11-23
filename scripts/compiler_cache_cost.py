@@ -44,23 +44,27 @@ def cost(
         Paid seconds and critical path per workflow, the billing label, and
         the console's population, transfer, and incremental cost fields.
     """
-    per_job: dict[tuple[str, str, str, str], float] = {}
+    per_job: dict[tuple[str, str, str, str], float | None] = {}
     for record in records:
         job = jobs_reader.matching_job(record, jobs, names)
-        if job is None:
-            continue
         key = (
             str(record["workflow"]),
             str(record["run_id"]),
             str(record["run_attempt"]),
             f"{record['job']}/{record['matrix_leg']}",
         )
-        seconds = jobs_reader.job_seconds(job)
-        if seconds is not None:
-            per_job[key] = seconds
-    by_workflow: dict[str, float] = {}
+        per_job[key] = jobs_reader.job_seconds(job) if job is not None else None
+    totals: dict[str, float] = {}
+    incomplete: set[str] = set()
     for (workflow, _run, _attempt, _key), seconds in per_job.items():
-        by_workflow[workflow] = round(by_workflow.get(workflow, 0.0) + seconds, 3)
+        if seconds is None:
+            incomplete.add(workflow)
+            continue
+        totals[workflow] = round(totals.get(workflow, 0.0) + seconds, 3)
+    by_workflow: dict[str, float | None] = {
+        workflow: None if workflow in incomplete else total
+        for workflow, total in totals.items()
+    } | {workflow: None for workflow in incomplete}
     critical = critical_paths(records, jobs, names)
     verified = console is not None and console.get("billing_rounding") == "verified"
     return {

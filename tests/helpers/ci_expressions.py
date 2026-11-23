@@ -55,6 +55,8 @@ _TOKEN = re.compile(
 #: The `${{ ... }}` wrapper a YAML value carries around an expression.
 _WRAPPER = re.compile(r"\A\s*\$\{\{(?P<body>.*)\}\}\s*\Z", re.DOTALL)
 _LITERALS = {"true": True, "false": False, "null": None}
+#: A legal JSON number, the only string GitHub coerces for comparison.
+_JSON_NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 _FALSY = (False, None, "", 0)
 
 type Token = tuple[str, str]
@@ -176,6 +178,9 @@ def actions_equal(left: object, right: object) -> bool:
     if isinstance(left, str) and isinstance(right, str):
         # GitHub compares two strings as strings, without numeric coercion.
         return left.lower() == right.lower()
+    if isinstance(left, (list, dict)) or isinstance(right, (list, dict)):
+        # Arrays and objects compare by identity, never by value.
+        return left is right
     first, second = _coerce(left), _coerce(right)
     if isinstance(first, (int, float)) and isinstance(second, (int, float)):
         return float(first) == float(second)  # ruff: ignore[float-equality-comparison] - exact by contract.
@@ -183,10 +188,10 @@ def actions_equal(left: object, right: object) -> bool:
         numeric, other = (
             (first, second) if isinstance(first, (int, float)) else (second, first)
         )
-        try:
-            return float(typ.cast("float", numeric)) == float(str(other))  # ruff: ignore[float-equality-comparison] - exact by contract.
-        except ValueError:
+        text = str(other)
+        if _JSON_NUMBER.fullmatch(text) is None:
             return False
+        return float(typ.cast("float", numeric)) == float(text)  # ruff: ignore[float-equality-comparison] - exact by contract.
     return first == second
 
 

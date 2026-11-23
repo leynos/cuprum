@@ -488,6 +488,7 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          selected-backend: ${{ steps.sccache.outputs.backend }}
           matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
           restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
@@ -950,6 +951,7 @@ jobs:
           expects-rustc: 'false'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          selected-backend: ${{ steps.sccache.outputs.backend }}
           matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
           restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
@@ -968,6 +970,7 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          selected-backend: ${{ steps.sccache.outputs.backend }}
           matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
           restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 
@@ -1296,6 +1299,7 @@ jobs:
           expects-rustc: 'true'
           pr-number: ${{ github.event.pull_request.number }}
           setup-status: ${{ steps.sccache.outputs.status }}
+          selected-backend: ${{ steps.sccache.outputs.backend }}
           matched-key: ${{ steps.sccache-dir.outputs.cache-matched-key }}
           restore-hit: ${{ steps.sccache-dir.outputs.cache-matched-key != '' }}
 

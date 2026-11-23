@@ -220,6 +220,10 @@ def _state(record: dict[str, object]) -> str:
     str
         One of ``ok``, ``degraded``, or ``noncompliant``.
     """
+    if record["backend"] not in {"local", "gha"}:
+        return "degraded"
+    if record["selected_backend"] != record["backend"]:
+        return "noncompliant"
     wrong_store = record["cache_service_v2"] or record["cache_host_class"] in {
         "github-results",
         "github-legacy",
@@ -254,6 +258,7 @@ def _identity_fields(
         "recorded_at": schema.now(),
         "setup_status": schema.bounded(environ.get("EVIDENCE_SETUP_STATUS")),
         "backend": schema.bounded(post.get("cache_backend")),
+        "selected_backend": schema.bounded(environ.get("EVIDENCE_SELECTED_BACKEND")),
         "wrapper_present": bool(environ.get("RUSTC_WRAPPER")),
         "cache_service_v2": bool(post.get("cache_service_v2")),
         "cache_host_class": schema.bounded(post.get("cache_host_class")),

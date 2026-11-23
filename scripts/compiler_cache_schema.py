@@ -113,6 +113,10 @@ def backend_of(location: object) -> str:
         return "none"
     if "github actions cache" in text:
         return "gha"
+    # sccache 0.12 reaches the Actions store through OpenDAL's `ghac` scheme,
+    # whose display form begins with that scheme name.
+    if text.startswith("ghac"):
+        return "gha"
     if text.startswith("local disk"):
         return "local"
     return "unknown"

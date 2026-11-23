@@ -260,7 +260,7 @@ def test_a_gha_backend_on_the_v2_service_is_noncompliant(
     }
     document = stats_document(cache_location="GitHub Actions Cache")
     _two_snapshots(environ, monkeypatch, (document, document))
-    record = writer.build_record(environ)
+    record = writer.build_record({**environ, "EVIDENCE_SELECTED_BACKEND": "gha"})
     assert record["backend"] == "gha", "the reported backend must be recorded"
     assert record["state"] == "noncompliant", (
         f"a v2 service with the gha backend must be noncompliant, got {record['state']}"
@@ -392,4 +392,20 @@ def test_the_restore_span_ends_at_its_end_marker(
     state = writer.capture(evidence_environment)
     assert state["restore_seconds"] == pytest.approx(6.0, abs=1.0), (
         f"the restore span must be the interval between the markers, got {state}"
+    )
+
+
+def test_a_selected_backend_that_differs_from_the_server_is_noncompliant(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record must not claim a store the action did not bind."""
+    document = stats_document(cache_location="GitHub Actions Cache")
+    _two_snapshots(evidence_environment, monkeypatch, (document, document))
+    record = writer.build_record({
+        **evidence_environment,
+        "EVIDENCE_SELECTED_BACKEND": "local",
+    })
+    assert record["state"] == "noncompliant", (
+        f"a local selection against a gha server must be noncompliant, got "
+        f"{record['state']}"
     )
