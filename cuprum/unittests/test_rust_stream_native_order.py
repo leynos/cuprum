@@ -183,6 +183,7 @@ def test_pump_adopts_and_closes_the_writer_on_success(
         )
 
 
+@_unix_only
 def test_owner_closes_only_while_the_contract_leaves_it_armed(
     native_streams: ModuleType,
 ) -> None:
@@ -191,8 +192,13 @@ def test_owner_closes_only_while_the_contract_leaves_it_armed(
     A pump rejected before adoption leaves the writer with the test, so the
     armed owner closes it once. A pump that adopted the writer leaves the owner
     disarmed; if that number is later reused, the owner must not close it.
-    Both directions are decided by which call was made, so they hold on every
-    platform without inspecting descriptor metadata.
+    Both directions are decided by which call was made, not by inspecting
+    descriptor metadata.
+
+    The direct native pump takes an owned Win32 handle on Windows and adopts
+    it before validating the buffer, so its CRT descriptors are not valid
+    inputs. The Windows adoption contract is pinned in
+    ``test_rust_errno_windows.py`` instead.
     """
     with contextlib.ExitStack() as stack:
         reader_fd, writer_fd = os.pipe()

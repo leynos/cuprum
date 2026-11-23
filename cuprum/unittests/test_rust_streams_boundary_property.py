@@ -26,8 +26,10 @@ default buffer so the reader is the value that fails.
 
 Windows consume accepts CRT descriptors in the same signed 32-bit range as
 Unix descriptors and duplicates the validated descriptor, changing only the
-duplicate's mode. Pump tests retain the Unix-only marker because its Windows
-handle capability is still deliberately rejected at the Python boundary.
+duplicate's mode. The reader-range and buffer properties run on both platforms,
+because the shared Python policy rejects those values before either platform
+step; only properties whose subject is a platform step that differs by design
+carry a platform marker.
 """
 
 from __future__ import annotations
@@ -52,9 +54,8 @@ _I64_MAX = (1 << 63) - 1
 _I64_MIN = -(1 << 63)
 
 # The shared Python policy rejects a negative or above-i32 reader on both
-# platforms before any platform step, so the reader-range property holds
-# everywhere. This marker exists only for properties whose subject is a
-# platform step that differs by design.
+# platforms before any platform step, so the reader-range property runs
+# everywhere and needs no platform marker.
 
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
