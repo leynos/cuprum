@@ -4596,17 +4596,19 @@ fails with a broken pipe and the stage exits. That exit is an ordinary pipeline
 failure, so fail-fast may terminate stages still running, including a
 downstream stage that had stopped reading but not yet exited; the recorded
 status and captured output of every stage remain in `PipelineResult.stages`.
-Nothing is released when the transport is absent or already closing, and a
-`RuntimeError` or `OSError` from `close()` is logged at `DEBUG` and suppressed
-so teardown still completes. Only the timeout path releases: EOF,
-`DOWNSTREAM_CLOSED`, the writerless drain and cancellation are unchanged.
+Nothing is released when the transport is absent, and a `RuntimeError` or
+`OSError` from `close()` is logged at `DEBUG` and suppressed so teardown still
+completes; an already-closing transport may finish the closure itself. Only the
+timeout path releases: EOF, `DOWNSTREAM_CLOSED`, the writerless drain and
+cancellation are unchanged.
 
 The release is best-effort, so it makes the hang unlikely rather than
 impossible. A finite burst can outlast the 0.25 s window before the producer
-ever writes into a full pipe, a skipped or failed close leaves the reader open,
-and a producer that handles the broken pipe without exiting keeps running. A
-run that must settle whatever the producer does needs its own pipeline timeout;
-the release shortens the common case, it does not replace that deadline.
+ever writes into a full pipe, a skipped or failed close may leave the reader
+open, and a producer that handles the broken pipe without exiting keeps
+running. A run that must settle whatever the producer does needs its own
+pipeline timeout; the release shortens the common case, it does not replace
+that deadline.
 
 Every hop that falls back to the Python pump inherits this rule, since all of
 them reach `_pump_stream` (see [section 13.4](#134-fallback-strategy)). The

@@ -12,12 +12,12 @@ A bounded drain that times out is the one case where draining the reader is not
 enough. The reader is still attached to a pipe nobody will read again, so a
 producer that keeps writing fills the pipe buffer and blocks indefinitely while
 pipeline completion waits for every stage. ``_release_stream_reader_transport``
-closes that reader transport, which hands the producer a broken pipe so its own
-write normally fails and it exits. The release is best-effort: a transport that
-is absent, already closing, or refuses to close leaves the producer unreleased,
-and a producer that handles the broken pipe without exiting keeps running. Use a
-configured pipeline timeout when completion must be bounded whatever the
-producer does.
+attempts to close that reader transport, which normally hands the producer a
+broken pipe so its own write fails and it exits. The release is best-effort: a
+transport that is absent or refuses to close may leave the producer unreleased,
+an already-closing transport may complete the closure itself, and a producer
+that handles the broken pipe without exiting keeps running. Use a configured
+pipeline timeout when completion must be bounded whatever the producer does.
 
 Consumed by ``cuprum._streams`` (which re-exports this surface) and the pipeline
 execution layer. ``_pump_stream`` closes any supplied writer once relay

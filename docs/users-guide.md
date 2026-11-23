@@ -1181,16 +1181,17 @@ result.
 An interior stage's stdout is pumped into the next stage's stdin. If a
 downstream stage exits before the upstream producer has finished, Cuprum keeps
 draining the upstream output for a bounded window, so a producer that writes a
-finite burst usually finishes normally. If that window expires, Cuprum closes
-the upstream read transport rather than leaving it open and unread. A producer
-that is still writing then receives a broken pipe and normally exits non-zero,
-so the pipeline settles promptly instead of waiting for a stage blocked on a
-full pipe that nothing drains. That failure counts like any other: it can be
-the pipeline's first failure, so the fail-fast rule above also terminates any
-stage still running, including a downstream stage that had stopped reading but
-had not yet exited. In that case `PipelineResult.ok` is `False` because the
-producer failed, while every stage's recorded exit status and captured output
-remain available in `PipelineResult.stages`.
+finite burst usually finishes normally. If that window expires, Cuprum attempts
+to close the upstream read transport rather than leaving it open and unread.
+When that close succeeds, a producer that is still writing receives a broken
+pipe and normally exits non-zero, so the pipeline settles promptly instead of
+waiting for a stage blocked on a full pipe that nothing drains. That failure
+counts like any other: it can be the pipeline's first failure, so the fail-fast
+rule above also terminates any stage still running, including a downstream
+stage that had stopped reading but had not yet exited. In that case
+`PipelineResult.ok` is `False` because the producer failed, while every stage's
+recorded exit status and captured output remain available in
+`PipelineResult.stages`.
 
 The release is best-effort, so it narrows the problem rather than removing it.
 A burst can outlast the drain window, the reader may have no transport to close
