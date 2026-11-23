@@ -185,15 +185,13 @@ def test_the_markdown_output_directory_is_created(tmp_path: Path) -> None:
     records.mkdir()
     output = tmp_path / "summary.json"
     markdown = tmp_path / "reports" / "summary.md"
-    assert (
-        report.main([
-            "--records",
-            str(records),
-            "--out",
-            str(output),
-            "--markdown",
-            str(markdown),
-        ])
-        == 0
-    )
+    status = report.main([
+        "--records",
+        str(records),
+        "--out",
+        str(output),
+        "--markdown",
+        str(markdown),
+    ])
+    assert status == 0, f"the report command must succeed, got {status}"
     assert markdown.is_file(), "the report must be written where it was asked"
