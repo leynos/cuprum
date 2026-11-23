@@ -39,7 +39,7 @@ def test_the_top_level_cache_location_is_classified_not_returned(
     monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(document))
     stats, version, backend = probe.read_stats({})
     assert stats["compile_requests"] == 1, f"the statistics must be parsed, got {stats}"
-    assert version == "0.12.0"
+    assert version == "0.12.0", f"the version must be preserved, got {version}"
     assert backend == "gha", f"the top-level store must classify as gha, got {backend}"
     assert "cache_location" not in stats, "the raw location must not reach the caller"
 
@@ -66,7 +66,9 @@ def test_cache_counts_are_not_doubled() -> None:
 
 def test_a_newer_sccache_map_shape_is_none() -> None:
     """A document without per-language counts is unknown, never zero."""
-    assert probe.count({"unexpected": {}}) is None
+    assert probe.count({"unexpected": {}}) is None, (
+        "a document with no counts map must be unknown"
+    )
 
 
 def test_the_compiler_commit_field_is_mapped(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,16 +100,18 @@ def test_an_ambiguous_job_mapping_is_unknown() -> None:
 def test_a_record_with_no_declared_mapping_is_unknown() -> None:
     """An undeclared job key contributes no whole-job seconds."""
     record = {"run_id": "1", "run_attempt": "1", "job": "x", "matrix_leg": "none"}
-    assert jobs_reader.matching_job(record, [], {}) is None
+    assert jobs_reader.matching_job(record, [], {}) is None, (
+        "an undeclared mapping must resolve to no job"
+    )
 
 
 def test_the_marker_files_are_read_verbatim(tmp_path: Path) -> None:
     """The end markers carry no ``-start`` suffix."""
     environ: cabc.Mapping[str, str] = {"EVIDENCE_DIR": str(tmp_path)}
-    assert probe.write_mark(environ, "restore")
-    assert probe.write_mark(environ, "restore-end")
-    assert probe.write_mark(environ, "save")
-    assert probe.write_mark(environ, "save-end")
+    assert probe.write_mark(environ, "restore"), "the restore start must persist"
+    assert probe.write_mark(environ, "restore-end"), "the restore end must persist"
+    assert probe.write_mark(environ, "save"), "the save start must persist"
+    assert probe.write_mark(environ, "save-end"), "the save end must persist"
     for name in ("restore-start", "restore-end", "save-start", "save-end"):
         assert (tmp_path / "marks" / name).is_file(), f"{name} must be written verbatim"
 

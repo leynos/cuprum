@@ -67,7 +67,9 @@ def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
     assert observed["pairs"] == 0, (
         f"a failed candidate must contribute no saving pair, got {observed}"
     )
-    assert decisions(built)[0]["verdict"] == "insufficient-evidence"
+    assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
+        "a family with no passing pair cannot be adopted"
+    )
 
 
 def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
