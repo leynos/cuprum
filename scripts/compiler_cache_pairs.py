@@ -64,12 +64,13 @@ def pairs_for(
     for record in records:
         if not _usable(record) or not _warm(record):
             continue
-        if record["backend"] == "local":
-            arm = "control"
-        elif record["backend"] == "gha":
-            arm = "candidate"
-        else:
-            continue
+        match record["backend"]:
+            case "local":
+                arm = "control"
+            case "gha":
+                arm = "candidate"
+            case _:
+                continue
         grouped.setdefault(pair_key(record), {"control": [], "candidate": []})[
             arm
         ].append(dict(record))
