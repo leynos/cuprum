@@ -161,17 +161,17 @@ async def _relay_chunks(
 
     A bounded drain that reaches EOF is the ordinary early-close outcome. One
     that times out leaves the upstream reader attached but unread, so the reader
-    is released before returning: the producer then normally meets a broken pipe
-    instead of a pipe buffer that never drains. That release is best-effort, so a
-    configured pipeline timeout still bounds completion when the producer
-    survives the broken pipe.
+    release is attempted before returning: the producer then normally meets a
+    broken pipe instead of a pipe buffer that never drains. That release is
+    best-effort, so a configured pipeline timeout still bounds completion when
+    the producer survives the broken pipe or the close is skipped or fails.
 
     Returns
     -------
     StreamOperationOutcome
         ``EOF`` without a writer, ``DOWNSTREAM_CLOSED`` when the post-close
         drain finished, or ``POST_CLOSE_DRAIN_TIMEOUT`` when it timed out and
-        the reader was released.
+        the reader release was attempted.
     """
     if writer is None:
         await _drain_stream_reader(
@@ -261,11 +261,15 @@ def _release_stream_reader_transport(reader: asyncio.StreamReader) -> None:
     reader is still attached to an open pipe. Left open, a producer that keeps
     writing fills the pipe buffer and blocks with no timeout, and pipeline
     completion waits for that stage forever. Closing the transport is what the
-    loop would have done at EOF, and it makes the producer's next write fail
-    with a broken pipe so the stage exits and the pipeline settles. That exit
-    is an ordinary pipeline failure, so the fail-fast rule may then terminate
-    other still-running stages, including a downstream stage that had stopped
-    reading but had not yet finished.
+    loop would have done at EOF, and it normally makes the producer's next write
+    fail with a broken pipe so the stage exits and the pipeline settles. The
+    release is best-effort: a close that is skipped or fails, or a producer that
+    handles the broken pipe without exiting, leaves the stage running, so a run
+    that must settle whatever the producer does needs its own pipeline timeout.
+    When the stage does exit on the broken pipe, that exit is an ordinary
+    pipeline failure, so the fail-fast rule may then terminate other
+    still-running stages, including a downstream stage that had stopped reading
+    but had not yet finished.
 
     Nothing is released unless the transport is present and still open, so a
     reader without a transport — a test double, or an already-closed pipe —
