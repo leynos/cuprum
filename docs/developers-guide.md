@@ -6884,6 +6884,21 @@ or native error. For hangs, the producer helper terminates and reaps its child
 after 30 seconds, then closes both pipe ends; the outer Rust boundary child
 retains its own deadline.
 
+`rust/cuprum-streams/src/consume.rs` owns that whole path: both
+`consume_stream` entry points, their `consume_stream_files` targets,
+`consume_with_reader`, and the read helpers the loop uses (`read_length_as_u64`,
+`filled_prefix`, `read_nonempty`, `DecodeState`, and `absorb_read`).
+`rust/cuprum-streams/src/lib.rs` declares the module, re-exports
+`consume_stream` so the public path is unchanged, re-exports the crate-private
+seams under the `cfg` gates their callers need —
+`cfg(all(test, unix, not(miri)))` for the Unix-only test modules and
+`cfg(any(test, windows))` for the tests plus the Windows C runtime (CRT)
+adapter — and keeps the pump path plus the rest of the public API. The split
+exists to hold `lib.rs` inside the repository's 400-line module limit: the pump
+machine and its doctests carry enough weight that the consume path no longer
+fits beside them. Keep new read or decode helpers in `consume.rs` rather than
+re-growing the crate root.
+
 Those snapshots are written inline with
 `insta::assert_snapshot!(value, @"...")` rather than as separate `.snap` files,
 which keeps the expected text beside the case that produces it and leaves no

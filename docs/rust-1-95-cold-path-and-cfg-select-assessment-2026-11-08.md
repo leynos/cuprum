@@ -188,6 +188,11 @@ all.
 
 _Table 3: Candidate cold-path sites, recorded as hypotheses only._
 
+The rows name the modules the sites occupied on 8 November 2026. A10's helper
+has since moved: it is `consume::consume_with_reader` in
+`rust/cuprum-streams/src/consume.rs` (#732). The branch it handles, and the
+handling it records, are unchanged.
+
 Several rows cannot fire on the supported platforms. A1, A3, and A9 fail only
 on a count conversion, and the kernel returns a non-negative count that fits
 the destination type. A6 is three checks in one branch: the two `usize` to

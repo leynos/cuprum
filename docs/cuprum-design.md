@@ -4273,6 +4273,15 @@ parallel taxonomy that could drift from the engine's. Module-initialization and
 PyO3 argument-extraction failures stay outside the conversion: they are not
 stream-domain failures, and PyO3 already maps them to the right classes.
 
+Inside the engine crate, the consume path is its own module.
+`rust/cuprum-streams/src/consume.rs` owns both `consume_stream` entry points,
+their `consume_stream_files` targets, and the shared `consume_with_reader`
+loop; the crate root keeps the pump path, `BufferSize`, the error enum, and the
+module declarations that re-export `consume_stream`. The boundary keeps each
+file inside the 400-line module limit without widening the Windows
+synchronous-handle capability, because the shared loop takes a read closure and
+only the platform entry points in that module name a stream type.
+
 ### 13.4 Fallback Strategy
 
 Cuprum selects the stream backend at runtime using the following precedence:
