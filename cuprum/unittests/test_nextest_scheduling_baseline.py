@@ -107,6 +107,56 @@ def _profiles(config: cabc.Mapping[str, object]) -> cabc.Mapping[str, object]:
     return profiles
 
 
+def _override_controls(name: str, overrides: object) -> list[str]:
+    """Return the scheduling controls declared by one profile's overrides.
+
+    Parameters
+    ----------
+    name : str
+        The profile name, used only to build the reported location.
+    overrides : object
+        The profile's ``overrides`` value, which a synthetic document may
+        omit or write as a non-list.
+
+    Returns
+    -------
+    list[str]
+        One dotted location per control found in an override table.
+    """
+    if not isinstance(overrides, list):
+        return []
+    return [
+        f"profile.{name}.overrides[{index}].{key}"
+        for index, override in enumerate(overrides)
+        if isinstance(override, dict)
+        for key in OVERRIDE_SCHEDULING_KEYS
+        if key in override
+    ]
+
+
+def _profile_controls(name: str, profile: object) -> list[str]:
+    """Return the scheduling controls declared by one profile.
+
+    Parameters
+    ----------
+    name : str
+        The profile name, used only to build the reported location.
+    profile : object
+        A profile value from the parsed configuration.
+
+    Returns
+    -------
+    list[str]
+        Profile-level controls followed by any override-level controls.
+    """
+    if not isinstance(profile, dict):
+        return []
+    profile_level = [
+        f"profile.{name}.{key}" for key in PROFILE_SCHEDULING_KEYS if key in profile
+    ]
+    return profile_level + _override_controls(name, profile.get("overrides"))
+
+
 def _scheduling_controls(config: cabc.Mapping[str, object]) -> list[str]:
     """Return every setting in ``config`` that changes the schedule.
 
@@ -125,22 +175,7 @@ def _scheduling_controls(config: cabc.Mapping[str, object]) -> list[str]:
     """
     found: list[str] = ["test-groups"] if "test-groups" in config else []
     for name, profile in _profiles(config).items():
-        if not isinstance(profile, dict):
-            continue
-        found += [
-            f"profile.{name}.{key}" for key in PROFILE_SCHEDULING_KEYS if key in profile
-        ]
-        overrides = profile.get("overrides")
-        if not isinstance(overrides, list):
-            continue
-        for index, override in enumerate(overrides):
-            if not isinstance(override, dict):
-                continue
-            found += [
-                f"profile.{name}.overrides[{index}].{key}"
-                for key in OVERRIDE_SCHEDULING_KEYS
-                if key in override
-            ]
+        found += _profile_controls(name, profile)
     return found
 
 
