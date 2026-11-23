@@ -5,11 +5,12 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — M1–M4 are committed and the branch is rebased onto
-`f62a510a1` (the advanced `main` as of 23 November 2026). The experiment
-baseline remains `87de64c2c`, recorded on 22 November 2026. No candidate family
-is adopted by this change; the deliverable is the measured-qualification
-apparatus plus a reviewable adopt/reject record.
+Status: IN PROGRESS — M1–M4 are committed, the branch is rebased onto
+`f62a510a1`, and all six commit gates pass at `93d5ead0a`. The experiment
+baseline remains `87de64c2c`, recorded on 22 November 2026. Delivery (push and
+draft pull request) is the remaining step. No candidate family is adopted by
+this change; the deliverable is the measured-qualification apparatus plus a
+reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -152,7 +153,12 @@ its own evidence and decision.
       refresh trigger are recorded in `docs/ci-cache-ownership.md`.
       Comparable warm pairs cannot exist until the instrumentation has run on
       ordinary activity, which this change does not manufacture.
-- [ ] M5: full gates, CodeRabbit review, draft pull request.
+- [x] 23 November 2026: M5 gates — `make check-fmt`, `make lint`,
+      `make typecheck`, `make test`, `make markdownlint` and `make nixie` all
+      pass at `93d5ead0a` in a clean, Lody-free environment. Six CodeRabbit
+      review rounds were run; every finding was addressed in a follow-up
+      commit and re-gated.
+- [ ] M5 delivery: push the branch and open the draft pull request.
 
 ## Surprises & Discoveries
 
@@ -210,10 +216,25 @@ its own evidence and decision.
 
 ## Outcomes & retrospective
 
-To be completed. The expected outcome is a reviewed adopt/reject record that
-retains archived caching for every family whose evidence is insufficient, plus
-an instrumentation path that can qualify a family on the next ordinary
-`main`/pull-request cycle.
+Delivered: the measured qualification path and a reviewed adopt/reject record.
+No family is adopted, because the gate requires five comparable warm pairs from
+ordinary activity and the instrumentation that produces them is what this
+change lands. Every candidate family keeps archived caching with a named owner,
+review date, rollback and refresh trigger.
+
+Lessons recorded during implementation:
+
+- The gate is only as credible as its inputs. Six review rounds found real
+  holes (double-counted cache events, a misread cache location, unverified
+  billing treated as free, bracket pairs counted as independent, and mismatched
+  backends accepted as healthy). Each became a contract or a validator rule;
+  none was suppressed.
+- A clean environment is part of the gate. The ambient Lody `git` shim stalls
+  Whitaker's snapshot `git rev-parse`; the repository's own Git instructions
+  already require removing it, and the recorded gate run does so.
+- The experiment cannot be shortcut. Synthesizing pushes to collect pairs
+  would invert the issue's evidence rule, so the decision stays "insufficient
+  evidence" until ordinary activity supplies the observations.
 
 ## Conformance basis
 
@@ -259,8 +280,9 @@ Obligations and their evidence:
    whole-job improvement, the pair count, the cost rule, and the contamination
    rules; the decision record cites the observations or records insufficiency.
 8. Existing fidelity is intact. Evidence: `make check-fmt`, `make lint`,
-   `make test` and `make markdownlint` pass, and the test-selection contract
-   collects the new modules.
+   `make typecheck`, `make test`, `make markdownlint` and `make nixie` pass at
+   `93d5ead0a` in a clean environment, and the test-selection contract collects
+   the new modules.
 
 ## Milestones
 
