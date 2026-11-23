@@ -6572,8 +6572,8 @@ module's own tests call `try_splice_pump` directly, and `lib_tests` calls
 `pump_stream_files_readwrite` directly, so neither would notice an inverted
 dispatch. `pump_stream_files` is the only place that decides, and
 `rust/cuprum-streams/src/dispatch_tests.rs` is what holds it to account. The
-module is Linux-only, matching the `#[cfg(target_os = "linux")]` splice arm, and
-excluded under Miri, which cannot run the unshimmed splice syscall on real
+module is Linux-only, matching the `#[cfg(target_os = "linux")]` splice arm,
+and excluded under Miri, which cannot run the unshimmed splice syscall on real
 descriptors. Its three scenarios enter through the public `pump_stream` and
 assert the selected path from the trace as well as from the bytes delivered,
 because either branch moves the payload:
@@ -6587,9 +6587,9 @@ because either branch moves the payload:
 
 Exact event cardinality comes from `Captured::event_count`, which counts direct
 events whose level and message both match and ignores fields inherited from
-enclosing spans. The span check is `Captured::span_field` on the
-`operation` field. Keep both signals in any new dispatcher scenario: a
-byte-count assertion alone passes on either path.
+enclosing spans. The span check is `Captured::span_field` on the `operation`
+field. Keep both signals in any new dispatcher scenario: a byte-count assertion
+alone passes on either path.
 
 The read/write fallback's write half routes through `io_utils::write_all_unix`,
 whose partial-write loop is factored into `write_all_unix_with` — the
@@ -7258,10 +7258,11 @@ toolchain. The formatter profile's `fn_single_line` option formats some
 compiles the configured profile. This is a formatter and `rstest` compatibility
 constraint, not a lint-policy exception.
 
-Exactly three fixtures carry a direct `#[rustfmt::skip]` while that combination
+Exactly four fixtures carry a direct `#[rustfmt::skip]` while that combination
 remains incompatible:
 
 - `rust/cuprum-native-io/src/ownership_tests.rs`: `descriptor_guard`
+- `rust/cuprum-streams/src/dispatch_tests.rs`: `pipe`
 - `rust/cuprum-streams/src/io_utils/tests.rs`: `pipe`
 - `rust/cuprum-streams/src/splice/tests.rs`: `pipe`
 
