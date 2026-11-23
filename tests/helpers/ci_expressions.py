@@ -175,24 +175,36 @@ def actions_equal(left: object, right: object) -> bool:
     bool
         Whether GitHub would consider the operands equal.
     """
-    if isinstance(left, str) and isinstance(right, str):
-        # GitHub compares two strings as strings, without numeric coercion.
-        return left.lower() == right.lower()
-    if isinstance(left, (list, dict)) or isinstance(right, (list, dict)):
-        # Arrays and objects compare by identity, never by value.
-        return left is right
+    match left, right:
+        case ((list() | dict()), _) | (_, (list() | dict())):
+            # Arrays and objects compare by identity, never by value.
+            return left is right
+        case str() as first_text, str() as second_text:
+            # Two strings compare as strings, without numeric coercion.
+            return first_text.lower() == second_text.lower()
     first, second = _coerce(left), _coerce(right)
-    if isinstance(first, (int, float)) and isinstance(second, (int, float)):
-        return float(first) == float(second)  # ruff: ignore[float-equality-comparison] - exact by contract.
-    if isinstance(first, (int, float)) or isinstance(second, (int, float)):
-        numeric, other = (
-            (first, second) if isinstance(first, (int, float)) else (second, first)
-        )
-        text = str(other)
-        if _JSON_NUMBER.fullmatch(text) is None:
-            return False
-        return float(typ.cast("float", numeric)) == float(text)  # ruff: ignore[float-equality-comparison] - exact by contract.
-    return first == second
+    match first, second:
+        case (int() | float()) as first_number, (int() | float()) as second_number:
+            return float(first_number) == float(second_number)  # ruff: ignore[float-equality-comparison] - exact by contract.
+        case (int() | float()) as number, str() as text:
+            return _numeric_equal(number, text)
+        case str() as text, (int() | float()) as number:
+            return _numeric_equal(number, text)
+        case _:
+            return first == second
+
+
+def _numeric_equal(number: object, text: str) -> bool:
+    """Compare a number with a string only when the string is a JSON number.
+
+    Returns
+    -------
+    bool
+        Whether the string is a legal JSON number equal to ``number``.
+    """
+    if _JSON_NUMBER.fullmatch(text) is None:
+        return False
+    return float(typ.cast("float", number)) == float(text)  # ruff: ignore[float-equality-comparison] - exact by contract.
 
 
 def _top_level(tokens: list[Token], operator: str) -> list[int]:
