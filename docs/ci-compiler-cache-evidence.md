@@ -162,12 +162,19 @@ The console observation supplies what no runner can see:
   "storage_gb": 30,
   "eviction_days": 7,
   "billing_rounding": "unknown",
+  "test_fidelity": "unknown",
   "initial_population_seconds": null,
   "incremental_transfer_seconds": null,
   "incremental_cost_seconds": null,
   "note": "Ubicloud console, cache tab"
 }
 ```
+
+`test_fidelity` is `matched` only when a reviewer has compared the candidate's
+tests with the control's by the five conditions in the gate, including node
+IDs, parametrizations, required outcomes, expected skips, and warning and
+coverage settings. The aggregator will not adopt a family whose fidelity is
+`unknown`.
 
 `billing_rounding` is `verified` only when the applicable charge terms have
 been read and recorded. Otherwise every runner-second figure is labelled a

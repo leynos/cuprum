@@ -132,7 +132,11 @@ def test_a_negative_incremental_cost_is_accepted() -> None:
     ]
     job_documents = jobs([*range(100, 105)], 240)
     job_documents += jobs([*range(200, 205)], 195)
-    built = summary(records, job_documents, console(incremental_cost_seconds=-10))
+    built = summary(
+        records,
+        job_documents,
+        console(incremental_cost_seconds=-10, test_fidelity="matched"),
+    )
     decision = decisions(built)[0]
     assert decision["incremental_cost_seconds"] == pytest.approx(-10.0), decision
     assert decision["verdict"] == "adopt", decision
@@ -179,6 +183,61 @@ def test_break_even_stays_unknown_until_billing_is_verified() -> None:
     assert decisions(verified)[0]["break_even_consumers"] == 3, (
         f"60 s population plus 40 s transfer over 45 s is 3 consumers, got "
         f"{decisions(verified)[0]}"
+    )
+
+
+def test_unknown_test_fidelity_blocks_adoption() -> None:
+    """The gate cannot adopt a candidate whose tests were not compared."""
+    records = [
+        Observation(run_id=str(100 + index), backend="local", hits=4)
+        for index in range(5)
+    ]
+    records += [
+        Observation(
+            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
+        )
+        for index in range(5)
+    ]
+    job_documents = jobs([*range(100, 105)], 240)
+    job_documents += jobs([*range(200, 205)], 195)
+    built = summary(records, job_documents, console(incremental_cost_seconds=0))
+    assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
+        "unknown test fidelity must not reach adopt"
+    )
+
+
+def test_a_family_with_only_cold_records_still_reports_a_decision() -> None:
+    """A cold family is evidence, not an absence of observations."""
+    records = [
+        Observation(run_id="100", backend="local", hits=0, restore_hit=False),
+    ]
+    built = summary(records, jobs([100], 240))
+    assert family(built)["pairs"] == 0
+    assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
+        f"a cold family must still be reported, got {built['gate']}"
+    )
+
+
+def test_pairs_with_different_compiler_provenance_are_excluded() -> None:
+    """A toolchain difference measures the toolchain, not the cache backend."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4, toolchain="1.87.0"),
+        Observation(
+            run_id="200",
+            backend="gha",
+            hits=6,
+            restore=None,
+            save=None,
+            toolchain="nightly-2026-08-23",
+        ),
+    ]
+    built = summary(records, jobs([100, 200], 240), console(test_fidelity="matched"))
+    observed = family(built)
+    assert observed["pairs"] == 0, (
+        f"an incomparable pair must not count, got {observed}"
+    )
+    assert observed["incomparable_pairs"] == 1, (
+        f"the excluded pair must be visible, got {observed}"
     )
 
 

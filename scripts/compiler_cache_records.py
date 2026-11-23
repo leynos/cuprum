@@ -109,6 +109,10 @@ def load_console(path: Path | None) -> dict[str, object] | None:
         condition=mapping["billing_rounding"] in {"verified", "unknown"},
         message="billing_rounding must be verified or unknown",
     )
+    require(
+        condition=mapping["test_fidelity"] in {"matched", "mismatch", "unknown"},
+        message="test_fidelity must be matched, mismatch, or unknown",
+    )
     return mapping
 
 

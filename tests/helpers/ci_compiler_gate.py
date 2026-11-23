@@ -39,6 +39,7 @@ class Observation:
     restore_hit: bool | None = True
     pr_number: str = "42"
     event_class: str = "pull_request"
+    toolchain: str = "nightly-2026-08-23"
 
     def as_record(self) -> dict[str, object]:
         """Return the observation as a record the validator accepts."""
@@ -58,6 +59,7 @@ class Observation:
             state=self.state,
             pr_number=self.pr_number,
             event_class=self.event_class,
+            toolchain=self.toolchain,
         )
 
 
@@ -89,6 +91,7 @@ def console(**overrides: object) -> dict[str, object]:
         "storage_gb": 30,
         "eviction_days": 7,
         "billing_rounding": "unknown",
+        "test_fidelity": "unknown",
         "initial_population_seconds": 60,
         "incremental_transfer_seconds": 5,
         "incremental_cost_seconds": 0,

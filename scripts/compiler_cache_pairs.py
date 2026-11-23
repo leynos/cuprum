@@ -209,6 +209,24 @@ def _transfer_total(record: cabc.Mapping[str, object]) -> float | None:
     return round(restore + save, 3)
 
 
+def _comparable(
+    control: cabc.Mapping[str, object], candidate: cabc.Mapping[str, object]
+) -> bool:
+    """Report whether two observations describe the same compiler and shape.
+
+    A pair whose toolchain, interpreter, or compiler identity differs measures
+    the change between them, not the cache backend, so it is excluded from the
+    saving sample.
+
+    Returns
+    -------
+    bool
+        Whether every provenance field matches.
+    """
+    fields = ("rustc", "toolchain", "compiler_shape", "python_version")
+    return all(control.get(field) == candidate.get(field) for field in fields)
+
+
 def _paired_savings(
     controls: cabc.Sequence[cabc.Mapping[str, object]],
     candidates: cabc.Sequence[cabc.Mapping[str, object]],
@@ -220,6 +238,7 @@ def _paired_savings(
     savings: list[float] = []
     control_times: list[float] = []
     candidate_times: list[float] = []
+    incomparable = 0
     for index in range(count):
         control_time, control_result = jobs_reader.seconds_and_result(
             controls[index], jobs, names
@@ -227,6 +246,9 @@ def _paired_savings(
         candidate_time, candidate_result = jobs_reader.seconds_and_result(
             candidates[index], jobs, names
         )
+        if not _comparable(controls[index], candidates[index]):
+            incomparable += 1
+            continue
         if control_result != "passed" or candidate_result != "passed":
             continue
         if control_time is None or candidate_time is None:
@@ -238,6 +260,7 @@ def _paired_savings(
         "savings": savings,
         "controls": control_times,
         "candidates": candidate_times,
+        "incomparable": incomparable,
         "job_pairs": count,
     }
 
@@ -287,6 +310,7 @@ def family_summary(
         "candidate_observations": len(arms["candidate"]),
         "pairs": len(savings),
         "independent_job_pairs": evidence["job_pairs"],
+        "incomparable_pairs": evidence["incomparable"],
         "failures": failure_count(all_records, context.jobs, context.names),
         "median_control_seconds": median(typ.cast("list[float]", evidence["controls"])),
         "median_candidate_seconds": median(

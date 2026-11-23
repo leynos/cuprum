@@ -65,21 +65,36 @@ def _installed(tmp_path: Path) -> dict[str, str]:
 def test_a_build_after_a_successful_start_runs_through_the_wrapper(
     tmp_path: Path,
 ) -> None:
-    """The installed wrapper survives a successful server start."""
+    """The installed path is executable and forwards the compiler arguments."""
     environment = {**_installed(tmp_path), **_start(tmp_path, starts=True)}
-    seen = tmp_path / "build-wrapper"
+    wrapper = tmp_path / ".local" / "bin" / "sccache"
+    compiler = tmp_path / "fake-rustc"
+    ran = tmp_path / "compiler-ran"
+    compiler.write_text(
+        f'#!/usr/bin/env bash\nprintf ran > "{ran}"\n', encoding="utf-8"
+    )
+    compiler.chmod(0o755)
+    arguments = tmp_path / "wrapper-arguments"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$@" > "{arguments}"\n'
+        f'exec "{compiler}" "$@"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
     result = run_step(
-        (
-            f'test -n "${{RUSTC_WRAPPER:-}}" && '
-            f'printf "%s" "${{RUSTC_WRAPPER}}" > "{seen}"'
-        ),
+        '"$RUSTC_WRAPPER" --crate-name demo',
         workdir=tmp_path,
         environment=environment,
     )
-    assert result.returncode == 0, "a successful start must leave a usable wrapper"
-    assert seen.read_text(encoding="utf-8") == environment["RUSTC_WRAPPER"], (
-        "the build must see the wrapper the install step verified"
-    )
+
+    assert result.returncode == 0, result.stderr
+    assert arguments.read_text(encoding="utf-8").splitlines() == [
+        "--crate-name",
+        "demo",
+    ], "the wrapper must receive the compiler arguments"
+    assert ran.is_file(), "the wrapper must execute the compiler it was given"
 
 
 def test_a_build_after_a_fallback_compiles_with_plain_rustc(tmp_path: Path) -> None:

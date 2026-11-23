@@ -21,7 +21,10 @@ are `false`, `null`, the empty string, and numeric zero.
 
 Examples
 --------
->>> evaluate("(fork || author == 'bot') && 'local' || 'gha'", {"fork": True})
+>>> evaluate(
+...     "(fork || author == 'bot') && 'local' || 'gha'",
+...     {"fork": True, "author": ""},
+... )
 'local'
 >>> evaluate("!(fork || author == 'bot')", {"fork": False, "author": "bot"})
 False
@@ -171,6 +174,9 @@ def actions_equal(left: object, right: object) -> bool:
     bool
         Whether GitHub would consider the operands equal.
     """
+    if isinstance(left, str) and isinstance(right, str):
+        # GitHub compares two strings as strings, without numeric coercion.
+        return left.lower() == right.lower()
     first, second = _coerce(left), _coerce(right)
     if isinstance(first, (int, float)) and isinstance(second, (int, float)):
         return float(first) == float(second)  # ruff: ignore[float-equality-comparison] - exact by contract.
@@ -371,6 +377,9 @@ def arm_condition(expression: str, hosted: str, owned: str) -> str:
         message = f"extra tokens after the `{hosted}` arm: {expression!r}"
         raise ExpressionError(message)
     _literal_at(left, and_index + 1, hosted)
+    if _top_level(left[:and_index], "||"):
+        message = f"the condition before the {hosted!r} arm is an ungrouped alternation"
+        raise ExpressionError(message)
     condition = " ".join(token for _, token in left[:and_index])
     if not condition:
         message = f"empty condition in {expression!r}"

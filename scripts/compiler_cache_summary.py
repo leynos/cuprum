@@ -186,10 +186,10 @@ def _gate(
     """Evaluate the predeclared gate for every family with observations.
 
     A family is adopted only with at least five pairs, a median saving that
-    beats both the transfer it replaces and five per cent of the control's
-    whole-job time, branch protection still on, and non-positive incremental
-    paid cost. Anything the console does not establish stays unknown, which
-    cannot satisfy the gate.
+    beats the transfer it replaces and is at least five per cent of the
+    control's whole-job time, matched test fidelity, branch protection still
+    on, and non-positive incremental paid cost. Anything the console does not
+    establish stays unknown, which cannot satisfy the gate.
 
     Returns
     -------
@@ -201,13 +201,15 @@ def _gate(
     return {"pairs_required": PAIRS_REQUIRED, "decisions": decisions}
 
 
-def _verdict(
-    *,
-    enough: bool,
-    worth_it: bool | None,
-    protected: bool,
-    incremental: float | None,
-) -> str:
+class Adoption(typ.NamedTuple):
+    """The three conditions beyond a worthwhile, sufficient saving."""
+
+    fidelity_matched: bool
+    protected: bool
+    incremental: float | None
+
+
+def _verdict(*, enough: bool, worth_it: bool | None, adoption: Adoption) -> str:
     """Decide one family's verdict from its gate inputs.
 
     A missing threshold input is not evidence that the saving is
@@ -224,10 +226,32 @@ def _verdict(
         return "insufficient-evidence"
     if not worth_it:
         return "reject"
-    unpaid = incremental is not None and incremental <= 0
-    if protected and unpaid:
+    unpaid = adoption.incremental is not None and adoption.incremental <= 0
+    adoptable = adoption.fidelity_matched and adoption.protected
+    if adoptable and unpaid:
         return "adopt"
     return "insufficient-evidence"
+
+
+def _worth_it(
+    saving: float | None, floor: float | None, transfer: float | None
+) -> bool | None:
+    """Report whether a saving clears both documented thresholds.
+
+    The gate accepts a saving at least as large as the five per cent floor and
+    strictly larger than the transfer it replaces, so the two are checked
+    separately rather than against their maximum.
+
+    Returns
+    -------
+    bool | None
+        The comparison, or ``None`` when any input is unknown.
+    """
+    if saving is None or floor is None:
+        return None
+    if transfer is None:
+        return None
+    return saving >= floor and saving > transfer
 
 
 def _minimum_worthwhile(floor: float | None, transfer: float | None) -> float | None:
@@ -261,12 +285,41 @@ def _break_even(
     return math.ceil((population + transfer) / saving)
 
 
+class Measurements(typ.NamedTuple):
+    """The family-level values the gate compares."""
+
+    saving: float | None
+    occupancy: float | None
+    transfer: float | None
+    floor: float | None
+    minimum: float | None
+
+
+def _measurements(family: cabc.Mapping[str, object]) -> Measurements:
+    """Read and derive one family's gate measurements.
+
+    Returns
+    -------
+    Measurements
+        The median saving, control occupancy, transfer, five per cent floor,
+        and the larger threshold the family must beat.
+    """
+    saving = validation.number_or_none(family["median_saving_seconds"])
+    occupancy = validation.number_or_none(family["median_control_seconds"])
+    transfer = validation.number_or_none(family["median_transfer_seconds"])
+    floor = round(MINIMUM_FRACTION * occupancy, 3) if occupancy is not None else None
+    return Measurements(
+        saving, occupancy, transfer, floor, _minimum_worthwhile(floor, transfer)
+    )
+
+
 def _decision(
     family: cabc.Mapping[str, object],
     console: cabc.Mapping[str, object] | None,
     *,
     protected: bool,
 ) -> dict[str, object]:
+    """Evaluate the gate for one family."""
     """Evaluate the gate for one family.
 
     Returns
@@ -276,39 +329,39 @@ def _decision(
         replaces, the console's incremental cost and break-even consumers, and
         the verdict.
     """
-    saving = validation.number_or_none(family["median_saving_seconds"])
-    occupancy = validation.number_or_none(family["median_control_seconds"])
-    transfer = validation.number_or_none(family["median_transfer_seconds"])
-    floor = round(MINIMUM_FRACTION * occupancy, 3) if occupancy is not None else None
-    minimum = _minimum_worthwhile(floor, transfer)
+    measured = _measurements(family)
     incremental = _console_number(console, "incremental_cost_seconds", signed=True)
     enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
-    worth_it = saving > minimum if saving is not None and minimum is not None else None
+    worth_it = _worth_it(measured.saving, measured.floor, measured.transfer)
     verified = console is not None and console.get("billing_rounding") == "verified"
     break_even = (
         _break_even(
-            _console_number(console, "initial_population_seconds"), transfer, saving
+            _console_number(console, "initial_population_seconds"),
+            measured.transfer,
+            measured.saving,
         )
         if verified
         else None
     )
+    adoption = Adoption(
+        fidelity_matched=(
+            console is not None and console.get("test_fidelity") == "matched"
+        ),
+        protected=protected,
+        incremental=incremental,
+    )
     return {
         "family": family["family"],
         "pairs": family["pairs"],
-        "median_saving_seconds": saving,
-        "control_occupancy_seconds": occupancy,
-        "five_percent_floor_seconds": floor,
-        "save_restore_seconds": transfer,
-        "minimum_worthwhile_seconds": minimum,
+        "median_saving_seconds": measured.saving,
+        "control_occupancy_seconds": measured.occupancy,
+        "five_percent_floor_seconds": measured.floor,
+        "save_restore_seconds": measured.transfer,
+        "minimum_worthwhile_seconds": measured.minimum,
         "incremental_cost_seconds": incremental,
         "break_even_consumers": break_even,
         "branch_protection": "enabled" if protected else "unknown",
-        "verdict": _verdict(
-            enough=enough,
-            worth_it=worth_it,
-            protected=protected,
-            incremental=incremental,
-        ),
+        "verdict": _verdict(enough=enough, worth_it=worth_it, adoption=adoption),
     }
 
 
@@ -321,14 +374,15 @@ def build_summary(
     """Compute the experiment summary, leaving unsupported fields ``unknown``."""
     grouped = pairs_reader.pairs_for(records)
     every = pairs_reader.records_by_family(records)
+    context = pairs_reader.JoinContext(jobs, names)
     families = [
         pairs_reader.family_summary(
             family,
-            arms,
-            pairs_reader.JoinContext(jobs, names),
+            grouped.get(family, {"control": [], "candidate": []}),
+            context,
             every.get(family, []),
         )
-        for family, arms in sorted(grouped.items())
+        for family in sorted(set(grouped) | set(every))
     ]
     return {
         "schema_version": schema.SCHEMA_VERSION,

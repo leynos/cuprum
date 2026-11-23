@@ -372,7 +372,8 @@ adopted only when all of the following hold, measured over ordinary CI activity:
 5. Test fidelity is unchanged: node IDs, parametrizations, required outcomes,
    expected skips, native-required execution, property budgets, compile-fail
    diagnostics, warning enforcement, and coverage settings all match the
-   control.
+   control. The reviewer records this as `test_fidelity` in the dated console
+   observation, and the aggregator reports `adopt` only when it reads `matched`.
 
 A family that fails or cannot satisfy the gate keeps archived caching. A higher
 hit rate alone does not satisfy it.

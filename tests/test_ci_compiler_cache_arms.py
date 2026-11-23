@@ -242,3 +242,16 @@ def test_numeric_equality_is_exact() -> None:
     assert not evaluate("a == b", {"a": 1000000000, "b": 1000000001}), (
         "a numeric tolerance would disagree with the expression under test"
     )
+
+
+def test_an_ungrouped_alternation_before_the_arm_is_refused() -> None:
+    """Without grouping, a true left operand selects a boolean, not the arm."""
+    with pytest.raises(ExpressionError, match="ungrouped alternation"):
+        arm_condition("fork || author == 'bot' && 'local' || 'gha'", "local", "gha")
+
+
+def test_two_strings_compare_as_strings_not_numbers() -> None:
+    """GitHub compares two string operands as strings."""
+    assert not evaluate("a == b", {"a": "0", "b": ""}), (
+        "'0' and '' are different strings, not equal numbers"
+    )

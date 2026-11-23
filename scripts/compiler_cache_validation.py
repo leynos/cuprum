@@ -70,6 +70,7 @@ CONSOLE_KEYS = frozenset({
     "storage_gb",
     "eviction_days",
     "billing_rounding",
+    "test_fidelity",
     "initial_population_seconds",
     "incremental_transfer_seconds",
     "incremental_cost_seconds",
