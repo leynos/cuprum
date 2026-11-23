@@ -5,11 +5,11 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — M1 is committed and M2 and M3 are implemented in the
-working tree, based on `87de64c2c`, the implementation baseline recorded on
-22 November 2026. No candidate family is adopted by this change; the
-deliverable is the measured-qualification apparatus plus a reviewable
-adopt/reject record.
+Status: IN PROGRESS — M1–M4 are committed and the branch is rebased onto
+`f62a510a1` (the advanced `main` as of 23 November 2026). The experiment
+baseline remains `87de64c2c`, recorded on 22 November 2026. No candidate family
+is adopted by this change; the deliverable is the measured-qualification
+apparatus plus a reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -191,6 +191,9 @@ its own evidence and decision.
   only when the privileged workflow also carries the experiment's evidence or
   compiler-cache restore. The trigger is legitimate in
   `dependabot-automerge.yml`, which runs no repository code.
+- 23 November 2026: rebased from `87de64c2c` onto `f62a510a1` (`#735`, which
+  moves the consume path) with no conflict; the experiment's baseline remains
+  `87de64c2c`, and the rebase touched no cache or compiler-shape file.
 - 23 November 2026: the original size tolerance (1,200 code lines, 250
   configuration, 500 documentation) was exceeded. The apparatus needs six
   writer/reader modules, one composite action, the workflow brackets, and the
