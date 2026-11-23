@@ -33,11 +33,11 @@ Inputs
 
 Examples
 --------
->>> pair_key({"family": "py3.13-debug", "matrix_leg": "none"})
-'py3.13-debug/none'
->>> median([1.0, 3.0, 2.0])
-2.0
->>> median([]) is None
+>>> _worth_it(45.0, 12.0, 40.0)
+True
+>>> _worth_it(5.0, 5.0, 1.0)
+True
+>>> _worth_it(None, 5.0, 1.0) is None
 True
 """
 

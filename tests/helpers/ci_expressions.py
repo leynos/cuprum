@@ -155,7 +155,8 @@ def _coerce(value: object) -> object:
     if value is True:
         return 1
     if isinstance(value, str):
-        return 0 if not value else value.lower()
+        trimmed = value.strip()
+        return 0 if not trimmed else trimmed.lower()
     return value
 
 

@@ -22,11 +22,28 @@ from tests.helpers.ci_compiler_evidence import (
 from tests.helpers.ci_runners import CACHE_RESTORE, ROOT, step_inputs, steps
 from tests.helpers.composite_actions import action_document
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from tests.helpers.workflow_types import Step
+
 
 def _bracket_calls(workflow_name: str, job_name: str, bracket: str) -> dict[str, int]:
     """Return each evidence call's position for one bracket, by phase or record."""
+    return _positions_of(
+        steps(workflow_name, job_name), bracket, workflow_name, job_name
+    )
+
+
+def _positions_of(
+    job_steps: cabc.Sequence[Step],
+    bracket: str,
+    workflow_name: str,
+    job_name: str,
+) -> dict[str, int]:
+    """Return each call's position, refusing a repeated phase."""
     positions: dict[str, int] = {}
-    for index, step in enumerate(steps(workflow_name, job_name)):
+    for index, step in enumerate(job_steps):
         declared = step.get("with")
         if not isinstance(declared, dict):
             continue
@@ -34,7 +51,14 @@ def _bracket_calls(workflow_name: str, job_name: str, bracket: str) -> dict[str,
         if inputs.get("bracket") != bracket:
             continue
         mode = str(inputs.get("mode"))
-        positions[str(inputs.get("phase")) if mode == "snapshot" else "record"] = index
+        assert step.get("uses") == EVIDENCE_ACTION_PATH, (
+            f"{workflow_name}:{job_name} must invoke the evidence action"
+        )
+        key = str(inputs.get("phase")) if mode == "snapshot" else "record"
+        assert key not in positions, (
+            f"{workflow_name}:{job_name} declares {key!r} for {bracket} twice"
+        )
+        positions[key] = index
     return positions
 
 
@@ -249,3 +273,21 @@ def test_the_upload_name_carries_the_matrix_leg() -> None:
     assert "inputs.matrix-leg" in name, (
         f"the artefact name must include the matrix leg, got {name!r}"
     )
+
+
+def test_a_duplicate_record_call_is_rejected() -> None:
+    """Two records for one bracket would be refused by the reader."""
+    duplicate = [
+        {
+            "uses": EVIDENCE_ACTION_PATH,
+            "with": {"mode": "snapshot", "bracket": "x", "phase": "pre"},
+        },
+        {
+            "uses": EVIDENCE_ACTION_PATH,
+            "with": {"mode": "snapshot", "bracket": "x", "phase": "post"},
+        },
+        {"uses": EVIDENCE_ACTION_PATH, "with": {"mode": "record", "bracket": "x"}},
+        {"uses": EVIDENCE_ACTION_PATH, "with": {"mode": "record", "bracket": "x"}},
+    ]
+    with pytest.raises(AssertionError, match="twice"):
+        _positions_of(typ.cast("list[Step]", duplicate), "x", "ci.yml", "job")

@@ -120,15 +120,16 @@ def test_a_failing_build_still_fails_after_a_fallback(tmp_path: Path) -> None:
     )
 
 
-def _fake_cargo(tmp_path: Path) -> tuple[Path, Path]:
-    """Write a fake Cargo that records its environment and argv."""
+def _fake_cargo(tmp_path: Path, status: int = 0) -> tuple[Path, Path]:
+    """Write a fake Cargo that records its argv and exits ``status``."""
     binary = tmp_path / "fake-cargo"
     recorded = tmp_path / "cargo-environment"
     arguments = tmp_path / "cargo-arguments"
     binary.write_text(
         "#!/usr/bin/env bash\n"
         f'env > "{recorded}"\n'
-        f'printf "%s\\n" "$@" > "{arguments}"\n',
+        f'printf "%s\\n" "$@" > "{arguments}"\n'
+        f"exit {status}\n",
         encoding="utf-8",
     )
     binary.chmod(0o755)
@@ -216,4 +217,17 @@ def test_the_adapter_replaces_itself_with_cargo(tmp_path: Path) -> None:
     ], (
         "the adapter must pass the reviewed fragment and the caller's argv, "
         f"got {observed}"
+    )
+
+
+def test_the_adapter_preserves_a_failing_cargo_status(tmp_path: Path) -> None:
+    """A failing build must stay failing through the adapter."""
+    cargo, _recorded = _fake_cargo(tmp_path, status=7)
+    result = run_step(
+        f'/bin/bash "{ADAPTER.resolve()}" build',
+        workdir=tmp_path,
+        environment=_adapter_environment(tmp_path, cargo),
+    )
+    assert result.returncode == 7, (
+        f"the adapter must exit with Cargo's status, got {result.returncode}"
     )

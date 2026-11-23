@@ -96,6 +96,7 @@ def main(argv: cabc.Sequence[str]) -> int:
     arguments.out.parent.mkdir(parents=True, exist_ok=True)
     arguments.out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     if arguments.markdown is not None:
+        arguments.markdown.parent.mkdir(parents=True, exist_ok=True)
         arguments.markdown.write_text(render_markdown(summary), encoding="utf-8")
     return 0
 

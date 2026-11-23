@@ -169,3 +169,31 @@ def test_the_gate_decisions_name_each_family() -> None:
     assert decisions(built)[0]["family"] == family(built)["family"], (
         "the decision and its family must agree"
     )
+
+
+def test_a_non_string_job_name_mapping_is_rejected(tmp_path: Path) -> None:
+    """A numeric display-name template would select an unrelated job."""
+    path = tmp_path / "names.json"
+    path.write_text(json.dumps({"extension-tests": 3.13}), encoding="utf-8")
+    with pytest.raises(records_reader.InvalidEvidenceError, match="must be strings"):
+        records_reader.load_names(path)
+
+
+def test_the_markdown_output_directory_is_created(tmp_path: Path) -> None:
+    """A requested report must not fail on a missing parent directory."""
+    records = tmp_path / "records"
+    records.mkdir()
+    output = tmp_path / "summary.json"
+    markdown = tmp_path / "reports" / "summary.md"
+    assert (
+        report.main([
+            "--records",
+            str(records),
+            "--out",
+            str(output),
+            "--markdown",
+            str(markdown),
+        ])
+        == 0
+    )
+    assert markdown.is_file(), "the report must be written where it was asked"

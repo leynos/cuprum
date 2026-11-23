@@ -250,3 +250,10 @@ def test_two_strings_compare_as_strings_not_numbers() -> None:
     assert not evaluate("a == b", {"a": "0", "b": ""}), (
         "'0' and '' are different strings, not equal numbers"
     )
+
+
+def test_a_whitespace_only_string_compares_as_zero() -> None:
+    """The runner trims before converting a string for numeric comparison."""
+    assert evaluate("a == b", {"a": " ", "b": False}), (
+        "a whitespace-only string must equal false"
+    )

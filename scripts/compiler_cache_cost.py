@@ -92,23 +92,26 @@ def critical_paths(
         The longest run span per workflow, in seconds, or an empty mapping
         when no record could be joined to the jobs document.
     """
-    spans: dict[tuple[str, str, str], list[dt.datetime]] = {}
+    runs: dict[tuple[str, str], set[str]] = {}
     for record in records:
-        job = jobs_reader.matching_job(record, jobs, names)
-        if job is None:
+        identity = (str(record["run_id"]), str(record["run_attempt"]))
+        runs.setdefault(identity, set()).add(str(record["workflow"]))
+    spans: dict[tuple[str, str, str], list[dt.datetime]] = {
+        (workflow, run_id, attempt): []
+        for (run_id, attempt), workflows in runs.items()
+        for workflow in workflows
+    }
+    for job in jobs:
+        identity = (str(job.get("run_id")), str(job.get("run_attempt")))
+        workflows = runs.get(identity)
+        if workflows is None:
             continue
         started = jobs_reader.instant(job.get("started_at"))
         completed = jobs_reader.instant(job.get("completed_at"))
         if started is None or completed is None:
             continue
-        spans.setdefault(
-            (
-                str(record["workflow"]),
-                str(record["run_id"]),
-                str(record["run_attempt"]),
-            ),
-            [],
-        ).extend([started, completed])
+        for workflow in workflows:
+            spans[workflow, identity[0], identity[1]].extend([started, completed])
     critical: dict[str, float] = {}
     for (workflow, _run, _attempt), instants in spans.items():
         span = (max(instants) - min(instants)).total_seconds()

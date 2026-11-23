@@ -266,3 +266,31 @@ def test_a_failed_fallback_is_counted_even_though_it_cannot_pair() -> None:
     assert observed["failures"] == 5, (
         f"the failed fallbacks must still be counted, got {observed}"
     )
+
+
+def test_the_critical_path_includes_jobs_without_evidence() -> None:
+    """A long prerequisite is part of the run's critical path."""
+    records = [Observation(run_id="100", backend="local", hits=4)]
+    job_documents: list[dict[str, object]] = [
+        {
+            "run_id": 100,
+            "run_attempt": 1,
+            "name": "Prerequisite",
+            "started_at": "2026-11-22T00:00:00Z",
+            "completed_at": "2026-11-22T00:10:00Z",
+            "conclusion": "success",
+        },
+        {
+            "run_id": 100,
+            "run_attempt": 1,
+            "name": "Extension-gated tests",
+            "started_at": "2026-11-22T00:10:00Z",
+            "completed_at": "2026-11-22T00:20:00Z",
+            "conclusion": "success",
+        },
+    ]
+    built = summary(records, job_documents)
+    cost = typ.cast("dict[str, object]", built["cost"])
+    assert cost["critical_path_seconds_by_workflow"] == {"ci.yml": 1200.0}, (
+        f"the unrecorded prerequisite must be included, got {cost}"
+    )

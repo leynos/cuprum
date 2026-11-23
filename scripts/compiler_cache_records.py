@@ -158,7 +158,9 @@ def load_names(path: Path | None) -> dict[str, str]:
         condition=isinstance(document, dict),
         message="job names must be an object",
     )
-    return {
-        str(key): str(value)
-        for key, value in typ.cast("dict[str, object]", document).items()
-    }
+    names = typ.cast("dict[str, object]", document)
+    require(
+        condition=all(isinstance(value, str) for value in names.values()),
+        message="job-name values must be strings",
+    )
+    return {str(key): typ.cast("str", value) for key, value in names.items()}
