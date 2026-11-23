@@ -48,8 +48,8 @@ import typing as typ
 
 from scripts import compiler_cache_jobs as jobs_reader
 from scripts import compiler_cache_pairs as pairs_reader
-from scripts import compiler_cache_records as records_reader
 from scripts import compiler_cache_schema as schema
+from scripts import compiler_cache_validation as validation
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -173,7 +173,7 @@ def _console_number(
     if console is None:
         return None
     value = console.get(name)
-    if not records_reader.number(value):
+    if not validation.number(value):
         return None
     number = float(typ.cast("float", value))
     return number if signed or number >= 0 else None
@@ -273,9 +273,9 @@ def _decision(
         replaces, the console's incremental cost and break-even consumers, and
         the verdict.
     """
-    saving = records_reader.number_or_none(family["median_saving_seconds"])
-    occupancy = records_reader.number_or_none(family["median_control_seconds"])
-    transfer = records_reader.number_or_none(family["median_transfer_seconds"])
+    saving = validation.number_or_none(family["median_saving_seconds"])
+    occupancy = validation.number_or_none(family["median_control_seconds"])
+    transfer = validation.number_or_none(family["median_transfer_seconds"])
     floor = round(MINIMUM_FRACTION * occupancy, 3) if occupancy is not None else None
     minimum = _minimum_worthwhile(floor, transfer)
     incremental = _console_number(console, "incremental_cost_seconds", signed=True)

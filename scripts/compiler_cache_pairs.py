@@ -21,7 +21,7 @@ from __future__ import annotations
 import typing as typ
 
 from scripts import compiler_cache_jobs as jobs_reader
-from scripts import compiler_cache_records as records_reader
+from scripts import compiler_cache_validation as validation
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -160,8 +160,8 @@ def _unique_jobs(
 
 def _transfer_total(record: cabc.Mapping[str, object]) -> float | None:
     """Return one job's restore-plus-save seconds, or ``None`` if incomplete."""
-    restore = records_reader.number_or_none(record.get("restore_seconds"))
-    save = records_reader.number_or_none(record.get("save_seconds"))
+    restore = validation.number_or_none(record.get("restore_seconds"))
+    save = validation.number_or_none(record.get("save_seconds"))
     if restore is None or save is None:
         return None
     return round(restore + save, 3)

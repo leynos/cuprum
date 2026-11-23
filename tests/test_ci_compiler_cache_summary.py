@@ -9,6 +9,7 @@ restore-plus-save total, and the signed incremental cost.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import typing as typ
 
@@ -27,36 +28,42 @@ if typ.TYPE_CHECKING:
 JOB_NAME = "Extension-gated tests"
 
 
-def _record(
-    *,
-    run_id: str,
-    backend: str,
-    hits: int,
-    restore: float | None = 20.0,
-    save: float | None = 20.0,
-    bracket: str = "extension",
-    leg: str = "none",
-    job: str = "extension-tests",
-    state: str = "ok",
-    restore_hit: bool | None = True,
-) -> dict[str, object]:
-    """Return one record with the counters and timings a pair needs."""
-    counters = dict.fromkeys(schema.COUNTERS, None)
-    counters["compile_requests"] = 5
-    counters["cache_hits"] = hits
-    return record_fixture(
-        run_id=run_id,
-        backend=backend,
-        counters=counters,
-        restore_hit=restore_hit,
-        restore_seconds=restore,
-        save_seconds=save,
-        bracket=bracket,
-        matrix_leg=leg,
-        job=job,
-        state=state,
-        family="py3.13-debug",
-    )
+@dataclasses.dataclass(frozen=True, slots=True)
+class Observation:
+    """One scripted record with the fields the gate arithmetic reads."""
+
+    run_id: str
+    backend: str
+    hits: int = 4
+    restore: float | None = 20.0
+    save: float | None = 20.0
+    bracket: str = "extension"
+    leg: str = "none"
+    job: str = "extension-tests"
+    state: str = "ok"
+    restore_hit: bool | None = True
+    pr_number: str = "42"
+    event_class: str = "pull_request"
+
+    def as_record(self) -> dict[str, object]:
+        """Return the observation as a record the validator accepts."""
+        counters = dict.fromkeys(schema.COUNTERS, None)
+        counters["compile_requests"] = 5
+        counters["cache_hits"] = self.hits
+        return record_fixture(
+            run_id=self.run_id,
+            backend=self.backend,
+            counters=counters,
+            restore_hit=self.restore_hit,
+            restore_seconds=self.restore,
+            save_seconds=self.save,
+            bracket=self.bracket,
+            matrix_leg=self.leg,
+            job=self.job,
+            state=self.state,
+            pr_number=self.pr_number,
+            event_class=self.event_class,
+        )
 
 
 def _jobs(
@@ -94,12 +101,12 @@ def _decisions(summary: cabc.Mapping[str, object]) -> list[dict[str, object]]:
 
 
 def _summary(
-    records: cabc.Sequence[dict[str, object]],
+    records: cabc.Sequence[Observation],
     jobs: cabc.Sequence[dict[str, object]],
     console: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a summary from fixtures through the real validator."""
-    validated = [records_reader.validate_record(record) for record in records]
+    validated = [records_reader.validate_record(item.as_record()) for item in records]
     return summary_reader.build_summary(validated, jobs, NAMES, console)
 
 
@@ -124,8 +131,8 @@ def _console(**overrides: object) -> dict[str, object]:
 def test_the_transfer_is_the_sum_of_restore_and_save_per_job() -> None:
     """A median of individual timings would halve the cost a migration removes."""
     records = [
-        _record(run_id="100", backend="local", hits=4),
-        _record(run_id="200", backend="gha", hits=6, restore=None, save=None),
+        Observation(run_id="100", backend="local", hits=4),
+        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
     ]
     summary = _summary(records, _jobs([100, 200], 240))
     family = _family(summary)
@@ -137,8 +144,8 @@ def test_the_transfer_is_the_sum_of_restore_and_save_per_job() -> None:
 def test_a_control_without_a_save_time_keeps_the_transfer_unknown() -> None:
     """A pull-request control never saves; inventing zero would understate cost."""
     records = [
-        _record(run_id="100", backend="local", hits=4, save=None),
-        _record(run_id="200", backend="gha", hits=6, restore=None, save=None),
+        Observation(run_id="100", backend="local", hits=4, save=None),
+        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
     ]
     summary = _summary(records, _jobs([100, 200], 240))
     family = _family(summary)
@@ -150,10 +157,12 @@ def test_a_control_without_a_save_time_keeps_the_transfer_unknown() -> None:
 def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
     """A failing candidate must not satisfy the gate through a shorter job."""
     records = [
-        _record(run_id=str(100 + index), backend="local", hits=4) for index in range(5)
+        Observation(run_id=str(100 + index), backend="local", hits=4)
+        for index in range(5)
     ]
     records += [
-        _record(run_id=str(200 + index), backend="gha", hits=6) for index in range(5)
+        Observation(run_id=str(200 + index), backend="gha", hits=6)
+        for index in range(5)
     ]
     jobs = _jobs([*range(100, 105), *range(200, 205)], 240)
     for job in jobs:
@@ -173,10 +182,10 @@ def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
 
 def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
     """Bracket pairs would multiply the sample and satisfy the gate early."""
-    records: list[dict[str, object]] = [
-        _record(run_id="100", backend="local", hits=4, bracket="typecheck"),
-        _record(run_id="100", backend="local", hits=4, bracket="python-tests"),
-        _record(
+    records: list[Observation] = [
+        Observation(run_id="100", backend="local", hits=4, bracket="typecheck"),
+        Observation(run_id="100", backend="local", hits=4, bracket="python-tests"),
+        Observation(
             run_id="200",
             backend="gha",
             hits=6,
@@ -184,7 +193,7 @@ def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
             restore=None,
             save=None,
         ),
-        _record(
+        Observation(
             run_id="200",
             backend="gha",
             hits=6,
@@ -209,13 +218,15 @@ def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
     assert family["pairs"] == 1, (
         f"two brackets of one job are one independent pair, got {family}"
     )
-    assert family["independent_job_pairs"] == 1
+    assert family["independent_job_pairs"] == 1, (
+        f"the independent pair must be recorded, got {family}"
+    )
 
 
 def test_job_cost_is_charged_once_for_several_brackets() -> None:
     """Three brackets in a 100-second job must not report 300 job-seconds."""
     records = [
-        _record(run_id="100", backend="local", hits=4, bracket=name)
+        Observation(run_id="100", backend="local", hits=4, bracket=name)
         for name in ("typecheck", "python-tests", "extension")
     ]
     summary = _summary(records, _jobs([100], 100))
@@ -228,10 +239,11 @@ def test_job_cost_is_charged_once_for_several_brackets() -> None:
 def test_a_negative_incremental_cost_is_accepted() -> None:
     """The gate requires non-positive cost, not exactly zero."""
     records = [
-        _record(run_id=str(100 + index), backend="local", hits=4) for index in range(5)
+        Observation(run_id=str(100 + index), backend="local", hits=4)
+        for index in range(5)
     ]
     records += [
-        _record(
+        Observation(
             run_id=str(200 + index),
             backend="gha",
             hits=6,
@@ -253,10 +265,15 @@ def test_a_negative_incremental_cost_is_accepted() -> None:
 def test_a_push_record_with_an_unknown_pr_is_not_a_pull_request_consumer() -> None:
     """The writer's `unknown` sentinel must not pass a truthiness check."""
     records = [
-        _record(run_id="100", backend="local", hits=4, restore_hit=True),
+        Observation(
+            run_id="100",
+            backend="local",
+            hits=4,
+            restore_hit=True,
+            pr_number="unknown",
+            event_class="push",
+        ),
     ]
-    records[0]["pr_number"] = "unknown"
-    records[0]["event_class"] = "push"
     summary = _summary(records, _jobs([100, 200], 240))
     observation = typ.cast("list[dict[str, object]]", summary["observations"])[0]
     assert observation["observation_class"] == "fresh-consumer", observation
@@ -264,9 +281,9 @@ def test_a_push_record_with_an_unknown_pr_is_not_a_pull_request_consumer() -> No
 
 def test_brackets_of_one_pull_request_run_are_the_first_consumer() -> None:
     """A second bracket of the same run is not a later push."""
-    records: list[dict[str, object]] = [
-        _record(run_id="100", backend="local", hits=4, bracket="typecheck"),
-        _record(run_id="100", backend="local", hits=4, bracket="python-tests"),
+    records: list[Observation] = [
+        Observation(run_id="100", backend="local", hits=4, bracket="typecheck"),
+        Observation(run_id="100", backend="local", hits=4, bracket="python-tests"),
     ]
     summary = _summary(records, _jobs([100, 200], 240))
     observations = typ.cast("list[dict[str, object]]", summary["observations"])

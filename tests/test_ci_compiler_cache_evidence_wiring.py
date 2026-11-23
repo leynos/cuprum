@@ -168,7 +168,14 @@ def test_each_restore_timer_immediately_precedes_the_compiler_restore() -> None:
             and "~/.cache/sccache"
             in str(typ.cast("dict[str, object]", step.get("with", {})).get("path", ""))
         ]
+        ends = [
+            index
+            for index, step in enumerate(job_steps)
+            if isinstance(step.get("with"), dict)
+            and step_inputs(step, "mark inputs").get("marker") == "restore-end"
+        ]
         assert len(marks) == 1, f"{workflow_name}:{job_name} must mark one restore"
+        assert len(ends) == 1, f"{workflow_name}:{job_name} must end the restore timer"
         assert len(compiler_restores) == 1, (
             f"{workflow_name}:{job_name} must restore the compiler cache once"
         )
@@ -176,6 +183,11 @@ def test_each_restore_timer_immediately_precedes_the_compiler_restore() -> None:
             f"{workflow_name}:{job_name} must mark the restore immediately "
             f"before the compiler cache, got mark {marks[0]} and restore "
             f"{compiler_restores[0]}"
+        )
+        assert ends[0] == compiler_restores[0] + 1, (
+            f"{workflow_name}:{job_name} must end the restore timer immediately "
+            f"after the compiler cache, got restore {compiler_restores[0]} and "
+            f"end {ends[0]}"
         )
 
 

@@ -169,6 +169,11 @@ def mark_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
     return Path(environ["EVIDENCE_DIR"]) / "marks" / f"{marker}-start"
 
 
+def _marker_file(environ: cabc.Mapping[str, str], name: str) -> Path:
+    """Return the stored file for a marker name, without a suffix."""
+    return Path(environ["EVIDENCE_DIR"]) / "marks" / name
+
+
 def seconds_since(environ: cabc.Mapping[str, str], marker: str) -> float | None:
     """Return seconds elapsed since a marker, or ``None`` when it is absent."""
     try:
@@ -176,6 +181,28 @@ def seconds_since(environ: cabc.Mapping[str, str], marker: str) -> float | None:
     except (OSError, ValueError):
         return None
     elapsed = time.time() - started
+    return round(elapsed, 3) if elapsed >= 0 else None
+
+
+def elapsed_between(
+    environ: cabc.Mapping[str, str], start: str, end: str
+) -> float | None:
+    """Return seconds between two markers, or ``None`` when either is absent.
+
+    Returns
+    -------
+    float | None
+        The non-negative interval, or ``None`` when a marker is missing or
+        unreadable.
+    """
+    begin_path = mark_path(environ, start)
+    finish_path = _marker_file(environ, end)
+    try:
+        begin = float(begin_path.read_text(encoding="utf-8").strip())
+        finish = float(finish_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    elapsed = finish - begin
     return round(elapsed, 3) if elapsed >= 0 else None
 
 
@@ -188,7 +215,11 @@ def write_mark(environ: cabc.Mapping[str, str], marker: str) -> bool:
         Whether the marker was persisted. A failure leaves one timing field
         unknown, which never fails the step that measures a paid transfer.
     """
-    path = mark_path(environ, marker)
+    path = (
+        _marker_file(environ, marker)
+        if marker == "restore-end"
+        else mark_path(environ, marker)
+    )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{time.time():.6f}\n", encoding="utf-8")

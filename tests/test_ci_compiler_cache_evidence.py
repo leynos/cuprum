@@ -307,3 +307,23 @@ def test_the_markdown_report_states_the_failure() -> None:
     """A report with no observations must say so rather than render a blank table."""
     rendered = report.render_markdown(summary_reader.build_summary([], [], {}, None))
     assert "insufficient-evidence" in rendered, rendered
+
+
+def test_the_restore_span_ends_at_its_end_marker(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The span must stop at the restore, not at the later snapshot."""
+    import time
+
+    marks = tmp = (
+        __import__("pathlib").Path(evidence_environment["EVIDENCE_DIR"]) / "marks"
+    )
+    tmp.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    (marks / "restore-start").write_text(f"{now - 10:.6f}\n", encoding="utf-8")
+    (marks / "restore-end").write_text(f"{now - 4:.6f}\n", encoding="utf-8")
+    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([stats_document()]))
+    state = writer.capture(evidence_environment)
+    assert state["restore_seconds"] == pytest.approx(6.0, abs=1.0), (
+        f"the restore span must be the interval between the markers, got {state}"
+    )

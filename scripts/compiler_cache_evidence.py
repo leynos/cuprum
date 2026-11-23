@@ -95,7 +95,7 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
         "phase": phase,
         "captured_at": schema.now(),
         "available": available,
-        "restore_seconds": probe.seconds_since(environ, "restore"),
+        "restore_seconds": probe.elapsed_between(environ, "restore", "restore-end"),
         "restore_bytes": probe.directory_bytes(environ),
         "sccache_version": version or None,
         "cache_backend": (
@@ -130,7 +130,7 @@ def mark(environ: cabc.Mapping[str, str]) -> int:
         must not fail the step that measures a paid transfer.
     """
     marker = environ.get("EVIDENCE_MARKER", "")
-    if marker not in {"restore", "save"}:
+    if marker not in {"restore", "restore-end", "save"}:
         print(f"{_WARNING}Invalid timing marker; the marker was omitted.")
         return 0
     if not probe.write_mark(environ, marker):

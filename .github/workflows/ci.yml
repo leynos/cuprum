@@ -155,6 +155,13 @@ jobs:
           key: ${{ env.SCCACHE_CACHE_KEY }}
           restore-keys: ${{ env.SCCACHE_CACHE_PREFIX }}
 
+      - name: Stop the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore-end
+
       - name: Record cache observations
         if: always()
         shell: bash
@@ -638,6 +645,13 @@ jobs:
       # Record the rendered key beside its result, so a reviewer can explain
       # any miss from the run summary alone rather than by re-deriving the
       # key from the workflow source.
+      - name: Stop the compiler-cache restore timer
+        if: env.LEG_RUNS == 'true'
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore-end
+
       - name: Record cache observations
         if: always() && env.LEG_RUNS == 'true'
         shell: bash
@@ -1048,6 +1062,13 @@ jobs:
       # Record the rendered key beside its result, so a reviewer can explain
       # any miss from the run summary alone rather than by re-deriving the
       # key from the workflow source.
+      - name: Stop the compiler-cache restore timer
+        if: always()
+        uses: ./.github/actions/compiler-cache-evidence
+        with:
+          mode: mark
+          marker: restore-end
+
       - name: Record cache observations
         if: always()
         shell: bash
