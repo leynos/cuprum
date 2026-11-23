@@ -195,9 +195,10 @@ zero cost.
 - **Owner:** the Cuprum maintainers (`leynos`).
 - **Review date:** 2027-11-22, or sooner if any nextest test exceeds the 300 s
   per-test allowance or a test binary starts a nested build.
-- **Rollback:** revert this ADR and its guard contract. Reopen issue [#606] and
-  repeat its Stage 1 and Stage 2 protocol against the new binary, using only
-  the existing required CI executions. Do not reintroduce a priority or a test
+- **Rollback:** revert the guard contract and record a superseding ADR that
+  reopens issue [#606]; do not delete this accepted record. Repeat Stage 1 and
+  Stage 2 of the original protocol against the new binary, using only the
+  existing required CI executions. Do not reintroduce a priority or a test
   group as an unmeasured default.
 
 ## Addendum (2026-11-23): a naturally cold observation
