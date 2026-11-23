@@ -25,7 +25,7 @@ use rstest_bdd_macros::scenario;
 use support::ObservedPump;
 
 /// The feature file, included so editing it rebuilds this module and the guard.
-const FEATURE_TEXT: &str = include_str!("../tests/features/public_stream_entry_points.feature");
+const FEATURE_TEXT: &str = include_str!("../../tests/features/public_stream_entry_points.feature");
 
 /// The path every `#[scenario]` binding must name, relative to the crate root.
 const FEATURE_PATH: &str = "tests/features/public_stream_entry_points.feature";

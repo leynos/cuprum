@@ -1,8 +1,6 @@
 //! Classification and resolution cases, including every rejection shape.
 
-//! Classification and resolution cases, including every rejection shape.
-
-use super::{classify, resolve};
+use super::{ChildReport, classify, resolve};
 use crate::unix_tests::ScenarioExpectation;
 
 const NAME: &str = "unix_tests::pump_transfers_a_preloaded_payload_to_the_sink";
@@ -12,6 +10,17 @@ fn expectation(title: &'static str, binding: &'static str) -> ScenarioExpectatio
         title,
         binding,
         requires_writer_probe: false,
+    }
+}
+
+/// Build a report from a run whose scenario succeeded.
+fn report<'a>(stdout: &'a str, stderr: &'a str) -> ChildReport<'a> {
+    ChildReport {
+        test_name: NAME,
+        succeeded: true,
+        stdout,
+        stderr,
+        requires_witness: false,
     }
 }
 
@@ -25,7 +34,7 @@ fn passing_output() -> String {
 #[test]
 fn accepts_a_single_passing_run() {
     assert_eq!(
-        classify(NAME, true, &passing_output(), "", false),
+        classify(&report(&passing_output(), "")),
         Ok(()),
         "a run reporting one passing test is acceptable evidence",
     );
@@ -36,8 +45,8 @@ fn rejects_a_run_that_selected_nothing() {
     let output = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; \
                   1 filtered out; finished in 0.00s\n";
 
-    let error = classify(NAME, true, output, "", false)
-        .expect_err("a run that selected nothing must not pass");
+    let error =
+        classify(&report(output, "")).expect_err("a run that selected nothing must not pass");
     assert!(
         error.contains("exactly one running test"),
         "the failure must name the empty run, found {error}",
@@ -51,8 +60,8 @@ fn rejects_an_ignored_result() {
          ignored; 0 measured; 0 filtered out\n",
     );
 
-    let error = classify(NAME, true, &output, "", false)
-        .expect_err("an ignored scenario must not count as executed");
+    let error =
+        classify(&report(&output, "")).expect_err("an ignored scenario must not count as executed");
     assert!(
         error.contains("did not report"),
         "the failure must name the missing result line, found {error}",
@@ -65,8 +74,11 @@ fn rejects_a_failed_result() {
         "running 1 test\ntest {NAME} ... FAILED\n\ntest result: FAILED. 0 passed; 1 failed\n",
     );
 
-    let error = classify(NAME, false, &output, "", false)
-        .expect_err("a failing scenario must not count as executed");
+    let failed = ChildReport {
+        succeeded: false,
+        ..report(&output, "")
+    };
+    let error = classify(&failed).expect_err("a failing scenario must not count as executed");
     assert!(
         error.contains("exited unsuccessfully"),
         "the failure must report the exit status, found {error}",
@@ -75,8 +87,12 @@ fn rejects_a_failed_result() {
 
 #[test]
 fn rejects_a_missing_witness() {
-    let error = classify(NAME, true, &passing_output(), "", true)
-        .expect_err("a writer-probe scenario must print its witness");
+    let output = passing_output();
+    let watched = ChildReport {
+        requires_witness: true,
+        ..report(&output, "")
+    };
+    let error = classify(&watched).expect_err("a writer-probe scenario must print its witness");
     assert!(
         error.contains("writer-probe witness"),
         "the failure must name the missing witness, found {error}",
@@ -88,7 +104,10 @@ fn accepts_a_present_witness() {
     let witness = crate::unix_tests::support::WRITER_PROBE_WITNESS;
 
     assert_eq!(
-        classify(NAME, true, &passing_output(), witness, true),
+        classify(&ChildReport {
+            requires_witness: true,
+            ..report(&passing_output(), witness)
+        }),
         Ok(()),
         "the witness must satisfy the writer-probe requirement",
     );
@@ -132,7 +151,7 @@ fn reports_a_missing_generated_test() {
 
 #[test]
 fn reports_an_ambiguous_generated_test() {
-    let listed = vec!["a::first_case".to_owned(), "b::first_case".to_owned()];
+    let listed = ["a::first_case".to_owned(), "b::first_case".to_owned()];
 
     let error = resolve(&listed, &[expectation("First case", "first_case")])
         .expect_err("an ambiguous binding must be reported");

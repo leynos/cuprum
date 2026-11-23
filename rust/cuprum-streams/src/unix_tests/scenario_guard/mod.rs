@@ -17,12 +17,12 @@
 mod parsing;
 mod runner;
 
-use parsing::{bound_scenarios, check_parity, declared_scenarios};
+use parsing::{ParityTable, bound_scenarios, check_parity, declared_scenarios};
 
 use super::{FEATURE_PATH, FEATURE_TEXT, SCENARIOS};
 
 /// The module source, included so the binding parser reads this test's code.
-const MODULE_SOURCE: &str = include_str!("../unix_tests.rs");
+const MODULE_SOURCE: &str = include_str!("../mod.rs");
 
 /// Every declared scenario must be bound by name and listed in the table.
 #[test]
@@ -35,13 +35,14 @@ fn every_scenario_is_declared_bound_and_expected() {
         bound_scenarios(MODULE_SOURCE, FEATURE_PATH),
         "the scenario bindings must parse",
     );
-    let expected: Vec<(&str, &str)> = SCENARIOS
+    let rows: Vec<(&str, &str)> = SCENARIOS
         .iter()
         .map(|entry| (entry.title, entry.binding))
         .collect();
+    let table = ParityTable::from_rows(&rows);
 
     expect_ok(
-        check_parity(&declared, &bound, &expected),
+        check_parity(&declared, &bound, &table),
         "the feature, the bindings, and the expectation table must agree",
     );
 }

@@ -80,18 +80,33 @@ fn resolve(
     }
 }
 
+/// One child run's report, as the classifier reads it.
+struct ChildReport<'a> {
+    /// The generated test name the child was told to run.
+    test_name: &'a str,
+    /// Whether the child exited successfully.
+    succeeded: bool,
+    /// The child's retained standard output.
+    stdout: &'a str,
+    /// The child's retained standard error, which carries the witness.
+    stderr: &'a str,
+    /// Whether this scenario is required to print the writer-probe witness.
+    requires_witness: bool,
+}
+
 /// Classify a child's own report as evidence that its scenario executed.
 ///
 /// The witness is looked for on `stderr` because libtest brackets the test
 /// body with the two halves of its result line: with `--nocapture`, a body that
 /// printed to `stdout` would split `test <name> ... ok` and defeat the check.
-fn classify(
-    test_name: &str,
-    succeeded: bool,
-    stdout: &str,
-    stderr: &str,
-    requires_witness: bool,
-) -> Result<(), String> {
+fn classify(report: &ChildReport<'_>) -> Result<(), String> {
+    let ChildReport {
+        test_name,
+        succeeded,
+        stdout,
+        stderr,
+        requires_witness,
+    } = *report;
     if !succeeded {
         return Err("the isolated child exited unsuccessfully".to_owned());
     }
@@ -124,7 +139,7 @@ fn list_tests(executable: &Path) -> Result<Vec<String>, String> {
     if !captured.status.success() {
         return Err(format!(
             "listing the test names failed with {}; stderr={}",
-            render_status(&captured.status),
+            render_status(captured.status),
             captured.stderr,
         ));
     }
@@ -148,17 +163,17 @@ fn run_isolated(executable: &Path, test_name: &str, requires_witness: bool) -> R
             "did not finish within {CHILD_DEADLINE:?} and was killed"
         ));
     }
-    classify(
+    let report = ChildReport {
         test_name,
-        captured.status.success(),
-        &captured.stdout,
-        &captured.stderr,
+        succeeded: captured.status.success(),
+        stdout: &captured.stdout,
+        stderr: &captured.stderr,
         requires_witness,
-    )
-    .map_err(|reason| {
+    };
+    classify(&report).map_err(|reason| {
         format!(
             "{reason}; status={}; stdout={}; stderr={}",
-            render_status(&captured.status),
+            render_status(captured.status),
             captured.stdout,
             captured.stderr,
         )
@@ -172,6 +187,45 @@ pub(super) fn execute_every_scenario(expected: &[ScenarioExpectation]) -> Result
     let listed = list_tests(&executable)?;
     let resolved = resolve(&listed, expected)?;
 
+    reject_unclaimed(&listed, &resolved)?;
+
+    let mut tally = Tally::default();
+    for scenario in expected {
+        let Some(test_name) = resolved.get(scenario.binding) else {
+            tally.failures.push(format!(
+                "{:?} was not resolved to a generated test",
+                scenario.title,
+            ));
+            continue;
+        };
+        let attempt = Attempt {
+            scenario,
+            test_name,
+        };
+        record_outcome(&executable, &attempt, &mut tally);
+    }
+
+    if !tally.failures.is_empty() {
+        return Err(tally.failures.join("; "));
+    }
+    if tally.executed != expected.len() {
+        return Err(format!(
+            "{} of {} declared scenarios executed successfully",
+            tally.executed,
+            expected.len(),
+        ));
+    }
+    Ok(())
+}
+
+/// Fail when a scenario-shaped test exists that no expectation claims.
+///
+/// The guard's own tests are excluded by module prefix: they are ordinary unit
+/// tests for this guard, not scenarios.
+fn reject_unclaimed(
+    listed: &[String],
+    resolved: &BTreeMap<&'static str, String>,
+) -> Result<(), String> {
     let claimed: BTreeSet<&str> = resolved.values().map(String::as_str).collect();
     let unexpected: Vec<&str> = listed
         .iter()
@@ -180,40 +234,39 @@ pub(super) fn execute_every_scenario(expected: &[ScenarioExpectation]) -> Result
         .filter(|name| !name.starts_with(GUARD_MODULE))
         .filter(|name| !claimed.contains(name))
         .collect();
-    if !unexpected.is_empty() {
-        return Err(format!(
-            "unexpected tests under {TEST_FILTER:?} that no scenario claims: {unexpected:?}"
-        ));
+    if unexpected.is_empty() {
+        return Ok(());
     }
+    Err(format!(
+        "unexpected tests under {TEST_FILTER:?} that no scenario claims: {unexpected:?}"
+    ))
+}
 
-    let mut failures = Vec::new();
-    let mut executed = 0_usize;
-    for scenario in expected {
-        let Some(test_name) = resolved.get(scenario.binding) else {
-            failures.push(format!(
-                "{:?} was not resolved to a generated test",
-                scenario.title,
-            ));
-            continue;
-        };
-        match run_isolated(&executable, test_name, scenario.requires_writer_probe) {
-            Ok(()) => executed = executed.saturating_add(1),
-            Err(reason) => {
-                failures.push(format!("{:?} ({test_name}): {reason}", scenario.title));
-            }
-        }
+/// Run one scenario and file its pass or failure by title.
+fn record_outcome(executable: &Path, attempt: &Attempt<'_>, tally: &mut Tally) {
+    let Attempt {
+        scenario,
+        test_name,
+    } = *attempt;
+    match run_isolated(executable, test_name, scenario.requires_writer_probe) {
+        Ok(()) => tally.executed = tally.executed.saturating_add(1),
+        Err(reason) => tally
+            .failures
+            .push(format!("{:?} ({test_name}): {reason}", scenario.title)),
     }
+}
 
-    if !failures.is_empty() {
-        return Err(failures.join("; "));
-    }
-    if executed != expected.len() {
-        return Err(format!(
-            "{executed} of {} declared scenarios executed successfully",
-            expected.len(),
-        ));
-    }
-    Ok(())
+/// One scenario resolved to the generated test that must run it.
+struct Attempt<'a> {
+    scenario: &'a ScenarioExpectation,
+    test_name: &'a str,
+}
+
+/// Running totals for the isolated execution guard.
+#[derive(Default)]
+struct Tally {
+    executed: usize,
+    failures: Vec<String>,
 }
 
 /// A child's exit status and bounded output.
@@ -286,15 +339,14 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
     thread::spawn(move || {
         let mut retained = Vec::new();
         let mut chunk = [0_u8; 4096];
-        loop {
-            match pipe.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(count) => {
-                    let room = RETAINED_BYTES.saturating_sub(retained.len());
-                    if let Some(prefix) = chunk.get(..room.min(count)) {
-                        retained.extend_from_slice(prefix);
-                    }
-                }
+        while let Ok(count) = pipe.read(&mut chunk) {
+            if count == 0 {
+                break;
+            }
+            let room = RETAINED_BYTES.saturating_sub(retained.len());
+            let keep = room.min(count);
+            if let Some(prefix) = chunk.get(..keep) {
+                retained.extend_from_slice(prefix);
             }
         }
         String::from_utf8_lossy(&retained).into_owned()
@@ -302,11 +354,10 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
 }
 
 /// Render an exit status for a diagnostic without assuming a code exists.
-fn render_status(status: &ExitStatus) -> String {
-    match status.code() {
-        Some(code) => format!("exit code {code}"),
-        None => format!("{status:?}"),
-    }
+fn render_status(status: ExitStatus) -> String {
+    status
+        .code()
+        .map_or_else(|| format!("{status:?}"), |code| format!("exit code {code}"))
 }
 
 #[cfg(test)]

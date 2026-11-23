@@ -1,8 +1,6 @@
 //! Parser and parity cases, including every failure shape the guard names.
 
-//! Parser and parity cases, including every failure shape the guard names.
-
-use super::{Bound, Declared, bound_scenarios, check_parity, declared_scenarios};
+use super::{Bound, Declared, ParityTable, bound_scenarios, check_parity, declared_scenarios};
 
 const PATH: &str = "tests/features/demo.feature";
 
@@ -126,7 +124,8 @@ fn parity_accepts_matching_multisets() {
         line: 1,
     }];
 
-    let outcome = check_parity(&declared, &bound, &[("First case", "first_case")]);
+    let table = ParityTable::from_rows(&[("First case", "first_case")]);
+    let outcome = check_parity(&declared, &bound, &table);
 
     assert_eq!(outcome, Ok(()), "matching declarations must pass parity");
 }
@@ -149,7 +148,8 @@ fn parity_reports_a_duplicate_declared_title() {
         line: 1,
     }];
 
-    let error = check_parity(&declared, &bound, &[("Same case", "same_case")])
+    let table = ParityTable::from_rows(&[("Same case", "same_case")]);
+    let error = check_parity(&declared, &bound, &table)
         .expect_err("a duplicate declaration must fail parity");
     assert!(
         error.contains("appears 2 times"),
@@ -169,7 +169,7 @@ fn parity_reports_a_declaration_without_a_binding() {
             line: 5,
         },
     ];
-    let bound = vec![
+    let bound = [
         Bound {
             name: "Bound case".to_owned(),
             function: "bound_case".to_owned(),
@@ -181,12 +181,15 @@ fn parity_reports_a_declaration_without_a_binding() {
             line: 9,
         },
     ];
-    let expected = [
+    let table = ParityTable::from_rows(&[
         ("Bound case", "bound_case"),
         ("Unbound case", "unbound_case"),
-    ];
+    ]);
+    let Some(first_bound) = bound.first().cloned() else {
+        panic!("the fixture must declare a binding to drop");
+    };
 
-    let error = check_parity(&declared, &[bound[0].clone()], &expected)
+    let error = check_parity(&declared, &[first_bound], &table)
         .expect_err("a declaration without a binding must fail parity");
     assert!(
         error.contains("has no matching scenario binding name"),
@@ -213,7 +216,8 @@ fn parity_reports_an_unexpected_binding() {
         },
     ];
 
-    let error = check_parity(&declared, &bound, &[("Known case", "known_case")])
+    let table = ParityTable::from_rows(&[("Known case", "known_case")]);
+    let error = check_parity(&declared, &bound, &table)
         .expect_err("an unexpected binding must fail parity");
     assert!(
         error.contains("Extra case") && error.contains("has no matching"),

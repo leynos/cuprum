@@ -100,11 +100,9 @@ pub(super) fn sink_expectation(
     payload: Option<&Payload>,
 ) -> StepResult<Vec<u8>, String> {
     match contents {
-        "the payload" => payload
-            .map(|payload| payload.bytes.to_vec())
-            .ok_or_else(|| {
-                "the feature file expects the payload, but no payload label was recorded".to_owned()
-            }),
+        "the payload" => payload.map(|named| named.bytes.to_vec()).ok_or_else(|| {
+            "the feature file expects the payload, but no payload label was recorded".to_owned()
+        }),
         "nothing" => Ok(Vec::new()),
         other => Err(format!(
             "the feature file names an unknown sink expectation: {other:?}"

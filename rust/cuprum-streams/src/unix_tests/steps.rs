@@ -52,10 +52,10 @@ fn recorded_payload(context: &StreamContext) -> StepResult<&'static support::Pay
 fn optional_payload(
     context: &StreamContext,
 ) -> StepResult<Option<&'static support::Payload>, String> {
-    match context.payload_label.get() {
-        Some(label) => payload_for(&label).map(Some),
-        None => Ok(None),
-    }
+    context
+        .payload_label
+        .get()
+        .map_or(Ok(None), |label| payload_for(&label).map(Some))
 }
 
 #[given("a source pipe preloaded with the {label} payload")]
@@ -125,13 +125,13 @@ fn a_panicking_reader_over_a_live_descriptor(context: &StreamContext) -> StepRes
 fn the_public_pump_runs(context: &StreamContext, size: isize) -> StepResult<(), String> {
     let buffer_size = buffer_size(size)?;
     let writer = take(&context.sink_writer, "sink writer")?;
-    let mut result = None;
+    let mut pumped = None;
     let captured = capture(Level::DEBUG, || {
-        result = context
+        pumped = context
             .reader
             .with_ref(|reader| pump_stream(reader, writer, buffer_size));
     });
-    let result = result
+    let result = pumped
         .ok_or_else(|| "no borrowed reader was recorded; a Given step must run first".to_owned())?;
     context.hangup_logged.set(captured.event_matches(
         Level::DEBUG,
