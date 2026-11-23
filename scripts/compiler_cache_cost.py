@@ -64,7 +64,7 @@ def cost(
     by_workflow: dict[str, float | None] = {
         workflow: None if workflow in incomplete else total
         for workflow, total in totals.items()
-    } | {workflow: None for workflow in incomplete}
+    } | dict.fromkeys(incomplete)
     critical = critical_paths(records, jobs, names)
     verified = console is not None and console.get("billing_rounding") == "verified"
     return {
