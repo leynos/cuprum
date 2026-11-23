@@ -25,13 +25,8 @@ import typing as typ
 
 import pytest
 
-from tests.helpers.ci_expressions import (
-    ExpressionError,
-    arm_condition,
-    evaluate,
-    normalized,
-    unwrap,
-)
+from tests.helpers.ci_expression_arms import arm_condition, normalized
+from tests.helpers.ci_expressions import ExpressionError, evaluate, unwrap
 from tests.helpers.ci_placement import AUTHOR_FIELD, FORK_FIELD, placement
 from tests.helpers.ci_runners import (
     CREDENTIALS_STEP,

@@ -46,137 +46,16 @@ from __future__ import annotations
 import math
 import typing as typ
 
-from scripts import compiler_cache_jobs as jobs_reader
+from scripts import compiler_cache_cost as cost_reader
 from scripts import compiler_cache_pairs as pairs_reader
 from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_validation as validation
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import datetime as dt
 
 PAIRS_REQUIRED = 5
 MINIMUM_FRACTION = 0.05
-
-
-def _cost(
-    records: cabc.Sequence[cabc.Mapping[str, object]],
-    jobs: cabc.Sequence[cabc.Mapping[str, object]],
-    names: cabc.Mapping[str, str],
-    console: cabc.Mapping[str, object] | None,
-) -> dict[str, object]:
-    """Return paid job-seconds per workflow and the critical path.
-
-    A job with several brackets is counted once: the records are deduplicated
-    by workflow, run, attempt, job, leg, and bracket before the seconds are
-    summed, so three typecheck brackets do not treble one job's cost.
-
-    Returns
-    -------
-    dict[str, object]
-        Paid seconds and critical path per workflow, the billing label, and
-        the console's population, transfer, and incremental cost fields.
-    """
-    per_job: dict[tuple[str, str, str, str], float] = {}
-    for record in records:
-        job = jobs_reader.matching_job(record, jobs, names)
-        if job is None:
-            continue
-        key = (
-            str(record["workflow"]),
-            str(record["run_id"]),
-            str(record["run_attempt"]),
-            f"{record['job']}/{record['matrix_leg']}",
-        )
-        seconds = jobs_reader.job_seconds(job)
-        if seconds is not None:
-            per_job[key] = seconds
-    by_workflow: dict[str, float] = {}
-    for (workflow, _run, _attempt, _key), seconds in per_job.items():
-        by_workflow[workflow] = round(by_workflow.get(workflow, 0.0) + seconds, 3)
-    critical = _critical_paths(records, jobs, names)
-    verified = console is not None and console.get("billing_rounding") == "verified"
-    return {
-        "paid_job_seconds_by_workflow": by_workflow or None,
-        "critical_path_seconds_by_workflow": critical or None,
-        "billing": "verified" if verified else "proxy",
-        "initial_population_seconds": _console_number(
-            console, "initial_population_seconds"
-        ),
-        "incremental_transfer_seconds": _console_number(
-            console, "incremental_transfer_seconds"
-        ),
-        "incremental_cost_seconds": _console_number(
-            console, "incremental_cost_seconds", signed=True
-        ),
-    }
-
-
-def _critical_paths(
-    records: cabc.Sequence[cabc.Mapping[str, object]],
-    jobs: cabc.Sequence[cabc.Mapping[str, object]],
-    names: cabc.Mapping[str, str],
-) -> dict[str, float]:
-    """Return each workflow's longest run, measured from job timestamps.
-
-    Returns
-    -------
-    dict[str, float]
-        The longest run span per workflow, in seconds, or an empty mapping
-        when no record could be joined to the jobs document.
-    """
-    spans: dict[tuple[str, str, str], list[dt.datetime]] = {}
-    for record in records:
-        job = jobs_reader.matching_job(record, jobs, names)
-        if job is None:
-            continue
-        started = jobs_reader.instant(job.get("started_at"))
-        completed = jobs_reader.instant(job.get("completed_at"))
-        if started is None or completed is None:
-            continue
-        spans.setdefault(
-            (
-                str(record["workflow"]),
-                str(record["run_id"]),
-                str(record["run_attempt"]),
-            ),
-            [],
-        ).extend([started, completed])
-    critical: dict[str, float] = {}
-    for (workflow, _run, _attempt), instants in spans.items():
-        span = (max(instants) - min(instants)).total_seconds()
-        critical[workflow] = round(max(critical.get(workflow, 0.0), span), 3)
-    return critical
-
-
-def _console_number(
-    console: cabc.Mapping[str, object] | None, name: str, *, signed: bool = False
-) -> float | None:
-    """Return one finite numeric console field.
-
-    Parameters
-    ----------
-    console : collections.abc.Mapping[str, object] | None
-        The dated console observation, or ``None``.
-    name : str
-        The field to read.
-    signed : bool
-        Accept a negative value. Durations are non-negative; an incremental
-        cost may be negative when the change saves money.
-
-    Returns
-    -------
-    float | None
-        The field, or ``None`` when the console is absent, the field is absent,
-        or the value is not a finite number.
-    """
-    if console is None:
-        return None
-    value = console.get(name)
-    if not validation.number(value):
-        return None
-    number = float(typ.cast("float", value))
-    return number if signed or number >= 0 else None
 
 
 def _gate(
@@ -330,13 +209,15 @@ def _decision(
         the verdict.
     """
     measured = _measurements(family)
-    incremental = _console_number(console, "incremental_cost_seconds", signed=True)
+    incremental = cost_reader.console_number(
+        console, "incremental_cost_seconds", signed=True
+    )
     enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
     worth_it = _worth_it(measured.saving, measured.floor, measured.transfer)
     verified = console is not None and console.get("billing_rounding") == "verified"
     break_even = (
         _break_even(
-            _console_number(console, "initial_population_seconds"),
+            cost_reader.console_number(console, "initial_population_seconds"),
             measured.transfer,
             measured.saving,
         )
@@ -399,6 +280,6 @@ def build_summary(
         },
         "observations": pairs_reader.classify_observations(records, jobs, names),
         "families": families,
-        "cost": _cost(records, jobs, names, console),
+        "cost": cost_reader.cost(records, jobs, names, console),
         "gate": _gate(families, console),
     }

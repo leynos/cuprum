@@ -30,8 +30,6 @@ Examples
 False
 >>> evaluate("fork == 'yes'", {"fork": "yes"})
 True
->>> arm_condition("(fork || author == 'bot') && 'local' || 'gha'", "local", "gha")
-"(fork || author == 'bot')"
 """
 
 from __future__ import annotations
@@ -42,7 +40,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("ExpressionError", "arm_condition", "evaluate", "referenced_names", "unwrap")
+__all__ = ("ExpressionError", "evaluate", "referenced_names", "unwrap")
 
 #: One token, longest operator first so `&&` is never read as two `&`.
 _TOKEN = re.compile(
@@ -318,90 +316,3 @@ def evaluate(expression: str, values: cabc.Mapping[str, object]) -> object:
         message = "empty expression"
         raise ExpressionError(message)
     return _Parser(tokens, values).parse()
-
-
-def _literal_at(tokens: list[Token], index: int, expected: str) -> None:
-    """Require one token to be the single-quoted ``expected`` literal."""
-    kind, spelling = tokens[index]
-    if kind != "string" or spelling != f"'{expected}'":
-        message = f"the final arm must be {expected!r}, got {spelling!r}"
-        raise ExpressionError(message)
-
-
-def arm_condition(expression: str, hosted: str, owned: str) -> str:
-    """Return the condition that selects between two string arms.
-
-    Parameters
-    ----------
-    expression : str
-        An expression body of the form
-        ``<condition> && '<hosted>' || '<owned>'``.
-    hosted : str
-        The literal the condition selects when it is true.
-    owned : str
-        The literal it selects otherwise.
-
-    Returns
-    -------
-    str
-        The condition text, whitespace-normalized, so two expressions can be
-        compared without depending on their layout.
-
-    Raises
-    ------
-    ExpressionError
-        When the expression is not that two-arm shape. The arms are read from
-        the right, past every group, so a condition that itself contains `||`
-        is not split at its own operator.
-    """
-    tokens = _tokens(expression)
-    alternations = _top_level(tokens, "||")
-    if not alternations:
-        message = f"expected `|| '{owned}'`, got {expression!r}"
-        raise ExpressionError(message)
-    split = alternations[-1]
-    if len(tokens) != split + 2:
-        message = f"extra tokens after the `{owned}` arm: {expression!r}"
-        raise ExpressionError(message)
-    _literal_at(tokens, split + 1, owned)
-    left = tokens[:split]
-    # A third arm such as `... || 'gha' || 's3'` leaves `'gha'` on the right of
-    # an inner alternation; the conjunction check below then sees it as the
-    # hosted arm and refuses, which is the intended failure.
-    conjunctions = _top_level(left, "&&")
-    if not conjunctions:
-        message = f"expected `&& '{hosted}'`, got {expression!r}"
-        raise ExpressionError(message)
-    and_index = conjunctions[-1]
-    if len(left) != and_index + 2:
-        message = f"extra tokens after the `{hosted}` arm: {expression!r}"
-        raise ExpressionError(message)
-    _literal_at(left, and_index + 1, hosted)
-    if _top_level(left[:and_index], "||"):
-        message = f"the condition before the {hosted!r} arm is an ungrouped alternation"
-        raise ExpressionError(message)
-    condition = " ".join(token for _, token in left[:and_index])
-    if not condition:
-        message = f"empty condition in {expression!r}"
-        raise ExpressionError(message)
-    return condition
-
-
-def normalized(expression: str) -> str:
-    """Return an expression with its whitespace collapsed.
-
-    Parameters
-    ----------
-    expression : str
-        An expression body, with or without the ``${{ }}`` wrapper.
-
-    Returns
-    -------
-    str
-        The body with every run of whitespace collapsed to one space.
-    """
-    try:
-        body = unwrap(expression)
-    except ExpressionError:
-        body = expression
-    return " ".join(body.split())
