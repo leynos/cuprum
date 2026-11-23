@@ -212,7 +212,7 @@ def test_a_family_with_only_cold_records_still_reports_a_decision() -> None:
         Observation(run_id="100", backend="local", hits=0, restore_hit=False),
     ]
     built = summary(records, jobs([100], 240))
-    assert family(built)["pairs"] == 0
+    assert family(built)["pairs"] == 0, "a cold family cannot pair"
     assert decisions(built)[0]["verdict"] == "insufficient-evidence", (
         f"a cold family must still be reported, got {built['gate']}"
     )
