@@ -13,7 +13,11 @@ enough. The reader is still attached to a pipe nobody will read again, so a
 producer that keeps writing fills the pipe buffer and blocks indefinitely while
 pipeline completion waits for every stage. ``_release_stream_reader_transport``
 closes that reader transport, which hands the producer a broken pipe so its own
-write fails and it exits, keeping cleanup bounded.
+write normally fails and it exits. The release is best-effort: a transport that
+is absent, already closing, or refuses to close leaves the producer unreleased,
+and a producer that handles the broken pipe without exiting keeps running. Use a
+configured pipeline timeout when completion must be bounded whatever the
+producer does.
 
 Consumed by ``cuprum._streams`` (which re-exports this surface) and the pipeline
 execution layer. ``_pump_stream`` closes any supplied writer once relay
@@ -157,8 +161,10 @@ async def _relay_chunks(
 
     A bounded drain that reaches EOF is the ordinary early-close outcome. One
     that times out leaves the upstream reader attached but unread, so the reader
-    is released before returning: the producer then meets a broken pipe instead
-    of a pipe buffer that never drains, and pipeline completion stays bounded.
+    is released before returning: the producer then normally meets a broken pipe
+    instead of a pipe buffer that never drains. That release is best-effort, so a
+    configured pipeline timeout still bounds completion when the producer
+    survives the broken pipe.
 
     Returns
     -------

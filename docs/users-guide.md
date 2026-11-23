@@ -1181,20 +1181,30 @@ result.
 An interior stage's stdout is pumped into the next stage's stdin. If a
 downstream stage exits before the upstream producer has finished, Cuprum keeps
 draining the upstream output for a bounded window, so a producer that writes a
-finite burst still finishes normally. If that window expires, Cuprum closes the
-upstream read transport rather than leaving it open and unread. A producer that
-is still writing then receives a broken pipe and normally exits non-zero, so
-the pipeline settles promptly instead of waiting for a stage blocked on a full
-pipe that nothing drains. That failure counts like any other: it can be the
-pipeline's first failure, so the fail-fast rule above also terminates any stage
-still running, including a downstream stage that had stopped reading but had
-not yet exited. In that case `PipelineResult.ok` is `False` because the
+finite burst usually finishes normally. If that window expires, Cuprum closes
+the upstream read transport rather than leaving it open and unread. A producer
+that is still writing then receives a broken pipe and normally exits non-zero,
+so the pipeline settles promptly instead of waiting for a stage blocked on a
+full pipe that nothing drains. That failure counts like any other: it can be
+the pipeline's first failure, so the fail-fast rule above also terminates any
+stage still running, including a downstream stage that had stopped reading but
+had not yet exited. In that case `PipelineResult.ok` is `False` because the
 producer failed, while every stage's recorded exit status and captured output
 remain available in `PipelineResult.stages`.
 
+The release is best-effort, so it narrows the problem rather than removing it.
+A burst can outlast the drain window, the reader may have no transport to close
+or one that is already closing, a close can fail, and a producer can ignore the
+broken pipe and keep writing. When completion must be bounded whatever the
+producer does, pass a pipeline `timeout` so the run ends with `TimeoutExpired`
+instead of waiting on that stage.
+
 The bounded drain and the reader close belong to the pure-Python pump. A hop
 that declines the Rust backend, and every hop of a Python-backend pipeline, use
-it, so the behaviour is the same whichever reason selected it.
+it, so the behaviour is the same whichever reason selected it. A successful
+native Rust hand-off does not: its transfer loop has no bounded post-close
+window to expire, so a producer that never stops writing keeps that hop busy
+for as long as it writes.
 
 ## Run commands concurrently
 
