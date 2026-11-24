@@ -18,7 +18,12 @@ and is re-exported here (``_pump_stream``, ``_close_stream_writer``,
 unchanged, as is ``_StreamConfig``. Used by the pipeline and single-command
 execution layers, it mirrors the optional Rust backend ``cuprum._streams_rs``.
 ``_pump_stream`` closes any supplied writer once relay completes or when no
-reader is supplied, so callers must not reuse the writer afterwards.
+reader is supplied, so callers must not reuse the writer afterwards. It also
+attempts to close the upstream reader when its bounded post-close drain times
+out, which normally releases the producer of an early-closed stage from a pipe
+that is never drained; the close is best-effort, so a missing transport, an
+already-closing one, or a failed close may leave the producer unreleased.
+Callers must not reuse that reader either.
 """
 
 from __future__ import annotations

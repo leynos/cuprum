@@ -1,7 +1,11 @@
 """Behavioural tests for pipeline execution under explicit backend selection.
 
 These BDD scenarios verify that pipelines produce correct results regardless
-of which stream backend (Python or Rust) handles inter-stage data pumping.
+of which stream backend (Python or Rust) handles inter-stage data pumping, and
+that a fallback hop releases an upstream producer whose consumer exits early.
+The ``Given`` and ``When`` steps live in
+:mod:`tests.behaviour._stream_backend_pipeline_steps`; the ``Then`` steps stay
+here because only ``test_*.py`` files may use ``assert``.
 """
 
 from __future__ import annotations
@@ -10,12 +14,11 @@ import sys
 import typing as typ
 
 import pytest
-from pytest_bdd import given, parsers, scenario, then, when
+from pytest_bdd import scenario, then
 
-from cuprum import ScopeConfig, _rust_backend, scoped, sh
+from cuprum import _rust_backend, sh
 from cuprum._backend import StreamBackend, _check_rust_available, get_stream_backend
 from cuprum._testing import (
-    force_python_pump_fallback,
     reset_pump_stream_dispatch_for_testing,
     set_rust_availability_for_testing,
 )
@@ -33,8 +36,10 @@ from tests.helpers.catalogue import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum.program import Program
     from cuprum.sh import PipelineResult
+    from tests.behaviour._stream_backend_pipeline_steps import _PipelineRun
+
+pytest_plugins = ("tests.behaviour._stream_backend_pipeline_steps",)
 
 
 @pytest.fixture
@@ -145,159 +150,18 @@ def test_pipeline_forced_fallback() -> None:
 
 @scenario(
     "../features/stream_backend_pipeline.feature",
+    "A continuing producer settles when the Rust pump falls back",
+)
+def test_pipeline_fallback_releases_continuing_producer() -> None:
+    """Python fallback pumping settles a producer that never stops writing."""
+
+
+@scenario(
+    "../features/stream_backend_pipeline.feature",
     "Pipeline raises when Rust is forced but unavailable",
 )
 def test_pipeline_forced_rust_unavailable_error() -> None:
     """Pipeline surfaces ImportError when Rust is forced but unavailable."""
-
-
-# -- Given steps --------------------------------------------------------------
-
-
-@given(
-    parsers.parse("the stream backend is set to {backend}"),
-    target_fixture="backend_env",
-)
-def given_stream_backend(
-    monkeypatch: pytest.MonkeyPatch,
-    backend: str,
-) -> str:
-    """Set the stream backend environment variable.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Pytest monkeypatch for environment variable isolation.
-    backend : str
-        The backend identifier to set.
-
-    Returns
-    -------
-    str
-        The backend identifier that was set.
-    """
-    _check_rust_available.cache_clear()
-    get_stream_backend.cache_clear()
-    monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend)
-    return backend
-
-
-@given("the Rust extension is reported as available")
-def given_rust_available() -> None:
-    """Force the Rust availability probe to return True."""
-    set_rust_availability_for_testing(is_available=True)
-
-
-@given(
-    "the Rust extension is not available for pipeline execution",
-)
-def given_rust_unavailable() -> None:
-    """Force the Rust availability probe to return False."""
-    set_rust_availability_for_testing(is_available=False)
-
-
-@given(
-    "inter-stage file descriptor extraction fails",
-    target_fixture="python_pump_fallback_counter",
-)
-def given_fd_extraction_fails() -> dict[str, int]:
-    """Force FD extraction to fail so dispatch falls back to Python pumping.
-
-    Returns
-    -------
-    dict[str, int]
-        Mutable call counter updated when the Python fallback pump executes.
-    """
-    return force_python_pump_fallback()
-
-
-@given(
-    "a simple two stage uppercase pipeline",
-    target_fixture="pipeline_under_test",
-)
-def given_uppercase_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
-    """Create a two stage pipeline that uppercases its input.
-
-    Returns
-    -------
-    tuple[sh.Pipeline, frozenset[Program]]
-        The pipeline and the allowlist of programs required.
-    """
-    return _make_echo_python_pipeline(
-        "import sys; sys.stdout.write(sys.stdin.read().upper())",
-    )
-
-
-@given(
-    "a pipeline with an immediately exiting downstream stage",
-    target_fixture="pipeline_under_test",
-)
-def given_short_lived_downstream_pipeline() -> tuple[sh.Pipeline, frozenset[Program]]:
-    """Create a pipeline whose downstream stage does not read stdin.
-
-    Returns
-    -------
-    tuple[sh.Pipeline, frozenset[Program]]
-        The pipeline and the allowlist of programs required.
-    """
-    return _make_echo_python_pipeline(
-        "import sys; sys.stdout.write('OK')",
-    )
-
-
-# -- When steps ---------------------------------------------------------------
-
-
-@when(
-    "I run the pipeline synchronously",
-    target_fixture="pipeline_result",
-)
-def when_run_sync(
-    pipeline_under_test: tuple[sh.Pipeline, frozenset[Program]],
-) -> PipelineResult:
-    """Execute the pipeline via ``run_sync()``.
-
-    Parameters
-    ----------
-    pipeline_under_test : tuple[sh.Pipeline, frozenset[Program]]
-        The pipeline and its required allowlist.
-
-    Returns
-    -------
-    PipelineResult
-        The result of the synchronous pipeline execution.
-    """
-    pipeline, allowlist = pipeline_under_test
-    with scoped(ScopeConfig(allowlist=allowlist)):
-        return pipeline.run_sync()
-
-
-@when(
-    "I attempt to run the pipeline synchronously",
-    target_fixture="pipeline_error",
-)
-def when_attempt_run_sync(
-    pipeline_under_test: tuple[sh.Pipeline, frozenset[Program]],
-) -> ImportError:
-    """Execute ``run_sync()`` and capture the forced-rust import failure.
-
-    Parameters
-    ----------
-    pipeline_under_test : tuple[sh.Pipeline, frozenset[Program]]
-        The pipeline and its required allowlist.
-
-    Returns
-    -------
-    ImportError
-        The ImportError raised when forced Rust is unavailable.
-    """
-    pipeline, allowlist = pipeline_under_test
-    with (
-        scoped(ScopeConfig(allowlist=allowlist)),
-        pytest.raises(ImportError, match="CUPRUM_STREAM_BACKEND") as exc_info,
-    ):
-        pipeline.run_sync()
-    return exc_info.value
 
 
 # -- Then steps ---------------------------------------------------------------
@@ -329,6 +193,40 @@ def then_all_stages_ok(pipeline_result: PipelineResult) -> None:
     assert pipeline_result.ok is True, "pipeline result should indicate success"
     assert all(stage.exit_code == 0 for stage in pipeline_result.stages), (
         "every stage should exit with code 0"
+    )
+
+
+@then("the pipeline settles within its deadline")
+def then_pipeline_settles_within_deadline(pipeline_run: _PipelineRun) -> None:
+    """Assert the pipeline settled well inside its configured timeout.
+
+    Parameters
+    ----------
+    pipeline_run : _PipelineRun
+        The timed run under the release deadline.
+    """
+    assert pipeline_run.elapsed_s < pipeline_run.deadline_s / 2, (
+        "a released producer must not consume the pipeline deadline: "
+        f"took {pipeline_run.elapsed_s:.2f}s of {pipeline_run.deadline_s}s"
+    )
+
+
+@then("the early consumer reports completion and exits successfully")
+def then_early_consumer_settles(pipeline_run: _PipelineRun) -> None:
+    """Assert the early consumer kept its own output and a clean exit status.
+
+    Parameters
+    ----------
+    pipeline_run : _PipelineRun
+        The timed run under the release deadline.
+    """
+    assert pipeline_run.result.stdout == "done", (
+        "the early consumer should report completion, got "
+        f"{pipeline_run.result.stdout!r}"
+    )
+    assert pipeline_run.result.stages[1].exit_code == 0, (
+        "the early consumer should exit cleanly, got "
+        f"{pipeline_run.result.stages[1].exit_code}"
     )
 
 
