@@ -4194,8 +4194,8 @@ importing the private modules directly.
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
-  `_release_stream_reader_transport` closes the upstream reader transport after
-  a timed-out post-close drain, and
+  `_release_stream_reader_transport` attempts to close the upstream reader
+  transport after a timed-out post-close drain, and
   `_log_suppressed_stream_close_error(event, operation, exc)` takes the event
   separately so its log record says which direction failed: the reader release
   reports `stream_reader_release_suppressed`, while writer teardown reports
