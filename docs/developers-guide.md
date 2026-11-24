@@ -2312,11 +2312,27 @@ scenario-level contract.
 Stream pumping continues to drain the upstream reader after
 `_write_to_stream_writer` reports `_WriteOutcome.CLOSED`. `_pump_stream` closes
 the writer in a `finally` block, so writer cleanup runs after success,
-exceptions, and cancellation. Tests cover this contract at four levels:
+exceptions, and cancellation. When that bounded post-close drain reports
+`POST_CLOSE_DRAIN_TIMEOUT`, `_pump_stream` also calls
+`_release_stream_reader_transport`, which closes the reader transport so an
+early-closed stage's producer normally meets a broken pipe instead of a pipe
+nobody drains. The release is best-effort: it closes only a present, open
+transport, and it suppresses `RuntimeError` and `OSError` at `DEBUG`, because a
+pipeline timeout is still what bounds completion when the producer survives.
+EOF, `DOWNSTREAM_CLOSED`, the writerless drain and cancellation keep their
+earlier behaviour; see
+[design section 13.6](cuprum-design.md#136-thread-safety-and-asyncio-integration)
+for the rule and its limits. Tests cover this contract at five levels:
 
 - direct helper tests in `cuprum/unittests/test_cqrs_helpers.py`
 - runtime behaviour and stream-drain properties in
   `cuprum/unittests/test_stream_pump_runtime_behaviour.py`
+- the release and its skip paths in
+  `cuprum/unittests/test_stream_pump_reader_release.py`, which uses the
+  transport doubles in `cuprum/unittests/_stream_pump_support.py`; reuse those
+  doubles rather than writing another fake reader, and reuse the
+  `early_close_pipeline` helper in `tests/helpers/catalogue.py` for the
+  continuing-producer case, including the forced-fallback behaviour scenario
 - observe-task assertions in `cuprum/unittests/test_observe.py`
 - CQRS hook and task-scheduling behaviour in
   `cuprum/unittests/test_cqrs_hook_behaviour.py`, covering allowlist
@@ -4178,6 +4194,12 @@ importing the private modules directly.
 - `cuprum/_pipeline_stream_results.py` — pipe-result triage for pipeline
   stages.
 - `cuprum/_streams_pump.py` — the stream pump loop with backpressure.
+  `_release_stream_reader_transport` closes the upstream reader transport after
+  a timed-out post-close drain, and
+  `_log_suppressed_stream_close_error(event, operation, exc)` takes the event
+  separately so its log record says which direction failed: the reader release
+  reports `stream_reader_release_suppressed`, while writer teardown reports
+  `stream_writer_close_suppressed`.
 - `cuprum/_stream_transport.py` — the transport a stream object answers to,
   consulting `StreamWriter.transport` and `StreamReader._transport`. It is a
   leaf importing nothing from `cuprum`, shared by the pump's reader release,
