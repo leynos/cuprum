@@ -62,7 +62,7 @@ fn keeps_a_bare_index_value_separate_from_text() {
 
     assert!(
         args.iter().any(|arg| arg.is_key("index")),
-        "an index argument must still be recognised by key",
+        "an index argument must still be recognized by key",
     );
     assert_eq!(
         args.iter().filter_map(|arg| arg.text("index")).count(),
