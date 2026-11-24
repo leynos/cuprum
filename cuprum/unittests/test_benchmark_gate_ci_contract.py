@@ -40,7 +40,6 @@ from hypothesis import strategies as st
 from tests.helpers.workflow import (
     BENCHMARK_JOB,
     CHANGES_JOB,
-    CI_WORKFLOW,
     FILTER_NAME,
     FILTER_STEP_ID,
     Workflow,
