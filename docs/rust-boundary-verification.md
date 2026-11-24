@@ -253,16 +253,17 @@ historical record.
   borrow the reader for that call, and only the pump's writer is adopted.
 
   `_prepare_native_reader` checks the platform ABI representation before writer
-  ownership is transferred. Round 7 first recorded a red focused regression run
-  in `/tmp/issue379-reader-validation-before.log`; the corrected hand-off
-  passed 14 focused tests, including the boundary-contract script, in
-  `/tmp/issue379-round7-focused-tests.log`. This check establishes only that
-  the integer can be represented and is non-negative. It does not establish
-  that the resource is valid, remains alive, or is exclusively owned. Round
-  22's extension-required suite then passed 80 tests with 1 skip after buffer
-  validation was restored before reader preparation; the round 21 property test
-  caught that precedence regression. It preserves POSIX invalid-buffer error
-  precedence and closes the duplicate on validation failure.
+  ownership is transferred.
+  `cuprum/unittests/test_streams_rs_reader_validation.py` pins that check: the
+  reader is validated before the writer is transferred, and the
+  boundary-contract script in `scripts/tests` fails if the order is reversed.
+  This check establishes only that the integer can be represented and is
+  non-negative. It does not establish that the resource is valid, remains
+  alive, or is exclusively owned. Round 22's extension-required suite then
+  passed 80 tests with 1 skip after buffer validation was restored before
+  reader preparation; the round 21 property test caught that precedence
+  regression. It preserves POSIX invalid-buffer error precedence and closes the
+  duplicate on validation failure.
 
   Issue #659 extended that precedence to consume. Unix consume previously
   delegated descriptor validation to the native entry, and Windows consume

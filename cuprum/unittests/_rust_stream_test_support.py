@@ -73,7 +73,11 @@ def _open_pipe_sink(stack: contextlib.ExitStack) -> _OwnedDescriptor:
     """
     reader_fd, writer_fd = os.pipe()
     stack.callback(_safe_close, reader_fd)
-    return _OwnedDescriptor(writer_fd)
+    owner = _OwnedDescriptor(writer_fd)
+    # Register here so a caller that forgets cannot leak the write end;
+    # ``close`` is idempotent, so disarming still suppresses the close.
+    stack.callback(owner.close)
+    return owner
 
 
 def _is_descriptor_open(fd: int) -> bool:

@@ -42,7 +42,10 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import (
+    _descriptor_state,
+    _safe_close,
+)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -117,10 +120,15 @@ def _pump_with_open_reader(
         instead.
     """
     writer_fd = os.open(os.devnull, os.O_WRONLY)
-    # No cleanup callback: the wrapper closes a writer that never reaches the
-    # native ownership boundary, so registering a second close here would be
-    # the double close this issue rules out.
-    return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    try:
+        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    finally:
+        # The wrapper closes a writer that never reaches native ownership, and
+        # the assertion proves it did: a regression would leak one descriptor
+        # per generated example. No second close is registered for the number.
+        assert _descriptor_state(writer_fd) == "closed", (
+            "a rejected pump call must close the writer it still owned"
+        )
 
 
 @pytest.mark.parametrize(
@@ -188,9 +196,15 @@ def _pump_with_reader_and_buffer(
         instead.
     """
     writer_fd = os.open(os.devnull, os.O_WRONLY)
-    # The wrapper owns this writer: it closes one that never reaches native
-    # ownership, so the test registers no second close for the number.
-    return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    try:
+        return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    finally:
+        # The wrapper owns this writer and closes it on every pre-native
+        # failure; asserting that keeps a regression from leaking a descriptor
+        # per generated example without closing the number a second time.
+        assert _descriptor_state(writer_fd) == "closed", (
+            "a rejected pump call must close the writer it still owned"
+        )
 
 
 class _ReaderAndBufferEntryPoint(typ.Protocol):
@@ -296,6 +310,9 @@ def test_pump_rejects_invalid_reader_descriptor(
     # would act on a number the test no longer owns.
     with pytest.raises(ValueError, match="file descriptor"):
         rust_streams.rust_pump_stream(bad_fd, writer_fd)
+    assert _descriptor_state(writer_fd) == "closed", (
+        "a rejected pump call must close the writer it still owned"
+    )
 
 
 @pytest.mark.parametrize(

@@ -120,8 +120,6 @@ def test_pump_reports_a_rejected_buffer_before_touching_the_writer(
     """
     with contextlib.ExitStack() as stack:
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         with pytest.raises(ValueError, match="buffer_size") as excinfo:
             native_streams.rust_pump_stream(-1, writer.fd, buffer_size=0)
 
@@ -157,8 +155,6 @@ def test_pump_adopts_and_closes_the_writer_on_success(
         upstream = _OwnedDescriptor(upstream_fd)
         stack.callback(upstream.close)
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         os.write(upstream.fd, payload)
         # Close the source writer so the pump observes EOF. The owner is
         # disarmed with the close, so the number cannot be closed twice.
@@ -206,8 +202,6 @@ def test_owner_closes_only_while_the_contract_leaves_it_armed(
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         with pytest.raises(ValueError, match="buffer_size"):
             native_streams.rust_pump_stream(reader_fd, writer.fd, buffer_size=0)
 
@@ -255,8 +249,6 @@ def test_native_pump_io_failure_after_adoption_releases_the_writer(
         reader = _OwnedDescriptor(write_end)
         stack.callback(reader.close)
         sink = _open_pipe_sink(stack)
-        stack.callback(sink.close)
-
         with pytest.raises(OSError, match=r"\[Errno 9\]|\[WinError (6|87)\]"):
             native_streams.rust_pump_stream(reader.fd, sink.fd, buffer_size=1024)
 
@@ -337,8 +329,6 @@ def test_wrong_argument_types_keep_pyo3_extraction_errors(
         stack.callback(_safe_close, reader_fd)
         stack.callback(_safe_close, reader_writer_fd)
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         with pytest.raises(TypeError):
             native_streams.rust_consume_stream(wrong)
 
@@ -383,7 +373,6 @@ def test_out_of_i64_buffer_keeps_pyo3_overflow_error(
         reader_fd = os.open(os.devnull, os.O_RDONLY)
         stack.callback(_safe_close, reader_fd)
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
         with pytest.raises(OverflowError):
             native_streams.rust_consume_stream(reader_fd, buffer_size=beyond_i64)
         with pytest.raises(OverflowError):
@@ -415,8 +404,6 @@ def test_out_of_i64_descriptors_keep_pyo3_overflow_error(
     """Descriptor extraction outside ``i64`` stays ``OverflowError``."""
     with contextlib.ExitStack() as stack:
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         with pytest.raises(OverflowError):
             native_streams.rust_consume_stream(beyond_i64)
 
@@ -468,8 +455,6 @@ def test_pump_maps_an_invalid_reader_descriptor_to_value_error(
     """
     with contextlib.ExitStack() as stack:
         writer = _open_pipe_sink(stack)
-        stack.callback(writer.close)
-
         with pytest.raises(ValueError, match="file descriptor"):
             native_streams.rust_pump_stream(
                 -1, writer.fd, buffer_size=_VALID_BUFFER_SIZE
@@ -543,7 +528,6 @@ def test_native_pump_transfers_with_the_declared_default_buffer(
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
         sink = _open_pipe_sink(stack)
-        stack.callback(sink.close)
         os.write(upstream.fd, payload)
         upstream.close()
 
@@ -576,7 +560,6 @@ def test_native_extracts_index_like_arguments_once(
         upstream = _OwnedDescriptor(writer_fd)
         stack.callback(upstream.close)
         sink = _open_pipe_sink(stack)
-        stack.callback(sink.close)
         os.write(upstream.fd, payload)
         upstream.close()
 
