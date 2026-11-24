@@ -7179,9 +7179,17 @@ make lint
 
 `rust/Cargo.toml` is the authoritative shared Rust lint table and every
 workspace member declares `[lints] workspace = true`. `rust/clippy.toml` holds
-the shared thresholds: cognitive complexity 9, four arguments, 70 lines, and
-four nesting levels. New workspace members must inherit these tables rather
-than replicate or weaken them.
+the shared thresholds: four arguments, 70 lines, and four nesting levels. New
+workspace members must inherit these tables rather than replicate or weaken
+them.
+
+Cognitive complexity is not gated by Clippy. Clippy's `cognitive_complexity`
+scores code after macro expansion, so it counts branching a macro generated.
+Whitaker's experimental `macro_aware_cognitive_complexity` gates it at
+`max_complexity = 9`, CodeScene's ceiling, over every workspace package, and
+`rust/dylint.toml` opts in with
+`[whitaker] experimental = ["macro_aware_cognitive_complexity"]`. Fix a finding
+by extracting named helpers, never by raising the threshold.
 
 The baseline follows Concordat revision
 `cf4333c3f38b55bf3d4d5d2663e2147e2da1cec8` with local extensions for
