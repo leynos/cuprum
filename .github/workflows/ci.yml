@@ -30,7 +30,7 @@ permissions:
 # to enforce it where the artefact is written, not here.
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # The Makefile defaults RUFF_VERSION and TY_VERSION with `?=`, so these

@@ -8352,18 +8352,17 @@ Each non-cancelled run also persists a durable observation, per
 [ADR-014](adrs/adr-0014-benchmark-gate-telemetry-sink.md); the
 [telemetry contract](ci-benchmark-gate-telemetry.md) owns its schema.
 
-The workflow declares `concurrency: ci-${{ github.ref }}` with
-`cancel-in-progress` true only for pull requests. A superseded pull-request run
-only spends benchmark minutes on a diff nobody will merge; a cancelled `main`
-run, by contrast, abandons the baseline upload, so `main` runs are left to
-finish.
+The workflow groups pull-request runs by pull-request number and every other
+run by its run ID, with `cancel-in-progress` true only for pull requests. A
+superseded pull-request run only spends benchmark minutes on a diff nobody will
+merge; a cancelled `main` run, by contrast, abandons the baseline upload, so
+`main` runs are left to finish.
 
 Be precise about what that does *not* buy. GitHub replaces a pending run when a
-newer one arrives and promises nothing about the order runs complete in, so two
-merges in quick succession may still publish baselines out of commit order, and
-a superseded pending run publishes nothing at all. Concurrency is not an
-ordering mechanism; anything that needs monotonic baselines has to enforce it
-where the artefact is written.
+newer one arrives in the same group and promises nothing about the order runs
+complete in, so two merges in quick succession may still publish baselines out
+of commit order. Concurrency is not an ordering mechanism; anything that needs
+monotonic baselines has to enforce it where the artefact is written.
 
 The gate deliberately names no status function. GitHub inserts an implicit
 `success()` into a job's `if:` unless the expression already names one, so a
