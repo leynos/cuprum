@@ -25,8 +25,16 @@ use super::super::{
 /// Filter that selects the generated scenario tests in the child's listing.
 const TEST_FILTER: &str = "unix_tests::";
 
-/// Prefix of the guard's own generated names, which are not scenarios.
+/// Prefix of the guard's own tests, which are not scenarios.
 const GUARD_MODULE: &str = "unix_tests::scenario_guard::";
+
+/// Marker that identifies a unit-test module rather than a scenario.
+///
+/// The guard polices scenario-shaped tests under [`TEST_FILTER`], but ordinary
+/// unit tests for this suite's own helpers live under the same prefix. Those
+/// are always in a nested `tests` module, which a generated scenario name never
+/// is, so that segment is what separates the two.
+const UNIT_TEST_MODULE: &str = "::tests::";
 
 /// How long the child's test listing may take.
 const LIST_DEADLINE: Duration = Duration::from_secs(60);
@@ -232,6 +240,7 @@ fn reject_unclaimed(
         .map(String::as_str)
         .filter(|name| name.starts_with(TEST_FILTER))
         .filter(|name| !name.starts_with(GUARD_MODULE))
+        .filter(|name| !name.contains(UNIT_TEST_MODULE))
         .filter(|name| !claimed.contains(name))
         .collect();
     if unexpected.is_empty() {

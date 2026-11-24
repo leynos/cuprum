@@ -14,19 +14,30 @@ use super::{Bound, Declared};
 /// on its own. Building both here keeps `check_parity` at three parameters and
 /// keeps the two projections from drifting apart.
 pub(crate) struct ParityTable<'a> {
-    /// Every expected title, in table order.
-    pub(crate) titles: Vec<&'a str>,
-    /// Every expected binding function, in table order.
-    pub(crate) bindings: Vec<&'a str>,
+    /// The table's `(title, binding function)` rows, in declaration order.
+    ///
+    /// The rows are kept together rather than projected into two columns: a
+    /// column pair cannot say which function belongs to which title, so a swap
+    /// between two rows would compare equal on both columns.
+    rows: Vec<(&'a str, &'a str)>,
 }
 
 impl<'a> ParityTable<'a> {
-    /// Project table rows into their title and binding columns.
+    /// Retain the table's rows as declared.
     pub(crate) fn from_rows(rows: &[(&'a str, &'a str)]) -> Self {
         Self {
-            titles: rows.iter().map(|(title, _)| *title).collect(),
-            bindings: rows.iter().map(|(_, binding)| *binding).collect(),
+            rows: rows.to_vec(),
         }
+    }
+
+    /// The title column, in declaration order.
+    fn titles(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.rows.iter().map(|(title, _)| *title)
+    }
+
+    /// The binding-function column, in declaration order.
+    fn bindings(&self) -> impl Iterator<Item = &'a str> + '_ {
+        self.rows.iter().map(|(_, binding)| *binding)
     }
 }
 
@@ -56,17 +67,15 @@ impl<'a> Indexes<'a> {
             ),
             expected_titles: index_by(
                 table
-                    .titles
-                    .iter()
+                    .titles()
                     .enumerate()
-                    .map(|(position, title)| (*title, position.saturating_add(1))),
+                    .map(|(position, title)| (title, position.saturating_add(1))),
             ),
             expected_bindings: index_by(
                 table
-                    .bindings
-                    .iter()
+                    .bindings()
                     .enumerate()
-                    .map(|(position, binding)| (*binding, position.saturating_add(1))),
+                    .map(|(position, binding)| (binding, position.saturating_add(1))),
             ),
         }
     }
@@ -107,6 +116,10 @@ pub(crate) fn check_parity(
         &indexes.expected_bindings,
     );
 
+    // The title and function columns are also compared column-wise, but that
+    // alone would accept a swap: rows (A, first) and (B, second) agree with
+    // bindings (B, first) and (A, second) on both columns independently. The
+    // pair comparison below is what pins each title to its own function.
     let comparisons = [
         (
             ("feature declaration", &indexes.declared_titles),
@@ -137,10 +150,38 @@ pub(crate) fn check_parity(
         );
     }
 
+    report_mispaired(&mut problems, bound, table);
+
     if problems.is_empty() {
         Ok(())
     } else {
         Err(problems.join("; "))
+    }
+}
+
+/// Report a title whose own row expects a different binding function.
+///
+/// Column-wise comparison cannot see this: it answers "does every expected
+/// function appear somewhere?", not "does each title's row name the function
+/// that actually implements it?".
+fn report_mispaired(problems: &mut Vec<String>, bound: &[Bound], table: &ParityTable<'_>) {
+    let by_name: BTreeMap<&str, &str> = bound
+        .iter()
+        .map(|entry| (entry.name.as_str(), entry.function.as_str()))
+        .collect();
+
+    for (title, expected_function) in &table.rows {
+        let Some(actual_function) = by_name.get(title) else {
+            // A missing or duplicated title is already reported by the
+            // column comparisons; naming it twice would bury the real cause.
+            continue;
+        };
+        if *actual_function != *expected_function {
+            problems.push(format!(
+                "expectation table row {title:?} expects binding {expected_function:?}, but the \
+                 binding named {title:?} calls {actual_function:?}",
+            ));
+        }
     }
 }
 

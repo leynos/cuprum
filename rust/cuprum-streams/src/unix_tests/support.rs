@@ -202,3 +202,7 @@ impl AsFd for PanickingReader<'_> {
 pub(super) fn print_writer_probe_witness() {
     eprintln!("{WRITER_PROBE_WITNESS}");
 }
+
+#[cfg(test)]
+#[path = "support_tests.rs"]
+mod tests;

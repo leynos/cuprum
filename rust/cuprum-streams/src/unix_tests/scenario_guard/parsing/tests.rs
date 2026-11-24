@@ -259,3 +259,74 @@ fn decodes_escaped_quotes_in_a_bound_name() {
         "a decoded title must match the feature declaration exactly",
     );
 }
+
+#[test]
+fn parity_rejects_swapped_binding_functions() {
+    // Titles and functions each appear once, so every column-wise comparison
+    // passes; only the row association is wrong.
+    let declared = vec![
+        Declared {
+            title: "First case".to_owned(),
+            line: 2,
+        },
+        Declared {
+            title: "Second case".to_owned(),
+            line: 5,
+        },
+    ];
+    let bound = [
+        Bound {
+            name: "First case".to_owned(),
+            function: "second_case".to_owned(),
+            line: 1,
+        },
+        Bound {
+            name: "Second case".to_owned(),
+            function: "first_case".to_owned(),
+            line: 8,
+        },
+    ];
+    let table =
+        ParityTable::from_rows(&[("First case", "first_case"), ("Second case", "second_case")]);
+
+    let error = check_parity(&declared, &bound, &table)
+        .expect_err("a swap between two rows must fail parity");
+    assert!(
+        error.contains("expects binding") && error.contains("calls"),
+        "the failure must name the row and the function it actually calls, found {error}",
+    );
+}
+
+#[test]
+fn parity_accepts_correctly_paired_bindings() {
+    let declared = vec![
+        Declared {
+            title: "First case".to_owned(),
+            line: 2,
+        },
+        Declared {
+            title: "Second case".to_owned(),
+            line: 5,
+        },
+    ];
+    let bound = [
+        Bound {
+            name: "First case".to_owned(),
+            function: "first_case".to_owned(),
+            line: 1,
+        },
+        Bound {
+            name: "Second case".to_owned(),
+            function: "second_case".to_owned(),
+            line: 8,
+        },
+    ];
+    let table =
+        ParityTable::from_rows(&[("First case", "first_case"), ("Second case", "second_case")]);
+
+    assert_eq!(
+        check_parity(&declared, &bound, &table),
+        Ok(()),
+        "correctly paired rows must pass",
+    );
+}

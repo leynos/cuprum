@@ -93,17 +93,28 @@ const SCENARIOS: &[ScenarioExpectation] = &[
     },
 ];
 
-/// Whether the harness started this process for one instrumented scenario.
+/// Read an environment variable, as a narrow lookup seam.
 ///
-/// This is the composition boundary for the isolation marker: it is resolved
-/// once, when the scenario fixture is built, and every step reads the resulting
-/// flag from [`StreamContext`] instead of reaching for the environment again.
+/// The scenario fixture supplies one of these; [`resolve_isolation`] never
+/// reaches for the environment itself, so its rule can be tested without one.
+type EnvLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+/// Whether the given lookup reports this run as an isolated scenario.
+///
+/// Only the exact value `1` enables isolation: a marker that exists but says
+/// anything else must not switch on the raw descriptor probe, whose verdict is
+/// meaningless in the shared suite binary.
+fn isolation_from(lookup: EnvLookup<'_>) -> bool {
+    lookup(support::ISOLATED_CHILD_ENV).is_some_and(|value| value == "1")
+}
+
+/// The process environment, used at the fixture composition boundary.
 #[expect(
     clippy::disallowed_methods,
-    reason = "The scenario fixture reads the marker its parent test supplied explicitly"
+    reason = "The fixture is the composition root; steps read the resolved flag instead"
 )]
-fn resolve_isolation() -> bool {
-    std::env::var_os(support::ISOLATED_CHILD_ENV).is_some_and(|value| value.to_str() == Some("1"))
+fn process_isolation() -> bool {
+    isolation_from(&|name| std::env::var_os(name).and_then(|value| value.into_string().ok()))
 }
 
 /// Scenario state shared between steps through `rstest-bdd` slots.
@@ -142,7 +153,7 @@ fn context() -> StreamContext {
     // A fresh context per scenario; steps populate its slots as they run. The
     // isolation flag is the one value known before the scenario starts.
     StreamContext {
-        isolated: resolve_isolation(),
+        isolated: process_isolation(),
         ..StreamContext::default()
     }
 }
