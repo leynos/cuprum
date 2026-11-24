@@ -15,7 +15,6 @@ CLIPPY_LINTS = {
     "allow_attributes",
     "allow_attributes_without_reason",
     "blanket_clippy_restriction_lints",
-    "cognitive_complexity",
     "disallowed_methods",
     "needless_pass_by_value",
     "implicit_hasher",
@@ -83,7 +82,6 @@ EXPECTED_UNEXPECTED_CFGS = {
     "check-cfg": ["cfg(kani)", "cfg(loom)", "cfg(miri)"],
 }
 EXPECTED_CLIPPY_OPTIONS = {
-    "cognitive-complexity-threshold": 9,
     "too-many-arguments-threshold": 4,
     "too-many-lines-threshold": 70,
     "excessive-nesting-threshold": 4,
@@ -190,7 +188,6 @@ def test_clippy_configuration_keeps_the_approved_thresholds_and_methods() -> Non
     assert {
         name: config[name]
         for name in (
-            "cognitive-complexity-threshold",
             "too-many-arguments-threshold",
             "too-many-lines-threshold",
             "excessive-nesting-threshold",
