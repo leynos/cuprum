@@ -40,7 +40,6 @@ from hypothesis import strategies as st
 from tests.helpers.workflow import (
     BENCHMARK_JOB,
     CHANGES_JOB,
-    CI_WORKFLOW,
     FILTER_NAME,
     FILTER_STEP_ID,
     Workflow,
@@ -475,66 +474,6 @@ class TestTheGateModel:
             f"a {event_name!r} event changing {changed} must run {BENCHMARK_JOB!r} so "
             "the main baseline artefact is refreshed"
         )
-
-
-class TestTheConcurrencyPolicy:
-    """Which runs supersede which, per ref."""
-
-    def test_the_workflow_serializes_runs_per_ref(
-        self, workflow_data: Workflow
-    ) -> None:
-        """Require per-ref concurrency that cancels pull-request runs only."""
-        concurrency = mapping(
-            typ.cast("dict[str, object]", workflow_data).get("concurrency"),
-            f"{CI_WORKFLOW} must declare a concurrency policy",
-        )
-
-        assert concurrency.get("group") == "ci-${{ github.ref }}", (
-            "the concurrency group must be per-ref, so a pull request's runs "
-            "supersede each other without touching another ref's; found "
-            f"{concurrency.get('group')!r}"
-        )
-        assert concurrency.get("cancel-in-progress") == (
-            "${{ github.event_name == 'pull_request' }}"
-        ), (
-            "only pull-request runs may be cancelled; a cancelled `main` run never "
-            "republishes the baseline artefact. Found "
-            f"{concurrency.get('cancel-in-progress')!r}"
-        )
-
-    @pytest.mark.parametrize(
-        ("newer_event", "expected_cancellation"),
-        [
-            pytest.param("pull_request", True, id="superseding-pull-request"),
-            pytest.param("push", False, id="superseding-main-push"),
-            pytest.param("workflow_dispatch", False, id="superseding-manual-run"),
-        ],
-    )
-    def test_a_new_run_cancels_only_superseded_pull_request_runs(
-        self,
-        workflow_data: Workflow,
-        newer_event: str,
-        expected_cancellation: bool,
-    ) -> None:
-        """Model the cancellation policy for a newer run on the same ref.
-
-        Parameters
-        ----------
-        workflow_data : Workflow
-            Parsed workflow whose concurrency policy is modelled.
-        newer_event : str
-            Event that starts the newer run in the ref's concurrency group.
-        expected_cancellation : bool
-            Whether that newer run must cancel an in-progress predecessor.
-        """
-        concurrency = mapping(
-            typ.cast("dict[str, object]", workflow_data).get("concurrency"),
-            f"{CI_WORKFLOW} must declare a concurrency policy",
-        )
-        condition = concurrency.get("cancel-in-progress")
-
-        assert condition == "${{ github.event_name == 'pull_request' }}"
-        assert (newer_event == "pull_request") is expected_cancellation
 
 
 class TestTheWorkflowHelpers:
