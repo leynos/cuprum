@@ -44,6 +44,7 @@ from cyclopts import App
 from scripts.tool_pins import (
     LOCKFILE,
     PinError,
+    Site,
     canonical_pins,
     check_pins,
     lock_drift,
@@ -91,6 +92,43 @@ def _atomic_write_text(path: Path, payload: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def _rewrite_file(
+    root: Path, relative: str, entries: list[tuple[Site, str]], pins: dict[str, str]
+) -> Path | None:
+    """Rewrite one file's derived literals, returning it when its bytes changed."""
+    path = root / relative
+    text = read_text(root, relative)
+    replacements = [(match_site(text, site), pins[tool]) for site, tool in entries]
+    updated = _apply_replacements(text, replacements)
+    if updated == text:
+        return None
+    _atomic_write_text(path, updated.encode("utf-8"))
+    return path
+
+
+def _report_sync(
+    root: Path, changed: list[Path], pins: dict[str, str], stream: typ.TextIO
+) -> None:
+    """Print what the sync did, and what it deliberately left to uv."""
+    if changed:
+        for path in changed:
+            print(f"Updated {path.relative_to(root)}", file=stream)
+        print("Derived tool pins now match pyproject.toml.", file=stream)
+    else:
+        print("Derived tool pins already match pyproject.toml.", file=stream)
+    if lock_drift(root, pins):
+        print(
+            f"{LOCKFILE} is owned by uv and was left unchanged: "
+            "run `uv lock` to resolve the lockfile.",
+            file=stream,
+        )
+    print(
+        "The wheel snapshot needs no regeneration: the WHEEL Generator header "
+        "is asserted against this pin before normalization.",
+        file=stream,
+    )
+
+
 def sync_pins(root: Path = ROOT, stream: typ.TextIO = sys.stdout) -> tuple[Path, ...]:
     """Rewrite derived literals from the canonical pins.
 
@@ -115,33 +153,12 @@ def sync_pins(root: Path = ROOT, stream: typ.TextIO = sys.stdout) -> tuple[Path,
         replaced atomically.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the pin readers this delegates to
     pins = canonical_pins(root)
-    changed: list[Path] = []
-    for relative, entries in sites_by_file().items():
-        path = root / relative
-        text = read_text(root, relative)
-        replacements = [(match_site(text, site), pins[tool]) for site, tool in entries]
-        updated = _apply_replacements(text, replacements)
-        if updated == text:
-            continue
-        _atomic_write_text(path, updated.encode("utf-8"))
-        changed.append(path)
-    if changed:
-        for path in changed:
-            print(f"Updated {path.relative_to(root)}", file=stream)
-        print("Derived tool pins now match pyproject.toml.", file=stream)
-    else:
-        print("Derived tool pins already match pyproject.toml.", file=stream)
-    if lock_drift(root, pins):
-        print(
-            f"{LOCKFILE} is owned by uv and was left unchanged: "
-            "run `uv lock` to resolve the lockfile.",
-            file=stream,
-        )
-    print(
-        "The wheel snapshot needs no regeneration: the WHEEL Generator header "
-        "is asserted against this pin before normalization.",
-        file=stream,
-    )
+    changed = [
+        path
+        for relative, entries in sites_by_file().items()
+        if (path := _rewrite_file(root, relative, entries, pins)) is not None
+    ]
+    _report_sync(root, changed, pins, stream)
     return tuple(changed)
 
 

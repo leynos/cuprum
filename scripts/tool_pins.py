@@ -192,29 +192,27 @@ def _read_utf8(path: Path) -> str:
         raise PinError(msg) from error
 
 
+def _load_toml(path: Path) -> dict[str, object]:
+    """Parse one repository file as TOML, naming it in any failure."""
+    try:
+        document = tomllib.loads(_read_utf8(path))
+    except tomllib.TOMLDecodeError as error:
+        msg = f"{path.name} is not valid TOML: {error}"
+        raise PinError(msg) from error
+    return document
+
+
 def _dev_group(root: Path) -> list[str]:
     """Return the pyproject dev dependency strings."""
-    text = _read_utf8(root / PYPROJECT)
-    try:
-        document = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as error:
-        msg = f"{PYPROJECT} is not valid TOML: {error}"
-        raise PinError(msg) from error
-    groups = document.get("dependency-groups")
+    groups = _load_toml(root / PYPROJECT).get("dependency-groups")
     if not isinstance(groups, dict):
         msg = f"{PYPROJECT} must declare a dependency-groups table"
         raise PinError(msg)
-    dev = groups.get("dev")
-    if not isinstance(dev, list):
-        msg = f"{PYPROJECT} must declare a dev dependency group"
+    dev = typ.cast("dict[str, object]", groups).get("dev")
+    if not isinstance(dev, list) or not all(isinstance(item, str) for item in dev):
+        msg = f"{PYPROJECT} dev group must list requirement strings, found {dev!r}"
         raise PinError(msg)
-    requirements: list[str] = []
-    for entry in dev:
-        if not isinstance(entry, str):
-            msg = f"{PYPROJECT} dev entries must be strings, found {entry!r}"
-            raise PinError(msg)
-        requirements.append(entry)
-    return requirements
+    return typ.cast("list[str]", dev)
 
 
 def canonical_pins(root: Path) -> dict[str, str]:
@@ -235,34 +233,33 @@ def canonical_pins(root: Path) -> dict[str, str]:
     PinError
         If a tool is declared zero times or more than once, or its declaration
         is not an exact ``name==X.Y.Z`` requirement.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the pin readers this delegates to
     requirements = _dev_group(root)
-    pins: dict[str, str] = {}
-    for tool in TOOLS:
-        declarations = [
-            requirement
-            for requirement in requirements
-            if _normalized_name(requirement) == tool.name
-        ]
-        if len(declarations) != 1:
-            msg = (
-                f"{PYPROJECT}: expected exactly one {tool.name} requirement in "
-                f"the dev group, found {declarations!r}"
-            )
-            raise PinError(msg)
-        declaration = declarations[0]
-        match = re.fullmatch(
-            rf"{re.escape(tool.name)}==(\d+\.\d+\.\d+)",
-            declaration.strip(),
+    return {tool.name: _exact_pin(tool.name, requirements) for tool in TOOLS}
+
+
+def _exact_pin(tool: str, requirements: list[str]) -> str:
+    """Return one tool's version, refusing a duplicate or inexact declaration."""
+    declarations = [
+        requirement
+        for requirement in requirements
+        if _normalized_name(requirement) == tool
+    ]
+    if len(declarations) != 1:
+        msg = (
+            f"{PYPROJECT}: expected exactly one {tool} requirement in "
+            f"the dev group, found {declarations!r}"
         )
-        if match is None:
-            msg = (
-                f"{PYPROJECT}: {tool.name} must be pinned as an exact "
-                f"'{tool.name}==X.Y.Z' release, found {declaration!r}"
-            )
-            raise PinError(msg)
-        pins[tool.name] = match.group(1)
-    return pins
+        raise PinError(msg)
+    declaration = declarations[0]
+    match = re.fullmatch(rf"{re.escape(tool)}==(\d+\.\d+\.\d+)", declaration.strip())
+    if match is None:
+        msg = (
+            f"{PYPROJECT}: {tool} must be pinned as an exact "
+            f"'{tool}==X.Y.Z' release, found {declaration!r}"
+        )
+        raise PinError(msg)
+    return match.group(1)
 
 
 def read_text(root: Path, relative: str) -> str:
@@ -342,35 +339,35 @@ def derived_drift(root: Path, pins: dict[str, str]) -> list[Drift]:
     return drifts
 
 
+def _locked_version(packages: list[object], tool: str) -> str:
+    """Return one package's locked version, refusing an absent or duplicate entry."""
+    versions = [
+        entry.get("version")
+        for entry in packages
+        if isinstance(entry, dict) and entry.get("name") == tool
+    ]
+    if len(versions) != 1:
+        msg = (
+            f"{LOCKFILE}: expected exactly one package entry for "
+            f"{tool}, found {len(versions)}"
+        )
+        raise PinError(msg)
+    locked = versions[0]
+    if not isinstance(locked, str):
+        msg = f"{LOCKFILE}: {tool} must carry a string version"
+        raise PinError(msg)
+    return locked
+
+
 def lock_drift(root: Path, pins: dict[str, str]) -> list[Drift]:
     """Return lock entries that already disagree with the canonical pins."""
-    text = _read_utf8(root / LOCKFILE)
-    try:
-        document = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as error:
-        msg = f"{LOCKFILE} is not valid TOML: {error}"
-        raise PinError(msg) from error
-    packages = document.get("package")
+    packages = _load_toml(root / LOCKFILE).get("package")
     if not isinstance(packages, list):
-        msg = f"{LOCKFILE} must declare a package table"
+        msg = f"{LOCKFILE} must declare a package list"
         raise PinError(msg)
     drifts: list[Drift] = []
     for tool in TOOLS:
-        versions = [
-            entry.get("version")
-            for entry in packages
-            if isinstance(entry, dict) and entry.get("name") == tool.name
-        ]
-        if len(versions) != 1:
-            msg = (
-                f"{LOCKFILE}: expected exactly one package entry for "
-                f"{tool.name}, found {len(versions)}"
-            )
-            raise PinError(msg)
-        locked = versions[0]
-        if not isinstance(locked, str):
-            msg = f"{LOCKFILE}: {tool.name} must carry a string version"
-            raise PinError(msg)
+        locked = _locked_version(packages, tool.name)
         if locked != pins[tool.name]:
             drifts.append(Drift(f"{LOCKFILE} {tool.name}", pins[tool.name], locked))
     return drifts
