@@ -6880,7 +6880,7 @@ tests would only cover a few examples.
 
 ### Public stream entry-point behavioural coverage
 
-`rust/cuprum-streams/src/unix_tests.rs` drives the public `pump_stream` and
+`rust/cuprum-streams/src/unix_tests/mod.rs` drives the public `pump_stream` and
 `consume_stream` over real Unix pipes. It sits beside `windows_tests.rs` rather
 than merging with it: each suite names the platform contract it exercises, and
 the Windows suite keeps the synchronous-handle boundary explicit. The Unix

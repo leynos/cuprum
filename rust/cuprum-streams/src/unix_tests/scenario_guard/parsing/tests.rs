@@ -1,5 +1,7 @@
 //! Parser and parity cases, including every failure shape the guard names.
 
+use rstest::rstest;
+
 use super::{Bound, Declared, ParityTable, bound_scenarios, check_parity, declared_scenarios};
 
 const PATH: &str = "tests/features/demo.feature";
@@ -260,11 +262,12 @@ fn decodes_escaped_quotes_in_a_bound_name() {
     );
 }
 
-#[test]
-fn parity_rejects_swapped_binding_functions() {
-    // Titles and functions each appear once, so every column-wise comparison
-    // passes; only the row association is wrong.
-    let declared = vec![
+/// Two titles whose declarations and expectation rows are fixed.
+///
+/// Only the functions the bindings call vary between the cases below, so the
+/// fixture keeps each case focused on the pairing decision.
+fn two_declared_titles() -> Vec<Declared> {
+    vec![
         Declared {
             title: "First case".to_owned(),
             line: 2,
@@ -273,60 +276,54 @@ fn parity_rejects_swapped_binding_functions() {
             title: "Second case".to_owned(),
             line: 5,
         },
-    ];
-    let bound = [
+    ]
+}
+
+fn two_row_table() -> ParityTable<'static> {
+    ParityTable::from_rows(&[("First case", "first_case"), ("Second case", "second_case")])
+}
+
+/// Build the two bindings with the functions the case supplies.
+fn bindings_calling(first: &str, second: &str) -> [Bound; 2] {
+    [
         Bound {
             name: "First case".to_owned(),
-            function: "second_case".to_owned(),
+            function: first.to_owned(),
             line: 1,
         },
         Bound {
             name: "Second case".to_owned(),
-            function: "first_case".to_owned(),
+            function: second.to_owned(),
             line: 8,
         },
-    ];
-    let table =
-        ParityTable::from_rows(&[("First case", "first_case"), ("Second case", "second_case")]);
+    ]
+}
 
-    let error = check_parity(&declared, &bound, &table)
-        .expect_err("a swap between two rows must fail parity");
+#[rstest]
+#[case::correctly_paired("first_case", "second_case", true)]
+#[case::swapped("second_case", "first_case", false)]
+fn parity_pairs_each_title_with_its_own_binding(
+    #[case] first: &str,
+    #[case] second: &str,
+    #[case] should_pass: bool,
+) {
+    let declared = two_declared_titles();
+    let table = two_row_table();
+    let bound = bindings_calling(first, second);
+
+    let outcome = check_parity(&declared, &bound, &table);
+
+    if should_pass {
+        assert_eq!(
+            outcome,
+            Ok(()),
+            "the row ({first:?}, {second:?}) pairs each title with its own binding",
+        );
+        return;
+    }
+    let error = outcome.expect_err("a swap between two rows must fail parity");
     assert!(
         error.contains("expects binding") && error.contains("calls"),
         "the failure must name the row and the function it actually calls, found {error}",
-    );
-}
-
-#[test]
-fn parity_accepts_correctly_paired_bindings() {
-    let declared = vec![
-        Declared {
-            title: "First case".to_owned(),
-            line: 2,
-        },
-        Declared {
-            title: "Second case".to_owned(),
-            line: 5,
-        },
-    ];
-    let bound = [
-        Bound {
-            name: "First case".to_owned(),
-            function: "first_case".to_owned(),
-            line: 1,
-        },
-        Bound {
-            name: "Second case".to_owned(),
-            function: "second_case".to_owned(),
-            line: 8,
-        },
-    ];
-    let table =
-        ParityTable::from_rows(&[("First case", "first_case"), ("Second case", "second_case")]);
-
-    assert_eq!(
-        check_parity(&declared, &bound, &table),
-        Ok(()),
-        "correctly paired rows must pass",
     );
 }
