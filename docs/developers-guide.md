@@ -1214,10 +1214,10 @@ literal rewrite.
 
 The built wheel's `Generator` header is asserted against the workflow's
 `MATURIN_VERSION` by the `verify-wheel-install` job before any wheel is
-installed, so a wheel built by a different maturin fails there. The local
-wheel snapshot keeps its own `Generator` assertion too, so neither check
-normalizes the header away: a pin bump that changes which maturin builds the
-wheel still fails a test rather than silently rewriting a snapshot.
+installed, so a wheel built by a different maturin fails there. The local wheel
+snapshot keeps its own `Generator` assertion too, so neither check normalizes
+the header away: a pin bump that changes which maturin builds the wheel still
+fails a test rather than silently rewriting a snapshot.
 
 The composite action accepts an explicit `maturin-version` override. The
 override is validated against the same exact `X.Y.Z` form before it reaches
