@@ -3,10 +3,11 @@
 `build-pure-wheel` and `verify-wheel-install` were separate Ubicloud jobs doing
 0.2 and 0.3 minutes of work and billing a minute each on every run. They are
 one job now, and the merge is only safe while four things hold: the pure wheel
-is built nowhere else, it is built before the artefacts are downloaded (the
-download is how the verification reads it back, and `release.yml` reads the
-same artefact), the job still waits for the native legs, and the verification
-installs into a fresh virtual environment rather than one the build touched.
+is built nowhere else, it is built into the directory the verification reads
+(and uploaded under the name `release.yml` publishes; the download fetches only
+the native legs, because re-reading this job's own upload raced the artefact
+listing), the job still waits for the native legs, and the verification installs
+into a fresh virtual environment rather than one the build touched.
 """
 
 from __future__ import annotations
