@@ -153,7 +153,7 @@ jobs:
           cache-size: 1G
       - name: Install prebuilt verifier and solver
         id: prover
-        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@b50fd9a2b2f2a096d64fe44593805dd2da7f9148
         env:
           # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
           UV_PYTHON: '3.14'
@@ -249,7 +249,7 @@ jobs:
           key: boundary-${{ matrix.check }}-${{ hashFiles('tools/kani/*', 'tools/rust-prover-tools/REF', 'Makefile') }}
       - name: Install prebuilt Kani frontend and bundle
         if: matrix.check == 'kani'
-        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@b50fd9a2b2f2a096d64fe44593805dd2da7f9148
         env:
           # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
           UV_PYTHON: '3.14'
@@ -270,7 +270,7 @@ jobs:
       - name: Install prebuilt Verus for the fault runs
         id: prover
         if: matrix.check == 'kani'
-        uses: leynos/shared-actions/.github/actions/install-prover-tools@a0519a1476ab769ca7b8badfa794f3751213f1ea
+        uses: leynos/shared-actions/.github/actions/install-prover-tools@b50fd9a2b2f2a096d64fe44593805dd2da7f9148
         env:
           # setup-uv exports UV_PYTHON=3.13, but the installer requires 3.14.
           UV_PYTHON: '3.14'
