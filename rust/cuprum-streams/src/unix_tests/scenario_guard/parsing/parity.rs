@@ -215,20 +215,22 @@ struct Side<'a> {
 /// Report keys that appear on only one of the two sides.
 fn report_unmatched(problems: &mut Vec<String>, sides: (&Side<'_>, &Side<'_>)) {
     let (left, right) = sides;
-    for (key, positions) in left.index {
-        if !right.index.contains_key(key) {
-            problems.push(format!(
+    problems.extend(absent_from(left, right));
+    problems.extend(absent_from(right, left));
+}
+
+/// Name every key this side has that the other side lacks.
+///
+/// Separated from the two-sided report so each direction is one filter rather
+/// than a loop whose body branches, which keeps the nesting flat.
+fn absent_from<'a>(mine: &'a Side<'a>, theirs: &'a Side<'a>) -> impl Iterator<Item = String> + 'a {
+    mine.index
+        .iter()
+        .filter(|(key, _)| !theirs.index.contains_key(*key))
+        .map(|(key, positions)| {
+            format!(
                 "{} {key:?} (at {positions:?}) has no matching {}",
-                left.label, right.label,
-            ));
-        }
-    }
-    for key in right.index.keys() {
-        if !left.index.contains_key(key) {
-            problems.push(format!(
-                "{} {key:?} has no matching {}",
-                right.label, left.label,
-            ));
-        }
-    }
+                mine.label, theirs.label,
+            )
+        })
 }

@@ -78,10 +78,12 @@ fn rejects_an_index_binding() {
     let source = "#[scenario(\n    path = \"tests/features/demo.feature\",\n    index = 0\n)]\nfn \
                   indexed() {}\n";
 
+    // `index` is not in the key vocabulary, so an index binding is refused
+    // before any comparison can treat it as a name.
     let error = bound_scenarios(source, PATH).expect_err("an index binding must be rejected");
     assert!(
-        error.contains("bind every scenario by name"),
-        "the failure must explain the named-binding rule, found {error}",
+        error.contains("unknown argument") && error.contains("index"),
+        "the failure must name the refused `index` key, found {error}",
     );
 }
 

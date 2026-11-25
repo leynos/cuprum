@@ -5,12 +5,9 @@ use super::{ArgValue, attribute_args};
 fn text_args(body: &str) -> Vec<(String, String)> {
     let args = attribute_args(body).expect("the sample attribute must parse");
     args.iter()
-        .filter_map(|arg| {
-            let key = arg.key.clone();
-            match &arg.value {
-                ArgValue::Text(text) => Some((key, text.clone())),
-                ArgValue::Bare => None,
-            }
+        .filter_map(|arg| match &arg.value {
+            ArgValue::Text(text) => Some((arg.key.as_str().to_owned(), text.clone())),
+            ArgValue::Bare => None,
         })
         .collect()
 }
@@ -55,19 +52,14 @@ fn decodes_escaped_backslash_and_unicode() {
 }
 
 #[test]
-fn keeps_a_bare_index_value_separate_from_text() {
+fn refuses_an_unknown_argument_key() {
+    // An index binding is refused at the key vocabulary, before any comparison.
     let body = "#[scenario(path = \"p\", index = 0)]";
 
-    let args = attribute_args(body).expect("the sample attribute must parse");
-
+    let error = attribute_args(body).expect_err("an unknown key must fail closed");
     assert!(
-        args.iter().any(|arg| arg.is_key("index")),
-        "an index argument must still be recognized by key",
-    );
-    assert_eq!(
-        args.iter().filter_map(|arg| arg.text("index")).count(),
-        0,
-        "a bare value must not masquerade as a string",
+        error.contains("unknown argument") && error.contains("index"),
+        "the failure must name the unknown key, found {error}",
     );
 }
 

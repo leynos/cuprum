@@ -11,11 +11,42 @@
 //! rather than guessed at: a wrong verdict from a half-understood literal is
 //! worse than a failure naming the escape.
 
+/// Which `#[scenario(...)]` argument a diagnostic is about.
+///
+/// Naming the two keys replaces a `&str` parameter on every helper that
+/// builds a diagnostic, so the key vocabulary lives in one place.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ArgKey {
+    /// The feature file the binding must name.
+    Path,
+    /// The scenario title the binding must name.
+    Name,
+}
+
+impl ArgKey {
+    /// The key's spelling in the attribute source.
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::Name => "name",
+        }
+    }
+
+    /// Recover the key from its spelling, refusing anything else.
+    fn parse(spelling: &str) -> Option<Self> {
+        match spelling {
+            "path" => Some(Self::Path),
+            "name" => Some(Self::Name),
+            _ => None,
+        }
+    }
+}
+
 /// One top-level argument of a `#[scenario(...)]` attribute.
 #[derive(Debug)]
 pub(super) struct AttributeArg {
-    /// The argument's key, without surrounding whitespace.
-    key: String,
+    /// Which argument this is.
+    key: ArgKey,
     /// The argument's value.
     value: ArgValue,
 }
@@ -31,15 +62,12 @@ enum ArgValue {
 
 impl AttributeArg {
     /// Return the decoded string value when this argument is `key`.
-    pub(super) fn text(&self, key: &str) -> Option<&str> {
+    pub(super) fn text(&self, key: ArgKey) -> Option<&str> {
         match &self.value {
-            ArgValue::Text(text) if self.key == key => Some(text),
+            ArgValue::Text(text) if self.key.as_str() == key.as_str() => Some(text),
             ArgValue::Text(_) | ArgValue::Bare => None,
         }
     }
-
-    /// Whether this argument is `key`, whatever its value shape.
-    pub(super) fn is_key(&self, key: &str) -> bool { self.key == key }
 }
 
 /// Parse the top-level arguments of an attribute body.
@@ -161,16 +189,17 @@ fn parse_arg(entry: &str) -> Result<AttributeArg, String> {
     let (raw_key, raw_value) = entry
         .split_once('=')
         .ok_or_else(|| format!("the scenario attribute argument {entry:?} has no value"))?;
-    let key = raw_key.trim().to_owned();
+    let key = ArgKey::parse(raw_key.trim())
+        .ok_or_else(|| format!("the scenario attribute has an unknown argument {raw_key:?}"))?;
     let value = match raw_value.trim().strip_prefix('"') {
-        Some(rest) => ArgValue::Text(decode_rust_string(rest, &key)?),
+        Some(rest) => ArgValue::Text(decode_rust_string(rest, key)?),
         None => ArgValue::Bare,
     };
     Ok(AttributeArg { key, value })
 }
 
 /// Decode a Rust string literal body, which starts just after the open quote.
-fn decode_rust_string(body: &str, key: &str) -> Result<String, String> {
+fn decode_rust_string(body: &str, key: ArgKey) -> Result<String, String> {
     let mut decoded = String::new();
     let mut chars = body.chars();
 
@@ -184,15 +213,19 @@ fn decode_rust_string(body: &str, key: &str) -> Result<String, String> {
         }
         let escape = chars
             .next()
-            .ok_or_else(|| format!("the `{key}` value ends inside an escape"))?;
+            .ok_or_else(|| format!("the `{}` value ends inside an escape", key.as_str()))?;
         decoded.push(decode_escape(escape, &mut chars, key)?);
     }
 
-    Err(format!("the `{key}` value is unterminated"))
+    Err(format!("the `{}` value is unterminated", key.as_str()))
 }
 
 /// Translate one escape sequence, leaving its introducer already consumed.
-fn decode_escape(escape: char, chars: &mut std::str::Chars<'_>, key: &str) -> Result<char, String> {
+fn decode_escape(
+    escape: char,
+    chars: &mut std::str::Chars<'_>,
+    key: ArgKey,
+) -> Result<char, String> {
     match escape {
         '"' => Ok('"'),
         '\'' => Ok('\''),
@@ -203,16 +236,20 @@ fn decode_escape(escape: char, chars: &mut std::str::Chars<'_>, key: &str) -> Re
         '0' => Ok('\0'),
         'u' => decode_unicode_escape(chars, key),
         other => Err(format!(
-            "the `{key}` value uses the unsupported escape `\\{other}`; extend the decoder rather \
-             than guessing its meaning"
+            "the `{}` value uses the unsupported escape `\\{other}`; extend the decoder rather \
+             than guessing its meaning",
+            key.as_str(),
         )),
     }
 }
 
 /// Decode a `\u{...}` escape, whose introducer has already been consumed.
-fn decode_unicode_escape(chars: &mut std::str::Chars<'_>, key: &str) -> Result<char, String> {
+fn decode_unicode_escape(chars: &mut std::str::Chars<'_>, key: ArgKey) -> Result<char, String> {
     if chars.next() != Some('{') {
-        return Err(format!("the `{key}` value has a malformed `\\u` escape"));
+        return Err(format!(
+            "the `{}` value has a malformed `\\u` escape",
+            key.as_str()
+        ));
     }
     let mut digits = String::new();
     for character in chars.by_ref() {
@@ -221,10 +258,18 @@ fn decode_unicode_escape(chars: &mut std::str::Chars<'_>, key: &str) -> Result<c
         }
         digits.push(character);
     }
-    let value = u32::from_str_radix(&digits, 16)
-        .map_err(|error| format!("the `{key}` value has a malformed `\\u{{{digits}}}`: {error}"))?;
-    char::from_u32(value)
-        .ok_or_else(|| format!("the `{key}` value has a `\\u{{{digits}}}` that is not a character"))
+    let value = u32::from_str_radix(&digits, 16).map_err(|error| {
+        format!(
+            "the `{}` value has a malformed `\\u{{{digits}}}`: {error}",
+            key.as_str()
+        )
+    })?;
+    char::from_u32(value).ok_or_else(|| {
+        format!(
+            "the `{}` value has a `\\u{{{digits}}}` that is not a character",
+            key.as_str()
+        )
+    })
 }
 
 #[cfg(test)]
