@@ -327,3 +327,30 @@ fn parity_pairs_each_title_with_its_own_binding(
         "the failure must name the row and the function it actually calls, found {error}",
     );
 }
+
+#[test]
+fn rejects_a_scenario_without_steps() {
+    // A step-less scenario runs nothing, but its binding still reports a
+    // passing test, so the grammar must refuse it rather than let the
+    // execution guard certify an empty run.
+    let text = feature("  Scenario: No steps here\n\n  Scenario: Another with none\n");
+
+    let error = declared_scenarios(&text).expect_err("a step-less scenario must fail closed");
+    assert!(
+        error.contains("needs at least one step"),
+        "the failure must say a scenario needs a step, found {error}",
+    );
+}
+
+#[test]
+fn rejects_a_trailing_scenario_without_steps() {
+    // The last declaration has no following scenario to close it, so the
+    // rejection has to happen at end of input too.
+    let text = feature("  Scenario: Has steps\n    Given a value\n\n  Scenario: Empty tail\n");
+
+    let error = declared_scenarios(&text).expect_err("a trailing step-less scenario must fail");
+    assert!(
+        error.contains("Empty tail") || error.contains("line 5"),
+        "the failure must name the trailing declaration, found {error}",
+    );
+}

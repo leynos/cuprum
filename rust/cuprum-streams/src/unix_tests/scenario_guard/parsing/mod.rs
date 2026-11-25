@@ -89,6 +89,13 @@ fn classify_feature_line(line: &str) -> FeatureLine<'_> {
 struct DeclarationState {
     declared: Vec<Declared>,
     saw_feature: bool,
+    /// Line of the most recent declaration while it still has no steps.
+    ///
+    /// A scenario with no steps executes nothing, yet an `rstest-bdd` binding
+    /// for it reports a passing test. The execution guard proves *that* a
+    /// scenario ran, not what it did, so the grammar refuses a step-less
+    /// declaration instead of letting the guard certify an empty run.
+    awaiting_steps: Option<usize>,
 }
 
 impl DeclarationState {
@@ -126,22 +133,30 @@ impl DeclarationState {
                 "line {line_number}: a Scenario must follow the Feature header"
             ));
         }
+        if let Some(step_less) = self.awaiting_steps {
+            return Err(step_less_scenario(step_less));
+        }
         self.declared.push(declared_scenario(rest, line_number)?);
+        self.awaiting_steps = Some(line_number);
         Ok(())
     }
 
     /// Accept a step line only inside a scenario.
-    fn accept_step(&self, line_number: usize) -> Result<(), String> {
+    fn accept_step(&mut self, line_number: usize) -> Result<(), String> {
         if self.declared.is_empty() {
             return Err(format!(
                 "line {line_number}: a step must belong to a Scenario"
             ));
         }
+        self.awaiting_steps = None;
         Ok(())
     }
 
     /// Require at least one Feature header and one declared scenario.
     fn finish(self) -> Result<Vec<Declared>, String> {
+        if let Some(step_less) = self.awaiting_steps {
+            return Err(step_less_scenario(step_less));
+        }
         if !self.saw_feature {
             return Err("the feature file declares no Feature header".to_owned());
         }
@@ -154,6 +169,14 @@ impl DeclarationState {
 
 /// Whether a feature line carries no grammar at all.
 fn is_skippable_feature_line(line: &str) -> bool { line.is_empty() || line.starts_with('#') }
+
+/// Name the declaration that has no steps to run.
+fn step_less_scenario(line_number: usize) -> String {
+    format!(
+        "line {line_number}: a Scenario needs at least one step; a scenario with none executes \
+         nothing and would still report a passing test"
+    )
+}
 
 /// Build one declaration from the text after `Scenario:`.
 fn declared_scenario(rest: &str, line_number: usize) -> Result<Declared, String> {
