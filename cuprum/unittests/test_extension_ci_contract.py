@@ -53,6 +53,9 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
     "dependabot-automerge.yml": {
         ".github/workflows/dependabot-automerge.yml",
     },
+    "delayed-pr-comment.yml": {
+        ".github/workflows/delayed-pr-comment.yml",
+    },
     "loom.yml": {
         ".github/actions/setup-rust",
     },

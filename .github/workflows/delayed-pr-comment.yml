@@ -6,55 +6,23 @@ on:
       pr_number:
         description: 'PR number to comment on'
         required: true
+        type: number
       delay_minutes:
-        description: 'Minutes to wait before commenting'
+        description: 'Minutes to wait before commenting (0 to 345)'
         required: true
+        type: number
       message:
         description: 'Comment body'
         required: true
+        type: string
 
 jobs:
-  delay_and_comment:
-    # Deliberately stays on GitHub-hosted Ubuntu: this sleeps while holding a
-    # runner and must not consume a metered Ubicloud build slot.
-    runs-on: ubuntu-latest
-    # Ten minutes above the 180-minute cap on `delay_minutes`, so the longest
-    # accepted sleep still leaves the comment step time to run, while a
-    # runaway job cannot hold a runner for GitHub's six-hour default. A delay
-    # longer than the cap belongs in a scheduled workflow, not a sleeping job.
-    timeout-minutes: 190
+  delayed-comment:
     permissions:
-      pull-requests: write   # needed to post comments
-    steps:
-      - name: Convert minutes to seconds
-        id: calc
-        shell: bash
-        env:
-          DELAY_MINUTES: ${{ github.event.inputs.delay_minutes }}
-        run: |
-          set -euo pipefail
-          # Refuse anything but a whole number before it reaches arithmetic.
-          if ! [[ "${DELAY_MINUTES}" =~ ^[0-9]+$ ]]; then
-            echo "delay_minutes must be a whole number of minutes." >&2
-            exit 1
-          fi
-          # Bash arithmetic wraps at 64 bits, so bound the value before
-          # multiplying. Stripping leading zeros keeps `007` valid and leaves
-          # at most three digits to compare, so the comparison cannot wrap.
-          minutes="${DELAY_MINUTES#"${DELAY_MINUTES%%[!0]*}"}"
-          minutes="${minutes:-0}"
-          if [ "${#minutes}" -gt 3 ] || [ "${minutes}" -gt 180 ]; then
-            echo "delay_minutes must be at most 180." >&2
-            exit 1
-          fi
-          echo "secs=$(( minutes * 60 ))" >> "$GITHUB_OUTPUT"
-      - name: Wait requested time
-        env:
-          DELAY_SECONDS: ${{ steps.calc.outputs.secs }}
-        run: sleep "${DELAY_SECONDS}"
-        shell: bash
-      - name: Comment PR
-        uses: thollander/actions-comment-pull-request@24bffb9b452ba05a4f3f77933840a6a841d1b32b
-        with:
-          pr-number: ${{ github.event.inputs.pr_number }}
-          message: ${{ github.event.inputs.message }}
+      pull-requests: write  # needed to post comments
+    # shared-actions PR 706 merge, 2026-11-24
+    uses: leynos/shared-actions/.github/workflows/delayed-pr-comment.yml@8091b7cb5f9bab2d4a76ced2e749fd4c1bccdb02
+    with:
+      pr_number: ${{ inputs.pr_number }}
+      delay_minutes: ${{ inputs.delay_minutes }}
+      message: ${{ inputs.message }}
