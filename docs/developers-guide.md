@@ -159,7 +159,6 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `publish-pypi`            | `release.yml`                | `ubuntu-latest`       | none            | 20      |
 | `draft-release`           | `release.yml`                | `ubuntu-latest`       | none            | 10      |
 | `publish-release`         | `release.yml`                | `ubuntu-latest`       | none            | 10      |
-| `delay_and_comment`       | `delayed-pr-comment.yml`     | `ubuntu-latest`       | none            | 190     |
 | `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    | none            | 45      |
 | `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
 

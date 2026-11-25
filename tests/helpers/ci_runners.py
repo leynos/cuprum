@@ -203,7 +203,6 @@ GITHUB_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     # decision recorded below.
     "ci.yml": ("loom-smoke",),
     "benchmark-gate-harness.yml": ("workflow-harness",),
-    "delayed-pr-comment.yml": ("delay_and_comment",),
     "loom.yml": ("loom",),
     "release.yml": (
         "check-version",

@@ -6,7 +6,7 @@ Steps that call ``scripts/`` see the repository's copy through
 :func:`link_scripts`, and :func:`fake_release` routes ``gh`` and ``curl`` to
 ``release_fake_tools.py``, whose directories stand in for the GitHub Release
 and PyPI. Scope: ``release.yml`` by default, and any other workflow whose
-steps are executed the same way (``delayed-pr-comment.yml``) by naming it;
+steps are executed the same way by naming it;
 composite actions have ``tests/helpers/composite_actions.py``.
 """
 

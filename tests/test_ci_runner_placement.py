@@ -320,6 +320,7 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
             ("release.yml", "build-wheels"),
             ("dependabot-automerge.yml", "automerge"),
             ("mutation-testing.yml", "mutation-python"),
+            ("delayed-pr-comment.yml", "delayed-comment"),
         }
     )
     assert declared == known, (
