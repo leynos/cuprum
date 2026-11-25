@@ -180,12 +180,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      # Uploads `wheels-pure`, which the download below and release.yml's
-      # publish both read, so it must precede the download.
+      # Uploads `wheels-pure`, which release.yml's publish reads. The build
+      # writes straight into `dist/wheels-pure`, the directory the install step
+      # reads, so verification never waits for the upload to become visible in
+      # the artefact API. Downloading the job's own artefact back raced that
+      # listing and intermittently found no pure wheel at all.
       - name: Build pure Python wheel
         uses: ./.github/actions/pure-python-wheel
         with:
           python-version: ${{ inputs['python-version'] }}
+          out-dir: dist/wheels-pure
           artifact-name: wheels-pure
       # The native wheel targets the stable ABI (`abi3`) from CPython 3.12, so
       # one wheel must serve every supported interpreter. Verify it on the
@@ -197,9 +201,14 @@ jobs:
           python-version: |
             3.14
             3.12
+      # Only the native legs' artefacts are downloaded. The pure wheel and
+      # sdist were built into `dist/wheels-pure` by the step above, so fetching
+      # them back from the artefact API would add nothing and could race this
+      # job's own upload.
       - name: Download wheel artefacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
+          pattern: wheels-native-*
           path: dist
       # Maturin records the version that built a wheel in its WHEEL
       # `Generator` header. Assert it against this workflow's pin *before* the

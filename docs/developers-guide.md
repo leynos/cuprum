@@ -394,9 +394,12 @@ minute each. It caches nothing on purpose. The pure-wheel action checks the
 repository out before it runs `uv build`, and that checkout would delete any
 workspace-scoped restore before the build read it, and caching the uv store
 there would give `~/.cache/uv` a second writer. The verification installs both
-wheels into a fresh virtual environment. It builds the pure wheel before
-downloading the artefacts, because the download is how it reads that wheel
-back, and `release.yml`'s publish reads the same `wheels-pure` artefact.
+wheels into a fresh virtual environment. The pure-wheel action builds straight
+into `dist/wheels-pure`, which is where the verification reads it, and the
+upload exists for `release.yml`'s publish. The download step fetches only
+`wheels-native-*`: asking the artefact API for this job's own upload raced the
+listing and intermittently produced no pure wheel at all, so the local build
+output is read instead of a round trip.
 
 Installed tools use the parent `~/.local/bin` cache path. Do not cache the
 terminal `~/.local/bin/sccache` file: a restore creates an empty directory at a
