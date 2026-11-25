@@ -90,7 +90,7 @@ def _makefile_site(name: str) -> Site:
         label=f"Makefile {name}",
         pattern=re.compile(
             rf"^(?P<prefix>[ ]*{re.escape(name)}[ \t]*\?=[ \t]*)"
-            rf"(?P<value>[^#\n]*?)(?P<suffix>[ \t]*(?:#.*)?)$",
+            rf"(?P<value>[^#\r\n]*?)(?P<suffix>[ \t]*(?:#.*)?\r?)$",
             re.MULTILINE,
         ),
         validator=_refuse_multi_token,
@@ -104,7 +104,7 @@ def _workflow_site(name: str) -> Site:
         label=f"ci.yml {name}",
         pattern=re.compile(
             rf"^(?P<prefix>[ \t]*{re.escape(name)}:\s*')(?P<value>[^']+)"
-            rf"(?P<suffix>'[ \t]*)$",
+            rf"(?P<suffix>'[ \t]*\r?)$",
             re.MULTILINE,
         ),
     )
@@ -118,13 +118,13 @@ _MATURIN_WORKFLOW_SITE = Site(
     label="build-wheels.yml MATURIN_VERSION",
     pattern=re.compile(
         r'^(?P<prefix>[ \t]*MATURIN_VERSION:\s*")(?P<value>[^"]+)'
-        r'(?P<suffix>"[ \t]*)$',
+        r'(?P<suffix>"[ \t]*\r?)$',
         re.MULTILINE,
     ),
 )
 
 _ACTION_INPUT_BLOCK_RE = re.compile(
-    r"^  maturin-version:\n(?:    [^\n]*\n)*",
+    r"^  maturin-version:\r?\n(?:    [^\n]*\n)*",
     re.MULTILINE,
 )
 
@@ -147,9 +147,9 @@ _MATURIN_ACTION_SITE = Site(
     relative_path=".github/actions/build-wheels/action.yml",
     label="build-wheels action maturin-version default",
     pattern=re.compile(
-        r"^(?P<prefix>  maturin-version:\n(?:    [^\n]*\n)*?    default: \")"
+        r"^(?P<prefix>  maturin-version:\r?\n(?:    [^\n]*\n)*?    default: \")"
         r'(?P<value>[^"]+)'
-        r'(?P<suffix>"[ \t]*)$',
+        r'(?P<suffix>"[ \t]*\r?)$',
         re.MULTILINE,
     ),
     validator=_require_one_action_default,

@@ -92,18 +92,15 @@ def _atomic_write_text(path: Path, payload: bytes) -> None:
             temporary.unlink(missing_ok=True)
 
 
-def _rewrite_file(
+def _plan_file(
     root: Path, relative: str, entries: list[tuple[Site, str]], pins: dict[str, str]
-) -> Path | None:
-    """Rewrite one file's derived literals, returning it when its bytes changed."""
+) -> tuple[Path, str] | None:
+    """Validate one file's sites, returning its new text when it differs."""
     path = root / relative
     text = read_text(root, relative)
     replacements = [(match_site(text, site), pins[tool]) for site, tool in entries]
     updated = _apply_replacements(text, replacements)
-    if updated == text:
-        return None
-    _atomic_write_text(path, updated.encode("utf-8"))
-    return path
+    return None if updated == text else (path, updated)
 
 
 def _report_sync(
@@ -153,11 +150,18 @@ def sync_pins(root: Path = ROOT, stream: typ.TextIO = sys.stdout) -> tuple[Path,
         replaced atomically.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the pin readers this delegates to
     pins = canonical_pins(root)
-    changed = [
-        path
+    # Every site is matched, and the lockfile's structure is read, before the
+    # first write. A malformed site found later would otherwise leave the
+    # earlier files rewritten while the command still reported failure.
+    plans = [
+        plan
         for relative, entries in sites_by_file().items()
-        if (path := _rewrite_file(root, relative, entries, pins)) is not None
+        if (plan := _plan_file(root, relative, entries, pins)) is not None
     ]
+    lock_drift(root, pins)
+    for path, updated in plans:
+        _atomic_write_text(path, updated.encode("utf-8"))
+    changed = [path for path, _ in plans]
     _report_sync(root, changed, pins, stream)
     return tuple(changed)
 

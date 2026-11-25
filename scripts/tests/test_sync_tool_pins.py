@@ -246,6 +246,49 @@ def test_missing_malformed_or_ambiguous_pins_fail_clearly(
         sync_tool_pins.sync_pins(repository)
 
 
+def test_a_late_structural_defect_writes_no_file(repository: Path) -> None:
+    """A defect found after an earlier drift leaves the earlier file untouched.
+
+    The sites are matched file by file, so a malformed site in a later file
+    would otherwise be discovered only after the earlier files had been
+    rewritten, leaving edits behind on a command that reported failure.
+    """
+    pins.bump(repository, "ruff")
+    pins.ambiguous_action_default(repository)
+    before = _snapshot(repository)
+
+    with pytest.raises(tool_pins.PinError, match="maturin-version default"):
+        sync_tool_pins.sync_pins(repository)
+
+    assert _snapshot(repository) == before, (
+        "a validation failure must not leave any file rewritten"
+    )
+
+
+def test_a_crlf_checkout_is_already_synchronized(repository: Path) -> None:
+    """Git's `core.autocrlf` on Windows must not turn a valid pin into drift."""
+    pins.to_crlf(repository)
+    status, output = _check(repository)
+    assert status == 0, f"a CRLF checkout must report a match, got {output!r}"
+
+
+def test_a_crlf_checkout_is_repaired_with_its_terminators_intact(
+    repository: Path,
+) -> None:
+    """Sync rewrites the value and leaves every CRLF line ending alone."""
+    pins.to_crlf(repository)
+    _, new = pins.bump(repository, "ruff")
+    _sync(repository)
+
+    body = (repository / "Makefile").read_bytes()
+    assert f"RUFF_VERSION ?= {new}\r\n".encode() in body, (
+        "sync must rewrite the value and keep the CRLF terminator"
+    )
+    assert b"\n" not in body.replace(b"\r\n", b""), (
+        "sync must not introduce a bare LF into a CRLF checkout"
+    )
+
+
 def test_a_failed_replace_keeps_the_original_bytes(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -41,6 +41,14 @@ def replace(repository: Path, relative: str, old: str, new: str) -> None:
     (repository / relative).write_text(body.replace(old, new), encoding="utf-8")
 
 
+def to_crlf(repository: Path) -> None:
+    """Rewrite every fixture file with CRLF line endings."""
+    for relative in PIN_FILES:
+        path = repository / relative
+        body = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        path.write_bytes(body)
+
+
 def pin(repository: Path, tool: str) -> str:
     """Return the canonical pin the copied ``pyproject.toml`` declares."""
     return tool_pins.canonical_pins(repository)[tool]
