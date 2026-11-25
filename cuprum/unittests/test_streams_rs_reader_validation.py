@@ -10,12 +10,7 @@ from unittest import mock
 import pytest
 
 from cuprum import _streams_rs
-
-
-def _close_duplicate(fd: int) -> None:
-    """Close a duplicate the native pump may already have consumed."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
+from cuprum.unittests._rust_stream_test_support import _OwnedDescriptor
 
 
 @pytest.mark.parametrize(
@@ -38,8 +33,8 @@ def test_invalid_reader_closes_duplicate_before_native_call(
         source, sink = os.pipe()
         stack.callback(os.close, source)
         stack.callback(os.close, sink)
-        duplicate = os.dup(sink)
-        stack.callback(_close_duplicate, duplicate)
+        duplicate = _OwnedDescriptor(os.dup(sink))
+        stack.callback(duplicate.close)
         native = mock.Mock(return_value=0)
         monkeypatch.setattr(
             _streams_rs,
@@ -47,11 +42,16 @@ def test_invalid_reader_closes_duplicate_before_native_call(
             lambda: SimpleNamespace(rust_pump_stream=native),
         )
         monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", lambda fd: fd)
-        with pytest.raises(error):
-            _streams_rs.rust_pump_stream(reader, duplicate)
+        try:
+            with pytest.raises(error):
+                _streams_rs.rust_pump_stream(reader, duplicate.fd)
+        finally:
+            # The wrapper closes a writer that never reaches native ownership,
+            # so the test must not close that number again.
+            duplicate.disarm()
         native.assert_not_called()
         with pytest.raises(OSError, match="Bad file descriptor"):
-            os.fstat(duplicate)
+            os.fstat(duplicate.fd)
         os.fstat(sink)
 
 
