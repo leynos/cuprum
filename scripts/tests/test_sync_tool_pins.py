@@ -289,6 +289,22 @@ def test_a_crlf_checkout_is_repaired_with_its_terminators_intact(
     )
 
 
+def test_sync_keeps_a_rewritten_file_executable(repository: Path) -> None:
+    """A mode the file already carries must survive the atomic replace."""
+    target = repository / "Makefile"
+    target.chmod(0o754)
+    before = target.stat().st_mode & 0o777
+    assert before == 0o754, f"the fixture mode must be 0o754, found {before:o}"
+
+    pins.bump(repository, "ruff")
+    _sync(repository)
+
+    after = target.stat().st_mode & 0o777
+    assert after == 0o754, (
+        f"sync must preserve the file's mode, {before:o} became {after:o}"
+    )
+
+
 def test_a_failed_replace_keeps_the_original_bytes(
     repository: Path,
     monkeypatch: pytest.MonkeyPatch,

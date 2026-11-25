@@ -1214,9 +1214,10 @@ literal rewrite.
 
 The built wheel's `Generator` header is asserted against the workflow's
 `MATURIN_VERSION` by the `verify-wheel-install` job before any wheel is
-installed, so a wheel built by a different maturin fails there. The pin tests
-therefore need no wheel snapshot regeneration, and a generator mismatch is
-never normalized away.
+installed, so a wheel built by a different maturin fails there. The local
+wheel snapshot keeps its own `Generator` assertion too, so neither check
+normalizes the header away: a pin bump that changes which maturin builds the
+wheel still fails a test rather than silently rewriting a snapshot.
 
 The composite action accepts an explicit `maturin-version` override. The
 override is validated against the same exact `X.Y.Z` form before it reaches
@@ -8210,18 +8211,22 @@ These checks span three test modules, one per concern — `test_maturin_pins.py`
 behind them are split across three boundaries.
 
 The **pin-synchronization** checks live in
-`cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
-to that module: they read repository files, have a single consumer, and gain
-nothing from indirection. Two exceptions sit in
-`cuprum/unittests/_maturin_pin_support.py`, each because it genuinely has a
-second consumer — the threshold this policy asks for before sharing anything:
+`cuprum/unittests/test_maturin_pins.py`. They read maturin's version through
+the same structured readers as every other tool pin — `read_pyproject_pin` and
+`read_lock_pin` from `cuprum/unittests/_tool_pin_support.py` for the manifest
+and the lock, and `tests/helpers/strict_yaml.py` for the two YAML sites, which
+refuses a document declaring one key twice. A text pattern would accept the
+first of a duplicated `MATURIN_VERSION` while GitHub used the last, so the YAML
+sites are parsed rather than searched. The `Generator` assertion in
+`test_maturin_build.py` reads the installed distribution's metadata instead,
+because its subject is the maturin that actually built the wheel.
 
-- `read_expected_maturin_version` — the pin comparison here, and the wheel
-  snapshot's `Generator` assertion in `test_maturin_build.py`.
-- `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
-  generated references in `test_manylinux_container_ref_properties.py`. Sharing
-  it through the support module keeps one test module from importing a private
-  name out of another.
+One helper sits in `cuprum/unittests/_maturin_pin_support.py` because it
+genuinely has a second consumer — the threshold this policy asks for before
+sharing anything: `MANYLINUX_CONTAINER_SHA256_RE`, used by the container-pin
+assertion here and by the generated references in
+`test_manylinux_container_ref_properties.py`. Sharing it through the support
+module keeps one test module from importing a private name out of another.
 
 The **availability detectors** are tested together in
 `cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
