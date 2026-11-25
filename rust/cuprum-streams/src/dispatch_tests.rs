@@ -82,8 +82,12 @@ fn assert_strategy(captured: &Captured, scenario: &str, fallback_events: usize, 
     assert_eq!(
         captured.event_count(Level::DEBUG, FALLBACK_MESSAGE),
         fallback_events,
-        "{scenario}: the splice support-detection event must fire exactly {fallback_events} \
-         time(s)",
+        concat!(
+            "{}: the splice support-detection event must fire exactly ",
+            "{} time(s)",
+        ),
+        scenario,
+        fallback_events,
     );
 
     let span_operation = captured.span_field(READWRITE_OPERATION, "operation");
