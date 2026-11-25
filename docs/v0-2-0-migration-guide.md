@@ -148,14 +148,20 @@ and the span events' attributes.
 
 `rust_consume_stream` validates `buffer_size` in Python before it inspects the
 reader descriptor, on every platform. A call that supplies both an invalid
-`buffer_size` and an invalid reader descriptor therefore raises the buffer
-`ValueError` where the previous path could report the descriptor failure first.
+`buffer_size` and an invalid reader descriptor therefore reports the buffer
+failure where the previous path could report the descriptor failure first.
 `rust_pump_stream` already worked this way, so the two entry points now agree.
+
+The failure class is the same one each buffer value produced before this
+change. An index-like integer outside the accepted limits, meaning zero or
+negative, above 1 GiB, or outside PyO3's `i64` range, raises the corresponding
+`ValueError` or `OverflowError`; a value that is not index-like raises
+`TypeError`. What moved is only the precedence: whichever of those the buffer
+produces now wins over a reader failure.
 
 Callers that branch on the descriptor failure should validate or check
 `buffer_size` first. No successful call changes behaviour, and the buffer
-bounds themselves are unchanged: greater than zero, at most 1 GiB, and an
-index-like integer inside PyO3's `i64` range.
+bounds themselves are unchanged.
 
 ## Breaking changes
 
