@@ -4052,6 +4052,66 @@ descriptor as a Win32 handle or relax the pump's synchronous-handle checks. The
 platform-specific helpers live in `cuprum/_streams_windows.py`; production use
 is limited to the extension shim's Windows setup and cleanup boundary.
 
+#### Python adapter argument policy
+
+Both Python entry points in `cuprum/_streams_rs.py` apply one order before any
+native call: load the extension, normalize and validate `buffer_size`,
+normalize and validate the raw reader descriptor, apply the platform step, then
+invoke the export. `_validate_buffer_size` and `_validate_raw_reader` live in
+`cuprum/_stream_argument_policy.py` and implement the shared policy once;
+`_prepare_native_reader` composes the raw check with the pump's platform
+conversion.
+
+The raw reader policy is the one the native boundary already enforces:
+`operator.index`, then the PyO3 `i64` extraction range, then non-negativity,
+then the signed 32-bit descriptor range. Running it in Python is what keeps a
+negative or oversized CRT descriptor away from `msvcrt.get_osfhandle` and
+`os.dup`, where it would otherwise surface as an `OSError` rather than the
+documented `ValueError`. It does not establish that an in-range descriptor is
+open. The pump leaves the writer untransferred until the reader has passed both
+validation and conversion.
+
+`rust_consume_stream` remains implemented but not integrated. Its validation
+now precedes the Windows duplication, and Unix consume passes the validated raw
+descriptor to a native entry that rechecks the same policy. No production
+dispatcher routes a consume through it.
+
+#### Compatibility decision: unified adapter validation (2026-11-19)
+
+Before this reconciliation the two wrappers prepared arguments in different
+orders. The pump validated `buffer_size` in Python, normalized the reader, and
+converted it for the platform. Consume converted the reader first: on Windows
+that step is `msvcrt.get_osfhandle`, which already rejected a negative or
+closed descriptor with `OSError` before any duplication, and on Unix it is the
+identity. The native entry then validated the buffer, so Unix consume already
+reported a buffer error ahead of an invalid descriptor for any value PyO3 could
+extract. Issue #659 unified the order in Python. The observable changes for
+callers of `rust_pump_stream` and `rust_consume_stream` are:
+
+1. On Unix, a `buffer_size` error now precedes PyO3's extraction errors for the
+   reader: `buffer_size=0` paired with a non-index-like or out-of-`i64` reader
+   raises the buffer `ValueError` rather than `TypeError` or `OverflowError`.
+   In-range descriptor failures also carry the wrapper's messages rather than
+   the native entry's. Integers that extract cleanly already saw the buffer
+   error first.
+2. On Windows, consume raises `ValueError` for a negative or above-`i32::MAX`
+   reader instead of the `OSError` that `msvcrt.get_osfhandle` produced, and it
+   rejects those values before `os.dup` can see them.
+3. A pump reader below `i64::MIN` now raises `OverflowError` from the wrapper
+   rather than `ValueError`. Values anywhere inside the `i64` range keep
+   `ValueError`, so this affects integers no descriptor API accepts.
+4. A Windows pump reader below zero now reports
+   `file descriptor must be non-negative` rather than
+   `file handle must be non-negative`. The class stays `ValueError`; only the
+   wording becomes platform-independent.
+5. A Windows pump reader above `i32::MAX` now raises
+   `ValueError: file descriptor out of range` before conversion; previously it
+   reached `msvcrt.get_osfhandle` and surfaced as `OSError`.
+
+These changes follow from validating in Python on both platforms; they remove
+platform-dependent classification and extraction-order dependence. No
+successful call changes behaviour, and the native boundary is unchanged.
+
 ```python
 # cuprum/_streams_rs.pyi (type stubs)
 from __future__ import annotations
@@ -4068,12 +4128,15 @@ def rust_pump_stream(
     Parameters
     ----------
     reader_fd:
-        File descriptor to read from (stdout of upstream process).
+        File descriptor to read from (stdout of upstream process). Any object
+        implementing ``__index__`` is accepted; the normalized value must be
+        non-negative and within the signed 32-bit descriptor range.
     writer_fd:
         File descriptor to write to (stdin of downstream process).
     buffer_size:
-        Size of the internal transfer buffer in bytes. Must be at least 1 and
-        no larger than 1 GiB (``1 << 30``).
+        Size of the internal transfer buffer in bytes. Any object implementing
+        ``__index__`` is accepted; the value must be at least 1 and no larger
+        than 1 GiB (``1 << 30``).
 
     Returns
     -------
@@ -4082,9 +4145,15 @@ def rust_pump_stream(
 
     Raises
     ------
+    ImportError
+        When the native module cannot be imported.
+    OverflowError
+        When ``buffer_size`` or ``reader_fd`` does not fit PyO3's ``i64``
+        range.
     ValueError
-        When ``buffer_size`` is not a positive integer or exceeds the 1 GiB
-        maximum.
+        When ``buffer_size`` is not positive or exceeds the 1 GiB maximum, or
+        when ``reader_fd`` is negative or above the signed 32-bit descriptor
+        range.
     OSError
         When an I/O error occurs during transfer. Expected broken-pipe
         conditions are swallowed while the reader continues draining.
@@ -4103,15 +4172,30 @@ def rust_consume_stream(
     Parameters
     ----------
     reader_fd:
-        File descriptor to read from.
+        File descriptor to read from. Any object implementing ``__index__`` is
+        accepted; the normalized value must be non-negative and within the
+        signed 32-bit descriptor range.
     buffer_size:
-        Size of the internal read buffer in bytes. Must be at least 1 and no
-        larger than 1 GiB (``1 << 30``).
+        Size of the internal read buffer in bytes. Any object implementing
+        ``__index__`` is accepted; the value must be at least 1 and no larger
+        than 1 GiB (``1 << 30``).
 
     Returns
     -------
     str
         Decoded stream content.
+
+    Raises
+    ------
+    ImportError
+        When the native module cannot be imported.
+    OverflowError
+        When ``buffer_size`` or ``reader_fd`` does not fit PyO3's ``i64``
+        range.
+    ValueError
+        When ``buffer_size`` is not positive or exceeds the 1 GiB maximum, or
+        when ``reader_fd`` is negative or above the signed 32-bit descriptor
+        range.
 
     Notes
     -----
@@ -4163,6 +4247,7 @@ sequenceDiagram
 
     PyCaller->>PyShim: rust_consume_stream(reader_fd, buffer_size)
     PyShim->>PyShim: validate buffer_size
+    PyShim->>PyShim: validate raw reader (sign, i32 range)
     alt Windows CRT descriptor
         PyShim->>PyShim: duplicate reader and set O_BINARY
         PyShim->>PyRust: rust_consume_stream(duplicate_crt_fd, buffer_size)
@@ -4455,9 +4540,12 @@ The following table summarizes when each pathway is recommended:
 Current Rust acceleration applies to inter-stage pipeline pumping, not
 stdout/stderr capture.
 
-The Python 64 KiB setting is an independently measured baseline for later
-consume-path work. It is not coupled to the Rust extension's separate
-`buffer_size` default, even though both currently use the same numeric value.
+The Python `_READ_SIZE` setting is an independently measured baseline for later
+consume-path work. It is not coupled to the native wrappers' default buffer
+size. Both native wrapper entry points now share `DEFAULT_NATIVE_BUFFER_SIZE`,
+which `NATIVE_PUMP_BUFFER_SIZE` re-exports, so that default cannot drift
+between pump and consume; the Rust signatures still declare their own literal
+`65536` defaults and are deliberately unchanged.
 
 The `rust_consume_stream()` helper targets a measured capture-only hotspot but
 is not yet integrated. The tee profiling baseline found that capture plus echo

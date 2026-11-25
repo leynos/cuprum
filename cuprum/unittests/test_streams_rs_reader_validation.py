@@ -10,12 +10,7 @@ from unittest import mock
 import pytest
 
 from cuprum import _streams_rs
-
-
-def _close_duplicate(fd: int) -> None:
-    """Close a duplicate the native pump may already have consumed."""
-    with contextlib.suppress(OSError):
-        os.close(fd)
+from cuprum.unittests._rust_stream_test_support import _OwnedDescriptor
 
 
 @pytest.mark.parametrize(
@@ -23,13 +18,9 @@ def _close_duplicate(fd: int) -> None:
     [
         (-1, ValueError),
         (1 << 64, OverflowError),
-        pytest.param(
-            1 << 31,
-            ValueError,
-            marks=pytest.mark.skipif(
-                os.name == "nt", reason="Windows handles are pointer-sized"
-            ),
-        ),
+        # The raw reader is a CRT descriptor on every platform, so the signed
+        # 32-bit range applies before any Windows conversion to a handle.
+        (1 << 31, ValueError),
     ],
 )
 def test_invalid_reader_closes_duplicate_before_native_call(
@@ -42,8 +33,8 @@ def test_invalid_reader_closes_duplicate_before_native_call(
         source, sink = os.pipe()
         stack.callback(os.close, source)
         stack.callback(os.close, sink)
-        duplicate = os.dup(sink)
-        stack.callback(_close_duplicate, duplicate)
+        duplicate = _OwnedDescriptor(os.dup(sink))
+        stack.callback(duplicate.close)
         native = mock.Mock(return_value=0)
         monkeypatch.setattr(
             _streams_rs,
@@ -51,11 +42,16 @@ def test_invalid_reader_closes_duplicate_before_native_call(
             lambda: SimpleNamespace(rust_pump_stream=native),
         )
         monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", lambda fd: fd)
-        with pytest.raises(error):
-            _streams_rs.rust_pump_stream(reader, duplicate)
+        try:
+            with pytest.raises(error):
+                _streams_rs.rust_pump_stream(reader, duplicate.fd)
+        finally:
+            # The wrapper closes a writer that never reaches native ownership,
+            # so the test must not close that number again.
+            duplicate.disarm()
         native.assert_not_called()
         with pytest.raises(OSError, match="Bad file descriptor"):
-            os.fstat(duplicate)
+            os.fstat(duplicate.fd)
         os.fstat(sink)
 
 
@@ -75,7 +71,7 @@ def test_windows_negative_reader_is_rejected_before_conversion(
 
     monkeypatch.setattr(_streams_rs.os, "name", "nt")
     monkeypatch.setattr(_streams_rs, "_convert_fd_for_platform", convert_reader)
-    with pytest.raises(ValueError, match="file handle must be non-negative"):
+    with pytest.raises(ValueError, match="file descriptor must be non-negative"):
         _streams_rs._prepare_native_reader(-1)
 
     assert not converted, "conversion must not run for a negative descriptor"

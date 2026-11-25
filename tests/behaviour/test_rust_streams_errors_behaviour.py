@@ -80,22 +80,22 @@ def test_native_stream_exception_categories() -> None:
 
 @given("the compiled Rust backend is required", target_fixture="required_backend")
 def given_compiled_backend_required(rust_streams: ModuleType) -> ModuleType:
-    """Return the compiled module, refusing to fall back to the shim.
+    """Return the adapter module once the compiled backend is known present.
 
-    ``rust_streams`` already skips when the extension is absent. This step
-    exists so the scenario states the precondition it actually depends on: the
-    exception classes asserted below are produced by the compiled boundary, and
-    a shim-only run would prove nothing about it.
+    ``rust_streams`` already skips when the extension is absent, so reaching
+    this step proves the compiled boundary loaded. The step states that
+    precondition: the exception categories asserted below are produced beyond
+    the Python adapter, and a shim-only run would prove nothing about them.
 
     Parameters
     ----------
     rust_streams : ModuleType
-        The compiled Rust streams module fixture.
+        The Python adapter module backed by the compiled extension.
 
     Returns
     -------
     ModuleType
-        The compiled native module.
+        The adapter module whose entry points delegate to the native code.
     """
     assert hasattr(rust_streams, "rust_pump_stream"), (
         "the compiled Rust backend must expose the native entry points"
@@ -118,7 +118,7 @@ def when_native_helper_receives(
     Parameters
     ----------
     required_backend : ModuleType
-        The compiled native module.
+        The adapter module backed by the compiled extension.
     tmp_path : Path
         Pytest-provided temporary directory holding the unreadable file the
         ``a fatal reader error`` row passes as its reader.
@@ -146,7 +146,7 @@ def when_native_helper_receives(
 
     match failure:
         case "a zero buffer size":
-            # The reader is never dereferenced because native buffer
+            # The reader is never dereferenced because the adapter's buffer
             # validation runs first. Keep it open so this row stays focused on
             # the documented argument error on every platform.
             with contextlib.ExitStack() as stack:

@@ -8,35 +8,44 @@ seam:
 
 - Non-positive and over-cap ``buffer_size`` values raise ``ValueError``.
 - Negative and out-of-``i32``-range descriptors raise ``ValueError``.
-- Values beyond ``i64`` stay PyO3 extraction errors.
+- Values beyond ``i64`` raise ``OverflowError``. Through the wrappers that
+  error comes from the shared Python policy, which enforces the range before
+  any native call; a direct native call still reports PyO3's own extraction
+  error, which ``test_rust_stream_native_order.py`` pins separately.
 
 The accepted arguments — where the default applies and the transfer actually
 completes — are covered by ``test_rust_streams_roundtrip_property.py``.
 
-Native buffer-size validation runs before native descriptor conversion, and
-both shims keep that order before entering native code: the pump validates its
-buffer before preparing descriptors, and Windows consume validates its buffer
-and its CRT descriptor before duplicating the descriptor. The descriptor
-properties use the default buffer so conversion is the failing step.
+Both adapters run the same Python checks before entering native code: buffer
+size first, then the raw reader's sign and signed 32-bit range, then their
+platform step. On Windows the pump converts the validated reader to a handle
+before the writer transfer, while consume duplicates the validated CRT
+descriptor into binary mode; Unix passes the raw descriptor through, and the
+native entry rechecks the same policy. The descriptor properties use the
+default buffer so the reader is the value that fails.
 
 Windows consume accepts CRT descriptors in the same signed 32-bit range as
 Unix descriptors and duplicates the validated descriptor, changing only the
-duplicate's mode. Pump tests retain the Unix-only marker because its Windows
-handle capability is still deliberately rejected at the Python boundary.
+duplicate's mode. The reader-range and buffer properties run on both platforms,
+because the shared Python policy rejects those values before either platform
+step; only properties whose subject is a platform step that differs by design
+carry a platform marker.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
-import sys
 import typing as typ
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from cuprum.unittests._rust_stream_test_support import _safe_close
+from cuprum.unittests._rust_stream_test_support import (
+    _descriptor_state,
+    _safe_close,
+)
 
 if typ.TYPE_CHECKING:
     from types import ModuleType
@@ -47,14 +56,9 @@ _I32_MAX = (1 << 31) - 1
 _I64_MAX = (1 << 63) - 1
 _I64_MIN = -(1 << 63)
 
-# The descriptor properties assert the Unix i32 file-descriptor conversion
-# contract. On Windows the wrapper routes fds through msvcrt.get_osfhandle and
-# the native path accepts pointer-sized handles, so those assertions do not
-# hold; skip them there rather than encode platform-specific error semantics.
-_pump_unix_only = pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="pump still requires the Unix descriptor contract",
-)
+# The shared Python policy rejects a negative or above-i32 reader on both
+# platforms before any platform step, so the reader-range property runs
+# everywhere and needs no platform marker.
 
 _SUPPRESS_FIXTURE = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
@@ -72,9 +76,10 @@ class _BufferSizeEntryPoint(typ.Protocol):
 
 # Both bounds span the whole signed 64-bit range, so the failure is the
 # documented buffer-size rejection rather than an integer-conversion overflow.
-# The negative bound reaches ``i64::MIN``: PyO3 extracts ``buffer_size`` as an
-# ``i64``, so every value in this range is a well-formed argument that the
-# native validator must classify itself rather than reject at extraction.
+# The negative bound reaches ``i64::MIN``: the shared Python policy extracts
+# ``buffer_size`` with ``operator.index`` and then applies its own range and
+# positivity checks, so every value in this range reaches the wrapper's buffer
+# validator instead of failing extraction.
 _OUT_OF_RANGE_BUFFER_SIZES = st.one_of(
     st.integers(min_value=_I64_MIN, max_value=0),
     st.integers(min_value=_MAX_BUFFER_SIZE + 1, max_value=_I64_MAX),
@@ -114,10 +119,16 @@ def _pump_with_open_reader(
         Whatever the entry point returns; the property expects it to raise
         instead.
     """
-    with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
         return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    finally:
+        # The wrapper closes a writer that never reaches native ownership, and
+        # the assertion proves it did: a regression would leak one descriptor
+        # per generated example. No second close is registered for the number.
+        assert _descriptor_state(writer_fd) == "closed", (
+            "a rejected pump call must close the writer it still owned"
+        )
 
 
 @pytest.mark.parametrize(
@@ -136,9 +147,10 @@ def test_rejects_out_of_range_buffer_with_open_reader(
 ) -> None:
     """Both entry points reject an out-of-range buffer for an open reader.
 
-    The native reader is never read because buffer validation raises. Windows
-    consume still duplicates the valid CRT descriptor before native entry; the
-    property verifies the native argument error survives that setup.
+    The native reader is never read because the shared Python buffer check
+    raises before the platform step, so on Windows consume never duplicates the
+    CRT descriptor for this example. The property pins that wrapper-level
+    precedence rather than a native recheck.
     """
     with contextlib.ExitStack() as stack:
         reader = os.open(os.devnull, os.O_RDONLY)
@@ -183,10 +195,16 @@ def _pump_with_reader_and_buffer(
         Whatever the entry point returns; the property expects it to raise
         instead.
     """
-    with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    try:
         return streams.rust_pump_stream(reader_fd, writer_fd, buffer_size=buffer_size)
+    finally:
+        # The wrapper owns this writer and closes it on every pre-native
+        # failure; asserting that keeps a regression from leaking a descriptor
+        # per generated example without closing the number a second time.
+        assert _descriptor_state(writer_fd) == "closed", (
+            "a rejected pump call must close the writer it still owned"
+        )
 
 
 class _ReaderAndBufferEntryPoint(typ.Protocol):
@@ -222,14 +240,12 @@ def test_buffer_validation_precedes_descriptor_conversion(
 ) -> None:
     """An invalid buffer is reported even when the descriptor is also invalid.
 
-    Native order is buffer then descriptor on every platform. The pump shim
-    validates its buffer before preparing either descriptor; Unix consume
-    leaves descriptor validation to the native function. Windows consume
-    validates its buffer before it validates or duplicates its CRT descriptor,
-    which is also the order that keeps an unusable descriptor away from
-    ``_read``. Both values are deliberately interior ``i64``, so PyO3 extracts
-    them successfully and classification is the boundary's own rather than an
-    extraction error.
+    Both wrappers validate the buffer before the raw reader, and consume does so
+    before duplicating its CRT descriptor on Windows, which is also the order
+    that keeps an unusable descriptor away from ``_read``. Both values are
+    deliberately interior ``i64``, so the wrapper's own buffer check decides the
+    competing failure; PyO3's extraction runs only after that check, and no
+    platform step or native call is reached.
     """
     with pytest.raises(ValueError, match="buffer_size") as excinfo:
         entry_point(rust_streams, reader_fd=bad_fd, buffer_size=bad_size)
@@ -271,7 +287,6 @@ def test_consume_out_of_i64_descriptor_stays_an_extraction_error(
         rust_streams.rust_consume_stream(beyond_i64)
 
 
-@_pump_unix_only
 @_SUPPRESS_FIXTURE
 @given(
     bad_fd=st.one_of(
@@ -287,12 +302,17 @@ def test_pump_rejects_invalid_reader_descriptor(
 
     The writer is a genuinely valid descriptor, so the ``ValueError`` can only
     originate from the invalid reader, not from a coincidentally invalid writer.
+    The shared Python policy decides this before the Windows handle conversion,
+    so the property runs on both platforms.
     """
-    with contextlib.ExitStack() as stack:
-        writer_fd = os.open(os.devnull, os.O_WRONLY)
-        stack.callback(_safe_close, writer_fd)
-        with pytest.raises(ValueError, match="file descriptor"):
-            rust_streams.rust_pump_stream(bad_fd, writer_fd)
+    writer_fd = os.open(os.devnull, os.O_WRONLY)
+    # The wrapper closes the writer on this rejection; a second close here
+    # would act on a number the test no longer owns.
+    with pytest.raises(ValueError, match="file descriptor"):
+        rust_streams.rust_pump_stream(bad_fd, writer_fd)
+    assert _descriptor_state(writer_fd) == "closed", (
+        "a rejected pump call must close the writer it still owned"
+    )
 
 
 @pytest.mark.parametrize(
@@ -308,24 +328,25 @@ def test_pump_rejects_invalid_reader_descriptor(
         st.integers(min_value=1 << 63), st.integers(max_value=-((1 << 63) + 1))
     )
 )
-def test_out_of_i64_buffer_size_stays_an_extraction_error(
+def test_out_of_i64_buffer_size_raises_overflow_error(
     rust_streams: ModuleType,
     entry_point: _OpenReaderEntryPoint,
     beyond_i64: int,
 ) -> None:
-    """Values outside ``i64`` keep PyO3's ``OverflowError``, not ``ValueError``.
+    """Values outside ``i64`` raise ``OverflowError``, not ``ValueError``.
 
-    The typed boundary classifies what PyO3 successfully extracted. An
-    out-of-range integer never reaches it, so this stays an extraction error:
-    reclassifying it as a stream-validation failure would claim the boundary
-    saw an argument it never received.
+    The wrapper's shared policy enforces the range in Python and raises
+    ``OverflowError`` with PyO3's message before any native call, so this is a
+    wrapper error rather than a native classification. A direct native caller
+    still gets PyO3's own extraction error; the native-order module pins that
+    separately.
 
     ``OverflowError`` is a subclass of ``ArithmeticError``, not of
     ``ValueError``, so ``pytest.raises(ValueError)`` would not mask a
     regression here.
 
-    The reader is a real read end so Windows consume's CRT duplication succeeds
-    and this property isolates extraction of the oversized buffer argument.
+    The reader is a real read end, so the only failing argument available to
+    the wrapper is the oversized buffer; no platform step or native call runs.
     """
     with contextlib.ExitStack() as stack:
         reader = os.open(os.devnull, os.O_RDONLY)

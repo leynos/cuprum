@@ -100,6 +100,7 @@ def test_sync_entry_point_refuses_a_running_event_loop(
     async def call_inside_loop() -> tuple[
         RunningEventLoopError, list[warnings.WarningMessage]
     ]:
+        """Call the entry point inside a running loop and capture the refusal."""
         # Yield once so the calling loop is demonstrably running, not merely
         # scheduled.
         await asyncio.sleep(0)

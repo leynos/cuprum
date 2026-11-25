@@ -157,9 +157,12 @@ def _convert_fd_for_platform(fd: int) -> int:
     )
     handle = get_osfhandle(fd)
     # ``get_osfhandle`` reports a raw HANDLE, which is signed when its top bit
-    # is set. Rust receives a ``u64``, so sign-extended values have to be
-    # narrowed back to the pointer's own width. ``sys.maxsize`` is
-    # ``2**63 - 1`` on a 64-bit interpreter and ``2**31 - 1`` on a 32-bit one,
-    # so its bit length plus the sign bit is exactly the pointer width.
+    # is set. The native ``PlatformFd`` is a ``usize``, but the value crosses
+    # PyO3 as an ``i64``, so a sign-extended handle has to be narrowed back to
+    # the pointer's own width first. ``sys.maxsize`` is ``2**63 - 1`` on a
+    # 64-bit interpreter and ``2**31 - 1`` on a 32-bit one, so its bit length
+    # plus the sign bit is exactly the pointer width. A handle whose narrowed
+    # value still exceeds ``i64::MAX`` cannot cross the boundary and is
+    # rejected by the caller's post-conversion range check.
     pointer_bits = sys.maxsize.bit_length() + 1
     return handle & ((1 << pointer_bits) - 1)
