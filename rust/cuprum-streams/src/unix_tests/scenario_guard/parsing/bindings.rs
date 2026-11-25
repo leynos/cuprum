@@ -9,18 +9,45 @@ use super::{
     attribute::{ArgKey, AttributeArg, attribute_args},
 };
 
+/// The Rust source being scanned, split into lines once.
+///
+/// The scanner walks this repeatedly — for each attribute and again for the
+/// `fn` item after it — so the lines are held rather than re-split, and the
+/// type marks every helper's input as "the module source" rather than any
+/// string that happens to be nearby.
+struct Source<'a> {
+    lines: Vec<&'a str>,
+}
+
+impl<'a> Source<'a> {
+    /// Split `text` into the lines the scan walks.
+    fn new(text: &'a str) -> Self {
+        Self {
+            lines: text.lines().collect(),
+        }
+    }
+
+    /// The line at `index`, trimmed, or `None` past the end.
+    fn trimmed(&self, index: usize) -> Option<&'a str> {
+        self.lines.get(index).map(|line| line.trim())
+    }
+}
+
 /// Parse every `#[scenario(...)]` binding in the module source.
 ///
 /// The source is rustfmt's output, so an attribute runs from the line that
 /// opens `#[scenario(` to the first line that closes it with `)]`. Each
 /// attribute must bind by `name`, must name the expected feature path, and
 /// must be followed by the `fn` item it decorates.
-pub(crate) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<Bound>, String> {
-    let lines: Vec<&str> = source.lines().collect();
+pub(crate) fn bound_scenarios(
+    module_source: &str,
+    expected_path: &str,
+) -> Result<Vec<Bound>, String> {
+    let source = Source::new(module_source);
     let mut bound = Vec::new();
     let mut cursor = 0;
 
-    while let Some(found) = find_attribute(&lines, cursor) {
+    while let Some(found) = find_attribute(&source, cursor) {
         let AttributeText {
             text,
             start_line,
@@ -33,7 +60,7 @@ pub(crate) fn bound_scenarios(source: &str, expected_path: &str) -> Result<Vec<B
         let name = argument_text(&args, ArgKey::Name)
             .map_err(|reason| format!("line {start_line}: {reason}"))?
             .to_owned();
-        let function = next_function_name(&lines, cursor)
+        let function = next_function_name(&source, cursor)
             .map_err(|reason| format!("line {start_line}: {reason}"))?;
         bound.push(Bound {
             name,
@@ -60,11 +87,11 @@ struct AttributeText {
 /// Returns the attribute, or `None` once no further attribute opens. Split out
 /// of the scan so collecting one attribute is a single call rather than a loop
 /// wrapping another loop.
-fn find_attribute(lines: &[&str], from: usize) -> Option<Result<AttributeText, String>> {
+fn find_attribute(source: &Source<'_>, from: usize) -> Option<Result<AttributeText, String>> {
     let mut index = from;
-    while let Some(line) = lines.get(index) {
-        if line.trim().starts_with("#[scenario(") {
-            return Some(collect_attribute(lines, index));
+    while let Some(line) = source.trimmed(index) {
+        if line.starts_with("#[scenario(") {
+            return Some(collect_attribute(source, index));
         }
         index = index.saturating_add(1);
     }
@@ -72,13 +99,13 @@ fn find_attribute(lines: &[&str], from: usize) -> Option<Result<AttributeText, S
 }
 
 /// Collect the attribute that opens at `open`, joining its lines.
-fn collect_attribute(lines: &[&str], open: usize) -> Result<AttributeText, String> {
+fn collect_attribute(source: &Source<'_>, open: usize) -> Result<AttributeText, String> {
     let start_line = open.saturating_add(1);
     let mut text = String::new();
     let mut index = open;
 
-    while let Some(current) = lines.get(index) {
-        text.push_str(current.trim());
+    while let Some(current) = source.trimmed(index) {
+        text.push_str(current);
         index = index.saturating_add(1);
         if text.ends_with(")]") {
             return Ok(AttributeText {
@@ -121,8 +148,8 @@ fn is_skippable_source_line(line: &str) -> bool {
 }
 
 /// Return the identifier of the first `fn` item after `index`.
-fn next_function_name(lines: &[&str], mut index: usize) -> Result<String, String> {
-    while let Some(line) = lines.get(index).map(|line| line.trim()) {
+fn next_function_name(source: &Source<'_>, mut index: usize) -> Result<String, String> {
+    while let Some(line) = source.trimmed(index) {
         index = index.saturating_add(1);
         if is_skippable_source_line(line) {
             continue;
