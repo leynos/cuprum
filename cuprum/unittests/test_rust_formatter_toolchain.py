@@ -20,6 +20,7 @@ _FORMATTER_TOOLCHAIN = RUSTFMT_TOOLCHAIN
 _PROJECT_TOOLCHAIN = "1.87.0"
 _FORMATTER_FIXTURE_SKIPS = {
     ("rust/cuprum-native-io/src/ownership_tests.rs", "descriptor_guard"),
+    ("rust/cuprum-streams/src/dispatch_tests.rs", "pipe"),
     ("rust/cuprum-streams/src/io_utils/tests.rs", "pipe"),
     ("rust/cuprum-streams/src/splice/tests.rs", "pipe"),
 }

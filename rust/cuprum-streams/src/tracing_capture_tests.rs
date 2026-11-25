@@ -182,3 +182,34 @@ fn event_matches_rejects_a_single_mismatch(
         "event_matches must require every predicate, not just some",
     );
 }
+
+/// Count only direct events whose level and message both match exactly.
+///
+/// The same message fires twice at `DEBUG`, once with different text, and once
+/// at `INFO`, so a count that ignored level, message, or repetition would land
+/// on a different number.
+#[rstest]
+fn event_count_counts_exact_direct_events() {
+    let captured = capture(Level::DEBUG, || {
+        tracing::debug!("repeated probe");
+        tracing::debug!("repeated probe");
+        tracing::debug!(sequence = 1_u64, "different probe");
+        tracing::info!("repeated probe");
+    });
+
+    assert_eq!(
+        captured.event_count(Level::DEBUG, "repeated probe"),
+        2,
+        "both DEBUG events carrying the exact message must count",
+    );
+    assert_eq!(
+        captured.event_count(Level::DEBUG, "absent probe"),
+        0,
+        "a message that never fired must count as zero",
+    );
+    assert_eq!(
+        captured.event_count(Level::INFO, "repeated probe"),
+        1,
+        "the INFO event must count only at its own level",
+    );
+}

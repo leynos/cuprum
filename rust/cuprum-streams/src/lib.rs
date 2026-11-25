@@ -14,6 +14,9 @@ mod consume_snapshot_tests;
 #[cfg(test)]
 pub(crate) mod consume_tests;
 
+#[cfg(all(test, target_os = "linux", not(miri)))]
+mod dispatch_tests;
+
 mod errors;
 
 mod io_utils;
