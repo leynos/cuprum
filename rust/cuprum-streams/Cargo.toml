@@ -20,7 +20,16 @@ cap-std = "4.0.2"
 insta = { version = "1.48.0", default-features = false }
 proptest = "1.11.0"
 rstest = "0.27.0"
+rstest-bdd = "0.5.0"
+rstest-bdd-macros = "0.5.0"
 tempfile = "3.27.0"
+
+# The Unix behavioural suite observes descriptor liveness through the native
+# boundary's `test-support` observer rather than growing a second syscall
+# wrapper in this safe crate. The normal dependency above stays feature-free,
+# so a default build does not compile the observer.
+[target.'cfg(unix)'.dev-dependencies]
+cuprum-native-io = { path = "../cuprum-native-io", version = "0.1.0", features = ["test-support"] }
 
 # Safe-stream code retains `#![forbid(unsafe_code)]` in its crate root. The
 # workspace intentionally does not impose that rule on the audited syscall and

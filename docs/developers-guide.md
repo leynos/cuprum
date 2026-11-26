@@ -6878,6 +6878,40 @@ Rust-level tests for safe stream policy live with `cuprum-streams` under
 decoder, parsing, state-machine, and adapter logic where Python integration
 tests would only cover a few examples.
 
+### Public stream entry-point behavioural coverage
+
+`rust/cuprum-streams/src/unix_tests/mod.rs` drives the public `pump_stream` and
+`consume_stream` over real Unix pipes. It sits beside `windows_tests.rs` rather
+than merging with it: each suite names the platform contract it exercises, and
+the Windows suite keeps the synchronous-handle boundary explicit. The Unix
+steps live in `unix_tests/steps.rs`; the payload table and shared helpers live
+in `unix_tests/support.rs`.
+
+Writer closure is always proved behaviourally, by reading the sink to EOF: a
+pipe reports end of input once its last writer drops. The `fd_is_open` writer
+probe runs only under the isolation marker that `unix_tests/scenario_guard/`
+sets when it re-runs a scenario alone, because a freed descriptor number in a
+shared binary can be reused before it is observed. That observer is exported
+from `cuprum-native-io` behind its `test-support` feature, which only a Unix
+dev-dependency enables, so a default build does not compile it. A Unix build
+with `test-support`, including `--all-features`, does expose it.
+
+Bind every `#[scenario]` by `name`. `scenario_guard` compares, as multisets,
+the feature declarations, the named bindings parsed from the module source, and
+the `SCENARIOS` table. It then lists the generated test names, resolves exactly
+one per binding, and re-runs each scenario alone, requiring the child's own
+output to report exactly one passing test. A declared-but-unbound scenario
+therefore fails the suite instead of silently re-running the first declaration.
+
+Keep a scenario's payload below the destination pipe's ring depth, or drain the
+sink concurrently. A pump that fills every destination slot blocks until its
+reader drains: that is correct backpressure, but it deadlocks a scenario that
+reads the sink only after the pump returns. Ring depth is not a fixed number —
+the kernel shrinks it under memory pressure — so a chunk size that works on an
+idle host can need more slots than a loaded one provides. Prove the transfer
+with one chunk that carries the whole payload, and leave the multi-chunk
+boundaries to the crate-private loop tests, which drive an injectable seam.
+
 ### Loom native-pump lifecycle models
 
 The native-pump hand-off crosses the Python event loop, an executor worker, and

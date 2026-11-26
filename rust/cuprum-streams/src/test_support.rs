@@ -5,6 +5,9 @@ use std::fmt::Debug;
 use std::{
     io::{self, Read, Write},
     os::fd::OwnedFd,
+    sync::mpsc::{self, RecvTimeoutError},
+    thread,
+    time::Duration,
 };
 
 #[cfg(not(miri))]
@@ -43,6 +46,65 @@ pub(crate) fn read_all_from(fd: &OwnedFd) -> io::Result<Vec<u8>> {
     let mut file = dup_as_file(fd)?;
     file.read_to_end(&mut collected)?;
     Ok(collected)
+}
+
+/// Why a bounded end-of-file observation produced no bytes.
+#[cfg(not(miri))]
+#[derive(Debug)]
+pub(crate) enum EofReadError {
+    /// The duplicated descriptor could not be read.
+    Io(io::Error),
+    /// The reader had not reached EOF when the caller's deadline expired.
+    TimedOut(Duration),
+    /// The worker ended without reporting a result.
+    Disconnected,
+}
+
+#[cfg(not(miri))]
+impl std::fmt::Display for EofReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "reading the pipe to EOF failed: {error}"),
+            Self::TimedOut(deadline) => write!(
+                formatter,
+                "the pipe did not reach EOF within {deadline:?}; a writer duplicate is still open",
+            ),
+            Self::Disconnected => formatter.write_str("the EOF worker ended without a result"),
+        }
+    }
+}
+
+/// Read a pipe to EOF through a duplicate, bounded by `deadline` on the caller.
+///
+/// The read runs on a worker thread because `read_to_end` has no timeout of its
+/// own: a writer that never closes would otherwise hold the test thread until
+/// the whole suite timed out. The deadline therefore bounds the *caller*, not
+/// the worker — a timed-out worker is left to finish on its own, which costs
+/// one blocked thread until the process exits.
+///
+/// EOF is evidence of closure only when every write duplicate is closed: a
+/// pipe reports end of input once its last writer drops, wherever that owner
+/// lives. Callers that still hold a writer will see [`EofReadError::TimedOut`].
+#[cfg(not(miri))]
+pub(crate) fn read_to_eof_bounded(
+    fd: &OwnedFd,
+    deadline: Duration,
+) -> Result<Vec<u8>, EofReadError> {
+    let mut file = dup_as_file(fd).map_err(EofReadError::Io)?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut collected = Vec::new();
+        let outcome = file.read_to_end(&mut collected).map(|_| collected);
+        // A failed send means the caller already gave up on this worker.
+        drop(sender.send(outcome));
+    });
+
+    match receiver.recv_timeout(deadline) {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(EofReadError::Io(error)),
+        Err(RecvTimeoutError::Timeout) => Err(EofReadError::TimedOut(deadline)),
+        Err(RecvTimeoutError::Disconnected) => Err(EofReadError::Disconnected),
+    }
 }
 
 /// Extract a successful fixture result at a recognized test boundary.

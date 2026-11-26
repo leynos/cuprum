@@ -93,6 +93,11 @@ mod test_support;
 #[cfg(all(test, unix))]
 mod tracing_capture;
 
+// Real descriptors and `fcntl`-based liveness observation are both out of
+// reach under Miri's isolation, matching the other descriptor-backed modules.
+#[cfg(all(test, unix, not(miri)))]
+mod unix_tests;
+
 mod utf8;
 // Timing regressions are meaningless under Miri's interpreter and Kani's
 // bounded symbolic execution, so both compile the module out.
