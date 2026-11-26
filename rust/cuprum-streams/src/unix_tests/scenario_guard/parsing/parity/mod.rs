@@ -234,3 +234,6 @@ fn absent_from<'a>(mine: &'a Side<'a>, theirs: &'a Side<'a>) -> impl Iterator<It
             )
         })
 }
+
+#[cfg(test)]
+mod tests;
