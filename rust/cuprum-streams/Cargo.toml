@@ -27,7 +27,7 @@ tempfile = "3.27.0"
 # The Unix behavioural suite observes descriptor liveness through the native
 # boundary's `test-support` observer rather than growing a second syscall
 # wrapper in this safe crate. The normal dependency above stays feature-free,
-# so production builds never compile the observer.
+# so a default build does not compile the observer.
 [target.'cfg(unix)'.dev-dependencies]
 cuprum-native-io = { path = "../cuprum-native-io", version = "0.1.0", features = ["test-support"] }
 

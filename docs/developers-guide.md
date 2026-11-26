@@ -6893,7 +6893,8 @@ probe runs only under the isolation marker that `unix_tests/scenario_guard/`
 sets when it re-runs a scenario alone, because a freed descriptor number in a
 shared binary can be reused before it is observed. That observer is exported
 from `cuprum-native-io` behind its `test-support` feature, which only a Unix
-dev-dependency enables; production builds never compile it.
+dev-dependency enables, so a default build does not compile it. A Unix build
+with `test-support`, including `--all-features`, does expose it.
 
 Bind every `#[scenario]` by `name`. `scenario_guard` compares, as multisets,
 the feature declarations, the named bindings parsed from the module source, and

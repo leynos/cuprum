@@ -280,3 +280,56 @@ fn parity_pairs_each_title_with_its_own_binding(
         "the failure must name the row and the function it actually calls, found {error}",
     );
 }
+
+#[test]
+fn parity_reports_a_duplicate_binding_name() {
+    // Two bindings name the same scenario, so each declaration is covered
+    // twice while the other declaration has no binding of its own.
+    let declared = vec![Declared {
+        title: "Only case".to_owned(),
+        line: 2,
+    }];
+    let bound = [
+        Bound {
+            name: "Only case".to_owned(),
+            function: "first_fn".to_owned(),
+            line: 1,
+        },
+        Bound {
+            name: "Only case".to_owned(),
+            function: "second_fn".to_owned(),
+            line: 8,
+        },
+    ];
+    let table = ParityTable::from_rows(&[("Only case", "first_fn")]);
+
+    let error = check_parity(&declared, &bound, &table)
+        .expect_err("a duplicate binding name must fail parity");
+
+    assert!(
+        error.contains("scenario binding name") && error.contains("appears 2 times"),
+        "the failure must count the duplicate binding, found {error}",
+    );
+}
+
+#[test]
+fn parity_reports_a_duplicate_expectation_row() {
+    let declared = vec![Declared {
+        title: "Only case".to_owned(),
+        line: 2,
+    }];
+    let bound = [Bound {
+        name: "Only case".to_owned(),
+        function: "only_fn".to_owned(),
+        line: 1,
+    }];
+    let table = ParityTable::from_rows(&[("Only case", "only_fn"), ("Only case", "only_fn")]);
+
+    let error = check_parity(&declared, &bound, &table)
+        .expect_err("a duplicate expectation row must fail parity");
+
+    assert!(
+        error.contains("expectation table title") && error.contains("appears 2 times"),
+        "the failure must count the duplicate row, found {error}",
+    );
+}

@@ -149,3 +149,37 @@ fn rejects_each_unsupported_construct(#[case] body: &str, #[case] expected: &str
         "the failure must name {expected:?}, found {error}",
     );
 }
+
+#[test]
+fn rejects_a_bare_examples_block() {
+    let error = declared_scenarios("Feature: Demo\n  Examples:\n    | size |\n")
+        .expect_err("an Examples block must fail closed");
+
+    assert!(
+        error.contains("only plain Scenario declarations"),
+        "the failure must name the unsupported header, found {error}",
+    );
+}
+
+#[test]
+fn rejects_a_rule_block() {
+    let error = declared_scenarios("Feature: Demo\n  Rule: Grouping\n")
+        .expect_err("a Rule must fail closed");
+
+    assert!(
+        error.contains("only plain Scenario declarations"),
+        "the failure must name the unsupported header, found {error}",
+    );
+}
+
+#[test]
+fn rejects_a_rule_that_precedes_its_scenarios() {
+    let text = "Feature: Demo\n  Rule: Grouping\n  Scenario: Case\n    Given a step\n";
+
+    let error = declared_scenarios(text).expect_err("a Rule must fail closed");
+
+    assert!(
+        error.contains("only plain Scenario declarations"),
+        "the failure must name the unsupported header, found {error}",
+    );
+}

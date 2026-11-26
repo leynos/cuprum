@@ -9,7 +9,7 @@
 # and fails closed on outlines, examples, rules, tables, doc strings and
 # localized keywords, so each case stays a plain scenario with explicit steps.
 # Payloads are named rather than spelled out; the raw bytes, including the
-# invalid sequences, live beside the steps in `unix_tests.rs`.
+# invalid sequences, live beside the steps in `unix_tests/support.rs`.
 
 Feature: Public Unix stream entry points
 

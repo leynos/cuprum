@@ -69,7 +69,7 @@ const PAYLOADS: &[Payload] = &[
         bytes: b"a\xFFb",
         decoded: "a\u{FFFD}b",
     },
-    // A four-byte sequence cut to its first two bytes at EOF.
+    // The first two bytes of a three-byte sequence, cut at EOF.
     Payload {
         label: "truncated-tail",
         bytes: b"ok\xE2\x82",
