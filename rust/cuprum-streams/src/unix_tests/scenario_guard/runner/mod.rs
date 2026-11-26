@@ -10,17 +10,19 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    io::Read,
     path::Path,
-    process::{Child, Command, ExitStatus, Stdio},
-    thread,
-    time::{Duration, Instant},
+    process::{Command, ExitStatus},
+    time::Duration,
 };
 
 use super::super::{
     ScenarioExpectation,
     support::{ISOLATED_CHILD_ENV, WRITER_PROBE_WITNESS},
 };
+
+mod child;
+
+use child::run_bounded;
 
 /// Filter that selects the generated scenario tests in the child's listing.
 const TEST_FILTER: &str = "unix_tests::";
@@ -45,12 +47,6 @@ const LIST_DEADLINE: Duration = Duration::from_secs(60);
 /// finishes in well under a second; the bound exists so a regression fails
 /// this guard instead of stalling the binary until a job timeout notices.
 const CHILD_DEADLINE: Duration = Duration::from_secs(60);
-
-/// How much of either child stream is retained for diagnostics.
-const RETAINED_BYTES: usize = 64 * 1024;
-
-/// How long the poller waits between exit checks.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Resolve one generated test name for every expected binding function.
 fn resolve(
@@ -276,91 +272,6 @@ struct Attempt<'a> {
 struct Tally {
     executed: usize,
     failures: Vec<String>,
-}
-
-/// A child's exit status and bounded output.
-#[derive(Debug)]
-struct CapturedChild {
-    status: ExitStatus,
-    stdout: String,
-    stderr: String,
-    timed_out: bool,
-}
-
-/// Spawn `command` with piped output, polling to a deadline that kills it.
-fn run_bounded(mut command: Command, deadline: Duration) -> Result<CapturedChild, String> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("the child process failed to start: {error}"))?;
-    let (Some(stdout_pipe), Some(stderr_pipe)) = (child.stdout.take(), child.stderr.take()) else {
-        discard(&mut child);
-        return Err("the child output pipes were not captured".to_owned());
-    };
-    let stdout = drain(stdout_pipe);
-    let stderr = drain(stderr_pipe);
-
-    let started = Instant::now();
-    let (status, timed_out) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break (status, false),
-            Ok(None) if started.elapsed() >= deadline => {
-                let status = kill_and_reap(&mut child)?;
-                break (status, true);
-            }
-            Ok(None) => thread::sleep(POLL_INTERVAL),
-            Err(error) => {
-                discard(&mut child);
-                return Err(format!("waiting for the child failed: {error}"));
-            }
-        }
-    };
-
-    Ok(CapturedChild {
-        status,
-        stdout: stdout.join().unwrap_or_default(),
-        stderr: stderr.join().unwrap_or_default(),
-        timed_out,
-    })
-}
-
-/// Kill a child and reap it, preserving either failure as an error.
-fn kill_and_reap(child: &mut Child) -> Result<ExitStatus, String> {
-    child
-        .kill()
-        .map_err(|error| format!("the timed-out child could not be killed: {error}"))?;
-    child
-        .wait()
-        .map_err(|error| format!("the killed child could not be reaped: {error}"))
-}
-
-/// Kill and reap a child whose output could not be observed.
-fn discard(child: &mut Child) {
-    drop(child.kill());
-    drop(child.wait());
-}
-
-/// Read a child stream on its own thread, retaining a bounded prefix.
-///
-/// Draining on a thread is what keeps a child that writes more than the pipe
-/// buffer can hold from blocking on its own output while this process polls.
-fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<String> {
-    thread::spawn(move || {
-        let mut retained = Vec::new();
-        let mut chunk = [0_u8; 4096];
-        while let Ok(count) = pipe.read(&mut chunk) {
-            if count == 0 {
-                break;
-            }
-            let room = RETAINED_BYTES.saturating_sub(retained.len());
-            let keep = room.min(count);
-            if let Some(prefix) = chunk.get(..keep) {
-                retained.extend_from_slice(prefix);
-            }
-        }
-        String::from_utf8_lossy(&retained).into_owned()
-    })
 }
 
 /// Render an exit status for a diagnostic without assuming a code exists.
