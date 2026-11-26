@@ -160,6 +160,10 @@ fn context() -> StreamContext {
 
 mod steps;
 
+#[cfg(test)]
+#[path = "tests_prereq.rs"]
+mod tests;
+
 // One `#[scenario]` binds exactly one scenario, and a binding that omits
 // `name` silently takes the first declaration in the file. Each title below is
 // therefore named explicitly; `scenario_guard` fails if any declaration, named

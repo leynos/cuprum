@@ -1,5 +1,12 @@
 //! Classification and resolution cases, including every rejection shape.
 
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    process::Command,
+    time::{Duration, Instant},
+};
+
 use super::{ChildReport, classify, resolve};
 use crate::unix_tests::ScenarioExpectation;
 
@@ -158,5 +165,154 @@ fn reports_an_ambiguous_generated_test() {
     assert!(
         error.contains("one binding must resolve to one test"),
         "the failure must explain the ambiguity, found {error}",
+    );
+}
+#[test]
+fn render_status_names_an_exit_code() {
+    let status = Command::new("/bin/sh")
+        .args(["-c", "exit 7"])
+        .status()
+        .expect("the probe command must run");
+    assert_eq!(
+        super::render_status(status),
+        "exit code 7",
+        "a normal exit must render its code",
+    );
+}
+
+#[test]
+fn render_status_falls_back_to_the_debug_form_without_a_code() {
+    // A signal-terminated child has no exit code, so the fallback branch is
+    // reachable only through a real signal.
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "kill -TERM $$"])
+        .spawn()
+        .expect("the probe command must start");
+    let status = child.wait().expect("the probe command must be reaped");
+    assert!(
+        !super::render_status(status).contains("exit code"),
+        "a signalled child has no exit code to render",
+    );
+}
+
+#[test]
+fn list_tests_reports_a_failing_binary() {
+    let error = super::list_tests(Path::new("/bin/sh"))
+        .expect_err("a shell is not a test binary and exits non-zero");
+
+    assert!(
+        error.contains("listing the test names failed"),
+        "the failure must name the listing step, found {error}",
+    );
+}
+
+#[test]
+fn run_isolated_reports_a_failing_binary() {
+    let error = super::run_isolated(Path::new("/bin/sh"), "some::test", false)
+        .expect_err("a shell is not a test binary and exits non-zero");
+
+    assert!(
+        error.contains("a shell is not a test binary") || error.contains("status="),
+        "the failure must carry the child's diagnostics, found {error}",
+    );
+}
+
+#[test]
+fn run_bounded_reports_a_missing_program() {
+    let error = super::run_bounded(
+        Command::new("/nonexistent/probe"),
+        Duration::from_millis(50),
+    )
+    .expect_err("a missing program must fail to start");
+
+    assert!(
+        error.contains("failed to start"),
+        "the failure must name the spawn, found {error}",
+    );
+}
+
+#[test]
+fn run_bounded_kills_a_child_that_outlives_its_deadline() {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "sleep 30"]);
+    let started = Instant::now();
+
+    let captured = super::run_bounded(command, Duration::from_millis(100))
+        .expect("a killed child is still captured");
+
+    assert!(
+        captured.timed_out,
+        "the child must be reported as timed out"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the deadline must bound the wait, not the child",
+    );
+}
+
+#[test]
+fn reject_unclaimed_reports_a_name_no_scenario_claims() {
+    let listed = [
+        "unix_tests::pump_case".to_owned(),
+        "unix_tests::stray".to_owned(),
+    ];
+    let resolved = BTreeMap::from([("pump_case", "unix_tests::pump_case".to_owned())]);
+
+    let error = super::reject_unclaimed(&listed, &resolved)
+        .expect_err("an unclaimed direct child must be reported");
+
+    assert!(
+        error.contains("stray"),
+        "the failure must name the unclaimed test, found {error}",
+    );
+}
+
+#[test]
+fn reject_unclaimed_ignores_nested_unit_test_modules() {
+    let listed = [
+        "unix_tests::pump_case".to_owned(),
+        "unix_tests::support::tests::a_case".to_owned(),
+        "unix_tests::scenario_guard::a_case".to_owned(),
+    ];
+    let resolved = BTreeMap::from([("pump_case", "unix_tests::pump_case".to_owned())]);
+
+    assert_eq!(
+        super::reject_unclaimed(&listed, &resolved),
+        Ok(()),
+        "nested unit tests and the guard's own tests are not scenarios",
+    );
+}
+
+#[test]
+fn record_outcome_counts_a_pass_and_files_a_failure() {
+    let scenario = ScenarioExpectation {
+        title: "Probe scenario",
+        binding: "probe_binding",
+        requires_writer_probe: false,
+    };
+    let mut tally = super::Tally::default();
+
+    super::record_outcome(
+        Path::new("/bin/sh"),
+        &super::Attempt {
+            scenario: &scenario,
+            test_name: "unix_tests::probe_binding",
+        },
+        &mut tally,
+    );
+
+    assert_eq!(
+        tally.executed, 0,
+        "a failing child must not count as executed"
+    );
+    assert_eq!(
+        tally.failures.len(),
+        1,
+        "a failing child must file exactly one failure",
+    );
+    let reason = tally.failures.first().map_or("", String::as_str);
+    assert!(
+        reason.contains("Probe scenario"),
+        "the failure must name the scenario, found {reason}",
     );
 }

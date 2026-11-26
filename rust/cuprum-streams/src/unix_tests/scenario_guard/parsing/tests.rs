@@ -2,64 +2,15 @@
 
 use rstest::rstest;
 
-use super::{Bound, Declared, ParityTable, bound_scenarios, check_parity, declared_scenarios};
+use super::{Bound, Declared, ParityTable, bound_scenarios, check_parity};
 
 const PATH: &str = "tests/features/demo.feature";
-
-fn feature(scenarios: &str) -> String { format!("Feature: Demo\n{scenarios}") }
-
-fn declared_titles(feature_text: &str) -> Vec<String> {
-    declared_scenarios(feature_text)
-        .expect("the sample feature must parse")
-        .into_iter()
-        .map(|entry| entry.title)
-        .collect()
-}
 
 fn sample_binding(name: &str, function: &str) -> String {
     format!(
         "#[scenario(\n    path = \"{PATH}\",\n    name = \"{name}\"\n)]\nfn {function}(context: \
          C) {{ let _ = context; }}\n",
     )
-}
-
-#[test]
-fn parses_plain_scenarios_and_steps() {
-    let text = feature(
-        "  Scenario: First case\n    Given a value\n    When it runs\n    Then it passes\n\n  \
-         Scenario: Second case\n    Given a value\n",
-    );
-
-    assert_eq!(
-        declared_titles(&text),
-        vec!["First case".to_owned(), "Second case".to_owned()],
-        "every plain scenario must be declared exactly once",
-    );
-}
-
-#[test]
-fn rejects_an_outline_with_its_line_number() {
-    let text = feature(
-        "  Scenario Outline: Outline case\n    Given a value of <size>\n\n    Examples:\n      | \
-         size |\n      | 1    |\n",
-    );
-
-    let error = declared_scenarios(&text).expect_err("an outline must fail closed");
-    assert!(
-        error.contains("line 2") && error.contains("Scenario Outline"),
-        "the failure must name the outline and its line, found {error}",
-    );
-}
-
-#[test]
-fn rejects_a_localized_keyword() {
-    let text = "Fonctionnalité: Démo\n  Scénario: Cas\n";
-
-    let error = declared_scenarios(text).expect_err("a localized keyword must fail closed");
-    assert!(
-        error.contains("localized keywords"),
-        "the failure must name the unsupported keyword class, found {error}",
-    );
 }
 
 #[test]
@@ -327,32 +278,5 @@ fn parity_pairs_each_title_with_its_own_binding(
     assert!(
         error.contains("expects binding") && error.contains("calls"),
         "the failure must name the row and the function it actually calls, found {error}",
-    );
-}
-
-#[test]
-fn rejects_a_scenario_without_steps() {
-    // A step-less scenario runs nothing, but its binding still reports a
-    // passing test, so the grammar must refuse it rather than let the
-    // execution guard certify an empty run.
-    let text = feature("  Scenario: No steps here\n\n  Scenario: Another with none\n");
-
-    let error = declared_scenarios(&text).expect_err("a step-less scenario must fail closed");
-    assert!(
-        error.contains("needs at least one step"),
-        "the failure must say a scenario needs a step, found {error}",
-    );
-}
-
-#[test]
-fn rejects_a_trailing_scenario_without_steps() {
-    // The last declaration has no following scenario to close it, so the
-    // rejection has to happen at end of input too.
-    let text = feature("  Scenario: Has steps\n    Given a value\n\n  Scenario: Empty tail\n");
-
-    let error = declared_scenarios(&text).expect_err("a trailing step-less scenario must fail");
-    assert!(
-        error.contains("Empty tail") || error.contains("line 5"),
-        "the failure must name the trailing declaration, found {error}",
     );
 }

@@ -121,7 +121,7 @@ fn a_panicking_reader_over_a_live_descriptor(context: &StreamContext) -> StepRes
 }
 
 #[when("the public pump runs with buffer size {size}")]
-fn the_public_pump_runs(context: &StreamContext, size: isize) -> StepResult<(), String> {
+pub(super) fn the_public_pump_runs(context: &StreamContext, size: isize) -> StepResult<(), String> {
     let buffer_size = buffer_size(size)?;
     let writer = take(&context.sink_writer, "sink writer")?;
     let mut pumped = None;
@@ -142,7 +142,10 @@ fn the_public_pump_runs(context: &StreamContext, size: isize) -> StepResult<(), 
 }
 
 #[when("the public consume runs with buffer size {size}")]
-fn the_public_consume_runs(context: &StreamContext, size: isize) -> StepResult<(), String> {
+pub(super) fn the_public_consume_runs(
+    context: &StreamContext,
+    size: isize,
+) -> StepResult<(), String> {
     let buffer_size = buffer_size(size)?;
     let text = context
         .reader
@@ -154,7 +157,7 @@ fn the_public_consume_runs(context: &StreamContext, size: isize) -> StepResult<(
 }
 
 #[when("the public pump unwinds during its read")]
-fn the_public_pump_unwinds(context: &StreamContext) -> StepResult<(), String> {
+pub(super) fn the_public_pump_unwinds(context: &StreamContext) -> StepResult<(), String> {
     let buffer_size = buffer_size(8)?;
     let writer = take(&context.sink_writer, "sink writer")?;
     let calls = Cell::new(0_u32);
@@ -256,7 +259,9 @@ fn the_consume_output_equals_the_decoded_payload(
 }
 
 #[then("the source is drained to end of input")]
-fn the_source_is_drained_to_end_of_input(context: &StreamContext) -> StepResult<(), String> {
+pub(super) fn the_source_is_drained_to_end_of_input(
+    context: &StreamContext,
+) -> StepResult<(), String> {
     let remaining = context
         .reader
         .with_ref(|reader| read_to_eof_bounded(reader, EOF_DEADLINE))
@@ -293,7 +298,10 @@ fn the_read_unwinds_exactly_once(context: &StreamContext) -> StepResult<(), Stri
 }
 
 #[then("the pump closed its writer with the sink holding {contents}")]
-fn the_pump_closed_its_writer(context: &StreamContext, contents: String) -> StepResult<(), String> {
+pub(super) fn the_pump_closed_its_writer(
+    context: &StreamContext,
+    contents: String,
+) -> StepResult<(), String> {
     let expected = sink_expectation(&contents, optional_payload(context)?)?;
 
     // The liveness probe runs before any descriptor is duplicated below: the

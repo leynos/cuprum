@@ -251,3 +251,6 @@ fn declares_unsupported_header(line: Line<'_>) -> bool {
             .next()
             .is_some_and(|first| first.is_ascii_uppercase())
 }
+
+#[cfg(test)]
+mod tests;

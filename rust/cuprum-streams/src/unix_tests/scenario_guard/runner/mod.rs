@@ -279,6 +279,7 @@ struct Tally {
 }
 
 /// A child's exit status and bounded output.
+#[derive(Debug)]
 struct CapturedChild {
     status: ExitStatus,
     stdout: String,
