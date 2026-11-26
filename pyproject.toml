@@ -38,17 +38,18 @@ dev = [
     "pytest<9.1",
     "pytest-benchmark",
     "pytest-bdd",
-    # Keep the ruff and ty pins in step with RUFF_VERSION and TY_VERSION in
-    # the Makefile and .github/workflows/ci.yml; the pin-parity contract test
-    # in cuprum/unittests/test_toolchain_pins.py enforces the parity.
+    # This group is the single authoritative declaration of the ruff, ty and
+    # maturin versions. `make sync-tool-pins` derives the Makefile defaults,
+    # the ci.yml env pins and the wheel workflow/action literals from it, and
+    # `make check-tool-pins` fails when one has drifted.
     "ruff==0.16.4",
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
     "syrupy",
     "ty==0.0.74",
-    # Keep in sync with .github/workflows/build-wheels.yml and
-    # .github/actions/build-wheels/action.yml.
+    # Kept in step with .github/workflows/build-wheels.yml and
+    # .github/actions/build-wheels/action.yml by `make sync-tool-pins`.
     "maturin==1.15.0",
     "pyyaml>=6.0.3",
     "cyclopts>=4.0",

@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from cuprum.unittests._tool_pin_support import read_makefile_pin
+
 ROOT = Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
 
@@ -72,16 +74,16 @@ def _recipe_lines(target: str) -> list[str]:
     return recipe
 
 
+def _ruff_pin() -> str:
+    """Return the Ruff version the Makefile's ``RUFF_VERSION`` default pins."""
+    return read_makefile_pin(ROOT, "RUFF_VERSION")
+
+
 def _ruff_argv() -> list[str]:
     """Build the pinned Ruff invocation the Makefile's ``RUFF`` expands to."""
     uv = shutil.which("uv")
     assert uv is not None, "the formatting contract requires uv on PATH"
-    version = next(
-        line.split("?=", 1)[1].strip()
-        for line in MAKEFILE.read_text(encoding="utf-8").splitlines()
-        if line.startswith("RUFF_VERSION ?=")
-    )
-    return [uv, "tool", "run", "--from", f"ruff=={version}", "ruff"]
+    return [uv, "tool", "run", "--from", f"ruff=={_ruff_pin()}", "ruff"]
 
 
 def _run_ruff(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -102,6 +104,29 @@ def _run_ruff(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         env=env,
         text=True,
         timeout=300,
+    )
+
+
+def test_the_contract_runs_the_ruff_release_the_makefile_pins() -> None:
+    """The Ruff this module executes is the release the Makefile selects.
+
+    ``_ruff_argv`` builds its command from the same ``RUFF_VERSION`` line the
+    gate reads, and this test proves the resolution actually lands on that
+    release. Without it the ordering check could certify a linter resolved
+    from somewhere else — an unrelated ``ruff`` earlier on ``PATH``, or a
+    stale ``uv tool`` environment.
+    """
+    declared = _ruff_pin()
+    result = _run_ruff(["--version"], ROOT)
+
+    assert result.returncode == 0, f"ruff --version failed: {result.stderr}"
+    reported = result.stdout.split()
+    assert len(reported) >= 2, (
+        f"ruff --version must report its name and release, got {result.stdout!r}"
+    )
+    assert reported[1] == declared, (
+        f"the formatting contract must run the pinned Ruff {declared}, "
+        f"got {result.stdout.strip()!r}"
     )
 
 

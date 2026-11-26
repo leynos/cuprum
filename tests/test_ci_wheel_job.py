@@ -3,10 +3,11 @@
 `build-pure-wheel` and `verify-wheel-install` were separate Ubicloud jobs doing
 0.2 and 0.3 minutes of work and billing a minute each on every run. They are
 one job now, and the merge is only safe while four things hold: the pure wheel
-is built nowhere else, it is built before the artefacts are downloaded (the
-download is how the verification reads it back, and `release.yml` reads the
-same artefact), the job still waits for the native legs, and the verification
-installs into a fresh virtual environment rather than one the build touched.
+is built nowhere else, it is built into the directory the verification reads
+(and uploaded under the name `release.yml` publishes; the download fetches only
+the native legs, because re-reading this job's own upload raced the artefact
+listing), the job still waits for the native legs, and the verification installs
+into a fresh virtual environment rather than one the build touched.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ WHEEL_JOB = "verify-wheel-install"
 PURE_WHEEL_ACTION = "./.github/actions/pure-python-wheel"
 DOWNLOAD_ACTION = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 PURE_ARTEFACT = "wheels-pure"
+PURE_WHEEL_DIR = "dist/wheels-pure"
+NATIVE_ARTEFACT_PATTERN = "wheels-native-*"
 INSTALL_STEP = "Install pure Python wheel, then native wheel"
 
 
@@ -52,20 +55,47 @@ def test_the_pure_wheel_is_built_only_in_the_verifying_job() -> None:
 
 
 def test_the_pure_wheel_is_built_before_the_artefacts_are_downloaded() -> None:
-    """The download is how the verification reads the pure wheel back."""
+    """The verification installs the pure wheel this job built itself."""
     build = single_step_position_using(WORKFLOW, WHEEL_JOB, uses=PURE_WHEEL_ACTION)
-    artefact = step_inputs(
+    inputs = step_inputs(
         steps(WORKFLOW, WHEEL_JOB)[build], "the pure-wheel build must declare inputs"
-    ).get("artifact-name")
+    )
+    artefact = inputs.get("artifact-name")
     assert artefact == PURE_ARTEFACT, (
         f"the pure wheel must be uploaded as {PURE_ARTEFACT!r}, which release.yml "
         f"publishes, not {artefact!r}"
+    )
+    assert inputs.get("out-dir") == PURE_WHEEL_DIR, (
+        f"the pure wheel must be built into {PURE_WHEEL_DIR!r}, the directory "
+        f"the install step reads, not {inputs.get('out-dir')!r}"
     )
     download = single_step_position_using(WORKFLOW, WHEEL_JOB, uses=DOWNLOAD_ACTION)
     install = _step_position(INSTALL_STEP)
     assert build < download < install, (
         f"{WHEEL_JOB} must build ({build}), download ({download}) and install "
         f"({install}) in that order"
+    )
+
+
+def test_the_download_excludes_the_artefact_this_job_uploads() -> None:
+    """Re-downloading its own upload raced the artefact listing.
+
+    The build writes into `dist/wheels-pure`, and the download recreates the
+    same directory per artefact. When the artefact API had not yet listed this
+    job's own upload, the download produced nothing and the install step found
+    no pure wheel, so only the native legs' artefacts may be fetched here.
+    """
+    download = single_step_position_using(WORKFLOW, WHEEL_JOB, uses=DOWNLOAD_ACTION)
+    inputs = step_inputs(
+        steps(WORKFLOW, WHEEL_JOB)[download], "the download must declare inputs"
+    )
+    assert "name" not in inputs, (
+        "the download must stay a pattern match so it covers every native leg"
+    )
+    pattern = inputs.get("pattern")
+    assert pattern == NATIVE_ARTEFACT_PATTERN, (
+        f"the download must be restricted to {NATIVE_ARTEFACT_PATTERN!r}, not "
+        f"{pattern!r}"
     )
 
 

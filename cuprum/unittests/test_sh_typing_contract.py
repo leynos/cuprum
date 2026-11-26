@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from cuprum.unittests._tool_pin_support import read_pyproject_pin
+
 #: The repository root, two levels above this module (``cuprum/unittests``).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -142,7 +144,13 @@ def fixture_copy(tmp_path: Path) -> Path:
 
 
 def test_ty_is_available_to_the_suite() -> None:
-    """The test harness can locate the ty executable it asserts against."""
+    """The test harness can locate the ty executable it asserts against.
+
+    The expected version is read from the canonical pin rather than written
+    here, so bumping ty cannot leave this assertion certifying the old
+    release.
+    """
+    expected = read_pyproject_pin(_REPO_ROOT, "ty")
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv
         [_ty_executable(), "--version"],
         shell=False,
@@ -151,8 +159,13 @@ def test_ty_is_available_to_the_suite() -> None:
         check=False,
     )
     assert result.returncode == 0, f"ty --version failed: {result.stderr}"
-    assert "0.0.74" in result.stdout, (
-        f"the suite must run against the pinned ty, got {result.stdout.strip()!r}"
+    reported = result.stdout.split()
+    assert len(reported) >= 2, (
+        f"ty --version must report its name and release, got {result.stdout!r}"
+    )
+    assert reported[1] == expected, (
+        f"the suite must run against the pinned ty {expected}, "
+        f"got {result.stdout.strip()!r}"
     )
 
 

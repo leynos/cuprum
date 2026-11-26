@@ -394,9 +394,12 @@ minute each. It caches nothing on purpose. The pure-wheel action checks the
 repository out before it runs `uv build`, and that checkout would delete any
 workspace-scoped restore before the build read it, and caching the uv store
 there would give `~/.cache/uv` a second writer. The verification installs both
-wheels into a fresh virtual environment. It builds the pure wheel before
-downloading the artefacts, because the download is how it reads that wheel
-back, and `release.yml`'s publish reads the same `wheels-pure` artefact.
+wheels into a fresh virtual environment. The pure-wheel action builds straight
+into `dist/wheels-pure`, which is where the verification reads it, and the
+upload exists for `release.yml`'s publish. The download step fetches only
+`wheels-native-*`: asking the artefact API for this job's own upload raced the
+listing and intermittently produced no pure wheel at all, so the local build
+output is read instead of a round trip.
 
 Installed tools use the parent `~/.local/bin` cache path. Do not cache the
 terminal `~/.local/bin/sccache` file: a restore creates an empty directory at a
@@ -1168,6 +1171,88 @@ one group entry offering exactly its member and carrying no `groups`, the plain
 entries ignore the pair, and no other ecosystem joins a group. The pull-request
 bound test for every plain stanza lives there too, and
 `tests/test_ci_dependabot_config.py` leaves the group entries to it.
+
+## Tool pin updates
+
+Ruff, ty and maturin are each declared once. The `[dependency-groups] dev`
+entry in `pyproject.toml` (`ruff==X.Y.Z`, and so on) is that declaration and
+the only one a contributor edits by hand. Several executable inputs cannot read
+it — the Makefile defaults, the workflow-level `env` selectors, and the
+composite action's `maturin-version` default are plain Make or YAML text — so
+each of them repeats the literal:
+
+- `Makefile`: the `RUFF_VERSION` and `TY_VERSION` defaults.
+- `.github/workflows/ci.yml`: the `RUFF_VERSION` and `TY_VERSION` `env`
+  selectors.
+- `.github/workflows/build-wheels.yml`: `MATURIN_VERSION`.
+- `.github/actions/build-wheels/action.yml`: the `maturin-version` input
+  default.
+
+Dependabot cannot rewrite any of those literals; it updates the manifest and
+the lock. Two Make targets keep them in step, and `scripts/tool_pins.py` owns
+the site table and the structural rules:
+
+- `make check-tool-pins` reads every site, writes nothing, and exits non-zero
+  with the file and value named for each drifted site. Continuous Integration
+  runs it before lint, so a stale literal fails the pull request with a
+  deterministic diagnosis rather than a lint failure at a different version.
+- `make sync-tool-pins` rewrites only the literal values, preserving quoting,
+  comments, and surrounding formatting. It is idempotent: a second run changes
+  no bytes.
+
+A pin declaration must appear exactly once and be an exact `name==X.Y.Z`
+requirement. A range, an environment marker, a duplicate, an absent
+declaration, or a second `NAME ?=` default raises a named error rather than
+being interpreted. An empty Make default counts as a declaration, because Make
+defines the variable on such a line and a later `?=` never takes effect; `sync`
+repairs a lone empty default, and both readers refuse a multi-token one. The
+readers capture the whole right-hand side before validating, so a malformed
+earlier default cannot let a later line pass as the pin.
+
+`uv.lock` is uv-owned. `check` reports a lock entry that disagrees with the
+canonical pin, and `sync` leaves the file untouched and prints the `uv lock`
+command instead; resolving the lock can also move unrelated transitive
+packages, which belongs in uv's diff and a reviewer's attention, not in a
+literal rewrite.
+
+The built wheel's `Generator` header is asserted against the workflow's
+`MATURIN_VERSION` by the `verify-wheel-install` job before any wheel is
+installed, so a wheel built by a different maturin fails there. The local wheel
+snapshot keeps its own `Generator` assertion too, so neither check normalizes
+the header away: a pin bump that changes which maturin builds the wheel still
+fails a test rather than silently rewriting a snapshot.
+
+The composite action accepts an explicit `maturin-version` override. The
+override is validated against the same exact `X.Y.Z` form before it reaches
+`pip`, and the step reads the installed release back, so an override is
+supported without accepting arbitrary requirement text as shell input. Only the
+default must mirror the canonical pin.
+
+### maturin and PyO3 advance independently
+
+maturin and PyO3 are versioned independently and do not move in lockstep. Pull
+request #593 (<https://github.com/leynos/cuprum/pull/593>) advanced the
+resolved PyO3 family to 0.29.3 with maturin unchanged at 1.15.0, built the
+cp312-abi3 manylinux wheel, ran the required-extension suites on Linux and
+Windows, and loaded the built wheel in a fresh CPython 3.14 environment. A
+maturin bump therefore needs no PyO3 change by itself, and a PyO3 bump needs no
+maturin change; what either bump does need is the native tests actually
+executing, so the extension suites set `CUPRUM_REQUIRE_RUST_EXTENSION=1` rather
+than being satisfied by the Python fallback.
+
+maturin 1.15.0 declares Rust 1.89 for a source build, above the workspace's
+1.87.0 MSRV. The wheel builder and the extension jobs install their own Rust
+toolchain, so that requirement applies to the builder, not to the library's
+consumers. Do not raise the workspace MSRV to satisfy the builder's toolchain.
+
+### Ruff and ty updates
+
+The parity check proves which version is selected, not that the selected tool
+behaves like the old one. The formatting and typecheck routes also probe the
+pinned binaries, so a stale `uv tool` environment cannot satisfy a green run.
+When a bump passes parity but the new release changes rules, formatter output,
+or type behaviour, treat that as a tool migration with its own review; it is
+not pin drift, and the fix is not to widen the parity check.
 
 ## Linux debug-build acceleration
 
@@ -8129,18 +8214,22 @@ These checks span three test modules, one per concern — `test_maturin_pins.py`
 behind them are split across three boundaries.
 
 The **pin-synchronization** checks live in
-`cuprum/unittests/test_maturin_pins.py`, with their readers and regexes local
-to that module: they read repository files, have a single consumer, and gain
-nothing from indirection. Two exceptions sit in
-`cuprum/unittests/_maturin_pin_support.py`, each because it genuinely has a
-second consumer — the threshold this policy asks for before sharing anything:
+`cuprum/unittests/test_maturin_pins.py`. They read maturin's version through
+the same structured readers as every other tool pin — `read_pyproject_pin` and
+`read_lock_pin` from `cuprum/unittests/_tool_pin_support.py` for the manifest
+and the lock, and `tests/helpers/strict_yaml.py` for the two YAML sites, which
+refuses a document declaring one key twice. A text pattern would accept the
+first of a duplicated `MATURIN_VERSION` while GitHub used the last, so the YAML
+sites are parsed rather than searched. The `Generator` assertion in
+`test_maturin_build.py` reads the installed distribution's metadata instead,
+because its subject is the maturin that actually built the wheel.
 
-- `read_expected_maturin_version` — the pin comparison here, and the wheel
-  snapshot's `Generator` assertion in `test_maturin_build.py`.
-- `MANYLINUX_CONTAINER_SHA256_RE` — the container-pin assertion here, and the
-  generated references in `test_manylinux_container_ref_properties.py`. Sharing
-  it through the support module keeps one test module from importing a private
-  name out of another.
+One helper sits in `cuprum/unittests/_maturin_pin_support.py` because it
+genuinely has a second consumer — the threshold this policy asks for before
+sharing anything: `MANYLINUX_CONTAINER_SHA256_RE`, used by the container-pin
+assertion here and by the generated references in
+`test_manylinux_container_ref_properties.py`. Sharing it through the support
+module keeps one test module from importing a private name out of another.
 
 The **availability detectors** are tested together in
 `cuprum/unittests/test_maturin_toolchain.py`: `toolchain_available` and
