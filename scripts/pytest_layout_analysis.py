@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import typing as typ
+from collections import Counter
 
 from scripts.atomic_write import write_json, write_text
 from scripts.pytest_layout_evidence import RunRecord
@@ -300,7 +301,7 @@ def fidelity(
     return _fidelity_report(control, candidate, control_nodes, candidate_nodes)
 
 
-def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> set[str]:
+def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> Counter[str]:
     """Return one side's collected node IDs, refusing an empty collection.
 
     Parameters
@@ -312,8 +313,9 @@ def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> set[str]:
 
     Returns
     -------
-    set of str
-        Every node ID that side collected.
+    collections.Counter of str
+        Every node ID that side collected, with its multiplicity. A multiset
+        is what detects a module collected twice, which a set would erase.
 
     Raises
     ------
@@ -322,7 +324,7 @@ def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> set[str]:
         report every difference as an addition or a loss depending on which
         side was empty, which reads as a result rather than as a failure.
     """
-    nodes = {node for run in runs for node in run.node_ids}
+    nodes = Counter(node for run in runs for node in run.node_ids)
     if not nodes:
         raise EvidenceError(_empty_side_message(side))
     return nodes
@@ -331,19 +333,25 @@ def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> set[str]:
 def _fidelity_report(
     control: cabc.Sequence[RunRecord],
     candidate: cabc.Sequence[RunRecord],
-    control_nodes: set[str],
-    candidate_nodes: set[str],
+    control_nodes: Counter[str],
+    candidate_nodes: Counter[str],
 ) -> dict[str, object]:
-    """Assemble the fidelity report from both sides' node sets."""
+    """Assemble the fidelity report from both sides' node multisets."""
     return {
         "schema_version": SCHEMA_VERSION,
         "control_runs": [run.run_id for run in control],
         "candidate_runs": [run.run_id for run in candidate],
-        "control_only": sorted(control_nodes - candidate_nodes),
-        "candidate_only": sorted(candidate_nodes - control_nodes),
-        "shared": len(control_nodes & candidate_nodes),
-        "control_total": len(control_nodes),
-        "candidate_total": len(candidate_nodes),
+        "control_only": sorted((control_nodes - candidate_nodes).elements()),
+        "candidate_only": sorted((candidate_nodes - control_nodes).elements()),
+        "shared": sum((control_nodes & candidate_nodes).values()),
+        "control_total": sum(control_nodes.values()),
+        "candidate_total": sum(candidate_nodes.values()),
+        "control_duplicates": sorted(
+            node for node, count in control_nodes.items() if count > 1
+        ),
+        "candidate_duplicates": sorted(
+            node for node, count in candidate_nodes.items() if count > 1
+        ),
         "identical": control_nodes == candidate_nodes,
     }
 

@@ -314,6 +314,38 @@ def test_fidelity_accepts_an_identical_suite() -> None:
     )
 
 
+def test_fidelity_detects_a_node_collected_twice() -> None:
+    """Detect duplicate collection, which a set comparison would erase.
+
+    Two runs that collect the same node ID twice and once respectively have
+    identical sets but different multisets, so the multiset is what proves the
+    layouts collected the same suite.
+    """
+    control = (
+        _run("c1", "baseline", _Spec(nodes=("a", "a"))),
+        _run("c2", "baseline", _Spec(nodes=("b",))),
+    )
+    candidate = (
+        _run("n1", "consolidated", _Spec(nodes=("a",))),
+        _run("n2", "consolidated", _Spec(nodes=("b",))),
+    )
+
+    report = fidelity(control, candidate)
+
+    assert report["identical"] is False, (
+        "a node collected twice must not compare equal to one collected once"
+    )
+    assert report["control_duplicates"] == ["a"], (
+        f"the repeated node must be reported, got {report['control_duplicates']}"
+    )
+    assert report["control_total"] == 3, (
+        f"multiplicity must be counted, got {report['control_total']}"
+    )
+    assert report["candidate_total"] == 2, (
+        f"the candidate collected two nodes once each, got {report['candidate_total']}"
+    )
+
+
 def test_fidelity_refuses_an_empty_side() -> None:
     """Refuse a comparison against nothing, which would look like a clean diff."""
     populated = (_run("c", "baseline", _Spec(nodes=("a",))),)
