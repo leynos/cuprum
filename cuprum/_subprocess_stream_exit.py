@@ -21,7 +21,9 @@ release it. The release runs inside the reconciliation's own shield rather than
 after it: ``_shielded_cleanup`` finishes its task and then re-raises the
 caller's cancellation, so a release awaited afterwards is skipped whenever a
 cancellation interrupts the reconciliation, leaving exactly the descriptors the
-release exists to close.
+release exists to close. Both primitives are the startup-abandon module's, which
+owns the release obligation every early-stop route shares; the context manager
+is imported here rather than defined here so there is one of it.
 
 ``_wait_for_streamed_process_exit`` and ``_reconcile_shielded`` are re-exported
 from ``cuprum._subprocess_stream_run``, which is where the surrounding module
@@ -30,11 +32,10 @@ and the repository's commentary already refer to them.
 
 from __future__ import annotations
 
-import contextlib
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
-from cuprum._subprocess_startup_abandon import _release_output_transports
+from cuprum._subprocess_startup_abandon import _releasing_output_transports
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
@@ -55,24 +56,6 @@ __all__ = [
     "_reconcile_shielded",
     "_wait_for_streamed_process_exit",
 ]
-
-
-@contextlib.asynccontextmanager
-async def _releasing_output_transports(
-    process: asyncio.subprocess.Process,
-    execution: _SubprocessExecution,
-) -> cabc.AsyncIterator[None]:
-    """Release the child's output transports however the block ends.
-
-    Yields
-    ------
-    None
-        Control, with the release owed on every exit from the block.
-    """
-    try:
-        yield
-    finally:
-        await _release_output_transports(process, execution)
 
 
 async def _reconcile_shielded(
