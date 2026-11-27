@@ -214,8 +214,16 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   both roots, and the drain marker is set by both preserving cancellation
   paths. The focused tests pass, and the affected drain, pipeline-payload,
   timeout-capture, public-API, and line-stream-exit suites pass.
-- [ ] EP-M2: supervise cancelled and short-stopped consumers early.
-- [ ] EP-M3: regression and public-API coverage.
+- [x] EP-M2: supervise cancelled and short-stopped consumers early. The
+  rendezvous classifies a cancelled task and a partial `_CapturedDrain` through
+  one shared `_consumer_outcome`, and one shared `_await_consumer_outcomes`
+  wait serves both post-exit supervisors. The reproducer now ends in 0.0 s with
+  `ConsumerCancelledError`.
+- [x] EP-M3: regression and public-API coverage. The rendezvous, precedence
+  property, real-child fail-fast matrix, reader-failure, telemetry, drain, and
+  public-surface tests cover cancelled callbacks, cancelled readers, short
+  drains, writer cancellation, caller cancellation, and reaping. The affected
+  suites pass.
 - [ ] EP-M4: documentation, changelog, and full gates.
 - [ ] Draft PR opened with `Closes #733` and the Lody session reference.
 
@@ -250,6 +258,16 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
 - **Pipelines and process handles are out of scope.** They reconcile readers
   only after every stage or the process exits; classifying cancellation there
   would change their contract rather than repair this hang.
+- **One shared post-exit wait.** The streamed run and the line stream need the
+  same wait: completion-ordered classification, stream labels, and prompt
+  return on the first failure. Only the budget differs, so
+  `_await_consumer_outcomes` takes an optional budget instead of both modules
+  carrying a near-identical loop. This also keeps the two supervisors from
+  drifting on the cancellation contract.
+- **A done-callback barrier.** `asyncio.wait` reports an unordered set, so
+  completion order is recorded through done callbacks. The wait yields once
+  after `asyncio.wait` returns, which makes the callback ordering explicit
+  rather than an implementation detail.
 
 ## Verification plan
 
