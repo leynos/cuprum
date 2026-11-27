@@ -22,13 +22,14 @@ from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._process_handle.coordinator import (
     _build_handle_result,
     _finalize_settled_run,
-    _HandleOutcome,
+    _handle_outcome,
     _ReconcileHooks,
 )
 from cuprum._process_handle.settlement import _expiry_error, _SettlementPlan
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_handle_errors import LiveStreamError
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_startup_abandon import _release_output_transports
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
@@ -37,8 +38,6 @@ from cuprum._subprocess_wait import (
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
-    import asyncio
-
     from cuprum._byte_stream.wiring import _ByteStreams
     from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.sh import BytesCommandResult
@@ -138,7 +137,7 @@ async def _settle_bytes_handle_run(
         streams.finalize_settlement()
         raise
 
-    late_failure = _late_consumer_failure(run.ownership)
+    late_failure = _consumer_failure(run.ownership)
     if late_failure is not None:
         streams.fail(late_failure[0], late_failure[1])
     streams.finalize_settlement()
@@ -163,13 +162,7 @@ async def _settle_bytes_handle_run(
     return _require_bytes_command_result(
         _build_handle_result(
             run,
-            _HandleOutcome(
-                exit_code=exit_code,
-                exited_at=exited_at,
-                stdout_payload=drained[0].payload,
-                stderr_payload=drained[1].payload,
-                captures=(drained[0].capture, drained[1].capture),
-            ),
+            _handle_outcome(exit_code, exited_at, drained),
             capture_bytes=True,
         )
     )
@@ -201,6 +194,30 @@ def _publish_early_failure(
     return LiveStreamError(_STREAM_NAMES[index], cause=error)
 
 
+def _consumer_failure(
+    ownership: _RunTaskOwnership,
+) -> tuple[int, BaseException] | None:
+    """Return a consumer's non-cancellation failure, in stream order.
+
+    The reconciliation gathers consumers with ``return_exceptions=True`` so a
+    failed reader cannot mask the run's own error. That also means a reader
+    that failed during the final drain would otherwise be reported as an empty
+    capture, so the failure is re-read here and given precedence over the
+    successful result. The rendezvous helper is reused rather than restated:
+    both callers ask exactly "which settled consumer failed, if any".
+
+    Returns
+    -------
+    tuple[int, BaseException] | None
+        The stream index and the failure, or ``None`` when no consumer failed.
+    """
+    for index, task in enumerate(ownership.consumers):
+        failure = _stdin_writer_failure(task)
+        if failure is not None:
+            return index, failure
+    return None
+
+
 def _consumer_index(
     ownership: _RunTaskOwnership,
     error: BaseException,
@@ -218,46 +235,7 @@ def _consumer_index(
         ``0`` for stdout, ``1`` for stderr, or ``None`` when no consumer
         raised *error*.
     """
-    for index, task in enumerate(ownership.consumers):
-        if _task_failure(task) is error:
-            return index
+    found = _consumer_failure(ownership)
+    if found is not None and found[1] is error:
+        return found[0]
     return None
-
-
-def _late_consumer_failure(
-    ownership: _RunTaskOwnership,
-) -> tuple[int, BaseException] | None:
-    """Return a consumer's non-cancellation failure found at reconciliation.
-
-    The reconciliation gathers consumers with ``return_exceptions=True`` so a
-    failed reader cannot mask the run's own error. That also means a reader
-    that failed during the final drain would otherwise be reported as an empty
-    capture, so the failure is re-read here and given precedence over the
-    successful result.
-
-    Returns
-    -------
-    tuple[int, BaseException] | None
-        The stream index and the failure, or ``None`` when no consumer failed.
-    """
-    for index, task in enumerate(ownership.consumers):
-        failure = _task_failure(task)
-        if failure is not None:
-            return index, failure
-    return None
-
-
-def _task_failure(task: asyncio.Task[object] | None) -> BaseException | None:
-    """Return a settled consumer's own failure, ignoring cancellation.
-
-    Returns
-    -------
-    BaseException | None
-        The exception the task ended on, or ``None`` for a task that succeeded,
-        is still running, was cancelled, or does not exist.
-    """
-    if task is None or not task.done():
-        return None
-    if task.cancelled():
-        return None
-    return task.exception()

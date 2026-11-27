@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import collections
 
+from cuprum._byte_bound import _validate_positive_byte_bound
 from cuprum.byte_streams import StreamClosure
 
 __all__ = ["_ByteQueue", "_validate_buffered_bytes"]
@@ -58,14 +59,8 @@ def _validate_buffered_bytes(value: object) -> int:
     --------
     >>> _validate_buffered_bytes(1024)
     1024
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        msg = "max_buffered_bytes must be an integer"
-        raise TypeError(msg)
-    if value <= 0:
-        msg = "max_buffered_bytes must be positive"
-        raise ValueError(msg)
-    return value
+    """  # ruff: ignore[docstring-extraneous-exception] - the shared validator raises both
+    return _validate_positive_byte_bound(value, field="max_buffered_bytes")
 
 
 class _ByteQueue:
@@ -265,8 +260,6 @@ class _ByteQueue:
         published state is left alone, so a reader close or a failure cannot
         be overwritten by a later EOF.
         """
-        if self._ending is not None:
-            return
         if self._discarded_bytes:
             self._publish(StreamClosure.TRUNCATED_BY_SETTLEMENT)
         else:

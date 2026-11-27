@@ -76,23 +76,23 @@ def run_scenario(name: str, *, timeout: float = 20.0) -> ScenarioResult:
     """
     command = [sys.executable, "-m", _SCENARIO_MODULE, name]
     session = {"start_new_session": True} if os.name == "posix" else {}
-    process = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
+    with subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
         command,
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         **session,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_session(process)
-        stdout, stderr = process.communicate()
-        return ScenarioResult(
-            name, process.returncode or -1, stdout, stderr, timed_out=True
-        )
-    return ScenarioResult(name, process.returncode, stdout, stderr, timed_out=False)
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_session(process)
+            stdout, stderr = process.communicate()
+            return ScenarioResult(
+                name, process.returncode or -1, stdout, stderr, timed_out=True
+            )
+        return ScenarioResult(name, process.returncode, stdout, stderr, timed_out=False)
 
 
 def _kill_session(process: subprocess.Popen[str]) -> None:

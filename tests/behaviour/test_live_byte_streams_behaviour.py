@@ -23,6 +23,7 @@ from pytest_bdd import given, scenario, then, when
 from cuprum import (
     ByteStreamReader,
     ExecutionContext,
+    LineEvent,
     Program,
     ProgramCatalogue,
     RunOutputOptions,
@@ -54,10 +55,10 @@ class _LiveObservation:
     error: BaseException | None = None
 
 
-type _LiveStory = _LiveStory
+type _LiveStory = cabc.Callable[[], cabc.Coroutine[typ.Any, typ.Any, _LiveObservation]]
 
 
-def _ignore_line(_line: str) -> None:
+def _ignore_line(_event: LineEvent) -> None:
     """Discard one observed line, proving only that the option is accepted."""
 
 

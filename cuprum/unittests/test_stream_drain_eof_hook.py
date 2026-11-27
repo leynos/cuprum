@@ -89,7 +89,7 @@ def test_eof_hook_is_not_called_when_the_read_is_cancelled() -> None:
         # A cancelled read is absorbed by the drain: the partial capture is
         # finalized and the task returns rather than propagating cancellation.
         drained = await drain
-        assert drained.payload == "", (
+        assert not drained.payload, (
             f"a cancelled read captures the empty prefix, got {drained.payload!r}"
         )
         assert tap.eof_calls == 0, (

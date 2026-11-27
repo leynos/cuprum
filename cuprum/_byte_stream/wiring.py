@@ -39,10 +39,6 @@ class _QueueTap:
         """
         await self.queue.put(chunk)
 
-    def on_eof(self) -> None:
-        """Publish the drain's genuine end-of-stream on the queue."""
-        self.queue.producer_eof()
-
 
 @dc.dataclass(frozen=True, slots=True)
 class _ByteStreams:
@@ -71,8 +67,8 @@ class _ByteStreams:
         stdout_tap = _QueueTap(self.stdout_queue)
         stderr_tap = _QueueTap(self.stderr_queue)
         return _LiveStreamSinks(
-            stdout=_LiveStreamSink(stdout_tap.on_chunk, stdout_tap.on_eof),
-            stderr=_LiveStreamSink(stderr_tap.on_chunk, stderr_tap.on_eof),
+            stdout=_LiveStreamSink(stdout_tap.on_chunk, self.stdout_queue.producer_eof),
+            stderr=_LiveStreamSink(stderr_tap.on_chunk, self.stderr_queue.producer_eof),
             max_buffered_bytes=self.stdout_queue.capacity,
         )
 

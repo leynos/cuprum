@@ -71,6 +71,7 @@ __all__ = [
     "_ReconcileHooks",
     "_build_handle_result",
     "_finalize_settled_run",
+    "_handle_outcome",
     "_settle_handle_run",
 ]
 
@@ -260,15 +261,30 @@ async def _settle_handle_run(run: _HandleRun) -> CommandResult:
     return _require_command_result(
         _build_handle_result(
             run,
-            _HandleOutcome(
-                exit_code=exit_code,
-                exited_at=exited_at,
-                stdout_payload=drained[0].payload,
-                stderr_payload=drained[1].payload,
-                captures=(drained[0].capture, drained[1].capture),
-            ),
+            _handle_outcome(exit_code, exited_at, drained),
             capture_bytes=False,
         )
+    )
+
+
+def _handle_outcome(
+    exit_code: int,
+    exited_at: float,
+    drained: _DrainPair,
+) -> _HandleOutcome:
+    """Build the settled record both handle modes publish from one drain.
+
+    Returns
+    -------
+    _HandleOutcome
+        The exit code, exit clock, drained payloads, and capture records.
+    """
+    return _HandleOutcome(
+        exit_code=exit_code,
+        exited_at=exited_at,
+        stdout_payload=drained[0].payload,
+        stderr_payload=drained[1].payload,
+        captures=(drained[0].capture, drained[1].capture),
     )
 
 
