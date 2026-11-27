@@ -9,6 +9,7 @@ objects rather than two drifting fixtures.
 from __future__ import annotations
 
 import dataclasses as dc
+import datetime as dt
 import typing as typ
 
 from scripts import compiler_cache_records as records_reader
@@ -41,6 +42,7 @@ class Observation:
     event_class: str = "pull_request"
     toolchain: str = "nightly-2026-08-23"
     family: str = "py3.13-debug"
+    runner_class: str = "self-hosted"
 
     def as_record(self) -> dict[str, object]:
         """Return the observation as a record the validator accepts."""
@@ -62,6 +64,7 @@ class Observation:
             event_class=self.event_class,
             toolchain=self.toolchain,
             family=self.family,
+            runner_class=self.runner_class,
         )
 
 
@@ -69,15 +72,15 @@ def jobs(
     run_ids: cabc.Iterable[int], seconds: float, *, conclusion: str = "success"
 ) -> list[dict[str, object]]:
     """Return one API job per run id, all lasting ``seconds``."""
+    started = dt.datetime(2026, 11, 22, tzinfo=dt.UTC)
+    completed = started + dt.timedelta(seconds=seconds)
     return [
         {
             "run_id": run,
             "run_attempt": 1,
             "name": JOB_NAME,
-            "started_at": "2026-11-22T00:00:00Z",
-            "completed_at": (
-                f"2026-11-22T00:{int(seconds // 60):02d}:{int(seconds % 60):02d}Z"
-            ),
+            "started_at": started.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "completed_at": completed.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "conclusion": conclusion,
         }
         for run in run_ids

@@ -172,21 +172,68 @@ def test_zero_request_classification(
     )
 
 
-def test_a_reason_that_first_appears_in_the_bracket_is_counted(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+def _record_after(
+    environ: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    before: dict[str, object],
+    after: dict[str, object],
+) -> dict[str, object]:
+    """Build one record after two scripted sccache snapshots."""
+    _two_snapshots(environ, monkeypatch, (before, after))
+    return writer.build_record(environ)
+
+
+class _ReasonCase(typ.NamedTuple):
+    """One scripted pair of reason maps and the deltas it must produce."""
+
+    before: dict[str, int]
+    after: dict[str, int]
+    expected: dict[str, int]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            _ReasonCase({}, {"unsupported": 3}, {"unsupported": 3}),
+            id="new-reason",
+        ),
+        pytest.param(
+            _ReasonCase(
+                {"unsupported": 5, "crate_type": 1},
+                {"unsupported": 1, "crate_type": 4},
+                {"crate_type": 3},
+            ),
+            id="reset-reason",
+        ),
+    ],
+)
+def test_a_reason_delta_is_zero_based_and_reset_aware(
+    evidence_environment: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    case: _ReasonCase,
 ) -> None:
-    """An absent reason is zero, not unknown, while both snapshots are available."""
-    _two_snapshots(
+    """An absent reason is zero; a reason that fell is omitted, never negative."""
+    record = _record_after(
         evidence_environment,
         monkeypatch,
-        (
-            stats_document(not_cached={}),
-            stats_document(not_cached={"unsupported": 3}),
-        ),
+        stats_document(not_cached=case.before),
+        stats_document(not_cached=case.after),
     )
-    record = writer.build_record(evidence_environment)
-    assert record["not_cached"] == {"unsupported": 3}, (
-        f"the new reason's count must survive, got {record['not_cached']}"
+    assert record["not_cached"] == case.expected, (
+        f"the reason deltas must be {case.expected!r}, got {record['not_cached']}"
+    )
+
+
+def test_the_record_carries_the_runner_class(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pair must never compare two runner classes as one backend change."""
+    record = _record_after(
+        evidence_environment, monkeypatch, stats_document(), stats_document()
+    )
+    assert record["runner_class"] == "self-hosted", (
+        f"the runner class must reach the record, got {record}"
     )
 
 
@@ -203,10 +250,9 @@ def test_the_save_span_ends_at_its_end_marker(
     now = time.time()
     (marks / "save-start").write_text(f"{now - 8:.6f}\n", encoding="utf-8")
     (marks / "save-end").write_text(f"{now - 3:.6f}\n", encoding="utf-8")
-    _two_snapshots(
-        evidence_environment, monkeypatch, (stats_document(), stats_document())
+    record = _record_after(
+        evidence_environment, monkeypatch, stats_document(), stats_document()
     )
-    record = writer.build_record(evidence_environment)
     assert record["save_seconds"] == pytest.approx(5.0, abs=1.0), (
         f"the save span must be the interval between the markers, got {record}"
     )

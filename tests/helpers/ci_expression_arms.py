@@ -83,12 +83,12 @@ def arm_condition(expression: str, hosted: str, owned: str) -> str:
 
 
 def _condition_text(tokens: list[Token], expression: str) -> str:
-    """Return the tokens as one whitespace-normalized condition."""
+    """Return the tokens as one normalized condition, tight inside groups."""
     condition = " ".join(spelling for _, spelling in tokens)
     if not condition:
         message = f"empty condition in {expression!r}"
         raise ExpressionError(message)
-    return condition
+    return condition.replace("( ", "(").replace(" )", ")")
 
 
 def normalized(expression: str) -> str:

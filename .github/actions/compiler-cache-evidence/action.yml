@@ -83,7 +83,12 @@ inputs:
     required: false
     default: ''
   restore-hit:
-    description: The restore step's `cache-hit` output, `true` or `false`.
+    description: >-
+      Whether the restore matched a key, by exact hit or through the
+      `restore-keys` prefix. The rolling key changes with `GITHUB_RUN_ID`, so
+      `cache-hit` is false even when a usable archive was restored; the
+      matched key is the honest signal, and `matched-key` still identifies the
+      generation.
     required: false
     default: ''
   pr-number:
@@ -99,6 +104,11 @@ runs:
       continue-on-error: true
       shell: bash
       env:
+        # The writer is run by file path, so Python puts `scripts/` on
+        # `sys.path`, not the repository root. The module imports
+        # `scripts.compiler_cache_*`; without the root on `PYTHONPATH` every
+        # step would fail its import and silently skip the evidence.
+        PYTHONPATH: ${{ github.workspace }}
         EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
         EVIDENCE_BRACKET: ${{ inputs.bracket }}
         EVIDENCE_PHASE: ${{ inputs.phase }}
@@ -122,6 +132,7 @@ runs:
       continue-on-error: true
       shell: bash
       env:
+        PYTHONPATH: ${{ github.workspace }}
         EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
         EVIDENCE_MARKER: ${{ inputs.marker }}
       run: python3 "${GITHUB_WORKSPACE}/scripts/compiler_cache_evidence.py" mark
@@ -132,7 +143,12 @@ runs:
       continue-on-error: true
       shell: bash
       env:
+        PYTHONPATH: ${{ github.workspace }}
         EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
+        # `runner.environment` is `self-hosted` on the Ubicloud lane and
+        # `github-hosted` on the fork fallback. The pair identity carries it so
+        # two runner classes can never be compared as one backend change.
+        EVIDENCE_RUNNER_CLASS: ${{ runner.environment }}
         EVIDENCE_BRACKET: ${{ inputs.bracket }}
         EVIDENCE_SETUP_STATUS: ${{ inputs.setup-status }}
         EVIDENCE_SELECTED_BACKEND: ${{ inputs.selected-backend }}

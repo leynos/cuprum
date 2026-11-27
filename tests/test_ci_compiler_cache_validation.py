@@ -46,6 +46,7 @@ def test_a_valid_record_passes_validation() -> None:
         ),
         ({"counters": {"cache_hits": 1}}, "counters"),
         ({"run_id": "one"}, "run_id"),
+        ({"runner_class": "a b"}, "runner_class"),
         ({"job": "line one\nline two"}, "job"),
         ({"save_seconds": -1}, "save_seconds"),
         ({"restore_seconds": -0.5}, "restore_seconds"),
@@ -66,6 +67,16 @@ def test_the_reader_refuses_duplicate_brackets(tmp_path: Path) -> None:
     line = json.dumps(record_fixture())
     path.write_text(f"{line}\n{line}\n", encoding="utf-8")
     with pytest.raises(records_reader.InvalidEvidenceError, match="duplicates"):
+        records_reader.load_records([path])
+
+
+def test_a_json_null_line_fails_validation_instead_of_being_skipped(
+    tmp_path: Path,
+) -> None:
+    """A non-blank `null` is an invalid record, not an empty line."""
+    path = tmp_path / "records.jsonl"
+    path.write_text("null\n", encoding="utf-8")
+    with pytest.raises(records_reader.InvalidEvidenceError, match=r"records\.jsonl:1"):
         records_reader.load_records([path])
 
 

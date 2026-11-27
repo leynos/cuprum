@@ -103,6 +103,30 @@ class CacheFamily(typ.NamedTuple):
         return "-".join((self.key_name, self.lane, *self.scope))
 
 
+class _ScopeContext(typ.NamedTuple):
+    """The contract message and job identity a family scope is rendered under."""
+
+    message: str
+    job_identity: tuple[str, str]
+
+
+def _family_scope(
+    inputs: cabc.Mapping[str, object],
+    key_name: str,
+    leg: cabc.Mapping[str, object],
+    context: _ScopeContext,
+) -> tuple[str, ...]:
+    """Return one key's family scope; the compiler key also names its version."""
+    scope = tuple(
+        _resolve(inputs[name], leg, context.message) for name in KEY_SCOPES[key_name]
+    )
+    if key_name != "SCCACHE_CACHE_KEY":
+        return scope
+    return scope + _compiler_version_scope(
+        inputs, leg, context.message, job_identity=context.job_identity
+    )
+
+
 def _lane(workflow_name: str, job_name: str) -> str:
     """Return the cache lane a job publishes its archives to."""
     label = placement(workflow_name, job_name).owned
@@ -274,16 +298,12 @@ def writer_families(workflow_name: str, job_name: str) -> set[CacheFamily]:
                 condition=not missing,
                 message=f"{message}: must declare {missing}",
             )
-            scope = tuple(
-                _resolve(inputs[name], leg, message) for name in KEY_SCOPES[key_name]
+            scope = _family_scope(
+                inputs,
+                key_name,
+                leg,
+                _ScopeContext(message, (workflow_name, job_name)),
             )
-            if key_name == "SCCACHE_CACHE_KEY":
-                scope += _compiler_version_scope(
-                    inputs,
-                    leg,
-                    message,
-                    job_identity=(workflow_name, job_name),
-                )
             family = CacheFamily(key_name, lane, scope)
             # Rejected here rather than deduplicated by the set. Two save steps
             # in one job that render the same family are the same collision the
@@ -340,12 +360,15 @@ def _restored_families(
     """Return the compiler families one restore step can read from."""
     message = f"{workflow_name}:{job_name} restore must declare inputs"
     key_name = _key_name(step, message)
-    if key_name != "SCCACHE_CACHE_KEY":
-        return set()
+    # Check membership before the compiler-key filter: a typo such as
+    # `env.SCCACHE_CACHE_KEYS` names no declared scope and must fail, not
+    # silently yield no family and make the join contract pass vacuously.
     require(
         condition=key_name in KEY_SCOPES,
         message=f"{message}: {key_name} has no declared scope",
     )
+    if key_name != "SCCACHE_CACHE_KEY":
+        return set()
     missing = [name for name in KEY_SCOPES[key_name] if name not in inputs]
     require(
         condition=not missing,
@@ -366,13 +389,10 @@ def _reader_family(
 ) -> CacheFamily:
     """Return the compiler family one matrix leg restores from."""
     message = f"{workflow_name}:{job_name} restore must declare inputs"
-    scope = tuple(
-        _resolve(inputs[name], leg, message) for name in KEY_SCOPES["SCCACHE_CACHE_KEY"]
-    )
-    scope += _compiler_version_scope(
+    scope = _family_scope(
         inputs,
+        "SCCACHE_CACHE_KEY",
         leg,
-        message,
-        job_identity=(workflow_name, job_name),
+        _ScopeContext(message, (workflow_name, job_name)),
     )
     return CacheFamily("SCCACHE_CACHE_KEY", _lane(workflow_name, job_name), scope)

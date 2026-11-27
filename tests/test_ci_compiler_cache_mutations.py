@@ -19,6 +19,7 @@ import typing as typ
 
 import pytest
 
+import tests.helpers.ci_cache_families as families
 import tests.helpers.ci_runners as runners
 from tests.helpers.ci_cache_wiring import (
     privileged_cache_workflows,
@@ -134,6 +135,34 @@ def test_a_privileged_workflow_carrying_the_experiment_is_detected() -> None:
     )
     assert not privileged_cache_workflows([("ci.yml", unprivileged)]), (
         "an ordinary pull-request workflow may carry the experiment"
+    )
+
+
+def test_an_undeclared_restore_key_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A typo in the key expression must fail, not silently restore nothing."""
+    faulted = [{"name": "Restore", "with": {"key": "${{ env.SCCACHE_CACHE_KEYS }}"}}]
+    monkeypatch.setattr(families, "restore_steps", lambda *_: faulted)
+    with pytest.raises(AssertionError, match="has no declared scope"):
+        families.reader_families("ci.yml", "extension-tests")
+
+
+def test_a_privileged_workflow_using_the_combined_cache_action_is_detected() -> None:
+    """`actions/cache@` restores too, so the combined form is equally forbidden."""
+    document = {
+        "on": {"pull_request_target": {}},
+        "jobs": {
+            "x": {
+                "steps": [
+                    {"uses": "actions/cache@0123456789abcdef0123456789abcdef01234567"}
+                ]
+            }
+        },
+    }
+    sources = [("ci.yml", typ.cast("dict[object, object]", document))]
+    assert privileged_cache_workflows(sources) == ["ci.yml"], (
+        "a privileged workflow using actions/cache@ must be reported"
     )
 
 

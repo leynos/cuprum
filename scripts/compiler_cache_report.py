@@ -13,6 +13,21 @@ The command fails closed: a malformed artefact exits non-zero rather than
 producing a plausible report. It writes a JSON summary and, with
 ``--markdown``, a compact table for the pull request or the issue.
 
+Inputs
+------
+``--records``
+    One or more JSONL files, or directories containing them.
+``--jobs``
+    A ``gh api .../jobs`` document, or a file holding a list of them.
+``--job-names``
+    A JSON object mapping a record's ``job`` key (``github.job``) to a jobs API
+    display-name substring, optionally with a ``{leg}`` placeholder. The API
+    does not expose the job key, so the mapping is declared rather than
+    guessed.
+``--console``
+    A dated console-observation JSON: storage, eviction, branch protection, and
+    billing rounding.
+
 Examples
 --------
 >>> render_markdown({"generated_at": "x", "cost": {"billing": "proxy"},

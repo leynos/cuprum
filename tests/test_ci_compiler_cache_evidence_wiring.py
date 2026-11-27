@@ -159,6 +159,45 @@ def test_the_warning_covers_every_step_that_can_fail() -> None:
         )
 
 
+def test_each_writer_step_puts_the_repository_root_on_pythonpath() -> None:
+    """Run by path, Python puts `scripts/` on `sys.path`, not the root.
+
+    The writer imports `scripts.compiler_cache_*`; without the root on
+    `PYTHONPATH` the import fails before `main()`, every step's
+    `continue-on-error` hides it, and the experiment silently records nothing.
+    """
+    document = action_document(EVIDENCE_ACTION)
+    runs = typ.cast("dict[str, object]", document["runs"])
+    writer_steps = [
+        step
+        for step in typ.cast("list[dict[str, object]]", runs["steps"])
+        if "scripts/compiler_cache_evidence.py" in str(step.get("run", ""))
+    ]
+    assert writer_steps, "the action must invoke the writer"
+    for step in writer_steps:
+        env = typ.cast("dict[str, object]", step.get("env"))
+        assert env.get("PYTHONPATH") == "${{ github.workspace }}", (
+            f"the {step.get('name')!r} step must run with the repository root "
+            f"on PYTHONPATH, got {env.get('PYTHONPATH')!r}"
+        )
+
+
+def test_the_record_step_carries_the_runner_class() -> None:
+    """A pair must never compare two runner classes as one backend change."""
+    document = action_document(EVIDENCE_ACTION)
+    runs = typ.cast("dict[str, object]", document["runs"])
+    record = [
+        step
+        for step in typ.cast("list[dict[str, object]]", runs["steps"])
+        if step.get("id") == "record"
+    ]
+    assert len(record) == 1, "the action must have one record step"
+    env = typ.cast("dict[str, object]", record[0].get("env"))
+    assert env.get("EVIDENCE_RUNNER_CLASS") == "${{ runner.environment }}", (
+        f"the record step must pass the runner class, got {env!r}"
+    )
+
+
 def test_the_evidence_action_uploads_with_bounded_retention() -> None:
     """Keep the artefact small and short-lived, as the telemetry precedent does."""
     document = action_document(EVIDENCE_ACTION)

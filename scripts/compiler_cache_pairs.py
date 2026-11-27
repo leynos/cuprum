@@ -244,16 +244,22 @@ def _comparable(
 ) -> bool:
     """Report whether two observations describe the same compiler and shape.
 
-    A pair whose toolchain, interpreter, or compiler identity differs measures
-    the change between them, not the cache backend, so it is excluded from the
-    saving sample.
+    A pair whose runner class, toolchain, interpreter, or compiler identity
+    differs measures that difference, not the cache backend, so it is excluded
+    from the saving sample.
 
     Returns
     -------
     bool
         Whether every provenance field matches.
     """
-    fields = ("rustc", "toolchain", "compiler_shape", "python_version")
+    fields = (
+        "runner_class",
+        "rustc",
+        "toolchain",
+        "compiler_shape",
+        "python_version",
+    )
     return all(control.get(field) == candidate.get(field) for field in fields)
 
 

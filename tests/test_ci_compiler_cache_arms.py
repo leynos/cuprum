@@ -193,6 +193,12 @@ def test_the_backend_and_credentials_follow_the_runner_predicate(
     )
 
 
+def test_two_adjacent_expressions_are_refused() -> None:
+    """The greedy wrapper must not return a body spanning two spans."""
+    with pytest.raises(ExpressionError, match="exactly one"):
+        unwrap("${{ a }} and ${{ b }}")
+
+
 def test_an_unmodelled_expression_is_refused() -> None:
     """Refuse syntax rather than silently rendering it true or false."""
     with pytest.raises(ExpressionError, match="cannot tokenize"):

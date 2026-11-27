@@ -1,8 +1,3 @@
-#!/usr/bin/env -S uv run python
-# /// script
-# requires-python = ">=3.12"
-# dependencies = []
-# ///
 """Turn compiler-cache records into the experiment's review artefact.
 
 ``scripts/compiler_cache_evidence.py`` writes one redacted JSON line per
@@ -16,20 +11,8 @@ counter an unavailable server did not report is ``null``. Records marked
 ``degraded`` or ``noncompliant`` are excluded from success evidence but kept in
 the cost totals, because a fallback run still spends paid time.
 
-Inputs
-------
-``--records``
-    One or more JSONL files, or directories containing them.
-``--jobs``
-    A ``gh api .../jobs`` document, or a file holding a list of them.
-``--job-names``
-    A JSON object mapping a record's ``job`` key (``github.job``) to a jobs API
-    display-name substring, optionally with a ``{leg}`` placeholder. The API
-    does not expose the job key, so the mapping is declared rather than
-    guessed.
-``--console``
-    A dated console-observation JSON: storage, eviction, branch protection, and
-    billing rounding.
+The command line and Markdown view live in
+``scripts.compiler_cache_report``, which reads the summary this module builds.
 
 Examples
 --------

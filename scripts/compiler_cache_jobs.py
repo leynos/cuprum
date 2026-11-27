@@ -68,10 +68,7 @@ def matching_job(
         job
         for job in jobs
         if str(job.get("run_id")) == str(record["run_id"])
-        and (
-            job.get("run_attempt") is None
-            or str(job.get("run_attempt")) == str(record["run_attempt"])
-        )
+        and str(job.get("run_attempt")) == str(record["run_attempt"])
         and pattern in str(job.get("name", ""))
     ]
     # An ambiguous mapping would charge an arbitrary job's seconds and

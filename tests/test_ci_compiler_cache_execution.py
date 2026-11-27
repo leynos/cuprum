@@ -13,6 +13,8 @@ adapter forwards the wrapper rather than replacing it.
 
 from __future__ import annotations
 
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
+import sys
 from pathlib import Path
 
 from tests.helpers.composite_actions import run_step, step_script
@@ -21,6 +23,35 @@ from tests.test_ci_setup_sccache_action import ACTION, _run_install
 START_STEP = "Start the sccache server"
 ADAPTER = Path("tools/dev-fast/cargo")
 FAKE_VERSION = "0.12.0"
+WRITER = Path("scripts/compiler_cache_evidence.py")
+
+
+def test_the_writer_runs_by_path_with_the_repository_root_on_pythonpath(
+    tmp_path: Path,
+) -> None:
+    """The action's invocation must resolve the writer's `scripts.` imports.
+
+    This runs the file exactly as the composite action does — by path, from a
+    different working directory — so an import that only works when the
+    repository root happens to be the current directory is caught here.
+    """
+    evidence = tmp_path / "evidence"
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+        [sys.executable, str((Path.cwd() / WRITER).resolve()), "mark"],
+        cwd=tmp_path,
+        env={
+            "PYTHONPATH": str(Path.cwd()),
+            "EVIDENCE_DIR": str(evidence),
+            "EVIDENCE_MARKER": "restore",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (evidence / "marks" / "restore-start").is_file(), (
+        "the writer must persist the marker when invoked by path"
+    )
 
 
 def _start(tmp_path: Path, *, starts: bool) -> dict[str, str]:

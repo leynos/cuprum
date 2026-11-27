@@ -216,20 +216,41 @@ def test_a_family_with_only_cold_records_still_reports_a_decision() -> None:
     )
 
 
-def test_pairs_with_different_compiler_provenance_are_excluded() -> None:
-    """A toolchain difference measures the toolchain, not the cache backend."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, toolchain="1.87.0"),
-        Observation(
-            run_id="200",
-            backend="gha",
-            hits=6,
-            restore=None,
-            save=None,
-            toolchain="nightly-2026-08-23",
+@pytest.mark.parametrize(
+    ("control", "candidate"),
+    [
+        (
+            Observation(run_id="100", backend="local", hits=4, toolchain="1.87.0"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                toolchain="nightly-2026-08-23",
+            ),
         ),
-    ]
-    built = summary(records, jobs([100, 200], 240), console(test_fidelity="matched"))
+        (
+            Observation(run_id="100", backend="local", hits=4),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                runner_class="github-hosted",
+            ),
+        ),
+    ],
+    ids=["toolchain", "runner-class"],
+)
+def test_an_incomparable_pair_is_excluded(
+    control: Observation, candidate: Observation
+) -> None:
+    """A provenance or runner difference must not be read as a cache saving."""
+    built = summary(
+        [control, candidate], jobs([100, 200], 240), console(test_fidelity="matched")
+    )
     observed = family(built)
     assert observed["pairs"] == 0, (
         f"an incomparable pair must not count, got {observed}"

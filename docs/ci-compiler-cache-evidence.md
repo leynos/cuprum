@@ -56,6 +56,7 @@ and rejects this object as a complete record.
   "sccache_version": "0.12.0",
   "rustc": {"release": "1.87.0", "commit": "unknown", "host": "x86_64-unknown-linux-gnu"},
   "family": "py3.12-debug",
+  "runner_class": "self-hosted",
   "matrix_leg": "3.12",
   "compiler_shape": "debug",
   "python_version": "3.12",
@@ -80,6 +81,16 @@ An empty identity input is recorded as `unknown`, never as a blank. That
 includes `matched_key` on a restore miss: `restore_hit` is the field that
 records the miss, so `matched_key` is unknown rather than empty, and the
 validator accepts `unknown` there.
+
+`restore_hit` is true when the restore matched a key, exactly or through the
+action's `restore-keys` prefix. The rolling compiler key carries
+`GITHUB_RUN_ID`, so an exact `cache-hit` is false on the prefix restores the
+experiment actually relies on; the matched key is the honest signal, and
+`matched_key` still identifies the generation that was restored.
+
+`runner_class` is `runner.environment`: `self-hosted` on the Ubicloud lane and
+`github-hosted` on the fork fallback. A pair must share it, so two runner
+classes can never be compared as if the difference were the cache backend.
 
 `counters` holds exactly the allowlisted statistics names the writer copies:
 `compile_requests`, `requests_executed`, `requests_unsupported_compiler`,
@@ -148,8 +159,13 @@ not be able to flatten into a plausible summary.
 ## Reading the evidence
 
 ```sh
-uv run python scripts/compiler_cache_evidence.py --help
+uv run python scripts/compiler_cache_report.py --help
 ```
+
+The composite action invokes the writer by file path, so it sets `PYTHONPATH`
+to the workspace root; the writer's `scripts.compiler_cache_*` imports do not
+resolve otherwise, and every step would fail its import while
+`continue-on-error` kept the job green.
 
 The reader accepts JSONL files or directories of them, one or more `gh api`
 jobs documents, a declared mapping from job key to display-name substring, and

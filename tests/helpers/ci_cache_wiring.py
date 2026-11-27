@@ -22,10 +22,12 @@ if typ.TYPE_CHECKING:
 NAMESPACE = re.compile(r"[a-z0-9][a-z0-9._-]{0,40}")
 #: The trigger that runs a workflow in the base repository's context.
 NEGATIVE_TRIGGER = "pull_request_target"
-#: The evidence action and the cache restore the experiment must not place in
-#: a privileged context.
+#: The evidence action and the cache actions the experiment must not place in
+#: a privileged context. `actions/cache@` restores as well as saves, so it is
+#: matched alongside the restore-only form.
 EVIDENCE_ACTION = "./.github/actions/compiler-cache-evidence"
 CACHE_RESTORE_ACTION = "actions/cache/restore@"
+CACHE_ACTION = "actions/cache@"
 
 
 def wrapper_overrides(
@@ -104,6 +106,7 @@ def privileged_cache_workflows(
         if not privileged:
             continue
         text = str(document)
-        if EVIDENCE_ACTION in text or CACHE_RESTORE_ACTION in text:
+        forbidden = (EVIDENCE_ACTION, CACHE_RESTORE_ACTION, CACHE_ACTION)
+        if any(token in text for token in forbidden):
             offenders.append(name)
     return offenders

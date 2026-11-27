@@ -25,13 +25,13 @@ block is the whole contract:
 - ``EVIDENCE_BRACKET``: the bracketed step's label, such as ``typecheck``.
 - ``EVIDENCE_PHASE``: ``pre`` or ``post`` for ``snapshot``.
 - ``EVIDENCE_MARKER``: ``restore`` or ``save`` for ``mark``.
-- ``EVIDENCE_EXPECTS_RUSTC``: ``true`` when the bracket should compile.
-- ``EVIDENCE_TARGET_PRESENT``: ``true`` when a Cargo ``target`` directory
-  already existed when the bracket opened.
-- ``EVIDENCE_FAMILY``, ``EVIDENCE_MATRIX_LEG``, ``EVIDENCE_COMPILER_SHAPE``,
-  ``EVIDENCE_PYTHON_VERSION``, ``EVIDENCE_TOOLCHAIN``, ``EVIDENCE_DEV_FAST``,
-  ``EVIDENCE_MATCHED_KEY``, ``EVIDENCE_RESTORE_HIT``,
-  ``EVIDENCE_SETUP_STATUS``, ``EVIDENCE_PR_NUMBER``: identity fields.
+- ``EVIDENCE_EXPECTS_RUSTC``: ``true`` when the bracket should compile;
+  ``EVIDENCE_TARGET_PRESENT``: ``true`` when a Cargo ``target`` already existed.
+- ``EVIDENCE_FAMILY``, ``EVIDENCE_MATRIX_LEG``, ``EVIDENCE_RUNNER_CLASS``,
+  ``EVIDENCE_COMPILER_SHAPE``, ``EVIDENCE_PYTHON_VERSION``,
+  ``EVIDENCE_TOOLCHAIN``, ``EVIDENCE_DEV_FAST``, ``EVIDENCE_MATCHED_KEY``,
+  ``EVIDENCE_RESTORE_HIT``, ``EVIDENCE_SETUP_STATUS``, ``EVIDENCE_PR_NUMBER``:
+  identity fields.
 - The run identity comes from ``GITHUB_RUN_ID``, ``GITHUB_RUN_ATTEMPT``,
   ``GITHUB_JOB``, ``GITHUB_EVENT_NAME``, and the workflow file name parsed out
   of ``GITHUB_WORKFLOW_REF``.
@@ -121,12 +121,13 @@ def _not_cached_delta(
         return {}
     before = typ.cast("dict[str, object]", pre.get("not_cached", {}))
     after = typ.cast("dict[str, object]", post.get("not_cached", {}))
-    reasons = set(before) | set(after)
-    return {
-        str(reason): int(typ.cast("int", after.get(reason, 0)))
-        - int(typ.cast("int", before.get(reason, 0)))
-        for reason in reasons
-    }
+    deltas: dict[str, int] = {}
+    for reason in set(before) | set(after):
+        value = schema.delta_value(after.get(reason, 0), before.get(reason, 0))
+        # A fallen reason means a restart; omit it rather than go negative.
+        if value is not None:
+            deltas[str(reason)] = int(value)
+    return deltas
 
 
 def _snapshot_path(environ: cabc.Mapping[str, str], bracket: str, phase: str) -> Path:
@@ -244,6 +245,7 @@ def _identity_fields(
         "sccache_version": schema.bounded(post.get("sccache_version")),
         "rustc": probe.rustc(environ),
         "family": schema.bounded(environ.get("EVIDENCE_FAMILY")),
+        "runner_class": schema.bounded(environ.get("EVIDENCE_RUNNER_CLASS")),
         "matrix_leg": schema.bounded(environ.get("EVIDENCE_MATRIX_LEG")),
         "compiler_shape": schema.bounded(environ.get("EVIDENCE_COMPILER_SHAPE")),
         "python_version": schema.bounded(
@@ -366,8 +368,8 @@ def record(environ: cabc.Mapping[str, str]) -> int:
     Returns
     -------
     int
-        Always zero. Telemetry must not fail a build that compiled correctly,
-        and an invalid record is reported rather than persisted.
+        Always zero; an invalid record is reported, never persisted, and
+        telemetry cannot fail a build that compiled correctly.
     """
     try:
         document = build_record(environ)

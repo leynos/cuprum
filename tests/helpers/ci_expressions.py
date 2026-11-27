@@ -91,7 +91,13 @@ def unwrap(value: object) -> str:
     if match is None:
         message = f"expected exactly one ${{{{ }}}} expression, got {value!r}"
         raise ExpressionError(message)
-    return match.group("body").strip()
+    body = match.group("body")
+    # The pattern is greedy, so it spans two adjacent expressions; the body is
+    # not an expression at all and must not be returned as if it were one.
+    if "${{" in body:
+        message = f"expected exactly one ${{{{ }}}} expression, got {value!r}"
+        raise ExpressionError(message)
+    return body.strip()
 
 
 def _tokens(text: str) -> list[Token]:

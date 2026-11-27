@@ -115,6 +115,15 @@ def test_an_ambiguous_job_mapping_is_unknown() -> None:
     assert resolved is not None, "a unique substring must still resolve"
 
 
+def test_a_job_without_an_attempt_does_not_join() -> None:
+    """Paid seconds and the critical path must agree about a missing attempt."""
+    record = {"run_id": "1", "run_attempt": "2", "job": "x", "matrix_leg": "none"}
+    jobs = [{"run_id": 1, "name": "Rust lint", "conclusion": "success"}]
+    assert jobs_reader.matching_job(record, jobs, {"x": "Rust lint"}) is None, (
+        "a job with no attempt must not join an attempt-2 record"
+    )
+
+
 def test_a_record_with_no_declared_mapping_is_unknown() -> None:
     """An undeclared job key contributes no whole-job seconds."""
     record = {"run_id": "1", "run_attempt": "1", "job": "x", "matrix_leg": "none"}

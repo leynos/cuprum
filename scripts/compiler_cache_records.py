@@ -93,9 +93,9 @@ def _add_line(
     line: str,
 ) -> None:
     """Validate and store one line, refusing a duplicate bracket."""
-    document = _parse_line(file, number_, line)
-    if document is None:
+    if not line.strip():
         return
+    document = _parse_line(file, number_, line)
     record = _validated(file, number_, document)
     key = _record_key(record)
     require(
@@ -114,10 +114,8 @@ def _validated(file: Path, number_: int, document: object) -> dict[str, object]:
         raise InvalidEvidenceError(message) from error
 
 
-def _parse_line(file: Path, number_: int, line: str) -> object | None:
-    """Return one parsed line, or ``None`` when the line is blank."""
-    if not line.strip():
-        return None
+def _parse_line(file: Path, number_: int, line: str) -> object:
+    """Return one parsed line; a JSON ``null`` is returned for validation."""
     try:
         return json.loads(line)
     except json.JSONDecodeError as error:

@@ -273,6 +273,8 @@ def test_the_action_publishes_the_backend_it_bound() -> None:
     document = action_document(ACTION)
     outputs = typ.cast("dict[str, dict[str, object]]", document["outputs"])
     assert "backend" in outputs, "setup-sccache must expose the selected backend"
-    assert "steps.install.outputs.backend" in str(outputs["backend"]["value"]), (
-        "the backend output must read the step that selects it"
+    declared = str(outputs["backend"]["value"]).strip()
+    assert declared == "${{ steps.install.outputs.backend }}", (
+        "the backend output must be the complete expression that reads the "
+        f"step which selects it, got {declared!r}"
     )
