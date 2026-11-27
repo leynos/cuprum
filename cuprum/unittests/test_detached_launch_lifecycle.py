@@ -297,7 +297,7 @@ def test_dropping_the_process_object_leaves_the_worker_running() -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             del process
-            # ``gc.collect()`` is process-wide, so it also finalises garbage
+            # ``gc.collect()`` is process-wide, so it also finalizes garbage
             # from earlier cases. The assertion below therefore names this
             # worker: only a warning about this pid is evidence that dropping
             # the handle reported it.
