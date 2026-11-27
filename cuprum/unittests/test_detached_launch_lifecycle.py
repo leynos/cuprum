@@ -297,12 +297,19 @@ def test_dropping_the_process_object_leaves_the_worker_running() -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             del process
+            # ``gc.collect()`` is process-wide, so it also finalises garbage
+            # from earlier cases. The assertion below therefore names this
+            # worker: only a warning about this pid is evidence that dropping
+            # the handle reported it.
             gc.collect()
-        resource_warnings = [
-            warning for warning in caught if warning.category is ResourceWarning
+        worker_warnings = [
+            warning
+            for warning in caught
+            if warning.category is ResourceWarning and str(pid) in str(warning.message)
         ]
-        assert not resource_warnings, (
-            "dropping a detached process object must not report the worker"
+        assert not worker_warnings, (
+            f"dropping the detached process object for pid {pid} must not "
+            "report the worker"
         )
         assert _is_running(pid), "the worker must outlive cuprum's handle"
     finally:

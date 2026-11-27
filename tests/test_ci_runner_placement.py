@@ -24,6 +24,8 @@ from tests.helpers.ci_runners import (
     FORK_REACHABLE_UBICLOUD_JOBS,
     GITHUB_HOSTED_JOBS,
     GITHUB_LABEL,
+    MACOS_HOSTED_JOBS,
+    MACOS_LABEL,
     RUNNER_NAMED_JOBS,
     UBICLOUD_JOBS,
     UBICLOUD_LABEL,
@@ -45,6 +47,7 @@ from tests.helpers.ci_runners import (
 UBICLOUD_CASES = expand(UBICLOUD_JOBS)
 GITHUB_HOSTED_CASES = expand(GITHUB_HOSTED_JOBS)
 WINDOWS_HOSTED_CASES = expand(WINDOWS_HOSTED_JOBS)
+MACOS_HOSTED_CASES = expand(MACOS_HOSTED_JOBS)
 FORK_REACHABLE_CASES = expand(FORK_REACHABLE_UBICLOUD_JOBS)
 ALL_CASES = all_jobs()
 STEP_CASES = [case for case in ALL_CASES if declares_steps(*case)]
@@ -277,6 +280,24 @@ def test_windows_native_jobs_stay_on_github_hosted_windows(
     )
 
 
+@pytest.mark.parametrize(("workflow_name", "job_name"), MACOS_HOSTED_CASES)
+def test_macos_lifecycle_jobs_stay_on_github_hosted_macos(
+    workflow_name: str, job_name: str
+) -> None:
+    """Keep the POSIX-without-procfs leg on a real Mac.
+
+    The leg's whole value is that it executes where Linux procfs does not
+    exist, so a placement change to a Linux label would leave it green while
+    proving nothing. Asserted by equality for the same reason as the Windows
+    rule: "hosted" is not "macOS".
+    """
+    placed = placement(workflow_name, job_name)
+    assert placed.labels == frozenset({MACOS_LABEL}), (
+        f"{workflow_name}:{job_name} must stay on {MACOS_LABEL}, "
+        f"got {sorted(placed.labels)}"
+    )
+
+
 def test_native_wheel_matrix_keeps_its_platform_runners() -> None:
     """Ubicloud has no Windows or macOS capacity, so the matrix stays hosted."""
     matrix_job = job("build-wheels.yml", "build-native-wheels")
@@ -312,6 +333,7 @@ def test_every_workflow_job_appears_in_one_placement_manifest() -> None:
         set(UBICLOUD_CASES)
         | set(GITHUB_HOSTED_CASES)
         | set(WINDOWS_HOSTED_CASES)
+        | set(MACOS_HOSTED_CASES)
         | {
             ("build-wheels.yml", "build-native-wheels"),
             ("rust-boundaries.yml", "native"),
