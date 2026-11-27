@@ -5,8 +5,11 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — the defect is reproduced on the starting tree and the
-implementation is beginning.
+Status: IN PROGRESS — implementation, documentation, and the first assessment
+round are complete. Both CodeRabbit assessments returned `incomplete` on the
+shared post-exit wait; the skipped-settled-consumer defect and the
+already-settled attribution rule are repaired and covered by deterministic
+regressions, and confirmation is pending on the repaired head.
 
 ## Purpose / big picture
 
@@ -224,9 +227,18 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   public-surface tests cover cancelled callbacks, cancelled readers, short
   drains, writer cancellation, caller cancellation, and reaping. The affected
   suites pass.
-- [ ] EP-M4: documentation, changelog, and full gates. The ADR addendum, users
-  guide, developers guide, design document, and changelog entry are written;
-  the gates and review remain.
+- [x] EP-M4: documentation, changelog, and full gates. The ADR addendum, users
+  guide, developers guide, design document, and changelog entry are written.
+  All six gates pass on `65d64c0b4`, hosted CI is green, and CodeScene passes
+  locally and hosted.
+- [x] Assessment repair: both CodeRabbit assessments found that the post-exit
+  wait could drop a settled consumer before classifying it, and the plan
+  assessment also asked for a documented rule for consumers already settled at
+  wait start. The wait now classifies every settled consumer before removal,
+  records stream order as the tie-break for already-settled consumers, and is
+  covered by deterministic unit and entry-point regressions in
+  `cuprum/unittests/test_post_exit_consumer_classification.py`.
+- [ ] Assessment confirmation on the repaired head and the formal review.
 - [ ] Draft PR opened with `Closes #733` and the Lody session reference.
 
 ## Surprises & discoveries
@@ -306,10 +318,25 @@ the existing 10 s watchdog.
 
 ## Outcomes & retrospective
 
-Pending implementation.
+The original hang is repaired: a callback that ends cancelled, or a consumer
+task cancelled while the run is live, now ends `run()` and `lines()` promptly
+with a stream-labelled `ConsumerCancelledError`, and a caller's own
+cancellation still arrives as `CancelledError`. The public error, the
+`reached_eof` marker, the two supervisor paths, and the documentation are in
+place, and the full gate suite and hosted CI pass on `65d64c0b4`.
 
-## Revision note
+The assessment round exposed a second-order defect worth recording: a done
+callback is not a barrier across event-loop turns. A consumer can be settled
+while its callback is still queued, so a wait that records completion order
+through callbacks and then removes every `done()` task can drop an outcome
+unclassified. The wait now classifies every settled consumer before removal,
+and it states stream order as the deterministic tie-break when several
+consumers were already settled before it began.
 
-Initial draft: records the reproduced defect, the four milestones, and the
-verification obligations. Subsequent revisions must record progress and any
-change to the classification contract.
+## Revision notes
+
+- Initial draft: records the reproduced defect, the four milestones, and the
+  verification obligations.
+- Assessment repair: records the skipped-settled-consumer defect, the
+  already-settled tie-break, the new regression module, and the pending
+  confirmation on the repaired head.

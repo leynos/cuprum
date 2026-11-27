@@ -2546,13 +2546,15 @@ sequenceDiagram
   that cannot arrive. A cancelled stdin writer remains quiet teardown, and a
   task that merely finishes leaves the exit wait running. After the exit, both
   single-command supervisors share `_await_consumer_outcomes`, which classifies
-  completions in order and stops on the first failure; the
-  `_CapturedDrain.reached_eof` marker is what distinguishes a short preserving
-  drain from an end-of-file one. The owned-handle and pipeline routes do not
-  race their readers: they wait for the process, or every stage, and reconcile
-  afterwards, so a reader failure there surfaces at finalization. A route that
-  stops the run before its streams drained also has to release the child's
-  output transports: a reader cancelled before end-of-file leaves its
+  completions in order and stops on the first failure. Every settled consumer
+  is classified before it is dropped, including one whose done callback has not
+  run yet, and consumers already settled when the wait begins are attributed in
+  stream order. The `_CapturedDrain.reached_eof` marker is what distinguishes a
+  short preserving drain from an end-of-file one. The owned-handle and pipeline
+  routes do not race their readers: they wait for the process, or every stage,
+  and reconcile afterwards, so a reader failure there surfaces at finalization.
+  A route that stops the run before its streams drained also has to release the
+  child's output transports: a reader cancelled before end-of-file leaves its
   descriptor with the transport that owns it, and a descendant holding an
   inherited write end prevents the end-of-file that would otherwise close it.
   The streamed exit wait releases them from each of its failure handlers,

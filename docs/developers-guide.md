@@ -9583,7 +9583,12 @@ reports it.
 The same classification serves both supervisors *after* the exit.
 `_await_consumer_outcomes` records completion order through done callbacks,
 classifies each settled consumer, and stops on the first failure rather than
-spending the budget on a wedged sibling. The streamed `run()` raises the
+spending the budget on a wedged sibling. Every settled consumer is classified
+before it is dropped, even one whose done callback has not run yet; a consumer
+that settled between the wait's completion set and its callback would otherwise
+escape as a raw `CancelledError` or as success. If several consumers were
+already settled when the wait began, the callback registration order — stdout
+before stderr — is the deterministic tie-break. The streamed `run()` raises the
 failure through its ordinary failure handler; `lines()` returns it from
 `_await_consumers`, which adds the line stream's remaining budget to the shared
 wait and publishes the error on the iterator's result future.

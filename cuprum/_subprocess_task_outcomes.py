@@ -224,24 +224,56 @@ def _consumer_failure(
 
 def _first_completion_failure(
     finished: cabc.Sequence[asyncio.Task[object]],
-    processed: int,
+    processed: set[asyncio.Task[object]],
     streams: cabc.Mapping[asyncio.Task[object], ConsumerStreamName],
-) -> tuple[BaseException | None, int]:
-    """Classify the completions recorded after *processed*, in order.
+) -> BaseException | None:
+    """Classify recorded completions that have not been classified yet.
+
+    *finished* is the completion order recorded by the done callbacks, so the
+    first unprocessed entry is the consumer that finished first.
 
     Returns
     -------
-    tuple[BaseException | None, int]
-        The first failure found and the new processed count, or ``(None, n)``
-        when every remaining completion was quiet.
+    BaseException | None
+        The first failure among the new completions, or ``None`` when every one
+        was quiet.
     """
-    while processed < len(finished):
-        task = finished[processed]
-        processed += 1
+    for task in finished:
+        if task in processed:
+            continue
+        processed.add(task)
         failure = _consumer_outcome(task, streams[task])
         if failure is not None:
-            return failure, processed
-    return None, processed
+            return failure
+    return None
+
+
+def _classify_unrecorded_settled(
+    streams: cabc.Mapping[asyncio.Task[object], ConsumerStreamName],
+    processed: set[asyncio.Task[object]],
+) -> BaseException | None:
+    """Classify settled consumers whose done callback has not run yet.
+
+    A consumer can settle after the wait computed its completion set but
+    before the callback that records completion order runs. Dropping it as
+    done without classification would let a raw cancellation or a partial
+    capture pass as a quiet finish. Stream order is the deterministic
+    tie-break when the completion order is no longer recoverable.
+
+    Returns
+    -------
+    BaseException | None
+        The first failure among the newly settled consumers, or ``None`` when
+        every one was quiet.
+    """
+    for task, stream in streams.items():
+        if task in processed or not task.done():
+            continue
+        processed.add(task)
+        failure = _consumer_outcome(task, stream)
+        if failure is not None:
+            return failure
+    return None
 
 
 async def _wait_for_consumer_completion(
@@ -282,10 +314,17 @@ async def _await_consumer_outcomes(
 
     Completions are classified in the order they arrive, so two consumers that
     settle in one loop step are attributed by completion order rather than by
-    task hashing. The first failure stops the wait: waiting for a wedged
-    sibling would spend the whole budget and report it as the run's deadline
-    instead of the failure that ended the run. A consumer that ended cancelled
-    or returned a partial capture is a failure for its stream, reported through
+    task hashing. When several consumers were already settled before the wait
+    began, the order their done callbacks were registered in — stdout before
+    stderr — is the deterministic tie-break. Every settled consumer is
+    classified before it is dropped, including one whose done callback has not
+    run yet; otherwise a raw cancellation or a partial capture could pass as a
+    quiet finish and surface later through a gather.
+
+    The first failure stops the wait: waiting for a wedged sibling would spend
+    the whole budget and report it as the run's deadline instead of the failure
+    that ended the run. A consumer that ended cancelled or returned a partial
+    capture is a failure for its stream, reported through
     :class:`~cuprum._stream_consumer_errors.ConsumerCancelledError`.
 
     Both single-command supervisors use this wait after the exit. They differ
@@ -322,7 +361,7 @@ async def _await_consumer_outcomes(
     for task in streams:
         task.add_done_callback(finished.append)
     pending = set(streams)
-    processed = 0
+    processed: set[asyncio.Task[object]] = set()
     loop = asyncio.get_running_loop()
     # One absolute budget rather than a fresh remainder per iteration: a loop
     # that re-measured the caller's remainder would let each round restart the
@@ -330,7 +369,10 @@ async def _await_consumer_outcomes(
     deadline = None if budget is None else loop.time() + budget
     while pending:
         await _wait_for_consumer_completion(pending, deadline, loop)
-        failure, processed = _first_completion_failure(finished, processed, streams)
+        failure = _first_completion_failure(finished, processed, streams)
+        if failure is not None:
+            return failure
+        failure = _classify_unrecorded_settled(streams, processed)
         if failure is not None:
             return failure
         pending = {task for task in pending if not task.done()}
@@ -340,6 +382,7 @@ async def _await_consumer_outcomes(
 __all__ = [
     "_StdinWriterLog",
     "_await_consumer_outcomes",
+    "_classify_unrecorded_settled",
     "_consumer_failure",
     "_consumer_outcome",
     "_first_completion_failure",

@@ -1806,10 +1806,16 @@ wait is cancelled, which terminates and reaps the child, the writer is asked
 once more, and the consumers are not re-read. After the exit settles, the same
 outcome is classified by one shared post-exit wait, `_await_consumer_outcomes`,
 which records completion order through done callbacks and stops on the first
-failure rather than waiting for a wedged sibling. The streamed `run()` raises
-that failure through its ordinary failure handler; `lines()` returns it from
-its reader wait and publishes it on the iterator's result future. A final
-gather no longer re-raises an unrequested reader `CancelledError`.
+failure rather than waiting for a wedged sibling. Every settled consumer is
+classified before it is removed, including one whose done callback has not run
+yet: a consumer that settled between the wait's completion set and its callback
+would otherwise be dropped and surface later as a raw `CancelledError` or as
+success. When several consumers were already settled before the wait began, the
+order their callbacks were registered in — stdout before stderr — is the
+deterministic tie-break. The streamed `run()` raises that failure through its
+ordinary failure handler; `lines()` returns it from its reader wait and
+publishes it on the iterator's result future. A final gather no longer
+re-raises an unrequested reader `CancelledError`.
 
 The caller's own cancellation is separate. The rendezvous forwards it to the
 exit wait and re-raises it as `asyncio.CancelledError`, so a caller still
