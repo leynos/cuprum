@@ -90,6 +90,11 @@ _COPIED_INPUTS: tuple[_CopiedInput, ...] = (
         is_directory=True,
     ),
     _CopiedInput(
+        "tools/rust-prover-tools/",
+        "test_dev_fast_contract dry-runs the Makefile, which parses REF",
+        is_directory=True,
+    ),
+    _CopiedInput(
         "rust/.config/",
         "the timeout-lane helpers read nextest.toml",
         is_directory=True,

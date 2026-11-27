@@ -8503,6 +8503,9 @@ Directories:
   `test_dev_fast_adapter` executes the `cargo` adapter.
 - `tools/mold/`: `test_dev_fast_prerequisites` reads `VERSION`, and the
   `Makefile` parses it while loading.
+- `tools/rust-prover-tools/`: the `Makefile` parses `REF` while loading, so
+  every route that dry-runs it — including
+  `test_dev_fast_contract`'s protected-route checks — fails without the file.
 - `rust/.config/`: the timeout-lane helpers read `nextest.toml`.
 - `rust/cuprum-rust/`, `rust/cuprum-streams/`, and `rust/cuprum-native-io/`:
   the wheel-build snapshot test builds from the crates.

@@ -451,9 +451,11 @@ also_copy = [
     "scripts/",
     # test_dev_fast_contract reads config.toml and test_dev_fast_adapter
     # executes the cargo adapter; test_dev_fast_prerequisites reads the mold
-    # version the Makefile also parses while loading.
+    # version the Makefile also parses while loading; the Makefile parses the
+    # prover-tools revision while loading, so every dry-run contract reads it.
     "tools/dev-fast/",
     "tools/mold/",
+    "tools/rust-prover-tools/",
     # The timeout-lane helpers read .config/nextest.toml, and the wheel-build
     # snapshot test builds from the crates.
     "rust/.config/",

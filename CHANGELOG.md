@@ -98,11 +98,11 @@
   `README.md` was absent, then failed again on the next missing root input
   because pytest runs with `-x`. `also_copy` now also carries `README.md`,
   `.yamllint.yml`, `.concordat`, `pyproject.toml`, `scripts/`,
-  `tools/dev-fast/`, `tools/mold/`, `rust/.config/`, and
-  `rust/rust-toolchain.toml`, with directories listed before the loose files
-  they parent. The configuration contract test checks the complete inventory,
-  that each entry exists with the expected kind, and that no build output or
-  cache directory is copied
+  `tools/dev-fast/`, `tools/mold/`, `tools/rust-prover-tools/`,
+  `rust/.config/`, and `rust/rust-toolchain.toml`, with directories listed
+  before the loose files they parent. The configuration contract test checks
+  the complete inventory, that each entry exists with the expected kind, and
+  that no build output or cache directory is copied
   ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **The mutation harness pins mutmut 3.7.0 and scopes its test selection:**
   3.6.0's async-generator trampoline forwarded iteration only, so a mutated
