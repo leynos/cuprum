@@ -158,7 +158,21 @@ its own evidence and decision.
       pass at `93d5ead0a` in a clean, Lody-free environment. Six CodeRabbit
       review rounds were run; every finding was addressed in a follow-up
       commit and re-gated.
-- [ ] M5 delivery: push the branch and open the draft pull request.
+- [x] 23 November 2026: draft pull request #743 opened from this branch with
+      `Closes #609` and the session reference.
+- [x] 27 November 2026: the tenth review round and the CodeScene delta were
+      cleared. Every finding became a contract or a validator rule: a falling
+      counter delta is unknown, an empty identity input is `unknown`, compiler
+      `-vV` text is bounded, negative transfer durations are refused, a
+      rejected record names its file and line, and the action's warning covers
+      a failed timer. The flagged functions were split and the duplicated tests
+      replaced with shared fixtures; `cs delta origin/main` reports no issues.
+- [x] 28 November 2026: M5 re-gates at `7717d0f97` — `make check-fmt`,
+      `make lint`, `make typecheck`, `make test`, `make markdownlint` and
+      `make nixie` all pass in a clean, Lody-free environment with the ambient
+      tool order. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-7717d0f97.log`.
+- [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
 
@@ -222,7 +236,17 @@ ordinary activity and the instrumentation that produces them is what this
 change lands. Every candidate family keeps archived caching with a named owner,
 review date, rollback and refresh trigger.
 
+A tenth review round hardened the reader further, and a CodeScene code-health
+failure on the pull request was cleared by splitting the flagged functions and
+sharing the duplicated test setup rather than suppressing the report.
+
 Lessons recorded during implementation:
+
+- A clean environment is not only about unsetting variables; tool order
+  matters. The gate must resolve `mold` from `~/.local/bin`, not the older
+  distribution copy in `/usr/bin`, so the ambient `PATH` order is preserved and
+  only Lody entries are removed. A hand-built `PATH` that puts `/usr/bin` first
+  makes `dev-fast-check` fail for a reason unrelated to the change.
 
 - The gate is only as credible as its inputs. Six review rounds found real
   holes (double-counted cache events, a misread cache location, unverified
