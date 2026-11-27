@@ -780,8 +780,11 @@ flowchart TD
 
 _Figure 1: Documentation workflow from draft through merge review._
 
-Number figures and tables sequentially from 1 in document order. Place a
-diagram's caption immediately after the diagram, and a table's caption
+Number figures sequentially from 1 in document order. Number tables
+sequentially from 1 in document order, or restart at 1 within each section of a
+long reference document navigated by section, such as
+`docs/developers-guide.md`; use one scheme consistently throughout a document.
+Place a diagram's caption immediately after the diagram, and a table's caption
 immediately after the table, using the document's consistent italic marker;
 markdownlint rule MD049 keeps one emphasis marker per document.
 
