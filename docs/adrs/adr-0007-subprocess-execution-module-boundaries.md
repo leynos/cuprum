@@ -1766,3 +1766,72 @@ for both `run()` and `lines()` and for either stream: exactly one
 record labelled `drain_<stream>`, one `settled` event with
 `terminal_outcome=error`, and the callback's own exception reaching the caller
 unchanged.
+
+## Addendum (2026-11-27): a cancelled stream consumer ends the run
+
+The 2026-11-15 addendum made a stream consumer that _fails_ end a
+single-command run. #733 found the same ending reached through a different
+exception. A consumer that ends **cancelled** — a callback that raises
+`asyncio.CancelledError`, or a consumer task cancelled from outside — was
+treated by `_stdin_writer_failure` as a task that had been torn down rather
+than broken. `_consumer_failure` therefore reported nothing, `_unfinished`
+dropped the settled consumer from the race, and the exit wait ran alone.
+Nothing read the pipe, the child blocked on a full buffer, and a run with no
+`timeout=` waited indefinitely.
+
+Re-raising the consumer's own `CancelledError` was rejected. That type is
+indistinguishable from the caller's cancellation: `except CancelledError` would
+swallow it, `asyncio.timeout` could read it as its own expiry, and a caller
+could never tell an output consumer that stopped from a cancel it requested.
+The run instead reports a public `ConsumerCancelledError(Exception)` carrying
+the stream whose consumer stopped. It is an ordinary exception, deliberately
+not a subclass of `asyncio.CancelledError` or `TimeoutError`, and it is
+re-exported from both `cuprum` and `cuprum.sh`.
+
+One shared query, `_consumer_outcome`, now classifies a settled consumer. An
+ordinary exception is returned unchanged, so a callback's own `TimeoutError`
+keeps the identity the provenance rule depends on. A cancelled task yields
+`ConsumerCancelledError(stream)` with the task's retrieved `CancelledError`
+chained as its cause. A task that returned while preserving a partial capture
+yields the same error without a cause: a preserving drain reports its prefix
+instead of raising, so `_CapturedDrain` now carries `reached_eof`, set to
+`False` by both preserving cancellation paths. Pending consumers and
+end-of-file drains stay quiet. The writer's own classification is unchanged: a
+cancelled writer is teardown, not a failure.
+
+Precedence is unchanged and state-based: a settled exit wins, then the stdin
+writer, then the consumers in stdout-then-stderr order. A consumer cancelled or
+short-stopped _before_ the exit settles follows the 2026-11-15 route: the exit
+wait is cancelled, which terminates and reaps the child, the writer is asked
+once more, and the consumers are not re-read. After the exit settles, the same
+outcome is classified by one shared post-exit wait, `_await_consumer_outcomes`,
+which records completion order through done callbacks and stops on the first
+failure rather than waiting for a wedged sibling. The streamed `run()` raises
+that failure through its ordinary failure handler; `lines()` returns it from
+its reader wait and publishes it on the iterator's result future. A final
+gather no longer re-raises an unrequested reader `CancelledError`.
+
+The caller's own cancellation is separate. The rendezvous forwards it to the
+exit wait and re-raises it as `asyncio.CancelledError`, so a caller still
+receives the cancellation it issued. A cancelled consumer is only classified
+while the supervisor is still live; a cancellation of the supervisor never
+becomes a `ConsumerCancelledError`.
+
+Pipelines and owned process handles are deliberately unchanged. They wait for
+the process, or every stage, and only then reconcile their readers, so a
+consumer failure there is reported at finalization and `timeout=` is the bound.
+`ExecPhase` is not extended: the run still settles with
+`TerminalOutcome.ERROR`, and the existing teardown diagnostics carry the route.
+
+`cuprum/unittests/test_subprocess_rendezvous.py` pins the classification and
+its precedence; `test_rendezvous_precedence_property.py` checks the oracle over
+generated slot states, including consumer cancellation;
+`test_consumer_failure_fail_fast.py` pins both entry points against real
+children that write until killed, with either stream, a synchronous or
+asynchronous callback, and a caller cancellation that must still raise
+`CancelledError`; `test_line_stream_reader_failure.py` pins the post-exit arm
+by gating the cancellation on the exit rendezvous returning;
+`test_stream_drain.py` and `test_stream_drain_cancelled_absorb.py` pin the
+`reached_eof` marker; `test_consumer_failure_telemetry.py` pins the terminal
+outcome; and `test_stream_consumer_errors_public_api.py` pins the error's
+export identity, inheritance, and stream annotation.

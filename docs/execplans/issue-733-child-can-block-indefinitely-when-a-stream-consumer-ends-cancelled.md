@@ -224,7 +224,9 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   public-surface tests cover cancelled callbacks, cancelled readers, short
   drains, writer cancellation, caller cancellation, and reaping. The affected
   suites pass.
-- [ ] EP-M4: documentation, changelog, and full gates.
+- [ ] EP-M4: documentation, changelog, and full gates. The ADR addendum, users
+  guide, developers guide, design document, and changelog entry are written;
+  the gates and review remain.
 - [ ] Draft PR opened with `Closes #733` and the Lody session reference.
 
 ## Surprises & discoveries
