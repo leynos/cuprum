@@ -8563,6 +8563,18 @@ workflow files rather than `cuprum` source. The recorded-output parser beside
 them, `tests/integration/test_act_stream_parsing.py`, is plain string handling
 and stays selected.
 
+Two observe-hook dispatch modules are omitted for a third reason: their oracle
+compares what the dispatcher scheduled by reading the task's coroutine — its
+code object and, for the wrapped result, a frame local. mutmut runs every
+mutated function through an async trampoline that creates its own coroutine, so
+the oracle sees `_trampoline_wrapper` rather than `_await_awaitable` and cannot
+read the original frame. The named examples beside them stay selected: they
+attribute `inspect.isawaitable` calls to the dispatcher through
+`cuprum/unittests/_observe_hook_dispatch_code.py`, which recognizes both the
+function's own code object and the renamed copies mutmut's trampoline builds
+(`x_<name>__mutmut_orig` and `x_<name>__mutmut_<n>`), instead of comparing
+identity.
+
 The omitted modules keep running in every `make test`, pull-request gate, and
 direct `uv run pytest` invocation; only the mutation harness omits them.
 `test_mutmut_config_contract.py` pins the exclusion list, so widening it fails

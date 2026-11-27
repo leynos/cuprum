@@ -147,6 +147,18 @@
   two tooling contracts that build their own environment, and the configuration
   contract pins the complete list
   ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The observe-hook dispatch tests survive the mutation harness:** mutmut runs
+  every mutated function through a trampoline that forwards to a renamed copy
+  (`x_<name>__mutmut_orig` and `x_<name>__mutmut_<n>`), so the named examples'
+  spy, which attributed `inspect.isawaitable` calls by comparing code objects
+  with the dispatcher's `__code__`, recorded nothing and failed the baseline.
+  They now ask `cuprum/unittests/_observe_hook_dispatch_code.py`, which
+  recognizes both the function's own code and the trampoline's copies, and a
+  unit test pins that predicate; the examples stay selected so they can still
+  kill mutants. The two oracle modules that read the scheduled coroutine's code
+  object and frame locals cannot hold under the async trampoline and are
+  omitted from the mutation selection only
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **The mutation caller adopts the shared environment preflight:** the
   mutation-testing caller now pins the shared revision that consolidates
   mutation preflight, and passes `preflight: true`. Before mutmut enumerates a

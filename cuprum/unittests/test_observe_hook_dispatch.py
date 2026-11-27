@@ -25,10 +25,10 @@ from cuprum import ECHO
 from cuprum._observability import (
     _LOGGER,
     _emit_exec_event,
-    _emit_observe_hook,
     _ExecEventEmissionError,
 )
 from cuprum.events import ExecEvent
+from cuprum.unittests._observe_hook_dispatch_code import is_dispatcher_code
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -82,7 +82,7 @@ def _install_spy(monkeypatch: pytest.MonkeyPatch) -> list[object]:
 
     def spy(obj: object) -> bool:
         """Record the argument when the dispatcher is the caller."""
-        if sys._getframe(1).f_code is _emit_observe_hook.__code__:
+        if is_dispatcher_code(sys._getframe(1).f_code, "_emit_observe_hook"):
             seen.append(obj)
         return real(obj)
 
@@ -145,6 +145,26 @@ def test_awaitable_objects_still_reach_isawaitable(
     asyncio.run(run())
 
     assert len(seen) == 1, "a Future result must reach inspect.isawaitable exactly once"
+
+
+def test_dispatcher_code_predicate_covers_both_harness_shapes() -> None:
+    """The predicate recognizes an exact name and mutmut's renamed copy."""
+
+    def probe() -> None:
+        """Stand in for a dispatcher's own code."""
+
+    def x_probe__mutmut_orig() -> None:
+        """Stand in for the copy mutmut's trampoline forwards to."""
+
+    assert is_dispatcher_code(probe.__code__, "probe"), (
+        "a dispatcher's own code must be attributed to it"
+    )
+    assert is_dispatcher_code(x_probe__mutmut_orig.__code__, "probe"), (
+        "a trampoline copy must still be attributed to its dispatcher"
+    )
+    assert not is_dispatcher_code(
+        test_dispatcher_code_predicate_covers_both_harness_shapes.__code__, "probe"
+    ), "unrelated code must not be attributed to the dispatcher"
 
 
 async def _record(  # ruff: ignore[unused-async]

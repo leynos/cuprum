@@ -20,7 +20,8 @@ sandbox. Both are pinned here to the inventory so the declaration cannot drift
 from it.
 
 The mutation run also excludes the test modules that cannot run against a
-mutated ``cuprum``: two build an environment of their own, and three are the
+mutated ``cuprum``: two build an environment of their own, two read the
+scheduled coroutine through mutmut's async trampoline, and three are the
 ``act`` scenarios that ``make test`` runs only from ``test-act`` (see
 ``_SANDBOX_EXCLUDED_MODULES``). The exclusion is pinned here so it cannot
 widen silently, and each excluded module is checked to still exist inside the
@@ -210,6 +211,13 @@ _SELECTED_ROOTS: tuple[str, ...] = ("tests/", "cuprum/unittests/")
 #: and installs itself only in an ephemeral ``uv run --with`` overlay, so
 #: neither constructed environment can import the mutated ``cuprum``.
 #:
+#: Two more compare what the observe-hook dispatcher scheduled by reading the
+#: task's coroutine code object and a frame local. mutmut's async trampoline
+#: creates its own coroutine, so the oracle sees the trampoline rather than the
+#: dispatcher and cannot read the original frame at all. The named examples
+#: beside them stay selected: their attribution predicate recognizes the
+#: trampoline's renamed copies.
+#:
 #: The three ``act`` scenarios need a container runtime. ``make test`` already
 #: runs them only from ``test-act``, so collecting them here would make the
 #: mutation baseline depend on whether the host has ``act`` installed, and on
@@ -220,6 +228,8 @@ _SELECTED_ROOTS: tuple[str, ...] = ("tests/", "cuprum/unittests/")
 _SANDBOX_EXCLUDED_MODULES: tuple[str, ...] = (
     "cuprum/unittests/test_nextest_route_floor.py",
     "cuprum/unittests/test_sh_typing_contract.py",
+    "cuprum/unittests/test_observe_hook_dispatch_properties.py",
+    "cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "tests/integration/test_workflow_integration.py",
     "tests/integration/test_experimental_leg_integration.py",
     "tests/integration/test_extension_typecheck_integration.py",

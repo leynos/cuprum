@@ -410,11 +410,22 @@ source_paths = ["cuprum/"]
 # one that does not: the baseline would depend on the host's scenario state
 # rather than on the source under mutation. The recorded-output parser beside
 # them is ordinary string handling and stays in the selection.
+#
+# The observe-hook dispatch oracle also stays out. Two modules compare what the
+# dispatcher scheduled by reading the task's coroutine: its code object and,
+# for the wrapped result, a frame local. mutmut runs every mutated function
+# through a trampoline that creates its own coroutine, so the oracle sees
+# `_trampoline_wrapper` instead of `_await_awaitable` and cannot see the
+# original frame locals at all. The named examples beside them still run,
+# because their attribution predicate (`_observe_hook_dispatch_code`) knows
+# the trampoline's renamed copies.
 pytest_add_cli_args_test_selection = [
     "tests/",
     "cuprum/unittests/",
     "--ignore=cuprum/unittests/test_nextest_route_floor.py",
     "--ignore=cuprum/unittests/test_sh_typing_contract.py",
+    "--ignore=cuprum/unittests/test_observe_hook_dispatch_properties.py",
+    "--ignore=cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "--ignore=tests/integration/test_workflow_integration.py",
     "--ignore=tests/integration/test_experimental_leg_integration.py",
     "--ignore=tests/integration/test_extension_typecheck_integration.py",
