@@ -286,6 +286,18 @@ RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ruff==$(R
 TY_VERSION ?= 0.0.74
 TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
+# Pin the colour environment for every pytest session `make test` runs. CPython
+# 3.14 and later colour `argparse` help whenever the environment asks for it, so
+# a test that compares captured help text with plain prose fails on the escape
+# sequences, and `make test` stops at the first failing pytest session, hiding
+# the rest of the suite. `NO_COLOR=1` covers tools that read the convention,
+# including an interpreter started with `-E`, which ignores `PYTHON_COLORS`;
+# `PYTHON_COLORS=0` is CPython's narrowest control and outranks both. `PY_COLORS`
+# is unset rather than zeroed because pytest gives it the highest precedence.
+# The prefix sits outside `$(PYTEST)` so a command-line `PYTEST` override keeps
+# the policy. Pass `PYTEST_COLOUR_ENV=` on the command line to opt out. See
+# "Colour environment for the test gate" in docs/developers-guide.md.
+PYTEST_COLOUR_ENV = unset FORCE_COLOR CLICOLOR_FORCE PY_COLORS; export NO_COLOR=1 PYTHON_COLORS=0;
 # Interrogate the whole Python estate, not only the production package: tests,
 # benchmarks, scripts, and the root conftest document their definitions too.
 # The [tool.interrogate] section in pyproject.toml excludes overload signatures,
@@ -635,11 +647,11 @@ test: test-selection test-python test-rust ## Run the Python and Rust suites seq
 test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
 	@for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
-	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) $(PYTEST_GROUPED_DESELECT) "$$@" || exit $$?; \
+	  $(PYTEST_COLOUR_ENV) RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) $(PYTEST_GROUPED_DESELECT) "$$@" || exit $$?; \
 	done
 	@set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
 	if [ "$$#" -gt 0 ]; then \
-	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
+	  $(PYTEST_COLOUR_ENV) RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
 	fi
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
@@ -649,7 +661,7 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 # prerequisite of both routes, so the selector's agreement with the module
 # population is settled before the loop that depends on it.
 test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against the module population
-	@$(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
+	@$(PYTEST_COLOUR_ENV) $(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
 
 # The scenario half of the harness: it runs the real `changes` job under `act`
 # against a throwaway repository, one scenario at a time. It is opt-in because
