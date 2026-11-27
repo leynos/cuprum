@@ -19,7 +19,7 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - run the real r
 import sys
 import typing as typ
 
-from scripts.pytest_layout import Layout, parse_groups
+from scripts.pytest_layout import Layout, Selection, expand_group, parse_groups
 from tests.helpers.makefile import variable_expansion
 from tests.helpers.suite_classification import (
     COMPILER_INVOKING_MODULES,
@@ -182,34 +182,67 @@ def test_compiler_modules_are_never_merged_into_a_multi_entry_group() -> None:
     is a real build, so merging it would let one batch reuse another's build
     and quietly stop testing a cold build.
     """
-    merged = _consolidated_groups()
-    for group in merged:
-        named = set(group)
-        overlap = named.intersection(COMPILER_INVOKING_MODULES)
-        assert not overlap or len(group) == 1, (
-            f"a compiler-invoking module is merged with others: {sorted(overlap)}"
+    merged = _consolidated_selections()
+    for selection in merged:
+        overlap = set(selection.files).intersection(COMPILER_INVOKING_MODULES)
+        assert not overlap or len(selection.files) == 1, (
+            "a compiler-invoking module is merged with others: "
+            f"{sorted(overlap)} in a group of {len(selection.files)} files"
         )
 
 
 def test_fresh_process_modules_are_never_merged() -> None:
     """Hold the stricter class to the same rule, with its own message."""
-    merged = _consolidated_groups()
-    for group in merged:
-        named = set(group)
-        overlap = named.intersection(FRESH_PROCESS_MODULES)
-        assert not overlap or len(group) == 1, (
-            f"a fresh-process module is merged with others: {sorted(overlap)}"
+    merged = _consolidated_selections()
+    for selection in merged:
+        overlap = set(selection.files).intersection(FRESH_PROCESS_MODULES)
+        assert not overlap or len(selection.files) == 1, (
+            "a fresh-process module is merged with others: "
+            f"{sorted(overlap)} in a group of {len(selection.files)} files"
         )
 
 
-def _consolidated_groups() -> tuple[tuple[str, ...], ...]:
-    """Return the declared candidate groups, or no groups when none is declared."""
+def _consolidated_selections() -> tuple[Selection, ...]:
+    """Return the declared candidate groups, expanded to the files they select.
+
+    The check must run on expanded files, not on the literal entries. A merged
+    entry such as `cuprum/unittests/test_*.py` would never equal a classified
+    path, so comparing entries would miss a compiler module hidden inside a
+    glob.
+
+    Returns
+    -------
+    tuple of Selection
+        One per declared candidate group, or empty when no candidate exists.
+    """
     rendered = os.environ.get("CUPRUM_PYTEST_LAYOUT_GROUPS") or _make_value(
         "PYTEST_LAYOUT_GROUPS"
     )
     if not rendered.strip():
         return ()
-    return parse_groups(rendered)
+    return tuple(expand_group(group) for group in parse_groups(rendered))
+
+
+def test_the_merge_guard_rejects_a_glob_that_hides_a_compiler_module() -> None:
+    """Prove the merge guard can fail on a hidden module.
+
+    Its pass over an empty manifest would otherwise mean nothing.
+
+    With no candidate declared the guards above iterate nothing. This case
+    drives the same expansion with a group that hides a classified module
+    inside a glob, which is exactly the shape the literal-entry comparison
+    would have missed.
+    """
+    compiler = min(COMPILER_INVOKING_MODULES)
+    directory = compiler.rsplit("/", 1)[0]
+    hidden = expand_group((f"{directory}/test_*.py",))
+
+    overlap = set(hidden.files).intersection(COMPILER_INVOKING_MODULES)
+
+    assert overlap, (
+        f"{directory}/test_*.py must expand to include the classified module "
+        f"{compiler}, so the guard is exercised rather than vacuous"
+    )
 
 
 def test_the_opt_in_target_runs_the_driver_and_propagates_its_status() -> None:
