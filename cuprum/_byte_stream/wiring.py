@@ -77,17 +77,6 @@ class _ByteStreams:
         )
 
     @property
-    def readers(self) -> tuple[ByteStreamReader, ByteStreamReader]:
-        """The two readers, in stream order.
-
-        Returns
-        -------
-        tuple[ByteStreamReader, ByteStreamReader]
-            The stdout reader, then the stderr reader.
-        """
-        return self.stdout, self.stderr
-
-    @property
     def queues(self) -> tuple[_ByteQueue, _ByteQueue]:
         """The two queues, in stream order.
 
