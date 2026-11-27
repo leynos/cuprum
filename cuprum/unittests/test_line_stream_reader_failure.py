@@ -27,6 +27,7 @@ from cuprum import (
     observe_line_stream,
 )
 from cuprum._line_stream.reader_wait import _await_consumers
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
 from cuprum.unittests._rendezvous_support import record_rendezvous, retrieve
 from tests.helpers.catalogue import python_builder as build_python_builder
@@ -34,7 +35,6 @@ from tests.helpers.catalogue import python_builder as build_python_builder
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum.lines import LineEvent, LineHook
     from cuprum.sh import SafeCmd
 
@@ -482,15 +482,26 @@ def test_cancelled_reader_after_exit_is_a_labelled_failure(
     )
 
 
+def _parked_consumer() -> asyncio.Task[_CapturedDrain]:
+    """Return a consumer task that never settles, typed as a real reader."""
+
+    async def never_settles() -> _CapturedDrain:
+        """Park until the test cancels the task."""
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    return asyncio.create_task(never_settles())
+
+
 def test_cancelled_reader_is_returned_before_a_pending_sibling() -> None:
     """A settled cancellation ends the wait instead of spending the budget."""
 
     async def scenario() -> ConsumerCancelledError:
         """Cancel stdout while stderr is still pending."""
-        cancelled = asyncio.create_task(asyncio.Event().wait())
+        cancelled = _parked_consumer()
         cancelled.cancel()
         await retrieve(cancelled)
-        sibling = asyncio.create_task(asyncio.Event().wait())
+        sibling = _parked_consumer()
         try:
             failure = await _await_consumers((cancelled, sibling), None)
         finally:
@@ -512,8 +523,8 @@ def test_cancelled_stderr_reader_is_labelled_after_a_successful_stdout() -> None
 
     async def scenario() -> ConsumerCancelledError:
         """Succeed on stdout and cancel stderr."""
-        stdout = asyncio.create_task(asyncio.sleep(0, result=object()))
-        cancelled = asyncio.create_task(asyncio.Event().wait())
+        stdout = asyncio.create_task(asyncio.sleep(0, result=_CapturedDrain()))
+        cancelled = _parked_consumer()
         cancelled.cancel()
         await retrieve(cancelled)
         failure = await _await_consumers((stdout, cancelled), None)
