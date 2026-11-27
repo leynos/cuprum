@@ -19,17 +19,18 @@ import dataclasses as dc
 import os
 import signal
 import sys
+import time
 import typing as typ
 
 import pytest
 
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
+from tests.helpers.process_exit import ExitObservation, observe_exit
 from tests.helpers.timeouts import (
     pipe_holding_child_argv,
     python_interpreter,
     wait_for_pid_file,
-    wait_for_process_death,
 )
 
 if typ.TYPE_CHECKING:
@@ -125,6 +126,44 @@ async def _spawn_immune_child(ready: Path) -> asyncio.subprocess.Process:
     return process
 
 
+def _observed_exit(pid: int) -> ExitObservation:
+    """Return *pid*'s observation, failing where the host cannot report it."""
+    observed = observe_exit(pid)
+    if observed is ExitObservation.UNOBSERVABLE:
+        pytest.fail(
+            f"this host cannot report whether process {pid} has exited, so "
+            "the descendant's fate is unproven"
+        )
+    return observed
+
+
+def _descendant_is_running(pid: int) -> bool:
+    """Report whether *pid* is running, never counting an unreaped zombie."""
+    return _observed_exit(pid) is ExitObservation.RUNNING
+
+
+def _wait_for_descendant_exit(
+    pid: int,
+    *,
+    seconds: float = 5.0,
+    context: str = "descendant teardown",
+) -> None:
+    """Fail unless *pid* has exited within *seconds*, zombies counting as exited.
+
+    Darwin refuses a group signal whose only remaining member is an unreaped
+    zombie and treats that group as settled, so a null-signal probe can report
+    a killed descendant as running until the host's reaper collects it.
+    ``observe_exit`` reads the scheduler state instead, which is the answer the
+    teardown promised.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if _observed_exit(pid) is ExitObservation.EXITED:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"Process {pid} still alive after {context}")
+
+
 async def _terminate_owned_run(run: _OwnedRun) -> None:
     """Tear the run down through the ordinary teardown entry."""
     await _terminate_all_shielded(
@@ -132,7 +171,7 @@ async def _terminate_owned_run(run: _OwnedRun) -> None:
         _TeardownPolicy(0.5, owns_group=True),
     )
     await asyncio.to_thread(
-        wait_for_process_death,
+        _wait_for_descendant_exit,
         run.grandchild_pid,
         context="owned-group teardown",
     )
