@@ -92,16 +92,12 @@ def _stdin_writer_failure(task: asyncio.Task[object] | None) -> BaseException | 
         The exception the task ended on, or ``None`` for a task that succeeded,
         is still running, was cancelled, or does not exist.
     """
-    # Written as two guards rather than one chained condition so each rejection
-    # reads as the distinct contract it is: no task, versus a task whose
-    # outcome is not yet or not a failure.
     if task is None:
         return None
-    if not task.done():
-        return None
-    if task.cancelled():
-        return None
-    return task.exception()
+    # One settled-and-unabandoned test, evaluated before ``exception``: asking
+    # a cancelled task raises, so the cancellation has to be excluded first.
+    settled = task.done() and not task.cancelled()
+    return task.exception() if settled else None
 
 
 def _labelled_consumers(

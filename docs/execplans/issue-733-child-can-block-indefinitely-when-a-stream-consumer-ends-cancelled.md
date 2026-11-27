@@ -270,6 +270,20 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   completion order is recorded through done callbacks. The wait yields once
   after `asyncio.wait` returns, which makes the callback ordering explicit
   rather than an implementation detail.
+- **A second production module.** The approved coding plan's surface, plus the
+  unchanged race, pushed `_subprocess_rendezvous.py` past the 400-line Pylint
+  ceiling. The writer publication, consumer classification, and shared
+  post-exit wait moved to `cuprum/_subprocess_task_outcomes.py`; the rendezvous
+  keeps the race, the writer's second read, and the re-exports its callers
+  already use. The initial 14-file tolerance undercounted the plan's own listed
+  surface (two new production modules, two export surfaces, five test modules,
+  and four documents), so the delivered file count is planned scope rather than
+  growth.
+- **Two duplication exceptions widened, one family avoided.** The writer-task
+  `None` guard moved with its task into the new module, and the
+  consumer-cancellation initializer joined the existing exception-constructor
+  family. The duplicated pending-task guard inside the new module was
+  refactored away rather than allowlisted.
 
 ## Verification plan
 
