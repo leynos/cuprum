@@ -31,6 +31,16 @@ _STDOUT_DRAIN = captured("stdout text")
 _STDERR_DRAIN = captured("stderr text")
 
 
+def _releasable_process(pid: int = 123) -> types.SimpleNamespace:
+    """Return the process shape the teardown release reads.
+
+    The release asks each output stream to close its parent-side transport, so
+    the stand-in holds neither. Supplying real pipes here would make the
+    teardown helper close descriptors the case never opened.
+    """
+    return types.SimpleNamespace(pid=pid, stdout=None, stderr=None)
+
+
 @dc.dataclass(slots=True)
 class _FailedExitTestDouble:
     """Patchable failed-exit seams and the observations they record.
@@ -206,7 +216,7 @@ def _failed_run(
         The stand-in run carrying the supplied execution bundle.
     """
     run = types.SimpleNamespace(
-        process=types.SimpleNamespace(pid=123),
+        process=_releasable_process(),
         tasks=types.SimpleNamespace(
             discard_on_cancel=asyncio.Event(),
             stdin_task=None,
@@ -310,9 +320,21 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
     """The discard drain drains the consumers without capturing output."""
     double = _FailedExitTestDouble(error=ValueError("unused"))
     consumers = object()
+    observation = object()
+    execution = typ.cast(
+        "_SubprocessExecution",
+        types.SimpleNamespace(
+            capture_stdout=_STDOUT_POLICY,
+            capture_stderr=_STDERR_POLICY,
+            capture_bytes=False,
+            observation=observation,
+        ),
+    )
     run = typ.cast(
         "_LineStreamRun",
         types.SimpleNamespace(
+            process=_releasable_process(),
+            execution=execution,
             tasks=types.SimpleNamespace(
                 consumers=consumers,
                 discard_on_cancel=asyncio.Event(),
@@ -323,16 +345,6 @@ def test_discard_drain_keeps_its_supplied_pid_and_never_captures(
             ),
             settlement_started=asyncio.Event(),
             telemetry=types.SimpleNamespace(emit=double.emit),
-        ),
-    )
-    observation = object()
-    execution = typ.cast(
-        "_SubprocessExecution",
-        types.SimpleNamespace(
-            capture_stdout=_STDOUT_POLICY,
-            capture_stderr=_STDERR_POLICY,
-            capture_bytes=False,
-            observation=observation,
         ),
     )
     double.install(monkeypatch)
@@ -400,18 +412,6 @@ def test_discard_drain_releases_the_capture_sinks(
     # A release that touched only the stdout slot would pass just as well with
     # ``captures=(sink, None)``, so hold a second sink in the stderr slot.
     stderr_sink = _ReleasedSink()
-    run = typ.cast(
-        "_LineStreamRun",
-        types.SimpleNamespace(
-            tasks=types.SimpleNamespace(
-                consumers=object(),
-                discard_on_cancel=asyncio.Event(),
-                captures=(sink, stderr_sink),
-            ),
-            settlement_started=asyncio.Event(),
-            telemetry=types.SimpleNamespace(emit=double.emit),
-        ),
-    )
     execution = typ.cast(
         "_SubprocessExecution",
         types.SimpleNamespace(
@@ -419,6 +419,20 @@ def test_discard_drain_releases_the_capture_sinks(
             capture_stderr=_STDERR_POLICY,
             capture_bytes=False,
             observation=object(),
+        ),
+    )
+    run = typ.cast(
+        "_LineStreamRun",
+        types.SimpleNamespace(
+            process=_releasable_process(),
+            execution=execution,
+            tasks=types.SimpleNamespace(
+                consumers=object(),
+                discard_on_cancel=asyncio.Event(),
+                captures=(sink, stderr_sink),
+            ),
+            settlement_started=asyncio.Event(),
+            telemetry=types.SimpleNamespace(emit=double.emit),
         ),
     )
     double.install(monkeypatch)
@@ -445,6 +459,8 @@ def _teardown_run(order: list[object]) -> _LineStreamRun:
     return typ.cast(
         "_LineStreamRun",
         types.SimpleNamespace(
+            process=_releasable_process(),
+            execution=types.SimpleNamespace(),
             settlement_started=asyncio.Event(),
             telemetry=types.SimpleNamespace(emit=emit),
         ),

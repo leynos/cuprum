@@ -8,7 +8,11 @@ changing run semantics.
 The sink awaits ``queue.put`` and the drain awaits that sink. A slow iterator
 therefore pauses reads instead of retaining unbounded output. Consumer tasks
 belong to ``_RunTaskOwnership.consumers`` and are reconciled once on completion,
-timeout, caller ``break``, generator close, and external cancellation.
+timeout, caller ``break``, generator close, and external cancellation. Every one
+of those early stops also releases the child's output transports: a reader
+cancelled before end-of-file keeps its parent-side descriptor with the transport
+that owns it, and a descendant holding an inherited write end means no
+end-of-file ever arrives to release it.
 
 This module holds the exit wait, the teardown steps, and the coordination that
 turns a settled run into a result. Queue plumbing, telemetry, spawn setup, and
@@ -29,6 +33,7 @@ from cuprum._line_stream.result_assembly import _assemble_line_stream_result
 from cuprum._line_stream.telemetry import _LineStreamEventDetails
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _drain_stream_consumers
+from cuprum._subprocess_startup_abandon import _releasing_output_transports
 from cuprum._subprocess_timeout import _handle_stream_timeout
 from cuprum._subprocess_wait import (
     _await_exit_or_writer_failure,
@@ -202,6 +207,17 @@ async def _run_line_stream_teardown[T](
     preservation from the outcome, while :func:`_discard_drain` always
     discards.
 
+    Every caller is an *early stop*: the run is ending before its streams have
+    necessarily drained, so the child's output transports are released however
+    the operation ends. That release runs inside the operation's own shield,
+    because ``_shielded_cleanup`` finishes its task and then re-raises the
+    caller's cancellation: a release awaited after it would be skipped exactly
+    when a cancellation interrupts the reconciliation, leaving the descriptors
+    the release exists to close. The successful result-assembly path does not
+    come through here, so a run that read every stream to end-of-file is
+    unaffected. ``TEARDOWN_COMPLETED`` is emitted only once the release has
+    returned, and never for a teardown that failed.
+
     Returns
     -------
     T
@@ -219,7 +235,13 @@ async def _run_line_stream_teardown[T](
     # allowed to stop line publication.
     run.settlement_started.set()
     run.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    result = await _shielded_cleanup(operation)
+
+    async def release_after_operation() -> T:
+        """Run the teardown operation, then release the pipes it stopped reading."""
+        async with _releasing_output_transports(run.process, run.execution):
+            return await operation
+
+    result = await _shielded_cleanup(release_after_operation())
     run.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
     return result
 

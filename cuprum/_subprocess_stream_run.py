@@ -38,6 +38,14 @@ responsible for its own cancellation being prompt. This module guarantees only
 that the boundary is *woken* on expiry; settlement of the tasks it owns is the
 expiry handler's, through the reconciliation every other exit route uses. ADR
 021 records why the intuitive reading is wrong.
+
+Settling tasks is not the same as closing pipes. A reader cancelled before
+end-of-file keeps its parent-side descriptor with the transport that owns it,
+and a descendant holding an inherited write end means no end-of-file ever
+arrives to release it. This module's post-exit failure routes therefore release
+the child's output transports from a ``finally`` inside the same shield as the
+group settlement and the reconciliation, so a cancellation that interrupts the
+cleanup cannot leave the descriptors behind.
 """
 
 from __future__ import annotations
@@ -50,7 +58,10 @@ from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _decode_consumer_drains
 from cuprum._subprocess_rendezvous import _await_consumer_outcomes
-from cuprum._subprocess_startup_abandon import _abandon_started_process
+from cuprum._subprocess_startup_abandon import (
+    _abandon_started_process,
+    _releasing_output_transports,
+)
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
     # module is where the repository's commentary points for the exit wait, and
@@ -132,6 +143,14 @@ async def _settle_group_and_reconcile_consumers(
     leaving tasks unreconciled. Composing them into one coroutine makes the
     shield cover the pair.
 
+    The child's output transports are released in a ``finally`` inside that
+    same shield, for the reason the exit wait's handlers give: settlement and
+    reconciliation cancel readers but close no pipes, and a reader cancelled
+    before end-of-file leaves its parent-side descriptor with the transport
+    that owns it. Composing the release with the pair rather than awaiting it
+    after ``_shielded_cleanup`` is what keeps a cancellation that interrupts
+    the reconciliation from skipping it.
+
     Returns
     -------
     _DrainPair
@@ -139,9 +158,10 @@ async def _settle_group_and_reconcile_consumers(
     """
 
     async def settle_then_reconcile() -> _DrainPair:
-        """Settle the group, then reconcile every run task, as one unit."""
-        await _settle_owned_group_before_draining(process, execution)
-        return await _reconcile_run_tasks(tasks, context)
+        """Settle the group, reconcile every run task, then release the pipes."""
+        async with _releasing_output_transports(process, execution):
+            await _settle_owned_group_before_draining(process, execution)
+            return await _reconcile_run_tasks(tasks, context)
 
     return await _shielded_cleanup(settle_then_reconcile())
 
@@ -345,3 +365,4 @@ __all__ = [
     "_settle_owned_group_before_draining",
     "_wait_for_streamed_process_exit",
 ]
+# weave: run 'weave explain cuprum/_subprocess_stream_run.py' for per-hunk detail, 'weave check' to verify your resolution

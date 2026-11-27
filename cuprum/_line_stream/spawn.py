@@ -27,9 +27,12 @@ from cuprum._line_stream.line_queue import (
 )
 from cuprum._line_stream.telemetry import _LineStreamTelemetry
 from cuprum._pipeline_types import _EventDetails
-from cuprum._process_lifecycle import _terminate_all_shielded
+from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._subprocess_spawn import _spawn_subprocess
-from cuprum._subprocess_startup_abandon import _abandon_started_process
+from cuprum._subprocess_startup_abandon import (
+    _abandon_started_process,
+    _releasing_output_transports,
+)
 from cuprum._subprocess_streams import (
     _build_run_task_ownership,
     _prepare_stream_spawn,
@@ -245,25 +248,12 @@ async def _abandon_unstarted_run(
     to drain: the record of tasks it had already started is the only handle the
     reclaim has, and those are cancelled and settled instead.
     """
-    # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
-    # lives in ``cuprum._line_stream.coordinator`` because a test patches its
-    # module-level ``_drain_stream_consumers`` name, and that module imports
-    # this one for the rest of the spawn machinery.
-    from cuprum._line_stream.coordinator import _discard_drain
-
     setup.settlement_started.set()
     await _stop_idle_monitor(execution.idle)
     setup.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    if progress.run is not None:
-        await _terminate_all_shielded(
-            (progress.process,),
-            _TeardownPolicy(
-                execution.ctx.cancel_grace,
-                owns_group=execution.owns_process_group,
-            ),
-            observations=(execution.observation,),
-        )
-        await _discard_drain(progress.run, progress.process.pid, execution)
+    run = progress.run
+    if run is not None:
+        await _discard_whole_run(run, execution)
     else:
         await _abandon_started_process(
             progress.process,
@@ -272,6 +262,42 @@ async def _abandon_unstarted_run(
             captures=progress.captures,
         )
     setup.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+
+
+async def _discard_whole_run(
+    run: _LineStreamRun,
+    execution: _SubprocessExecution,
+) -> None:
+    """Stop a whole run's child, discard its output, and release its pipes.
+
+    One shielded sequence rather than two. The termination and the discard can
+    each be cancelled, and each needs the other plus the output-transport
+    release to follow: two sequential shields would let a cancellation arriving
+    during the termination skip both. The release sits in a ``finally`` inside
+    that shield because it is owed even when the termination itself fails,
+    while the discard stays off that route — a termination that raises leaves
+    nothing settled to drain.
+    """
+    # Imported here, not at module scope, to avoid a cycle: ``_discard_drain``
+    # lives in ``cuprum._line_stream.coordinator`` because a test patches its
+    # module-level ``_drain_stream_consumers`` name, and that module imports
+    # this one for the rest of the spawn machinery.
+    from cuprum._line_stream.coordinator import _discard_drain
+
+    async def terminate_discard_and_release() -> None:
+        """Stop the child, drain its consumers, and release its pipes."""
+        async with _releasing_output_transports(run.process, execution):
+            await _terminate_all_shielded(
+                (run.process,),
+                _TeardownPolicy(
+                    execution.ctx.cancel_grace,
+                    owns_group=execution.owns_process_group,
+                ),
+                observations=(execution.observation,),
+            )
+            await _discard_drain(run, run.process.pid, execution)
+
+    await _shielded_cleanup(terminate_discard_and_release())
 
 
 def _with_line_sink_hooks(
