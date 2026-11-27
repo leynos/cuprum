@@ -148,18 +148,50 @@ def phases(
         If ``parallel_workers`` exceeds two, or a parallel file also appears in
         the serial selection. Either would run a test twice or fan out past the
         audited bound.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - LayoutError propagates from _require_compatible.
     settings = Options() if options is None else options
+    expanded = layout.expanded(root)
+    _require_compatible(expanded, settings)
+    planned = _serial_phases(expanded, settings)
+    if settings.parallel:
+        planned.append(_parallel_phase(settings))
+    return tuple(planned)
+
+
+def _require_compatible(
+    expanded: cabc.Sequence[cabc.Sequence[str]], settings: Options
+) -> None:
+    """Refuse a settings combination the audited bound does not allow.
+
+    Parameters
+    ----------
+    expanded : Sequence of Sequence of str
+        Each serial group's selected files.
+    settings : Options
+        The run's settings.
+
+    Raises
+    ------
+    LayoutError
+        If the parallel worker count exceeds the audited bound, or a parallel
+        file is also in the serial selection. Either would run a test twice, or
+        fan out past the count the runner is billed for.
+    """
     if settings.parallel_workers > MAX_PARALLEL_WORKERS:
         raise LayoutError(_worker_bound_message(settings.parallel_workers))
-    expanded = layout.expanded(root)
     serial = {name for group in expanded for name in group}
     overlap = sorted(serial.intersection(settings.parallel))
     if overlap:
         raise LayoutError(_overlap_message(overlap))
-    planned = [
+
+
+def _serial_phases(
+    expanded: cabc.Sequence[cabc.Sequence[str]], settings: Options
+) -> list[Phase]:
+    """Return one serial phase per non-empty group, in declaration order."""
+    return [
         Phase(
-            files=group,
+            files=tuple(group),
             workers=settings.workers,
             distribution=settings.distribution,
             name="serial",
@@ -167,16 +199,16 @@ def phases(
         for group in expanded
         if group
     ]
-    if settings.parallel:
-        planned.append(
-            Phase(
-                files=tuple(settings.parallel),
-                workers=settings.parallel_workers,
-                distribution="load",
-                name="parallel",
-            )
-        )
-    return tuple(planned)
+
+
+def _parallel_phase(settings: Options) -> Phase:
+    """Return the single two-worker phase for the declared manifest."""
+    return Phase(
+        files=tuple(settings.parallel),
+        workers=settings.parallel_workers,
+        distribution="load",
+        name="parallel",
+    )
 
 
 def _worker_bound_message(requested: int) -> str:

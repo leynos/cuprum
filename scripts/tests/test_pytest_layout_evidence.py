@@ -34,25 +34,38 @@ if typ.TYPE_CHECKING:
     import pathlib as pth
 
 
-def _run(
-    run_id: str,
-    layout: str,
-    *,
-    seconds: float | None = 100.0,
-    nodes: tuple[str, ...] = (),
-    failed: bool = False,
-) -> RunRecord:
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Spec:
+    """The optional facts about a synthetic run.
+
+    Attributes
+    ----------
+    seconds : float or None
+        Step wall time, or ``None`` when the run recorded none.
+    nodes : tuple of str
+        Collected node IDs.
+    failed : bool
+        Whether the run failed or was cancelled.
+    """
+
+    seconds: float | None = 100.0
+    nodes: tuple[str, ...] = ()
+    failed: bool = False
+
+
+def _run(run_id: str, layout: str, spec: _Spec | None = None) -> RunRecord:
     """Build one run record for the tests."""
+    facts = _Spec() if spec is None else spec
     return RunRecord(
         run_id=run_id,
         layout=layout,
         python_version="3.12",
         cache_state="warm",
-        step_seconds=seconds,
-        job_seconds=None if seconds is None else seconds * 4,
-        node_ids=nodes,
-        exit_status=1 if failed else 0,
-        failed=failed,
+        step_seconds=facts.seconds,
+        job_seconds=None if facts.seconds is None else facts.seconds * 4,
+        node_ids=facts.nodes,
+        exit_status=1 if facts.failed else 0,
+        failed=facts.failed,
     )
 
 
@@ -61,8 +74,8 @@ def _pairs(count: int, saving: float) -> list[RunRecord]:
     records: list[RunRecord] = []
     for index in range(count):
         records.extend((
-            _run(f"c{index}", "baseline", seconds=100.0),
-            _run(f"n{index}", "consolidated", seconds=100.0 - saving),
+            _run(f"c{index}", "baseline", _Spec(seconds=100.0)),
+            _run(f"n{index}", "consolidated", _Spec(seconds=100.0 - saving)),
         ))
     return records
 
@@ -97,8 +110,8 @@ def test_a_saving_below_the_fraction_threshold_is_rejected() -> None:
     records: list[RunRecord] = []
     for index in range(MINIMUM_PAIRS):
         records.extend((
-            _run(f"c{index}", "baseline", seconds=2000.0),
-            _run(f"n{index}", "consolidated", seconds=1979.0),
+            _run(f"c{index}", "baseline", _Spec(seconds=2000.0)),
+            _run(f"n{index}", "consolidated", _Spec(seconds=1979.0)),
         ))
 
     comparison = compare(records)
@@ -117,8 +130,8 @@ def test_a_saving_below_the_seconds_threshold_is_rejected() -> None:
     records: list[RunRecord] = []
     for index in range(MINIMUM_PAIRS):
         records.extend((
-            _run(f"c{index}", "baseline", seconds=10.0),
-            _run(f"n{index}", "consolidated", seconds=8.5),
+            _run(f"c{index}", "baseline", _Spec(seconds=10.0)),
+            _run(f"n{index}", "consolidated", _Spec(seconds=8.5)),
         ))
     comparison = compare(records)
 
@@ -130,8 +143,8 @@ def test_a_saving_below_the_seconds_threshold_is_rejected() -> None:
 def test_one_large_regression_rejects_the_arm() -> None:
     """Refuse a candidate that is usually faster but once much slower."""
     records = _pairs(MINIMUM_PAIRS, 60.0)
-    records.append(_run("c-slow", "baseline", seconds=100.0))
-    records.append(_run("n-slow", "consolidated", seconds=140.0))
+    records.append(_run("c-slow", "baseline", _Spec(seconds=100.0)))
+    records.append(_run("n-slow", "consolidated", _Spec(seconds=140.0)))
 
     comparison = compare(records)
 
@@ -173,7 +186,9 @@ def test_a_failed_run_is_counted_in_the_cost() -> None:
     """Mark a pair whose run failed, so a fast failure is not read as a saving."""
     records = _pairs(MINIMUM_PAIRS, 40.0)
     records[-1] = _run(
-        f"n{MINIMUM_PAIRS - 1}", "consolidated", seconds=10.0, failed=True
+        f"n{MINIMUM_PAIRS - 1}",
+        "consolidated",
+        _Spec(seconds=10.0, failed=True),
     )
 
     comparison = compare(records)
@@ -188,9 +203,10 @@ def test_a_failed_run_is_counted_in_the_cost() -> None:
 def test_a_pair_without_step_times_cannot_supply_a_saving() -> None:
     """Report `inconclusive` rather than a zero saving when times are absent."""
     records = [
-        _run(f"c{index}", "baseline", seconds=None) for index in range(MINIMUM_PAIRS)
+        _run(f"c{index}", "baseline", _Spec(seconds=None))
+        for index in range(MINIMUM_PAIRS)
     ] + [
-        _run(f"n{index}", "consolidated", seconds=None)
+        _run(f"n{index}", "consolidated", _Spec(seconds=None))
         for index in range(MINIMUM_PAIRS)
     ]
 
@@ -261,8 +277,8 @@ def test_loading_accepts_a_single_run_and_a_list(tmp_path: pth.Path) -> None:
 
 def test_fidelity_reports_both_directions() -> None:
     """List the lost and added nodes separately, never as a single count."""
-    control = (_run("c", "baseline", nodes=("a", "b", "d")),)
-    candidate = (_run("n", "consolidated", nodes=("a", "b", "c")),)
+    control = (_run("c", "baseline", _Spec(nodes=("a", "b", "d"))),)
+    candidate = (_run("n", "consolidated", _Spec(nodes=("a", "b", "c"))),)
 
     report = fidelity(control, candidate)
 
@@ -282,8 +298,8 @@ def test_fidelity_reports_both_directions() -> None:
 
 def test_fidelity_accepts_an_identical_suite() -> None:
     """Report identity when the layouts collected the same nodes."""
-    control = (_run("c", "baseline", nodes=("a", "b")),)
-    candidate = (_run("n", "consolidated", nodes=("b", "a")),)
+    control = (_run("c", "baseline", _Spec(nodes=("a", "b"))),)
+    candidate = (_run("n", "consolidated", _Spec(nodes=("b", "a"))),)
 
     report = fidelity(control, candidate)
 
@@ -300,8 +316,8 @@ def test_fidelity_accepts_an_identical_suite() -> None:
 
 def test_fidelity_refuses_an_empty_side() -> None:
     """Refuse a comparison against nothing, which would look like a clean diff."""
-    populated = (_run("c", "baseline", nodes=("a",)),)
-    empty = (_run("n", "consolidated", nodes=()),)
+    populated = (_run("c", "baseline", _Spec(nodes=("a",))),)
+    empty = (_run("n", "consolidated", _Spec(nodes=())),)
 
     with pytest.raises(EvidenceError, match="collected no node IDs"):
         fidelity(populated, empty)

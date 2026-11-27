@@ -28,14 +28,22 @@ re-derive every number in the report.
 
 from __future__ import annotations
 
-import dataclasses as dc
 import statistics
 import typing as typ
+
+from scripts.pytest_layout_records import (
+    SCHEMA_VERSION,
+    AdoptionThresholds,
+    Comparison,
+    Pair,
+    RunRecord,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = (
+    "SCHEMA_VERSION",
     "AdoptionThresholds",
     "Comparison",
     "Pair",
@@ -44,173 +52,9 @@ __all__ = (
     "pair_runs",
 )
 
-#: Bumped when a report's shape changes meaning, so an old artefact is not
-#: compared against a new one.
-SCHEMA_VERSION = 1
-
 #: Fewer pairs than this cannot support a median, so the report says
 #: `inconclusive` rather than quoting a number nobody should act on.
 MINIMUM_PAIRS = 5
-
-
-@dc.dataclass(frozen=True, slots=True)
-class AdoptionThresholds:
-    """The decision rule, declared before any candidate ran.
-
-    Attributes
-    ----------
-    minimum_saving_seconds : float
-        Least median paired saving that counts as useful.
-    minimum_saving_fraction : float
-        Least median saving as a fraction of the control step.
-    maximum_pair_regression_seconds : float
-        Largest single-pair regression tolerated before the arm is rejected.
-    """
-
-    minimum_saving_seconds: float = 20.0
-    minimum_saving_fraction: float = 0.015
-    maximum_pair_regression_seconds: float = 15.0
-
-
-@dc.dataclass(frozen=True, slots=True)
-class RunRecord:
-    """One measured run, as a workflow recorded it.
-
-    Attributes
-    ----------
-    run_id : str
-        The workflow run identifier.
-    layout : str
-        ``baseline`` or ``consolidated``.
-    python_version : str
-        The interpreter leg, e.g. ``3.12``.
-    cache_state : str
-        ``warm``, ``cold`` or ``scratch-cold``.
-    step_seconds : float or None
-        The `Run tests` step's wall time, or ``None`` when unrecorded.
-    job_seconds : float or None
-        The whole job's wall time.
-    node_ids : tuple of str
-        Collected node IDs, when the run produced a session record.
-    exit_status : int
-        The step's exit status.
-    failed : bool
-        Whether the run failed, was cancelled, or was retried.
-    """
-
-    run_id: str
-    layout: str
-    python_version: str
-    cache_state: str
-    step_seconds: float | None
-    job_seconds: float | None
-    node_ids: tuple[str, ...]
-    exit_status: int
-    failed: bool
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Pair:
-    """One control run and one candidate run that may be compared.
-
-    Attributes
-    ----------
-    control : RunRecord
-        The baseline run.
-    candidate : RunRecord
-        The consolidated run.
-    """
-
-    control: RunRecord
-    candidate: RunRecord
-
-    @property
-    def saving_seconds(self) -> float | None:
-        """Paired saving on the test step, or ``None`` when unrecorded."""
-        if self.control.step_seconds is None or self.candidate.step_seconds is None:
-            return None
-        return self.control.step_seconds - self.candidate.step_seconds
-
-    @property
-    def saving_fraction(self) -> float | None:
-        """Paired saving as a fraction of the control step."""
-        control = self.control.step_seconds
-        saving = self.saving_seconds
-        if control is None or saving is None:
-            return None
-        if control <= 0.0:
-            return None
-        return saving / control
-
-
-@dc.dataclass(frozen=True, slots=True)
-class Comparison:
-    """The outcome of pairing and judging two layouts.
-
-    Attributes
-    ----------
-    pairs : tuple of Pair
-        Every comparable pair, in input order.
-    unpaired : tuple of RunRecord
-        Runs that could not be paired, reported so they are visible rather than
-        dropped.
-    state : str
-        ``adopted``, ``rejected`` or ``inconclusive``.
-    reason : str
-        Why the state was reached, in words a reviewer can check.
-    median_saving_seconds : float or None
-        Median paired saving, or ``None`` when no pair recorded a step time.
-    median_saving_fraction : float or None
-        Median paired saving as a fraction of the control step.
-    """
-
-    pairs: tuple[Pair, ...]
-    unpaired: tuple[RunRecord, ...]
-    state: str
-    reason: str
-    median_saving_seconds: float | None
-    median_saving_fraction: float | None
-
-    def as_report(self) -> dict[str, object]:
-        """Return the comparison as a JSON-serializable report.
-
-        Returns
-        -------
-        dict
-            The report, carrying :data:`SCHEMA_VERSION`.
-        """
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "state": self.state,
-            "reason": self.reason,
-            "median_saving_seconds": self.median_saving_seconds,
-            "median_saving_fraction": self.median_saving_fraction,
-            "pairs": [
-                {
-                    "control_run": pair.control.run_id,
-                    "candidate_run": pair.candidate.run_id,
-                    "python_version": pair.control.python_version,
-                    "cache_state": pair.control.cache_state,
-                    "control_seconds": pair.control.step_seconds,
-                    "candidate_seconds": pair.candidate.step_seconds,
-                    "saving_seconds": pair.saving_seconds,
-                    "saving_fraction": pair.saving_fraction,
-                    "control_job_seconds": pair.control.job_seconds,
-                    "candidate_job_seconds": pair.candidate.job_seconds,
-                    "counted_in_cost": pair.control.failed or pair.candidate.failed,
-                }
-                for pair in self.pairs
-            ],
-            "unpaired": [
-                {
-                    "run_id": run.run_id,
-                    "layout": run.layout,
-                    "python_version": run.python_version,
-                    "cache_state": run.cache_state,
-                }
-                for run in self.unpaired
-            ],
-        }
 
 
 def pair_runs(
@@ -296,76 +140,142 @@ def compare(
     """
     rule = AdoptionThresholds() if thresholds is None else thresholds
     pairs, unpaired = pair_runs(records)
-    savings = [pair.saving_seconds for pair in pairs if pair.saving_seconds is not None]
-    fractions = [
-        pair.saving_fraction for pair in pairs if pair.saving_fraction is not None
-    ]
+    verdict = _decide(pairs, rule, minimum_pairs)
+    return Comparison(
+        pairs=pairs,
+        unpaired=unpaired,
+        state=verdict.state,
+        reason=verdict.reason,
+        median_saving_seconds=verdict.median_seconds,
+        median_saving_fraction=verdict.median_fraction,
+    )
+
+
+class _Verdict(typ.NamedTuple):
+    """One decision, with the medians it was reached from.
+
+    Attributes
+    ----------
+    state : str
+        ``adopted``, ``rejected`` or ``inconclusive``.
+    reason : str
+        Why the state was reached, in words a reviewer can check.
+    median_seconds : float or None
+        Median paired saving, or ``None`` when none could be computed.
+    median_fraction : float or None
+        Median paired saving as a fraction of the control step.
+    """
+
+    state: str
+    reason: str
+    median_seconds: float | None
+    median_fraction: float | None
+
+
+def _decide(
+    pairs: cabc.Sequence[Pair],
+    rule: AdoptionThresholds,
+    minimum_pairs: int,
+) -> _Verdict:
+    """Apply the predeclared rule to a paired sample.
+
+    The clauses run in a fixed order and the first to fire decides, so one
+    sample always yields one verdict. Each clause delegates its arithmetic, so
+    this function reads as the rule itself.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        Comparable control/candidate pairs.
+    rule : AdoptionThresholds
+        The predeclared decision rule.
+    minimum_pairs : int
+        Pairs required before a median is quoted.
+
+    Returns
+    -------
+    _Verdict
+        The state, its reason, and the medians it rests on.
+    """
+    seconds, fraction = _medians(pairs)
     if len(pairs) < minimum_pairs:
-        return Comparison(
-            pairs=pairs,
-            unpaired=unpaired,
-            state="inconclusive",
-            reason=(
-                f"{len(pairs)} comparable pairs is fewer than the {minimum_pairs} "
-                "needed for a median; report the sample rather than a threshold"
-            ),
-            median_saving_seconds=statistics.median(savings) if savings else None,
-            median_saving_fraction=statistics.median(fractions) if fractions else None,
+        return _Verdict(
+            "inconclusive",
+            f"{len(pairs)} comparable pairs is fewer than the {minimum_pairs} "
+            "needed for a median; report the sample rather than a threshold",
+            seconds,
+            fraction,
         )
-    if not savings:
-        return Comparison(
-            pairs=pairs,
-            unpaired=unpaired,
-            state="inconclusive",
-            reason="no pair recorded both step times, so no saving can be computed",
-            median_saving_seconds=None,
-            median_saving_fraction=None,
+    if seconds is None or fraction is None:
+        return _Verdict(
+            "inconclusive",
+            "no pair recorded both step times, so no saving can be computed",
+            seconds,
+            fraction,
         )
-    median_seconds = statistics.median(savings)
-    median_fraction = statistics.median(fractions) if fractions else 0.0
+    rejected = _regression_reason(pairs, rule) or _minimum_reason(
+        seconds, fraction, rule
+    )
+    if rejected is not None:
+        return _Verdict("rejected", rejected, seconds, fraction)
+    return _Verdict(
+        "adopted",
+        f"median saving {seconds:.1f}s ({fraction:.1%}) clears the predeclared "
+        "minimum with no pair beyond the regression tolerance",
+        seconds,
+        fraction,
+    )
+
+
+def _medians(pairs: cabc.Sequence[Pair]) -> tuple[float | None, float | None]:
+    """Return the median paired saving in seconds and as a fraction."""
+    savings = [p.saving_seconds for p in pairs if p.saving_seconds is not None]
+    fractions = [p.saving_fraction for p in pairs if p.saving_fraction is not None]
+    return (
+        statistics.median(savings) if savings else None,
+        statistics.median(fractions) if fractions else None,
+    )
+
+
+def _regression_reason(
+    pairs: cabc.Sequence[Pair], rule: AdoptionThresholds
+) -> str | None:
+    """Return why a large regression rejects the arm, or ``None``.
+
+    One pair beyond the tolerance rejects the arm rather than being averaged
+    away: an occasionally much slower suite is a real cost even when the median
+    looks good.
+
+    Returns
+    -------
+    str or None
+        The rejection text, or ``None`` when no pair exceeds the tolerance.
+    """
     regressions = [
         pair
         for pair in pairs
         if pair.saving_seconds is not None
         and pair.saving_seconds < -rule.maximum_pair_regression_seconds
     ]
-    if regressions:
-        return Comparison(
-            pairs=pairs,
-            unpaired=unpaired,
-            state="rejected",
-            reason=(
-                f"{len(regressions)} pair(s) regressed by more than "
-                f"{rule.maximum_pair_regression_seconds}s; the slowest is "
-                f"{min(pair.saving_seconds or 0.0 for pair in regressions):.1f}s"
-            ),
-            median_saving_seconds=median_seconds,
-            median_saving_fraction=median_fraction,
-        )
-    if (
-        median_seconds < rule.minimum_saving_seconds
-        or median_fraction < rule.minimum_saving_fraction
+    if not regressions:
+        return None
+    slowest = min(pair.saving_seconds or 0.0 for pair in regressions)
+    return (
+        f"{len(regressions)} pair(s) regressed by more than "
+        f"{rule.maximum_pair_regression_seconds}s; the slowest is {slowest:.1f}s"
+    )
+
+
+def _minimum_reason(
+    seconds: float, fraction: float, rule: AdoptionThresholds
+) -> str | None:
+    """Return why the median is not useful, or ``None`` when it clears both."""
+    if seconds >= rule.minimum_saving_seconds and (
+        fraction >= rule.minimum_saving_fraction
     ):
-        return Comparison(
-            pairs=pairs,
-            unpaired=unpaired,
-            state="rejected",
-            reason=(
-                f"median saving {median_seconds:.1f}s ({median_fraction:.1%}) is "
-                f"below the {rule.minimum_saving_seconds:.0f}s and "
-                f"{rule.minimum_saving_fraction:.1%} predeclared minimum"
-            ),
-            median_saving_seconds=median_seconds,
-            median_saving_fraction=median_fraction,
-        )
-    return Comparison(
-        pairs=pairs,
-        unpaired=unpaired,
-        state="adopted",
-        reason=(
-            f"median saving {median_seconds:.1f}s ({median_fraction:.1%}) clears "
-            "the predeclared minimum with no pair beyond the regression tolerance"
-        ),
-        median_saving_seconds=median_seconds,
-        median_saving_fraction=median_fraction,
+        return None
+    return (
+        f"median saving {seconds:.1f}s ({fraction:.1%}) is below the "
+        f"{rule.minimum_saving_seconds:.0f}s and "
+        f"{rule.minimum_saving_fraction:.1%} predeclared minimum"
     )

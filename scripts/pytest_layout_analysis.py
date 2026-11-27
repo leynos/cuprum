@@ -191,13 +191,47 @@ def fidelity(
         If either side collected nothing, since a comparison against an empty
         set would report every difference as an addition or a loss depending on
         which side was empty.
+    """  # ruff: ignore[docstring-extraneous-exception] - EvidenceError propagates from _node_ids.
+    control_nodes = _node_ids(control, "control")
+    candidate_nodes = _node_ids(candidate, "candidate")
+    return _fidelity_report(control, candidate, control_nodes, candidate_nodes)
+
+
+def _node_ids(runs: cabc.Sequence[RunRecord], side: str) -> set[str]:
+    """Return one side's collected node IDs, refusing an empty collection.
+
+    Parameters
+    ----------
+    runs : Sequence of RunRecord
+        That side's runs.
+    side : str
+        ``control`` or ``candidate``, used in the refusal text.
+
+    Returns
+    -------
+    set of str
+        Every node ID that side collected.
+
+    Raises
+    ------
+    EvidenceError
+        If the side collected nothing. A comparison against an empty set would
+        report every difference as an addition or a loss depending on which
+        side was empty, which reads as a result rather than as a failure.
     """
-    control_nodes = {node for run in control for node in run.node_ids}
-    candidate_nodes = {node for run in candidate for node in run.node_ids}
-    if not control_nodes:
-        raise EvidenceError(_empty_side_message("control"))
-    if not candidate_nodes:
-        raise EvidenceError(_empty_side_message("candidate"))
+    nodes = {node for run in runs for node in run.node_ids}
+    if not nodes:
+        raise EvidenceError(_empty_side_message(side))
+    return nodes
+
+
+def _fidelity_report(
+    control: cabc.Sequence[RunRecord],
+    candidate: cabc.Sequence[RunRecord],
+    control_nodes: set[str],
+    candidate_nodes: set[str],
+) -> dict[str, object]:
+    """Assemble the fidelity report from both sides' node sets."""
     return {
         "schema_version": SCHEMA_VERSION,
         "control_runs": [run.run_id for run in control],
