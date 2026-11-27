@@ -52,14 +52,14 @@ ARGUMENT_ERROR_EXIT_CODE = 2
 #: coloured renderer consumes the backticks around ``main`` as markup, so the
 #: plain-text expectations below can only be asserted against a pinned renderer.
 _AMBIENT_COLOUR_ENVIRONMENTS = (
-    pytest.param({"FORCE_COLOR": "1"}, id="force-color"),
+    pytest.param({"FORCE_COLOR": "1"}, id="force-colour"),
     pytest.param(
         {"PYTHON_COLORS": "1", "FORCE_COLOR": "1"},
-        id="python-colors-over-force-color",
+        id="python-colour-over-force-colour",
     ),
     pytest.param(
         {"PY_COLORS": "1", "FORCE_COLOR": "1", "NO_COLOR": ""},
-        id="py-colors-with-empty-no-color",
+        id="py-colour-with-empty-no-colour",
     ),
     pytest.param({}, id="colour-variables-absent"),
 )
