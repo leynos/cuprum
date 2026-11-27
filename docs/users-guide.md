@@ -43,7 +43,8 @@ Or jump straight to a task:
   [launch a detached command](#launch-a-detached-command).
 - **Limit what may run:** [apply a policy](#apply-a-policy).
 - **Supervise a long-running child:**
-  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it).
+  [hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) or
+  [consume its output as bytes](#consume-output-from-a-running-child-as-bytes).
 - **Watch runs in production:**
   [observe production runs](#observe-production-runs).
 - **Something went wrong:** [troubleshoot a run](#troubleshoot-a-run).
@@ -1914,6 +1915,127 @@ means the platform has no route to a caller-named signal, so `terminate()` or
 `kill()` is the only option there. Stopping an already-exited child is not an
 error: `terminate()` and `kill()` are no-ops that report the recorded outcome,
 so both are safe to call twice or from two places at once.
+
+### Consume output from a running child as bytes
+
+`start_bytes()` is the live counterpart of `start()`. It spawns the child,
+returns an owned `RunningBytesCommand`, and exposes the child's `stdout` and
+`stderr` as independent `ByteStreamReader` objects. Each reader yields
+`ByteChunk` values — the stream name, the child's bytes untouched, and a
+per-stream sequence number — while the child is still running.
+
+This interface is **Unreleased**. It is not part of `0.2.0-beta2`, and no
+released wheel provides `start_bytes()`.
+
+<!-- tested-example: live-byte-streams -->
+
+```python
+import asyncio
+import sys
+
+from cuprum import Program, ProgramCatalogue, StreamClosure, sh
+
+catalogue = ProgramCatalogue.from_programs(sys.executable, name="live-bytes")
+python = sh.make(Program(sys.executable), catalogue=catalogue)
+CHILD = (
+    "import sys\n"
+    "sys.stdout.buffer.write(b'\\xff\\xfe')\n"
+    "sys.stdout.buffer.flush()\n"
+    "sys.stderr.buffer.write(b'note')\n"
+    "sys.stderr.buffer.flush()\n"
+)
+
+
+async def read_live() -> tuple[bytes, bytes]:
+    async with await python("-c", CHILD).start_bytes() as handle:
+        stdout = bytearray()
+        async for chunk in handle.stdout:
+            stdout.extend(chunk.data)
+        assert handle.stdout.at_eof
+        assert handle.stdout.closure is StreamClosure.EOF
+        stderr = bytearray()
+        async for chunk in handle.stderr:
+            stderr.extend(chunk.data)
+        result = await handle.wait()
+        assert result.stdout == bytes(stdout)
+        assert result.stderr == bytes(stderr)
+        return bytes(stdout), bytes(stderr)
+
+
+assert asyncio.run(read_live()) == (b"\xff\xfe", b"note")
+```
+
+Consume each stream concurrently when both may produce more than a pipe buffer;
+reading one to end-of-file first is safe only while the other cannot fill its
+pipe and block the child. `asyncio.gather()` over two reader loops is the
+straightforward shape for a protocol that uses both streams.
+
+Per-stream order is guaranteed. There is no total cross-stream order: two
+drains read the two pipes independently, and a chunk boundary is the parent's
+read boundary, not the child's write boundary. A protocol consumer must not
+infer record boundaries from chunks.
+
+Each reader reaches its own end independently of the other stream and of the
+process. `wait_eof()` waits for this stream's terminal state and returns it;
+`at_eof` reports whether that state is `EOF`; `closure` reports the terminal
+state or `None` while the reader is live. `aclose()` closes one reader without
+stopping the child, the other stream, or the capture.
+
+`StreamClosure` has four members:
+
+- `EOF` — the drain observed the stream's end and nothing was discarded.
+- `READER_CLOSED` — `aclose()` released the reader; queued bytes are discarded
+  and later live bytes are dropped from the reader while capture continues.
+- `TRUNCATED_BY_SETTLEMENT` — settlement began before the reader reached a
+  clean end. Bytes that did not fit the queue afterwards exist only in the
+  run's capture.
+- `FAILED` — the drain or the supervisor failed. Iteration and `wait_eof()`
+  raise `LiveStreamError`, chained to the original cause.
+
+Normal terminal states drain queued chunks before iteration stops. `FAILED`
+outranks pending chunks, so a protocol consumer sees the failure rather than a
+silently shortened stream.
+
+While a reader is live, delivery is lossless: a consumer that stops reading
+applies backpressure to the child rather than losing a byte. This is the
+opposite of `BoundedDelivery`, which governs _echo_ and must drop rather than
+stall the run; the live queue bounds observation, and the two policies are
+independent. `max_buffered_bytes` (64 KiB by default) is the payload-byte bound
+for each stream's queue and also caps each stream's read size. The bound covers
+queued live bytes only: it excludes the capture policy's retention, the chunk
+being written, transport buffers, and the operating system's pipe buffer.
+
+Once settlement begins, a queue that has not reached a clean end stops
+accepting live chunks, wakes a blocked producer, and reports truncation.
+Capture is unaffected, so the settled `BytesCommandResult` still carries every
+byte the child wrote. Consume to end-of-stream before awaiting the result when
+the live stream and the capture must agree; a `wait()` that starts first is
+already a settlement.
+
+`start_bytes()` accepts the same `StdinSource` as `run()`: a complete
+`StdinInput` payload or a `StdinStream` producer. A streaming producer is
+pulled one chunk at a time, so a consumer can observe an output prefix, release
+a producer through an `asyncio.Event`, and only then send the token the child
+is waiting for.
+
+`wait(timeout=...)` bounds one caller's wait exactly as it does on
+`RunningCommand`, and a `timeout` passed to `start_bytes()` is the default
+deadline for every `wait()` on that handle. Expiry stops the child, reaps it,
+records the outcome, and raises `TimeoutExpired` with the bytes captured before
+the deadline.
+
+Capture is always on and byte-exact, and the handle reads both streams through
+parent-side pipes. A caller-supplied `on_line` observer is refused with
+`ValueError`, because decoded text and byte-exact capture would give one stream
+two contradictory contracts; registered observe hooks still receive decoded
+lines. A redirected stdout or stderr target is refused for the same reason
+`start()` refuses one. `terminate()`, `kill()`, `signal()`, `result`, and the
+`async with` teardown are the same as on `RunningCommand`.
+
+Containment has the documented limits. `ProcessGroupPolicy.OWN_GROUP` reaches a
+descendant that stays in the child's group; a descendant that leaves the group
+is outside the guarantee. On Windows, a timed-out live-byte run can stop the
+direct child but cannot reap a descendant that inherited a pipe.
 
 ### Restrict a block of code to specific programs
 

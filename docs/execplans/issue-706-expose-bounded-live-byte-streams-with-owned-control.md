@@ -111,14 +111,18 @@ repository, so the budgets are conservative rather than historical.
   byte-result modules.
 - [x] (2026-11-27) Branch renamed and Lody session titled.
 - [x] (2026-11-27) Issue comment with the Lody session link posted.
-- [ ] `EP-M1` ADR, design section, public vocabulary, error type.
-- [ ] `EP-M2` drain `on_eof`, composed byte tap, lossless byte queue and tests.
-- [ ] `EP-M3` reader, `start_bytes()`, `RunningBytesCommand`, bytes settlement,
-  supervisor, exports and typing/API tests.
-- [ ] `EP-M4` real-child, barrier-driven, externally supervised tests and BDD
-  feature.
-- [ ] `EP-M5` users' guide, changelog, roadmap, migration note, contents index.
-- [ ] Commit gates, CodeRabbit review, push, draft PR.
+- [x] (2026-11-27) `EP-M1` ADR-0030, design §13.11, `ByteChunk`,
+  `StreamClosure`, and `LiveStreamError`.
+- [x] (2026-11-27) `EP-M2` drain `on_eof`, the composed byte tap, the lossless
+  byte queue, and their unit tests.
+- [x] (2026-11-27) `EP-M3` reader, `start_bytes()`, `RunningBytesCommand`, the
+  bytes settlement and eager supervisor, exports, and typing/API tests.
+- [x] (2026-11-27) `EP-M4` the scripted child, the external session watchdog,
+  seven portable scenarios, two POSIX descendant scenarios, and the BDD feature
+  and steps.
+- [x] (2026-11-27) `EP-M5` users' guide section and gated example, changelog,
+  roadmap, migration note, and contents index.
+- [ ] Commit gates, CodeRabbit review, push, draft PR, merge.
 
 ## Surprises & discoveries
 
@@ -136,6 +140,19 @@ repository, so the budgets are conservative rather than historical.
   `coordinator._settle_handle_run` calls `_wait_for_exit_code_within_timeout`
   directly. Impact: the byte owner needs its own eager race through
   `_await_exit_or_writer_failure`, while the text path stays unchanged.
+- Observation: the first composition delivered every chunk to the byte tap
+  twice, because both the drain's fan-out and the line publisher invoked it.
+  Evidence: the split-UTF-8 drain test recorded `[b'\xe2', b'\xe2', ...]`.
+  Impact: the tap lives on the config and is invoked once by the drain; the
+  line publisher only decodes. The test now pins the single delivery.
+- Observation: `__aenter__` returning the base class erased the subclass's
+  readers from the type checker's view. Evidence: `make typecheck` reported that
+  `_OwnedCommandHandle` has no `stdout`. Impact: the base returns
+  `typing.Self`, so both public handles keep their own surface.
+- Observation: `typing-only-first-party-import` conflicts with public
+  annotations that must resolve at runtime. Evidence: `get_type_hints` on the
+  new public methods. Impact: the four affected imports carry a narrow
+  `ruff: ignore` naming the runtime-resolution reason.
 
 ## Decision log
 
@@ -171,7 +188,15 @@ repository, so the budgets are conservative rather than historical.
 
 ## Outcomes & retrospective
 
-Not yet complete.
+The feature is implemented and covered by deterministic unit tests, a
+fourteen-case supervised real-child suite, and three BDD scenarios. The text
+handle, `lines()`, `run_bytes()`, and every existing result shape are
+unchanged. The core drain and stream-spawn modules were split along seams the
+live tap exposed, and the handle lifecycle moved to a shared base so the two
+public handles cannot drift. The remaining work is the commit gates, CodeRabbit
+review, push, and merge. Lesson: the tap must be invoked by exactly one layer;
+composing it into both the drain and the line feeder duplicates every chunk,
+and the split-UTF-8 test is the cheapest detector.
 
 ## Context and orientation
 
@@ -292,4 +317,7 @@ Add the users' guide section and gated example, the changelog entry, the
 ## Revision note
 
 2026-11-27: Initial draft created from the issue and the reconnaissance above.
-The ADR number was corrected from the issue's stale 0029 to 0030.
+The ADR number was corrected from the issue's stale 0029 to 0030. 2026-11-27:
+Implementation milestones EP-M1 to EP-M5 recorded as complete. Decision log D6
+and D7 and the surprises above record the final tap placement, the shared
+handle base, and the double-delivery defect the drain test caught.

@@ -5822,13 +5822,16 @@ in addition to this one.
 
 #### 13.11.4 The single drain and the byte tap
 
-The live tap is composed into the existing single `on_chunk` slot, before the
-line feeder. A chunk is therefore handled in one order by one task: capture
-first, then echo, then the byte tap, then line decoding and line observation.
-Capture and echo failures keep their existing meaning: a capture failure stops
-the drain and the run, while an echo failure follows the configured broken-pipe
-policy. A byte-tap failure is a queue-internal invariant failure and is
-reported as `FAILED`; it cannot silently drop a chunk.
+The live tap travels on `_StreamConfig`, so a byte run and a text run call the
+same consume entry points with the same argument counts. The drain's single
+fan-out invokes the tap before the line feeder. A chunk is therefore handled in
+one order by one task: capture first, then echo, then the byte tap, then line
+decoding and line observation. Composing the tap into the line feeder as well
+would deliver every chunk to the live queue twice, which is why the feeder only
+decodes. Capture and echo failures keep their existing meaning: a capture
+failure stops the drain and the run, while an echo failure follows the
+configured broken-pipe policy. A byte-tap failure is a queue-internal invariant
+failure and is reported as `FAILED`; it cannot silently drop a chunk.
 
 EOF is a separate, synchronous `on_eof` hook on the drain. It is called only
 when the read loop observes the empty read, and before `_finish_drain`
@@ -5893,3 +5896,14 @@ gathered, or reclaimed by the attachment failure path.
 - `cuprum/_process_handle_errors.py` owns `LiveStreamError`, beside the signal
   refusals, so the public facade can re-export it without importing the byte
   package.
+
+The core stream modules were split to stay inside the 400-line ceiling, along
+the seams the byte work exposed rather than around it: `cuprum/_stream_tap.py`
+owns the per-stream tap record and the chunk and EOF callback types,
+`cuprum/_stream_drain_loop.py` owns the drain state, read loop, and per-chunk
+fan-out, and `cuprum/_stream_spawn_types.py` owns the records a run resolves
+before its consumers exist. `cuprum/_process_handle/base.py` holds the
+lifecycle the two public handles share, so neither reimplements a stop, a
+signal, or the shielded teardown. `cuprum._streams` and
+`cuprum._subprocess_streams` re-export the moved names, so the existing import
+paths and test seams keep working.

@@ -102,6 +102,15 @@ for the full toolchain requirements.
 
 ## Upgrading from 0.2.0-beta2
 
+### Live byte streams are not in 0.2.0-beta2
+
+`SafeCmd.start_bytes()` and the `RunningBytesCommand`, `ByteStreamReader`,
+`ByteChunk`, `StreamClosure`, and `LiveStreamError` types are unreleased. They
+are absent from `0.2.0-beta2`, so an application pinned to that prerelease
+cannot use them and needs no migration for them. See
+[Consume output from a running child as bytes](users-guide.md#consume-output-from-a-running-child-as-bytes)
+for the contract an unreleased build provides.
+
 Beta2 testers have everything above. Two changes since beta2 can need an edit:
 awaitable observe hooks are now bounded, and `rust_consume_stream` now
 validates its buffer size before the reader descriptor.
