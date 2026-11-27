@@ -151,6 +151,10 @@ and the content boundary.
   before timed work, give each run a private writable home and target
   directory, record preparation separately from the workload, and use external
   compiler admission unchanged.
+- [ADR-030: Retain default nextest scheduling][adr-030] - accepted decision to
+  keep nextest's default ordering, grouping, and concurrency, closing #606 as
+  superseded because ADR-027 removed the `compile_tests` binaries it proposed
+  to re-order.
 
 ## Requests for comments
 
@@ -236,6 +240,7 @@ and the content boundary.
 [adr-027]: adrs/adr-0027-compile-contracts-in-the-build-graph.md
 [adr-028]: adrs/adr-0028-detached-command-launch.md
 [adr-029]: adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md
+[adr-030]: adrs/adr-0030-retain-default-nextest-scheduling.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rstest-bdd-guide]: rstest-bdd-users-guide.md
