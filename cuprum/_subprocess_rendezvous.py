@@ -271,6 +271,35 @@ def _first_completion_failure(
     return None, processed
 
 
+async def _wait_for_consumer_completion(
+    pending: set[asyncio.Task[object]],
+    deadline: float | None,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Wait for at least one pending consumer to settle.
+
+    The done callbacks are registered ahead of the wait's own release, so this
+    round's completions are already recorded when the wait returns; the yield
+    states that ordering explicitly rather than relying on it as an asyncio
+    detail.
+
+    Raises
+    ------
+    TimeoutError
+        When the budget is spent before a consumer settles.
+    """
+    done, _ = await asyncio.wait(
+        pending,
+        timeout=None if deadline is None else max(0.0, deadline - loop.time()),
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if not done:
+        # The wait returned without a completion, so its only bound — the
+        # remaining budget — is spent.
+        raise TimeoutError
+    await asyncio.sleep(0)
+
+
 async def _await_consumer_outcomes(
     consumers: cabc.Sequence[asyncio.Task[object] | None],
     *,
@@ -312,7 +341,7 @@ async def _await_consumer_outcomes(
         spent when the wait began is reported the same way, because
         ``asyncio.wait`` returns at once for a non-positive timeout and leaves
         every unsettled consumer in *pending*.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - the helper raises the expiry.
     streams = {task: stream for stream, task in _labelled_consumers(consumers)}
     if not streams:
         return None
@@ -327,19 +356,7 @@ async def _await_consumer_outcomes(
     # deadline it is meant to share.
     deadline = None if budget is None else loop.time() + budget
     while pending:
-        done, _ = await asyncio.wait(
-            pending,
-            timeout=None if deadline is None else max(0.0, deadline - loop.time()),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if not done:
-            # The wait returned without a completion, so its only bound — the
-            # remaining budget — is spent.
-            raise TimeoutError
-        # Done callbacks are registered ahead of the wait's own release, so
-        # this round's completions are already recorded; the yield states that
-        # ordering explicitly rather than relying on it as an asyncio detail.
-        await asyncio.sleep(0)
+        await _wait_for_consumer_completion(pending, deadline, loop)
         failure, processed = _first_completion_failure(finished, processed, streams)
         if failure is not None:
             return failure

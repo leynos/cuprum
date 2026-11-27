@@ -11,6 +11,7 @@ attribution in ``test_line_stream_reader_failure.py``.
 from __future__ import annotations
 
 import asyncio
+import enum
 import typing as typ
 
 import pytest
@@ -101,29 +102,34 @@ def test_exit_with_nothing_to_race_is_awaited_directly() -> None:
     )
 
 
-def test_a_consumer_that_succeeds_leaves_the_exit_wait_running() -> None:
-    """A consumer that reaches its own end does not end the run."""
+class _ConsumerOutcome(enum.Enum):
+    """How one settled consumer ended, for the classification table."""
 
-    async def scenario() -> tuple[tuple[int, float], bool]:
-        """Race a consumer that settles successfully against the exit wait.
+    SUCCEEDS = "succeeds"
+    CANCELLED = "cancelled"
+    SHORT_STOPPED = "short_stopped"
 
-        Returns
-        -------
-        tuple[tuple[int, float], bool]
-            The exit result, and whether the exit wait was cancelled.
-        """
-        probe = ExitProbe(exit_code=4, ticks=2)
-        consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
-        result = await _await_exit_or_writer_failure(
-            probe.wait(),
-            None,
-            consumers=(consumer,),
+
+async def _settled_consumer(outcome: _ConsumerOutcome) -> asyncio.Task[object]:
+    """Build a consumer that is already settled in *outcome*'s way.
+
+    Returns
+    -------
+    asyncio.Task[object]
+        The settled consumer task.
+    """
+    if outcome is _ConsumerOutcome.SHORT_STOPPED:
+        return asyncio.create_task(
+            asyncio.sleep(
+                0,
+                result=_CapturedDrain(payload="partial", reached_eof=False),
+            ),
         )
-        return result, probe.cancelled.is_set()
-
-    result, cancelled = asyncio.run(scenario())
-    assert result == (4, 1.5), f"the run must end on the exit, got {result!r}"
-    assert not cancelled, "a consumer that succeeded must not cancel the exit wait"
+    consumer = asyncio.create_task(asyncio.sleep(0, result=object()))
+    if outcome is _ConsumerOutcome.CANCELLED:
+        consumer.cancel()
+        await retrieve(consumer)
+    return consumer
 
 
 def _slot_consumers(
@@ -134,90 +140,90 @@ def _slot_consumers(
     return tuple(consumer if index == slot else None for index in range(2))
 
 
-@pytest.mark.parametrize(("slot", "stream"), [(0, "stdout"), (1, "stderr")])
-def test_a_cancelled_consumer_ends_the_run_with_its_stream(
+async def _race_settled_consumer(
+    outcome: _ConsumerOutcome,
     slot: int,
-    stream: str,
-) -> None:
-    """A cancelled consumer is an early failure labelled with its stream."""
+) -> tuple[tuple[int, float] | None, ConsumerCancelledError | None, bool]:
+    """Race one settled consumer against an exit wait.
 
-    async def scenario() -> tuple[ConsumerCancelledError, bool]:
-        """Cancel one consumer while the child's exit is still pending.
-
-        Returns
-        -------
-        tuple[ConsumerCancelledError, bool]
-            The run's error, and whether the exit wait was cancelled.
-        """
-        probe = ExitProbe()
-        consumer = asyncio.create_task(asyncio.Event().wait())
-        consumer.cancel()
-        await retrieve(consumer)
-        with pytest.raises(ConsumerCancelledError) as caught:
-            await _await_exit_or_writer_failure(
+    Returns
+    -------
+    tuple[tuple[int, float] | None, ConsumerCancelledError | None, bool]
+        The exit result for a quiet consumer, the run's error for a cancelled
+        or short-stopped one, and whether the exit wait was cancelled.
+    """
+    # A quiet consumer must be outlasted by the exit; a failing one needs an
+    # exit that stays pending, or the settled exit would win outright.
+    probe = (
+        ExitProbe(exit_code=4, ticks=2)
+        if outcome is _ConsumerOutcome.SUCCEEDS
+        else ExitProbe()
+    )
+    consumer = await _settled_consumer(outcome)
+    result: tuple[int, float] | None = None
+    failure: ConsumerCancelledError | None = None
+    try:
+        if outcome is _ConsumerOutcome.SUCCEEDS:
+            result = await _await_exit_or_writer_failure(
                 probe.wait(),
                 None,
                 consumers=_slot_consumers(consumer, slot),
             )
-        return caught.value, probe.cancelled.is_set()
+        else:
+            with pytest.raises(ConsumerCancelledError) as caught:
+                await _await_exit_or_writer_failure(
+                    probe.wait(),
+                    None,
+                    consumers=_slot_consumers(consumer, slot),
+                )
+            failure = caught.value
+    finally:
+        await retrieve(consumer)
+    return result, failure, probe.cancelled.is_set()
 
-    failure, cancelled = asyncio.run(scenario())
+
+@pytest.mark.parametrize(
+    ("outcome", "slot", "stream"),
+    [
+        (_ConsumerOutcome.SUCCEEDS, 0, "stdout"),
+        (_ConsumerOutcome.CANCELLED, 0, "stdout"),
+        (_ConsumerOutcome.CANCELLED, 1, "stderr"),
+        (_ConsumerOutcome.SHORT_STOPPED, 0, "stdout"),
+        (_ConsumerOutcome.SHORT_STOPPED, 1, "stderr"),
+    ],
+)
+def test_a_settled_consumer_outcome_is_classified(
+    outcome: _ConsumerOutcome,
+    slot: int,
+    stream: str,
+) -> None:
+    """A quiet consumer leaves the exit alone; a cancelled one ends the run."""
+    result, failure, cancelled = asyncio.run(_race_settled_consumer(outcome, slot))
+    if outcome is _ConsumerOutcome.SUCCEEDS:
+        assert result == (4, 1.5), f"the run must end on the exit, got {result!r}"
+        assert failure is None, (
+            f"a quiet consumer must not fail the run, got {failure!r}"
+        )
+        assert not cancelled, "a consumer that succeeded must not cancel the exit wait"
+        return
+    assert failure is not None, "a cancelled consumer must end the run with an error"
     assert failure.stream == stream, (
-        f"the {stream} consumer's cancellation must name its stream, got "
-        f"{failure.stream!r}"
-    )
-    assert isinstance(failure.__cause__, asyncio.CancelledError), (
-        "the consumer's own cancellation must be chained as the cause, got "
-        f"{failure.__cause__!r}"
+        f"the {stream} consumer's outcome must name its stream, got {failure.stream!r}"
     )
     assert cancelled, (
         "a cancelled consumer must cancel the exit wait, which is what "
         "terminates and reaps the child"
     )
-
-
-@pytest.mark.parametrize(("slot", "stream"), [(0, "stdout"), (1, "stderr")])
-def test_a_short_stopped_consumer_ends_the_run_with_its_stream(
-    slot: int,
-    stream: str,
-) -> None:
-    """A preserving drain that stopped short is an early failure too."""
-
-    async def scenario() -> tuple[ConsumerCancelledError, bool]:
-        """Settle one consumer with a partial, non-EOF capture.
-
-        Returns
-        -------
-        tuple[ConsumerCancelledError, bool]
-            The run's error, and whether the exit wait was cancelled.
-        """
-        probe = ExitProbe()
-        consumer = asyncio.create_task(
-            asyncio.sleep(
-                0,
-                result=_CapturedDrain(payload="partial", reached_eof=False),
-            ),
+    if outcome is _ConsumerOutcome.CANCELLED:
+        assert isinstance(failure.__cause__, asyncio.CancelledError), (
+            "the consumer's own cancellation must be chained as the cause, got "
+            f"{failure.__cause__!r}"
         )
-        with pytest.raises(ConsumerCancelledError) as caught:
-            await _await_exit_or_writer_failure(
-                probe.wait(),
-                None,
-                consumers=_slot_consumers(consumer, slot),
-            )
-        return caught.value, probe.cancelled.is_set()
-
-    failure, cancelled = asyncio.run(scenario())
-    assert failure.stream == stream, (
-        f"the {stream} consumer's short drain must name its stream, got "
-        f"{failure.stream!r}"
-    )
-    assert failure.__cause__ is None, (
-        f"a drain that returned has no cancellation to chain, got {failure.__cause__!r}"
-    )
-    assert cancelled, (
-        "a short-stopped consumer must cancel the exit wait, which is what "
-        "terminates and reaps the child"
-    )
+    else:
+        assert failure.__cause__ is None, (
+            "a drain that returned has no cancellation to chain, got "
+            f"{failure.__cause__!r}"
+        )
 
 
 def test_a_cancelled_writer_stays_quiet() -> None:
