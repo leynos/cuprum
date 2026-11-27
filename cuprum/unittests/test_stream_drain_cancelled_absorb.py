@@ -100,3 +100,7 @@ def test_a_cancelled_absorb_retains_the_chunk_the_file_already_holds(
     assert drained.capture.storage == "file", (
         f"the chunk must be reported as spilled; got {drained.capture.storage!r}"
     )
+    assert drained.reached_eof is False, (
+        "a cancellation inside the absorb stopped short of end of stream, so "
+        "the drain must not report a completed read"
+    )
