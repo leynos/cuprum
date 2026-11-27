@@ -1848,3 +1848,43 @@ by gating the cancellation on the exit rendezvous returning;
 `reached_eof` marker; `test_consumer_failure_telemetry.py` pins the terminal
 outcome; and `test_stream_consumer_errors_public_api.py` pins the error's
 export identity, inheritance, and stream annotation.
+
+## Addendum (2026-11-27): output-transport release is one shared obligation
+
+The 2026-10-30 addendum made the reclaim of an abandoned startup close the
+child's output transports. That close was never particular to startup
+abandonment: settling a reader is not closing it, because a reader cancelled
+before end-of-file keeps its parent-side descriptor with the transport that
+owns it, and a descendant holding an inherited write end means end-of-file
+never arrives to release it. Every route that stops a run before its streams
+drained therefore owes the same close, and the primitive now lives where that
+obligation is owned: `_release_output_transports` sits in
+`cuprum/_subprocess_startup_abandon.py` beside `_releasing_output_transports`,
+the context manager that composes the close with a route's own cleanup. Callers
+do not re-implement either; a second copy of "ask the `wait4` owner, or ask
+each fallback pipe transport" would be a second place for the two backends to
+disagree.
+
+The context manager also encodes the ordering rule the earlier addendum only
+implied. `_shielded_cleanup` finishes its task and then re-raises the caller's
+cancellation, so a release awaited _after_ a separately shielded reconciliation
+is skipped exactly when a cancellation interrupts that reconciliation. A route
+therefore runs settlement, reconciliation and release as one shielded sequence,
+with the release in a `finally` inside the shield. The routes that adopt it are
+the streamed exit wait's three handlers, the streamed route's post-exit
+collection, the line-stream coordinator's teardown wrapper — which every
+line-stream early stop reaches, while the successful result-assembly path does
+not call it — and the line stream's fully built startup abandonment, whose
+termination and discard become one sequence rather than two. The pipeline
+coordinator is not one of them: `cuprum/_pipeline_collect.py` waits for every
+stage and reconciles its readers afterwards, so it is not a rendezvous call
+site, and its early-close behaviour is tracked by issue #552.
+
+Bounded discarding moved to `cuprum/_subprocess_output_discard.py`. With the
+context manager added, `cuprum/_subprocess_startup_abandon.py` would have
+exceeded `max-module-lines = 400`, and the discard is a separable
+responsibility: it owns how long reading a stopped child's pipes may take and
+how that wait is bounded, while the reclaim owns when the discard runs and what
+follows it. `_discard_outputs` keeps its name and is imported into the
+reclaim's namespace, so the existing tests and monkeypatch seams resolve
+exactly what they did before, and no suppression was added.

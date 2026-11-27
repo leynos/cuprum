@@ -3768,7 +3768,12 @@ descriptor to be released only when the transport holding it was collected. The
 reclaim asks the `wait4` owner through `close_output_transports`, and for the
 fallback closes each output pipe's own transport through the stream that holds
 it — never the subprocess transport, so termination and process-group ownership
-are untouched.
+are untouched. That close is the shared release every early-stop route uses,
+and the context manager that composes it with a route's own cleanup lives
+beside it. The bounded discard that precedes it belongs to
+`cuprum/_subprocess_output_discard.py`, split out so this module stays within
+the Pylint module ceiling; the reclaim still imports `_discard_outputs` into
+its own namespace, so a failed discard is reported exactly as before.
 
 Three rules matter when adding or moving a post-spawn step:
 
@@ -9630,19 +9635,38 @@ cancelled before end-of-file leaves its parent-side descriptor with the
 transport that owns it, and a descendant holding an inherited write end means
 end-of-file never arrives to release it — the `wait4` owner reaps without
 closing anything, and the fallback's asyncio transports close only at
-end-of-file. Each of `_wait_for_streamed_process_exit`'s three handlers — the
-consumer failure, the deadline expiry and the caller's cancellation — composes
-its reconciliation with `_release_output_transports` from
-`cuprum/_subprocess_startup_abandon.py` and runs the pair under one
-`_shielded_cleanup`; closing is idempotent, so a stream that already drained is
-unaffected. The pair must be composed rather than sequenced:
-`_shielded_cleanup` finishes its task and then re-raises the caller's
-cancellation, so a release awaited after a separately shielded reconciliation
-is skipped whenever a cancellation interrupts that reconciliation. The release
-is not yet applied to every path that can stop early, which is a known
-divergence rather than a guarantee: the line-stream coordinator and the
-streamed route's own post-exit collection close no transports, so a run ending
-there with a live descendant leaves the parent-side descriptor to the collector.
+end-of-file. `cuprum/_subprocess_startup_abandon.py` owns the obligation:
+`_release_output_transports` closes what the run still holds, and the
+`_releasing_output_transports` context manager composes that close with a
+route's own cleanup, so every caller uses one primitive. Closing is idempotent,
+so a stream that already drained is unaffected. The release must be composed
+with the cleanup rather than sequenced after it: `_shielded_cleanup` finishes
+its task and then re-raises the caller's cancellation, so a release awaited
+after a separately shielded reconciliation is skipped whenever a cancellation
+interrupts that reconciliation. Every early stop therefore runs its cleanup and
+the release as one shielded sequence:
+
+- `_wait_for_streamed_process_exit`'s three handlers — the consumer failure,
+  the deadline expiry and the caller's cancellation.
+- the streamed route's own post-exit collection, in
+  `_settle_group_and_reconcile_consumers`, which settles the owned group,
+  reconciles the run's tasks and releases the pipes in a `finally`.
+- the line-stream coordinator's `_run_line_stream_teardown`, which every
+  line-stream early stop reaches: the exit wait's failure, expiry and
+  cancellation, the post-exit collect's failure and expiry, and the discard
+  used by startup abandonment. Its result-assembly path never calls the
+  wrapper, so a line stream that read every stream to end-of-file is
+  unaffected, and `TEARDOWN_COMPLETED` still follows a successful teardown
+  only, once the release has returned.
+- the line stream's fully built startup abandonment, in `_discard_whole_run`,
+  where the termination and the discard are one shielded sequence whose
+  `finally` releases the pipes. The discard is skipped when the termination
+  raises, because nothing is left settled to drain; the release is not.
+
+The pipeline coordinator is deliberately outside this guarantee.
+`cuprum/_pipeline_collect.py` waits for every stage and reconciles its readers
+afterwards, so it is not a rendezvous call site; its early-close behaviour is
+tracked by issue #552.
 
 A consumer failure that *ends* a run is a decision point — cuprum terminates
 and reaps a child that was still working — and it is reported through the
