@@ -234,12 +234,14 @@ def _decide(
     _Verdict
         The state, its reason, and the medians it rests on.
     """
-    seconds, fraction = _medians(pairs)
-    if len(pairs) < minimum_pairs:
+    usable = _usable(pairs)
+    seconds, fraction = _medians(usable)
+    if len(usable) < minimum_pairs:
         return _Verdict(
             "inconclusive",
-            f"{len(pairs)} comparable pairs is fewer than the {minimum_pairs} "
-            "needed for a median; report the sample rather than a threshold",
+            f"{len(usable)} usable pairs is fewer than the {minimum_pairs} "
+            "needed for a median; a pair counts only when both sides are warm "
+            "and neither failed, and report the sample rather than a threshold",
             seconds,
             fraction,
         )
@@ -250,7 +252,7 @@ def _decide(
             seconds,
             fraction,
         )
-    rejected = _regression_reason(pairs, rule) or _minimum_reason(
+    rejected = _regression_reason(usable, rule) or _minimum_reason(
         seconds, fraction, rule
     )
     if rejected is not None:
@@ -261,6 +263,35 @@ def _decide(
         "minimum with no pair beyond the regression tolerance",
         seconds,
         fraction,
+    )
+
+
+def _usable(pairs: cabc.Sequence[Pair]) -> tuple[Pair, ...]:
+    """Return the pairs the predeclared rule may draw a median from.
+
+    A pair counts only when both runs are warm and neither failed. A cold run
+    measures the cache rather than the layout, and a failed run's short step
+    time is not a saving; admitting either would let the tool report adoption
+    on evidence the plan never accepted.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        Comparable control/candidate pairs.
+
+    Returns
+    -------
+    tuple of Pair
+        The pairs whose saving is admissible.
+    """
+    return tuple(
+        pair
+        for pair in pairs
+        if pair.control.cache_state == "warm"
+        and pair.candidate.cache_state == "warm"
+        and not pair.control.failed
+        and not pair.candidate.failed
+        and pair.saving_seconds is not None
     )
 
 

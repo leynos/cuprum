@@ -215,7 +215,7 @@ def test_a_pair_without_step_times_cannot_supply_a_saving() -> None:
     assert comparison.state == "inconclusive", (
         "Report `inconclusive` rather than a zero saving when times are absent"
     )
-    assert "no pair recorded both step times" in comparison.reason, (
+    assert "usable pairs" in comparison.reason, (
         "Report `inconclusive` rather than a zero saving when times are absent"
     )
 
