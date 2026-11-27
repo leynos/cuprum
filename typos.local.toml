@@ -33,6 +33,15 @@ ignore = [
   '[0-9a-f]{6}[0-9]',
   # markdownlint-cli2 follows this fixed external environment variable.
   '\bFORCE_COLOR\b',
+  # The external colour-control variables keep their upstream US spelling:
+  # CPython's PYTHON_COLORS, pytest's PY_COLORS, the no-color.org convention's
+  # NO_COLOR, and the older CLICOLOR/CLICOLOR_FORCE pair. Renaming any of them
+  # would stop the tool reading the variable, so each name is exempted whole;
+  # ordinary prose and repository identifiers still use en-GB spelling.
+  '\bPYTHON_COLORS\b',
+  '\bPY_COLORS\b',
+  '\bNO_COLOR\b',
+  '\bCLICOLOR_FORCE\b',
   # Cargo fixes this environment variable's US spelling as an external name.
   '\bCARGO_TERM_COLOR\b',
   # GitHub's Actions API and the established CLI expose these literal names.

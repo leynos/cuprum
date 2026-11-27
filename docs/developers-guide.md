@@ -758,6 +758,47 @@ module population is settled before the loop that reads it. The dependency is
 also ordered rather than incidental — the bootstrap is a prerequisite, so it
 completes before the selector-driven loop starts.
 
+### Colour environment for the test gate
+
+`make test` stops at the first failing pytest session, so one colour-sensitive
+assertion hides every later session and the whole Rust suite. CPython 3.14 and
+later colour `argparse` help when the environment asks for it, and an agent
+harness, terminal, or CI wrapper that exports `FORCE_COLOR=1` is enough to turn
+a captured help transcript into ANSI escape sequences. The coloured renderer
+also consumes the backticks in a description as markup, so stripping the
+escapes afterwards would not recover the plain text either.
+
+The `PYTEST_COLOUR_ENV` prefix therefore starts all three sessions
+[Test selection](#test-selection) describes — the `test-selection` bootstrap,
+the individual loop, and the grouped `--dist loadgroup` run. It removes
+`FORCE_COLOR`, `CLICOLOR_FORCE` and `PY_COLORS`, and exports `NO_COLOR=1` and
+`PYTHON_COLORS=0`.
+
+The two exports are not redundant. CPython reads `PYTHON_COLORS` first and it
+outranks every other colour control, but an interpreter started with `-E` or
+`-I` ignores it along with the rest of the `PYTHON*` family; `NO_COLOR=1`
+covers those interpreters and any other tool that follows the convention.
+pytest gives `PY_COLORS` the highest precedence of its own controls, so it is
+unset rather than set to `0`. `CLICOLOR_FORCE` is not read by CPython or
+pytest, but it is the older force-colour spelling that other tools still
+honour, and removing it costs nothing.
+
+The prefix sits outside `$(PYTEST)`, so `make test PYTEST=…` still applies it;
+`make test PYTEST_COLOUR_ENV=` is the deliberate opt-out. The policy belongs to
+the gate, not to the Cuprum CLI or the benchmark scripts, which keep honouring
+the caller's environment for real users. `pylint-integration`, `test-act` and
+`test-extension` are not prefixed: they run outside `make test`, and the
+contract below pins the three sessions the gate owns. A test that replaces a
+child's environment rather than inheriting it is outside the policy's reach, as
+is a tool with a colour flag of its own; pin colour inside such a test with
+`monkeypatch`, which also makes a direct `pytest` run independent of the
+caller's environment.
+
+`tests/test_ci_pytest_colour_contract.py` drives the real `test-python` recipe
+with a stubbed `uv` and asserts the exact session sequence, the policy in each
+session's environment and in a child spawned without an `env=` mapping, and the
+same result when `PYTEST` is overridden on the command line.
+
 ### One execution per suite
 
 Each suite runs once per event. The coverage job is the only place the Rust
