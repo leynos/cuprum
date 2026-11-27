@@ -383,9 +383,16 @@ def test_a_post_exit_deadline_releases_both_descriptors(
                 "the lines the child delivered before the deadline must survive "
                 f"the expiry and reach the caller, got {delivered!r}"
             )
-            assert _MARKER in (expired.stdout or ""), (
+            # Checked for text before membership: the payload is widened for
+            # bytes-mode runs, and `str in bytes` is not a meaningful question.
+            expired_text = expired.stdout
+            assert isinstance(expired_text, str), (
+                "a text-mode line stream must report its captured text as str, "
+                f"got {type(expired_text).__name__}"
+            )
+            assert _MARKER in expired_text, (
                 "the expiry must carry the output the run had already captured, "
-                f"got {expired.stdout!r}"
+                f"got {expired_text!r}"
             )
         finally:
             reader.cancel()

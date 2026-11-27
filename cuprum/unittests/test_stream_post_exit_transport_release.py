@@ -132,9 +132,16 @@ def test_a_post_exit_deadline_releases_both_descriptors(
             descendant_pid = assert_released_before_the_descendant_ends(
                 record, pid_file, context=context
             )
-            assert _MARKER in (expired.output or ""), (
+            # Checked for text before membership: the payload is widened for
+            # bytes-mode runs, and `str in bytes` is not a meaningful question.
+            expired_text = expired.output
+            assert isinstance(expired_text, str), (
+                "a text-mode run must report its captured text as str, got "
+                f"{type(expired_text).__name__}"
+            )
+            assert _MARKER in expired_text, (
                 "the expiry must carry the output the run had already captured, "
-                f"got {expired.output!r}"
+                f"got {expired_text!r}"
             )
         finally:
             reap_descendant(pid_file, descendant_pid)

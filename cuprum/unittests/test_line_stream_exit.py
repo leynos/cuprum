@@ -37,6 +37,11 @@ def _releasable_process(pid: int = 123) -> types.SimpleNamespace:
     The release asks each output stream to close its parent-side transport, so
     the stand-in holds neither. Supplying real pipes here would make the
     teardown helper close descriptors the case never opened.
+
+    Returns
+    -------
+    types.SimpleNamespace
+        A stand-in process carrying *pid* and no output streams.
     """
     return types.SimpleNamespace(pid=pid, stdout=None, stderr=None)
 
