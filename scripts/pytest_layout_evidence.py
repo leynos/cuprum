@@ -84,16 +84,7 @@ def pair_runs(
     pairs: list[Pair] = []
     unpaired: list[RunRecord] = []
     for control in controls:
-        partner = next(
-            (
-                run
-                for run in candidates
-                if run.run_id not in used
-                and run.python_version == control.python_version
-                and run.cache_state == control.cache_state
-            ),
-            None,
-        )
+        partner = _first_comparable(control, candidates, used)
         if partner is None:
             unpaired.append(control)
             continue
@@ -101,6 +92,52 @@ def pair_runs(
         pairs.append(Pair(control=control, candidate=partner))
     unpaired.extend(run for run in candidates if run.run_id not in used)
     return tuple(pairs), tuple(unpaired)
+
+
+def _is_comparable(control: RunRecord, candidate: RunRecord) -> bool:
+    """Return whether two runs may be compared at all.
+
+    Two runs are comparable only when they share an interpreter and a
+    cache-state class. Pooling across interpreters would compare different
+    suites; pooling across cache states would compare a warm build with a cold
+    one and attribute the difference to the layout.
+
+    Returns
+    -------
+    bool
+        Whether the pair shares an interpreter and a cache-state class.
+    """
+    return (
+        candidate.python_version == control.python_version
+        and candidate.cache_state == control.cache_state
+    )
+
+
+def _first_comparable(
+    control: RunRecord,
+    candidates: cabc.Sequence[RunRecord],
+    used: cabc.Set[str],
+) -> RunRecord | None:
+    """Return the first unused candidate comparable to ``control``.
+
+    Parameters
+    ----------
+    control : RunRecord
+        The baseline run seeking a partner.
+    candidates : Sequence of RunRecord
+        The candidate runs, in input order.
+    used : set of str
+        Run IDs already paired, so no candidate is used twice.
+
+    Returns
+    -------
+    RunRecord or None
+        The partner, or ``None`` when no unused candidate is comparable.
+    """
+    for candidate in candidates:
+        if candidate.run_id not in used and _is_comparable(control, candidate):
+            return candidate
+    return None
 
 
 def compare(

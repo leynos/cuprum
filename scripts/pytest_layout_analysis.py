@@ -132,6 +132,45 @@ def load_records(path: pth.Path) -> tuple[RunRecord, ...]:
 
 def _record(path: pth.Path, index: int, entry: object) -> RunRecord:
     """Build one record, refusing an entry that omits a pairing key."""
+    fields = _require_entry(path, index, entry)
+    nodes = _require_nodes(path, index, fields)
+    return RunRecord(
+        run_id=typ.cast("str", fields["run_id"]),
+        layout=typ.cast("str", fields["layout"]),
+        python_version=typ.cast("str", fields["python_version"]),
+        cache_state=typ.cast("str", fields["cache_state"]),
+        step_seconds=_number(fields.get("step_seconds")),
+        job_seconds=_number(fields.get("job_seconds")),
+        node_ids=tuple(nodes),
+        exit_status=int(typ.cast("int", fields.get("exit_status", 0))),
+        failed=bool(fields.get("failed", False)),
+    )
+
+
+def _require_entry(path: pth.Path, index: int, entry: object) -> dict[str, object]:
+    """Require one run entry to be an object carrying every pairing key.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The artefact being read, named in the refusal.
+    index : int
+        The entry's position in the document.
+    entry : object
+        The decoded entry.
+
+    Returns
+    -------
+    dict of str to object
+        The same entry, narrowed to a mapping for the caller.
+
+    Raises
+    ------
+    EvidenceError
+        If the entry is not an object, or omits a key that pairing needs. A run
+        without an interpreter or cache state cannot be paired, so accepting it
+        would silently shrink the sample.
+    """
     if not isinstance(entry, dict):
         raise EvidenceError(_entry_message(path, index))
     missing = [
@@ -141,20 +180,35 @@ def _record(path: pth.Path, index: int, entry: object) -> RunRecord:
     ]
     if missing:
         raise EvidenceError(_missing_keys_message(path, index, missing))
+    return entry
+
+
+def _require_nodes(path: pth.Path, index: int, entry: dict[str, object]) -> list[str]:
+    """Return the entry's node IDs, requiring a list of strings.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The artefact being read, named in the refusal.
+    index : int
+        The entry's position in the document.
+    entry : dict of str to object
+        The decoded entry.
+
+    Returns
+    -------
+    list of str
+        The collected node IDs, empty when the run recorded none.
+
+    Raises
+    ------
+    EvidenceError
+        If ``node_ids`` is present but is not a list of strings.
+    """
     nodes = entry.get("node_ids", [])
     if not isinstance(nodes, list) or not all(isinstance(n, str) for n in nodes):
         raise EvidenceError(_nodes_message(path, index))
-    return RunRecord(
-        run_id=typ.cast("str", entry["run_id"]),
-        layout=typ.cast("str", entry["layout"]),
-        python_version=typ.cast("str", entry["python_version"]),
-        cache_state=typ.cast("str", entry["cache_state"]),
-        step_seconds=_number(entry.get("step_seconds")),
-        job_seconds=_number(entry.get("job_seconds")),
-        node_ids=tuple(nodes),
-        exit_status=int(typ.cast("int", entry.get("exit_status", 0))),
-        failed=bool(entry.get("failed", False)),
-    )
+    return nodes
 
 
 def _number(value: object) -> float | None:
