@@ -780,6 +780,11 @@ flowchart TD
 
 _Figure 1: Documentation workflow from draft through merge review._
 
+Number figures and tables sequentially from 1 in document order. Place a
+diagram's caption immediately after the diagram, and a table's caption
+immediately after the table, using the document's consistent italic marker;
+markdownlint rule MD049 keeps one emphasis marker per document.
+
 ## Roadmap task writing guidelines
 
 When documenting development roadmap items, write them to be achievable,
