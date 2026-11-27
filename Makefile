@@ -643,7 +643,7 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 # cannot drift into a second source of truth for what the suite collects.
 PYTEST_LAYOUT ?= baseline
 PYTEST_LAYOUT_RUNNER ?= scripts/pytest_batches.py
-PYTEST_LAYOUT_BASELINE ?= $(subst $(space),|,$(strip   $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),    $(target)$(subst $(space),,$(foreach skip,$(PYTEST_GROUPED_TARGETS),+-$(skip))))  $(if $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)),    $(subst $(space),+,$(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS))))))
+PYTEST_LAYOUT_BASELINE ?= $(subst $(space),|,$(strip   $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),    $(target)$(subst $(space),,$(foreach skip,$(PYTEST_GROUPED_TARGETS),+-$(skip))))  $(if $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)),    $(subst $(space),+,$(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)))+!loadgroup)))
 PYTEST_LAYOUT_GROUPS ?=
 PYTEST_PARALLEL_TARGETS ?=
 PYTEST_PARALLEL_WORKERS ?= 2

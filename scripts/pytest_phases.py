@@ -21,7 +21,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib as pth
 
-    from scripts.pytest_layout import Layout
+    from scripts.pytest_layout import Layout, Selection
 
 __all__ = ("MAX_PARALLEL_WORKERS", "LayoutError", "Options", "Phase", "phases")
 
@@ -73,6 +73,7 @@ class Phase:
     workers: int
     distribution: str | None
     name: str
+    deselect: tuple[str, ...] = ()
 
     def argv(self) -> tuple[str, ...]:
         """Return the pytest argument vector for this phase.
@@ -85,6 +86,8 @@ class Phase:
         argv = [*PYTEST, *BASE_FLAGS, "-n", str(self.workers)]
         if self.distribution is not None:
             argv.extend(("--dist", self.distribution))
+        for name in self.deselect:
+            argv.extend(("--deselect", name))
         argv.extend(self.files)
         return tuple(argv)
 
@@ -150,9 +153,10 @@ def phases(
         audited bound.
     """  # ruff: ignore[docstring-extraneous-exception] - LayoutError propagates from _require_compatible.
     settings = Options() if options is None else options
-    expanded = layout.expanded(root)
+    selections = layout.selections(root)
+    expanded = tuple(selection.files for selection in selections)
     _require_compatible(expanded, settings)
-    planned = _serial_phases(expanded, settings)
+    planned = _serial_phases(selections, settings)
     if settings.parallel:
         planned.append(_parallel_phase(settings))
     return tuple(planned)
@@ -186,18 +190,31 @@ def _require_compatible(
 
 
 def _serial_phases(
-    expanded: cabc.Sequence[cabc.Sequence[str]], settings: Options
+    selections: cabc.Sequence[Selection], settings: Options
 ) -> list[Phase]:
-    """Return one serial phase per non-empty group, in declaration order."""
+    """Return one serial phase per non-empty group, in declaration order.
+
+    A group whose entry asks for `loadgroup` keeps that strategy; otherwise the
+    caller's `--dist` applies. The grouped invocation in the Make recipe is the
+    only group that asks for it.
+
+    Returns
+    -------
+    list of Phase
+        One phase per non-empty group, in declaration order.
+    """
     return [
         Phase(
-            files=tuple(group),
+            files=selection.files,
             workers=settings.workers,
-            distribution=settings.distribution,
+            distribution=(
+                "loadgroup" if selection.loadgroup else settings.distribution
+            ),
             name="serial",
+            deselect=selection.deselect,
         )
-        for group in expanded
-        if group
+        for selection in selections
+        if selection.files
     ]
 
 

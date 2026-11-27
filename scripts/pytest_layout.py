@@ -50,6 +50,32 @@ _GLOB_CHARACTERS = frozenset("*?[")
 #: instead of a flag the driver would have to apply to every command.
 DESELECT_PREFIX = "-"
 
+#: Entry marking a group that the recipe runs with `--dist loadgroup`. The
+#: marker is inert at `-n 0`, but recording it keeps the grouped invocation's
+#: argv reproducible if the group is ever run with workers.
+LOADGROUP_MARKER = "!loadgroup"
+
+
+class Selection(typ.NamedTuple):
+    """One group resolved to what the process will run and what it will skip.
+
+    Attributes
+    ----------
+    files : tuple of str
+        Files handed to pytest, in sorted order. A deselected file stays in
+        this list, because the recipe passes it to pytest and lets
+        `--deselect` remove its nodes; removing it here would skip the import
+        and any collection error it raises.
+    deselect : tuple of str
+        Node-selector arguments for `--deselect`, one per deselected file.
+    loadgroup : bool
+        Whether the recipe runs this group with `--dist loadgroup`.
+    """
+
+    files: tuple[str, ...]
+    deselect: tuple[str, ...]
+    loadgroup: bool
+
 
 class GroupError(ValueError):
     """A group that cannot be run as written.
@@ -99,15 +125,51 @@ def expand(
         run that file twice; a layout must not, so the ambiguity is reported
         rather than resolved by guessing.
     """  # ruff: ignore[docstring-extraneous-exception] - GroupError propagates from _claim.
+    selection = expand_group(entries, root)
+    deselected = set(selection.deselect)
+    return tuple(name for name in selection.files if name not in deselected)
+
+
+def expand_group(
+    entries: cabc.Sequence[str], root: pth.Path | None = None
+) -> Selection:
+    """Resolve one group to its files, its deselections, and its strategy.
+
+    The distinction between dropping a file and deselecting it is not cosmetic.
+    The Make recipe passes a deselected module to pytest and lets `--deselect`
+    remove its nodes, so the module is still imported and a collection error in
+    it still fails the run. Removing the name here would hide exactly that.
+
+    Parameters
+    ----------
+    entries : Sequence of str
+        Selector entries, including `-`-prefixed deselections and the
+        `!loadgroup` marker.
+    root : pathlib.Path or None
+        Directory the entries are relative to.
+
+    Returns
+    -------
+    Selection
+        The files, the deselect arguments, and whether to use `loadgroup`.
+
+    Raises
+    ------
+    GroupError
+        If two selecting entries in the group name the same file.
+    """  # ruff: ignore[docstring-extraneous-exception] - GroupError propagates from _claim.
     base = DEFAULT_ROOT if root is None else root
     selected: dict[str, str] = {}
     deselected: set[str] = set()
+    loadgroup = False
     for entry in entries:
-        if entry.startswith(DESELECT_PREFIX):
+        if entry == LOADGROUP_MARKER:
+            loadgroup = True
+        elif entry.startswith(DESELECT_PREFIX):
             deselected.update(_expand_one(entry[len(DESELECT_PREFIX) :], base))
         else:
             _claim(selected, entry, base)
-    return tuple(sorted(set(selected) - deselected))
+    return Selection(tuple(sorted(selected)), tuple(sorted(deselected)), loadgroup)
 
 
 def _claim(selected: dict[str, str], entry: str, base: pth.Path) -> None:
@@ -179,6 +241,21 @@ class Layout:
             as an empty tuple, so a caller can report it rather than lose it.
         """
         return tuple(expand(group, root) for group in self.groups)
+
+    def selections(self, root: pth.Path | None = None) -> tuple[Selection, ...]:
+        """Resolve every group to its files, deselections and strategy.
+
+        Parameters
+        ----------
+        root : pathlib.Path or None
+            Directory the entries are relative to.
+
+        Returns
+        -------
+        tuple of Selection
+            One per declared group, in declaration order.
+        """
+        return tuple(expand_group(group, root) for group in self.groups)
 
     def files(self, root: pth.Path | None = None) -> tuple[str, ...]:
         """Return every file the layout selects, in group order.
