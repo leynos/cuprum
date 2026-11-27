@@ -12,6 +12,13 @@ inventory is also checked against the filesystem. Directories must precede the
 loose files they parent: mutmut creates parent directories only when copying a
 directory.
 
+The same inventory is repeated in ``[tool.mutation-preflight].sandbox_paths``,
+which the shared mutation workflow checks against the copy contract of the
+mutmut release the caller pins before any mutant is enumerated, and in the
+declared Makefile dry-run check that proves the root-relative pins reached the
+sandbox. Both are pinned here to the inventory so the declaration cannot drift
+from it.
+
 The mutation run also excludes the test modules that cannot run against a
 mutated ``cuprum``: two build an environment of their own, and three are the
 ``act`` scenarios that ``make test`` runs only from ``test-act`` (see
@@ -257,6 +264,18 @@ def _test_selection() -> list[str]:
     return _string_list(_mutmut_table(), "pytest_add_cli_args_test_selection")
 
 
+def _preflight_table() -> dict[str, object]:
+    """Return the ``[tool.mutation-preflight]`` table declared in ``pyproject.toml``."""
+    pyproject = tomllib.loads(
+        (repo_root() / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    match pyproject["tool"]["mutation-preflight"]:
+        case dict() as preflight:
+            return preflight
+        case _:
+            pytest.fail("pyproject.toml must declare [tool.mutation-preflight]")
+
+
 def _ignored_paths(selection: list[str]) -> set[str]:
     """Return the paths named by ``--ignore=`` entries in ``selection``."""
     return {
@@ -355,6 +374,44 @@ def test_mutation_run_ignores_exactly_the_pinned_modules() -> None:
     assert not missing, (
         "every module that cannot run against a mutated cuprum must stay "
         f"excluded; missing: {missing}"
+    )
+
+
+def test_preflight_declares_exactly_the_sandbox_inventory() -> None:
+    """The shared preflight checks the same paths the sandbox must carry."""
+    declared = {
+        PurePosixPath(entry).as_posix()
+        for entry in _string_list(_preflight_table(), "sandbox_paths")
+    }
+    inventoried = {PurePosixPath(copied.path).as_posix() for copied in _COPIED_INPUTS}
+    assert declared == inventoried, (
+        "sandbox_paths must be the audited also_copy inventory, so the shared "
+        f"preflight checks every copied input; missing: "
+        f"{sorted(inventoried - declared)}; unexplained: "
+        f"{sorted(declared - inventoried)}"
+    )
+
+
+def test_preflight_dry_runs_the_makefile_before_enumeration() -> None:
+    """The declared check is the dry run that reads every root-relative pin."""
+    checks = _preflight_table().get("checks")
+    assert isinstance(checks, list), (
+        f"the preflight checks must be a list, got {checks!r}"
+    )
+    assert len(checks) == 1, (
+        "the preflight must declare exactly one check, so a failing baseline "
+        f"has one bounded log to read; got {checks!r}"
+    )
+    check = checks[0]
+    assert isinstance(check, dict), f"the check must be a table, got {check!r}"
+    assert check.get("name") == "makefile-dry-run", (
+        f"the declared check must be makefile-dry-run, got {check.get('name')!r}"
+    )
+    command = check.get("command")
+    assert isinstance(command, list), f"the check needs a command list, got {command!r}"
+    assert command[:2] == ["make", "--dry-run"], (
+        "the check must dry-run the Makefile, which parses its root-relative "
+        f"pins while loading; got {command!r}"
     )
 
 

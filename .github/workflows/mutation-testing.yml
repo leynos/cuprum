@@ -2,7 +2,8 @@
 name: Mutation testing
 
 # Thin caller of the shared mutation-testing reusable workflow; caller
-# guide: leynos/shared-actions docs/mutation-mutmut-workflow.md.
+# guides: leynos/shared-actions docs/mutation-mutmut-workflow.md and
+# docs/mutation-preflight.md.
 #
 # Only the Python package is covered. The Rust extension under rust/ is
 # deliberately not enrolled: the pinned mutation-cargo.yml reusable
@@ -27,7 +28,11 @@ jobs:
     permissions:
       contents: read
       id-token: write  # OIDC workflow-source resolution
-    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@774cc5a01e457714aede66e14a97b3e257812fc2
+    # This pin carries the shared consolidated mutation preflight (#698, which
+    # closes #591) and the bounded failure diagnostics it publishes under
+    # always(), so a failing baseline keeps its first actionable error without
+    # a second local run.
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@2e3272cceeb353b5c79b9752024378777e722d22
     with:
       # Flat layout: the mutable source is the cuprum/ package at the
       # repository root, so change detection watches it directly.
@@ -41,54 +46,9 @@ jobs:
       # its cleanup pending until loop shutdown and the unchanged-source
       # baseline failed in test_bounded_delivery_lines.
       mutmut-version: "3.7.0"
-
-  # The shared workflow publishes its results listing and mutmut's statistics
-  # file only after a successful run, so a failing baseline leaves no artefact
-  # behind: the first actionable error survives only in the failed step's log,
-  # which GitHub expires. This job reproduces the baseline on a runner and
-  # keeps its output as an artefact. It runs only when the mutation run failed,
-  # and mutmut's statistics phase executes the whole unchanged-source suite
-  # before any mutant, so the pinned single-module glob cannot hide the error
-  # the baseline hit.
-  #
-  # The shared prevention belongs in leynos/shared-actions#591; this keeps the
-  # diagnosis available from cuprum's own run in the meantime.
-  baseline-diagnostics:
-    name: Mutation baseline diagnostics
-    needs: mutation-python
-    if: ${{ failure() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
-        with:
-          python-version: "3.13"
-
-      - name: Reproduce the baseline and capture its output
-        shell: bash
-        run: |
-          set -uo pipefail
-          # A failing baseline stops the statistics phase, so this exits early
-          # with mutmut's own dump of the failing run in both the step log and
-          # the captured file. If the failure was transient, the glob bounds
-          # the follow-on work instead of starting a second full sweep.
-          timeout 3000 uv run --with mutmut==3.7.0 mutmut run \
-            'cuprum._enum_parse.*' --max-children 1 2>&1 \
-            | tee mutation-baseline-diagnostics.txt
-          exit "${PIPESTATUS[0]}"
-
-      - name: Upload the baseline diagnostics
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: mutation-baseline-diagnostics
-          path: mutation-baseline-diagnostics.txt
-          if-no-files-found: error
+      # Check [tool.mutation-preflight] before mutmut enumerates a mutant: a
+      # declared sandbox path the selected release will not copy, or a
+      # required command that does not resolve, fails as a named finding
+      # whose diagnostics are uploaded under always(). That keeps the
+      # sandbox-input class of failure out of the baseline.
+      preflight: true

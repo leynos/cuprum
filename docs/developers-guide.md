@@ -8504,8 +8504,8 @@ Directories:
 - `tools/mold/`: `test_dev_fast_prerequisites` reads `VERSION`, and the
   `Makefile` parses it while loading.
 - `tools/rust-prover-tools/`: the `Makefile` parses `REF` while loading, so
-  every route that dry-runs it — including
-  `test_dev_fast_contract`'s protected-route checks — fails without the file.
+  every route that dry-runs it — including `test_dev_fast_contract`'s
+  protected-route checks — fails without the file.
 - `rust/.config/`: the timeout-lane helpers read `nextest.toml`.
 - `rust/cuprum-rust/`, `rust/cuprum-streams/`, and `rust/cuprum-native-io/`:
   the wheel-build snapshot test builds from the crates.
@@ -8611,29 +8611,37 @@ documentation helpers resolve the repository root from their own location, so
 inside the sandbox they read the copied `README.md` and `docs/` files rather
 than the working tree.
 
-### Baseline diagnostics
+### Environment preflight and baseline diagnostics
 
-The shared workflow publishes `mutation-mutmut-results.txt` and
-`mutants/mutmut-stats.json` only after `mutmut run` succeeds, so a failing
-baseline leaves no artefact behind: mutmut's dump of the failing run survives
-only in the step log, which GitHub expires. `leynos/shared-actions#591` tracks
-the shared fix. Until it lands, `.github/workflows/mutation-testing.yml`
-declares `baseline-diagnostics`, a job that needs `mutation-python` and runs
-only when it fails. It checks out the repository, installs uv with Python 3.13,
-reruns `mutmut run` under `uv run --with mutmut==3.7.0` for the
-`cuprum._enum_parse.*` glob, tees the output to
-`mutation-baseline-diagnostics.txt`, and uploads that file as an artefact
-whatever the rerun's outcome.
+Every failure recorded in `leynos/shared-actions#591` happened before a mutant
+was exercised: a sandbox missing a copied file, an interpreter outside the
+project's range, an external command that was never installed.
+`leynos/shared-actions#698` consolidated that work into one shared preflight
+and closed #591; the shared workflow now owns both the prevention and the
+diagnosis, so the caller carries no repair job of its own.
 
-The single-module glob does not weaken the diagnosis: mutmut's statistics phase
-executes the whole selected suite before it considers any mutant, so a failing
-baseline stops there with the same first error regardless of the glob. If the
-original failure was transient, the glob bounds the rerun to a handful of
-mutants rather than a second full sweep.
+The caller opts in with `preflight: true`. Before mutmut enumerates a mutant,
+the shared preflight reads `[tool.mutation-preflight]` from `pyproject.toml`
+and checks the declared `sandbox_paths` against the copy contract of the mutmut
+release the caller pins — not against what merely exists in the checkout — plus
+any required command and declared check. A path the run will not materialize in
+`mutants/` fails there as a named finding, with the preflight report uploaded
+under `always()`, instead of surfacing later as a failing baseline.
 
-`tests/test_ci_mutation_workflow_contract.py` pins the job's failure-only
-condition, its least-privilege permissions, the mutmut release it runs, the
-captured file name, and the unconditional upload.
+The preflight also runs the declared `makefile-dry-run` check inside a fresh
+sandbox copy built from the same contract the mutation run receives. The
+Makefile parses its root-relative pins while it loads, so the dry run is the
+smallest command that proves they reached the sandbox; it is what caught the
+missing `tools/rust-prover-tools/REF` entry that the `also_copy` inventory now
+carries.
+
+The pinned caller revision also bounds a failing baseline's output. On failure
+the shared workflow uploads `mutation-failure-diagnostics-mutmut` with
+`stdout.log`, `stderr.log` and `metadata.json`, independently of whether the
+results or statistics files exist, keeping each stream's first 512 KiB so the
+earliest error survives. `tests/test_ci_mutation_workflow_contract.py` pins the
+`preflight: true` input, and `cuprum/unittests/test_mutmut_config_contract.py`
+pins the declaration to the audited `also_copy` inventory.
 
 ### The forced-fail probe
 
@@ -8900,7 +8908,7 @@ quiet days are cheap no-ops. A **manual dispatch** (the Actions "Run workflow"
 control) mutates the whole package; select a branch in that control to exercise
 a feature branch.
 
-The caller passes two configuration inputs:
+The caller passes four configuration inputs:
 
 - `paths` — `cuprum/`, the change-detection glob that decides whether a
   scheduled run has anything to mutate. The flat repository layout puts the
@@ -8908,6 +8916,10 @@ The caller passes two configuration inputs:
   the package itself.
 - `module-prefix-strip` — the empty string, because the flat layout has no
   `src/` prefix to strip before module-glob translation.
+- `mutmut-version` — `3.7.0`, the release whose async-generator trampoline
+  forwards `close()` and `athrow()`.
+- `preflight` — `true`, so the shared environment preflight validates the
+  `[tool.mutation-preflight]` declaration before enumeration.
 
 The `uses:` reference pins the shared workflow to a full 40-character commit
 SHA rather than a branch or tag, so a force-push upstream cannot silently
@@ -8941,8 +8953,10 @@ A full mutmut pass runs it as well, through the same `also_copy` entry that puts
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
   SHA;
-- the `with:` block carries exactly
-  `{"paths": "cuprum/", "module-prefix-strip": ""}`;
+- the `with:` block carries exactly the flat-layout configuration, the pinned
+  mutmut release, and `preflight: true`;
+- the caller declares no second job, because the shared revision publishes its
+  preflight and failure diagnostics itself;
 - job permissions are least-privilege (`contents: read`, `id-token: write`)
   and the workflow-level default token scope is empty;
 - `concurrency` serializes runs per ref without cancelling one in progress;

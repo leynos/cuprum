@@ -485,6 +485,60 @@ also_copy = [
     "rust/rust-toolchain.toml",
 ]
 
+# Validation the shared mutation workflow runs before mutmut enumerates a
+# mutant; see leynos/shared-actions docs/mutation-preflight.md. The sandbox
+# paths repeat the also_copy inventory (directories without the trailing slash
+# mutmut's own configuration needs) so the preflight checks, against the copy
+# contract of the mutmut release the caller pins, that each entry will really
+# be materialized in mutants/ rather than merely exist in the checkout.
+[tool.mutation-preflight]
+sandbox_paths = [
+    "benchmarks",
+    "docs",
+    ".github",
+    "scripts",
+    "tools/dev-fast",
+    "tools/mold",
+    "tools/rust-prover-tools",
+    "rust/.config",
+    "rust/cuprum-rust",
+    "rust/cuprum-streams",
+    "rust/cuprum-native-io",
+    "conftest.py",
+    "README.md",
+    ".yamllint.yml",
+    ".concordat",
+    "CHANGELOG.md",
+    "Makefile",
+    "pyproject.toml",
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/clippy.toml",
+    "rust/dylint.toml",
+    "rust/rust-toolchain.toml",
+]
+
+# test_dev_fast_contract dry-runs the Makefile's protected boundary routes, so
+# the baseline needs the make executable itself, not just the copied Makefile.
+[[tool.mutation-preflight.require_commands]]
+name = "make"
+
+# The Makefile parses its root-relative pins while it loads, so a dry run is
+# the smallest command that proves those files reached the sandbox. Declared
+# as a preflight check, a missing input fails before enumeration with this
+# check's own bounded log, rather than surfacing as a failing baseline.
+[[tool.mutation-preflight.checks]]
+name = "makefile-dry-run"
+command = [
+    "make",
+    "--dry-run",
+    "CARGO=probe-cargo",
+    "boundary-kani",
+    "boundary-miri",
+    "boundary-test",
+]
+timeout_seconds = 120
+
 [tool.uv]
 package = true
 

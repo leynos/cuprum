@@ -147,12 +147,18 @@
   two tooling contracts that build their own environment, and the configuration
   contract pins the complete list
   ([#592](https://github.com/leynos/cuprum/issues/592)).
-- **A failing mutation baseline keeps its diagnostics:** the shared workflow
-  publishes its results listing and statistics file only after `mutmut run`
-  succeeds, so a baseline failure left only a step log that GitHub expires. A
-  `baseline-diagnostics` job now follows a failed mutation run, reproduces the
-  baseline with the pinned mutmut release, and uploads its captured output as
-  the `mutation-baseline-diagnostics` artefact with `if-no-files-found: error`
+- **The mutation caller adopts the shared environment preflight:** the
+  mutation-testing caller now pins the shared revision that consolidates
+  mutation preflight, and passes `preflight: true`. Before mutmut enumerates a
+  mutant, the preflight checks the new `[tool.mutation-preflight]` declaration,
+  whose `sandbox_paths` repeat the `also_copy` inventory, against the copy
+  contract of the pinned mutmut release; a path the run will not materialize
+  fails as a named finding. A declared `makefile-dry-run` check runs inside a
+  fresh sandbox copy and fails there when a root-relative Makefile input is
+  missing, and a `make` requirement records the executable the baseline
+  invokes. Because the pinned revision publishes its preflight report and a
+  failing baseline's bounded, `always()`-uploaded diagnostics itself, the
+  caller's own `baseline-diagnostics` job is removed
   ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **Synchronous entry points refuse a running event loop explicitly:**
   calling `SafeCmd.run_sync()`, `SafeCmd.run_bytes_sync()`,
