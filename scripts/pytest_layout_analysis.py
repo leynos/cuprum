@@ -109,25 +109,74 @@ def load_records(path: pth.Path) -> tuple[RunRecord, ...]:
         If the file is missing, is not JSON, or does not have the expected
         shape. A missing file is reported as such rather than as an empty
         comparison.
+    """  # ruff: ignore[docstring-extraneous-exception] - EvidenceError propagates from the helpers.
+    entries = _entries(path, _payload(path))
+    return tuple(_record(path, index, entry) for index, entry in enumerate(entries))
+
+
+def _payload(path: pth.Path) -> object:
+    """Return one artefact's decoded JSON, naming the path on refusal.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The file to read.
+
+    Returns
+    -------
+    object
+        The decoded document.
+
+    Raises
+    ------
+    EvidenceError
+        If the file is missing or is not JSON. A missing file is reported as
+        such rather than as an empty comparison.
     """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
         raise EvidenceError(_missing_message(path)) from error
     except json.JSONDecodeError as error:
         raise EvidenceError(_unreadable_message(path, str(error))) from error
+
+
+def _entries(path: pth.Path, payload: object) -> list[object]:
+    """Return the run entries a document carries.
+
+    A document may hold one run, a ``runs`` array, or a bare array. Anything
+    else is refused by name: a silently ignored input would make a comparison
+    look better-supported than it is.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The artefact being read, named in the refusal.
+    payload : object
+        The decoded document.
+
+    Returns
+    -------
+    list of object
+        The run entries, still undecoded.
+
+    Raises
+    ------
+    EvidenceError
+        If the document holds neither a run nor a list of runs, or its
+        ``runs`` value is not a list.
+    """
     match payload:
-        case {"runs": runs}:
-            entries = runs
+        case {"runs": runs} if isinstance(runs, list):
+            return runs
+        case {"runs": _}:
+            raise EvidenceError(_runs_message(path))
         case dict():
-            entries = [payload]
+            return [payload]
         case list():
-            entries = payload
+            return payload
         case _:
             raise EvidenceError(_shape_message(path))
-    if not isinstance(entries, list):
-        raise EvidenceError(_runs_message(path))
-    return tuple(_record(path, index, entry) for index, entry in enumerate(entries))
 
 
 def _record(path: pth.Path, index: int, entry: object) -> RunRecord:
