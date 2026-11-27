@@ -34,6 +34,7 @@ from cuprum import _wait4_spawn
 from cuprum._pipeline_stream_fds import _extract_stream_fd
 from cuprum.unittests._post_exit_teardown_support import recorded_descendant_or_fail
 from tests.helpers.process_exit import ExitObservation, observe_exit
+from tests.helpers.process_state import process_state
 
 if typ.TYPE_CHECKING:
     import asyncio
@@ -231,19 +232,29 @@ def assert_direct_child_reaped(
     *,
     context: str,
 ) -> None:
-    """Assert the direct child is gone, counting an unreaped zombie as gone.
+    """Assert the direct child's exit status was collected, not merely that it died.
 
-    The probe is the shared one rather than ``process.returncode`` so this
-    reads the process table: a run that terminated the child but abandoned the
-    reap would leave a zombie, and a stale attribute would not show it.
+    Two observations, because neither is sufficient on its own. ``returncode``
+    is published by whichever owner collected the status — the ``wait4`` owner
+    only once its ``wait4`` call returns, and asyncio's transport only once the
+    child watcher has reaped the child — so a non-``None`` value *is* the
+    reaping, on either backend and either platform. The process table then
+    rules out what a bare exit probe cannot see: ``observe_exit`` counts an
+    unreaped zombie as exited, so a run that terminated the child and abandoned
+    the reap would pass an exit check while leaving the zombie behind.
     """
-    observed = observe_exit(process.pid)
-    if observed is ExitObservation.UNOBSERVABLE:
-        pytest.skip("this host cannot report whether a process has exited")
-    assert observed is ExitObservation.EXITED, (
-        f"{context} must terminate and reap its direct child before the "
-        f"failure reaches the caller, but pid {process.pid} was observed "
-        f"{observed.name}"
+    assert process.returncode is not None, (
+        f"{context} must reap its direct child before the failure reaches the "
+        f"caller, but pid {process.pid} publishes no exit status"
+    )
+    state = process_state(process.pid)
+    if not state.available:
+        # No readable process table on this host, so the collected status is
+        # the strongest evidence available; it is still the reaping itself.
+        return
+    assert state.state != "Z", (
+        f"{context} must reap its direct child, but pid {process.pid} is still "
+        "an unreaped zombie"
     )
 
 

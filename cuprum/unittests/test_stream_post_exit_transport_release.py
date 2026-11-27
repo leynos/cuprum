@@ -120,6 +120,9 @@ def test_a_post_exit_deadline_releases_both_descriptors(
     pid_file = tmp_path / f"run-{spawn_backend.requested}.pid"
     command = _descendant_leaving_command(owned_builder, pid_file)
     record: SpawnRecord = record_spawn(monkeypatch, "cuprum._subprocess_spawn")
+    handoff = record_rendezvous(
+        monkeypatch, "cuprum._subprocess_stream_exit._await_exit_or_writer_failure"
+    )
 
     async def run_case() -> None:
         """Run to the post-exit deadline and read what the run left behind."""
@@ -128,6 +131,11 @@ def test_a_post_exit_deadline_releases_both_descriptors(
             expired = await run_to_its_own_deadline(
                 command.run(**_run_kwargs(timeout=_DEADLINE_S)),
                 cleanup_allowance_s=_STDIN_RECLAIM_BUDGET_S + _CAPTURE_EOF_GRACE_S,
+            )
+            assert handoff.is_set(), (
+                "the deadline must expire in the post-exit collection, but the "
+                "exit rendezvous never settled, so the expiry was reached one "
+                "phase earlier and this case proves nothing about it"
             )
             descendant_pid = assert_released_before_the_descendant_ends(
                 record, pid_file, context=context

@@ -364,6 +364,9 @@ def test_a_post_exit_deadline_releases_both_descriptors(
         )
     )
     record = record_spawn(monkeypatch, "cuprum._line_stream.spawn")
+    handoff = record_rendezvous(
+        monkeypatch, "cuprum._line_stream.coordinator._await_exit_or_writer_failure"
+    )
 
     async def run_case() -> None:
         """Run to the post-exit deadline and read what the run left behind."""
@@ -375,6 +378,11 @@ def test_a_post_exit_deadline_releases_both_descriptors(
             expired = await run_to_its_own_deadline(
                 reader,
                 cleanup_allowance_s=_STDIN_RECLAIM_BUDGET_S + _CAPTURE_EOF_GRACE_S,
+            )
+            assert handoff.is_set(), (
+                "the deadline must expire in the post-exit collection, but the "
+                "exit rendezvous never settled, so the expiry was reached one "
+                "phase earlier and this case proves nothing about it"
             )
             descendant_pid = assert_released_before_the_descendant_ends(
                 record, pid_file, context=context
