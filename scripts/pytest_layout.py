@@ -98,23 +98,44 @@ def expand(
         If two entries in one group select the same file. The shell loop would
         run that file twice; a layout must not, so the ambiguity is reported
         rather than resolved by guessing.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - GroupError propagates from _claim.
     base = DEFAULT_ROOT if root is None else root
     selected: dict[str, str] = {}
     deselected: set[str] = set()
     for entry in entries:
         if entry.startswith(DESELECT_PREFIX):
             deselected.update(_expand_one(entry[len(DESELECT_PREFIX) :], base))
-            continue
-        for relative in _expand_one(entry, base):
-            if relative in selected:
-                raise GroupError(
-                    entry,
-                    f"selects {relative}, which {selected[relative]!r} already "
-                    "selects; one group may name a file only once",
-                )
-            selected[relative] = entry
+        else:
+            _claim(selected, entry, base)
     return tuple(sorted(set(selected) - deselected))
+
+
+def _claim(selected: dict[str, str], entry: str, base: pth.Path) -> None:
+    """Record every file ``entry`` selects, refusing a repeat within the group.
+
+    Parameters
+    ----------
+    selected : dict of str to str
+        Files already claimed, mapped to the entry that claimed them.
+    entry : str
+        The selector entry to claim.
+    base : pathlib.Path
+        Directory the entry is relative to.
+
+    Raises
+    ------
+    GroupError
+        If this entry selects a file another entry in the group already
+        selected. The shell loop would run that file twice.
+    """
+    for relative in _expand_one(entry, base):
+        if relative in selected:
+            raise GroupError(
+                entry,
+                f"selects {relative}, which {selected[relative]!r} already "
+                "selects; one group may name a file only once",
+            )
+        selected[relative] = entry
 
 
 def _expand_one(entry: str, base: pth.Path) -> tuple[str, ...]:
