@@ -14,12 +14,15 @@ composes into a pipeline and a pipeline is built from commands — so the cycle
 between them is broken the same way ``cuprum.sh`` breaks its own: each side
 defers the import it needs to the point of use. ``cuprum/sh/__init__.py``
 re-exports the classes unchanged, so importers of ``cuprum.sh`` see the same
-objects they always did. Two entry points are contributed by mixins this class
+objects they always did. Three entry points are contributed by mixins this class
 inherits: ``SafeCmd.start`` by ``_OwnedStart`` in
 :mod:`cuprum._process_handle.owned_start`, because the handle path resolves its
-own run inputs, and ``SafeCmd.launch_detached`` (with its synchronous twin) by
-``_DetachedLaunchEntryPoints`` in :mod:`cuprum._detached_launch`, because a
-detached launch shares their resolution rules without sharing their ownership.
+own run inputs; ``SafeCmd.start_bytes`` by ``_OwnedBytesStart`` in
+:mod:`cuprum._byte_stream.owned_start`, because the byte handle adds live
+streams without changing the text handle; and ``SafeCmd.launch_detached`` (with
+its synchronous twin) by ``_DetachedLaunchEntryPoints`` in
+:mod:`cuprum._detached_launch`, because a detached launch shares their
+resolution rules without sharing their ownership.
 """
 
 # No ``from __future__ import annotations`` here: the public signatures are
@@ -30,6 +33,7 @@ detached launch shares their resolution rules without sharing their ownership.
 import dataclasses as dc
 import typing  # ruff: ignore[unconventional-import-alias]  # Interrogate recognizes only typing.overload.
 
+from cuprum._byte_stream.owned_start import _OwnedBytesStart
 from cuprum._bytes_run import _require_command_result
 from cuprum._command_internals import (
     _ExecutionState,
@@ -70,7 +74,12 @@ __all__ = [
 
 
 @dc.dataclass(frozen=True, slots=True)
-class SafeCmd(_OwnedStart, _DetachedLaunchEntryPoints, _BytesEntryPoints):
+class SafeCmd(
+    _OwnedStart,
+    _OwnedBytesStart,
+    _DetachedLaunchEntryPoints,
+    _BytesEntryPoints,
+):
     """Typed representation of a curated command ready for execution."""
 
     program: Program

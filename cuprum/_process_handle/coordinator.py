@@ -46,7 +46,7 @@ from cuprum import _wait4_spawn
 from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_process
-from cuprum._result_assembly import _recorded_captures, _require_text
+from cuprum._result_assembly import _recorded_captures, _require_bytes, _require_text
 from cuprum._subprocess_context import _sh_module
 from cuprum._subprocess_execution import _relay_fallbacks_for_result
 from cuprum._subprocess_timeout import _emit_run_exit_event
@@ -58,12 +58,18 @@ from cuprum._subprocess_wait import (
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum._subprocess_outcome import _SharedResultFields
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum._subprocess_wait_types import _DrainPair
+    from cuprum._subprocess_wait_types import _DrainPair, _StreamPayload
     from cuprum.capture_policy import CapturedStream
-    from cuprum.sh import CommandResult
+    from cuprum.sh import BytesCommandResult, CommandResult
 
 __all__ = [
+    "_HandleOutcome",
+    "_ReconcileHooks",
+    "_build_handle_result",
     "_finalize_settled_run",
     "_settle_handle_run",
 ]
@@ -101,11 +107,30 @@ async def _settle_owned_group_before_draining(run: _HandleRun) -> None:
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _ReconcileHooks:
+    """Optional work a run wraps around its stream reconciliation.
+
+    A byte run releases its live queues before the drain and its output
+    transports after it. Bundling the two hooks keeps the coordinator's
+    signature within the repository's argument limit and makes the pair a
+    property of the run rather than two independent parameters a caller could
+    supply one of.
+    """
+
+    before: cabc.Callable[[], None] | None = None
+    after: cabc.Callable[[], cabc.Awaitable[None]] | None = None
+
+
+_NO_RECONCILE_HOOKS = _ReconcileHooks()
+
+
 async def _finalize_settled_run(
     run: _HandleRun,
     execution: _SubprocessExecution,
     *,
     preserve: bool,
+    hooks: _ReconcileHooks = _NO_RECONCILE_HOOKS,
 ) -> _DrainPair:
     """Reconcile an ended run's tasks, keeping its output if asked.
 
@@ -115,6 +140,12 @@ async def _finalize_settled_run(
     and a descendant holding the pipes open is what stops those consumers
     reaching end-of-file. The sequence is otherwise the one every exit path in
     the library uses.
+
+    ``hooks.before`` runs after the group is settled and immediately before
+    the drain. A byte run uses it to release its live queues, so a consumer
+    that stopped reading cannot hold the reconciliation open. ``hooks.after``
+    runs once the drain has settled, on both its success and failure paths, so
+    a byte run can release output transports no reader will consume again.
 
     Both phases run under **one** shield: ``_shielded_cleanup`` finishes its
     task and then re-raises the caller's cancellation, so two sequential
@@ -136,6 +167,10 @@ async def _finalize_settled_run(
     preserve : bool
         Whether to keep the drained output. False while another error is
         propagating, so a drain failure cannot mask it.
+    hooks : _ReconcileHooks, default=_NO_RECONCILE_HOOKS
+        The optional synchronous hook run just before the consumers settle and
+        the optional asynchronous hook run inside the same shield once the
+        drain ends.
 
     Returns
     -------
@@ -147,15 +182,21 @@ async def _finalize_settled_run(
     async def settle_then_reconcile() -> _DrainPair:
         """Settle the owned group, then reconcile the run's tasks, as one unit."""
         await _settle_owned_group_before_draining(run)
-        return await _reconcile_run_tasks(
-            run.ownership,
-            _drain_context(
-                execution,
+        if hooks.before is not None:
+            hooks.before()
+        try:
+            return await _reconcile_run_tasks(
                 run.ownership,
-                run.process.pid,
-                preserve=preserve,
-            ),
-        )
+                _drain_context(
+                    execution,
+                    run.ownership,
+                    run.process.pid,
+                    preserve=preserve,
+                ),
+            )
+        finally:
+            if hooks.after is not None:
+                await hooks.after()
 
     return await _shielded_cleanup(settle_then_reconcile())
 
@@ -211,15 +252,23 @@ async def _settle_handle_run(run: _HandleRun) -> CommandResult:
             drain_grace_s=execution.delivery_grace_s,
         ),
     )
-    return _build_handle_result(
-        run,
-        _HandleOutcome(
-            exit_code=exit_code,
-            exited_at=exited_at,
-            stdout_text=_require_text(drained[0].payload, "stdout"),
-            stderr_text=_require_text(drained[1].payload, "stderr"),
-            captures=(drained[0].capture, drained[1].capture),
-        ),
+    # Imported here, not at module scope: ``cuprum._bytes_run`` imports the
+    # ``cuprum.sh`` result modules, and this module is reached while that
+    # package is still initializing.
+    from cuprum._bytes_run import _require_command_result
+
+    return _require_command_result(
+        _build_handle_result(
+            run,
+            _HandleOutcome(
+                exit_code=exit_code,
+                exited_at=exited_at,
+                stdout_payload=drained[0].payload,
+                stderr_payload=drained[1].payload,
+                captures=(drained[0].capture, drained[1].capture),
+            ),
+            capture_bytes=False,
+        )
     )
 
 
@@ -227,17 +276,21 @@ async def _settle_handle_run(run: _HandleRun) -> CommandResult:
 class _HandleOutcome:
     """The settled facts of an owned run, ready to be published.
 
-    The exit code and the drained text are produced by whichever route reached
-    the end of the wait, so they travel as one record rather than as four
-    arguments apiece. That keeps the publishing helper's signature fixed no
-    matter which route reached it, and keeps every route's ``CommandResult``
-    carrying the same fields.
+    The exit code and the drained payloads are produced by whichever route
+    reached the end of the wait, so they travel as one record rather than as
+    four arguments apiece. That keeps the publishing helper's signature fixed
+    no matter which route reached it, and keeps every route's result carrying
+    the same fields.
+
+    The payloads stay wide — the drain serves both modes — and each result
+    builder narrows them with ``_require_text`` or ``_require_bytes`` before it
+    constructs its class.
     """
 
     exit_code: int
     exited_at: float
-    stdout_text: str | None
-    stderr_text: str | None
+    stdout_payload: _StreamPayload | None
+    stderr_payload: _StreamPayload | None
     # The capture records for the two streams, in the stdout-then-stderr order
     # every pair in this library uses. Carried here rather than read from the
     # drain again, because the drain happens exactly once per run and its
@@ -245,18 +298,28 @@ class _HandleOutcome:
     captures: tuple[CapturedStream | None, CapturedStream | None] = (None, None)
 
 
-def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandResult:
-    """Publish the run's exit event and assemble its ``CommandResult``.
+def _build_handle_result(
+    run: _HandleRun,
+    outcome: _HandleOutcome,
+    *,
+    capture_bytes: bool,
+) -> CommandResult | BytesCommandResult:
+    """Publish the run's exit event and assemble its result.
 
-    The two are built together so the event a consumer observes carries the
-    same exit code the caller's result does. The result's ``duration`` is
+    The event and the result are built together so a consumer observes the
+    same exit code the caller's result carries. The result's ``duration`` is
     measured from the spawn, so it spans the time the handle was held — the
     child's lifetime, not the caller's wait.
 
+    The shared fields are assembled once and each mode adds only its own
+    narrowing of the two payloads. A text handle narrows to ``str``; a byte
+    handle narrows to ``bytes``. Neither computes a measurement twice.
+
     Returns
     -------
-    CommandResult
-        The command's outcome, carrying the captured streams, the exit code,
+    CommandResult | BytesCommandResult
+        A ``BytesCommandResult`` when *capture_bytes* is true, otherwise the
+        text ``CommandResult``. Both carry the captured streams, the exit code,
         the resource measurements the child's own reap produced, and the
         relay-diagnostic fields the run recorded.
     """
@@ -277,31 +340,41 @@ def _build_handle_result(run: _HandleRun, outcome: _HandleOutcome) -> CommandRes
         pid=run.process.pid,
         resource_usage=rusage,
     )
-    return _sh_module().CommandResult(
-        program=execution.cmd.program,
-        argv=execution.cmd.argv,
-        exit_code=outcome.exit_code,
-        pid=run.process.pid if run.process.pid is not None else -1,
-        stdout=outcome.stdout_text,
-        stderr=outcome.stderr_text,
-        started_at=run.wall_clock_started_at,
-        duration=max(0.0, outcome.exited_at - run.started_at),
+    shared: _SharedResultFields = {
+        "program": execution.cmd.program,
+        "argv": execution.cmd.argv,
+        "exit_code": outcome.exit_code,
+        "pid": run.process.pid if run.process.pid is not None else -1,
+        "started_at": run.wall_clock_started_at,
+        "duration": max(0.0, outcome.exited_at - run.started_at),
         # The same figures the exit event above carries, so the caller's result
         # and the observed event agree rather than one having to be correlated
         # with the other.
-        max_rss_bytes=None if rusage is None else rusage.max_rss_bytes,
-        user_cpu_seconds=None if rusage is None else rusage.user_cpu_seconds,
-        system_cpu_seconds=None if rusage is None else rusage.system_cpu_seconds,
+        "max_rss_bytes": None if rusage is None else rusage.max_rss_bytes,
+        "user_cpu_seconds": None if rusage is None else rusage.user_cpu_seconds,
+        "system_cpu_seconds": None if rusage is None else rusage.system_cpu_seconds,
         # Carried through from the observation for the same reason ``run()``
         # carries it: the handle spawns the bound executable, so a result that
         # reported ``None`` here would claim no binding applied while the
         # caller's binding is exactly what chose the file that ran.
-        resolved_path=execution.observation.resolved_path,
-        relay_fallbacks=_relay_fallbacks_for_result(run.ownership.relay_diagnostics),
+        "resolved_path": execution.observation.resolved_path,
+        "relay_fallbacks": _relay_fallbacks_for_result(run.ownership.relay_diagnostics),
         # Flattened through the same helper every other result-construction
         # site uses, so a handle that captured one stream reports exactly the
         # one record a ``run()`` of the same command would: the raw optional
         # pair would put a ``None`` in a tuple the field declares as holding
         # only records.
-        captures=_recorded_captures(outcome.captures),
+        "captures": _recorded_captures(outcome.captures),
+    }
+    sh = _sh_module()
+    if capture_bytes:
+        return sh.BytesCommandResult(
+            **shared,
+            stdout=_require_bytes(outcome.stdout_payload, "stdout"),
+            stderr=_require_bytes(outcome.stderr_payload, "stderr"),
+        )
+    return sh.CommandResult(
+        **shared,
+        stdout=_require_text(outcome.stdout_payload, "stdout"),
+        stderr=_require_text(outcome.stderr_payload, "stderr"),
     )

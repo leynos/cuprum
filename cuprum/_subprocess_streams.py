@@ -53,6 +53,14 @@ from cuprum._stream_config import (
 from cuprum._stream_config import (
     _resolve_stream_sink as _resolve_stream_sink,
 )
+from cuprum._stream_spawn_types import (
+    _NO_SPAWN_OPTIONS,
+    _StreamSpawnOptions,
+)
+from cuprum._stream_spawn_types import (
+    _StreamConsumerSpawnContext as _StreamConsumerSpawnContext,
+)
+from cuprum._stream_spawn_types import _StreamSpawnInputs as _StreamSpawnInputs
 from cuprum._streams import _consume_stream, _RelayDiagnostics, _StreamConfig
 from cuprum._subprocess_startup_abandon import _record_started
 from cuprum._subprocess_stdin import _spawn_run_stdin_writer
@@ -61,8 +69,6 @@ from cuprum._subprocess_wait_types import _RunTaskOwnership
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._capture_types import CaptureSink
-    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_wait_types import _ConsumerPair, _StreamConsumerTask
@@ -95,64 +101,6 @@ def _create_stream_callback(
             started_at=execution.started_at,
         ),
     )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StreamConsumerSpawnContext:
-    """Inputs a run hands to its stream-consumer spawn.
-
-    Bundles the *resolved* per-stream configurations, the subprocess PID, and
-    the per-stream relay diagnostics collectors so the spawn helper takes one
-    argument instead of three. The context is created before any consumer task
-    exists; ownership of the collectors stays with the run, which continues to
-    retain the same tuple on its ``_RunTaskOwnership``.
-
-    The configurations are resolved here rather than inside the spawn so that
-    the run holds the very objects its consumers drain. That is what makes the
-    capture accumulators reachable from teardown: a config carries the
-    accumulator for its own policy, and a run that rebuilt the configs would
-    hold accumulators nobody drained into while the ones holding a spill file
-    went out of reach.
-    """
-
-    stdout_config: _StreamConfig
-    stderr_config: _StreamConfig
-    pid: int | None
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
-
-    @property
-    def captures(self) -> tuple[CaptureSink | None, CaptureSink | None]:
-        """Report both streams' accumulators, stdout first.
-
-        The order matches ``relay_diagnostics`` and the consumer pair, so a
-        teardown indexed by stream reaches the right accumulator for whichever
-        stream it is cleaning up.
-        """
-        return (self.stdout_config.capture_sink, self.stderr_config.capture_sink)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _StreamSpawnInputs:
-    """Everything a streamed run needs before it starts its consumers.
-
-    The three runs that own a child's streams — the direct run, the line
-    iterator, and the owned handle — build the same configuration, the same
-    diagnostics tuple, and the same spawn context. Bundling them here keeps
-    that construction in one place, because each caller documents the same
-    invariant: the consumers it starts must be wired exactly as the others
-    wire theirs, or the paths silently diverge on capture, echo, and sink
-    selection.
-
-    ``discard_on_cancel``, ``relay_diagnostics``, and ``idle`` are carried
-    alongside the context because the run retains all three on its
-    ``_RunTaskOwnership``: the context is a value snapshot for the spawn, not a
-    hand-off of ownership.
-    """
-
-    discard_on_cancel: asyncio.Event
-    spawn_context: _StreamConsumerSpawnContext
-    relay_diagnostics: tuple[_RelayDiagnostics, _RelayDiagnostics]
-    idle: _IdleMonitor | None
 
 
 def _build_run_task_ownership(
@@ -342,20 +290,23 @@ def _prepare_stream_spawn(
     execution: _SubprocessExecution,
     pid: int | None,
     *,
-    discard_on_cancel: asyncio.Event | None = None,
-    settlement_started: asyncio.Event | None = None,
+    options: _StreamSpawnOptions = _NO_SPAWN_OPTIONS,
 ) -> _StreamSpawnInputs:
     """Build stream inputs, reusing caller latches before any consumer starts.
 
     The settlement event identifies line-stream teardown; an omitted discard
-    latch is created here for routes that do not supply one.
+    latch is created here for routes that do not supply one. The options are
+    bundled so this signature stays within the repository's argument limit
+    however many run-specific latches later paths need.
 
     Returns
     -------
     _StreamSpawnInputs
-        The latches, diagnostics collectors, idle monitor, and resolved stream
-        configs for the consumers this run starts.
+        The latches, diagnostics collectors, idle monitor, resolved stream
+        configs, and live tap for the consumers this run starts.
     """
+    live = options.live
+    discard_on_cancel = options.discard_on_cancel
     if discard_on_cancel is None:
         discard_on_cancel = asyncio.Event()
     # The run's own collectors when it made them, so bounded-delivery loss
@@ -366,15 +317,23 @@ def _prepare_stream_spawn(
         relay_diagnostics = (_RelayDiagnostics(), _RelayDiagnostics())
     # Both configs are resolved before the consumers exist and the run keeps
     # the exact pair they drain, so each stream's capture accumulator stays
-    # reachable from the run's single reconciliation point.
+    # reachable from the run's single reconciliation point. A live tap travels
+    # on its stream's config, which is why no consumer signature changes.
     stdout_config, stderr_config = _resolve_stream_configs(
         execution,
-        _build_stream_config(execution, discard_on_cancel, settlement_started),
+        _build_stream_config(
+            execution,
+            discard_on_cancel,
+            options.settlement_started,
+            live=live,
+        ),
+        stderr_tap=None if live is None else live.stderr,
     )
     return _StreamSpawnInputs(
         discard_on_cancel=discard_on_cancel,
         relay_diagnostics=relay_diagnostics,
         idle=execution.idle,
+        live=live,
         spawn_context=_StreamConsumerSpawnContext(
             stdout_config=stdout_config,
             stderr_config=stderr_config,
@@ -387,6 +346,7 @@ def _prepare_stream_spawn(
 __all__ = [
     "_StreamConsumerSpawnContext",
     "_StreamSpawnInputs",
+    "_StreamSpawnOptions",
     "_build_run_task_ownership",
     "_build_stream_config",
     "_build_task_ownership",

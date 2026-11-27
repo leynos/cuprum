@@ -1,4 +1,4 @@
-"""Signal-delivery failures for an owned running command.
+"""Failures an owned running command reports to its caller.
 
 ``RunningCommand.signal`` is the one operation on the handle that the operating
 system can refuse for reasons the caller has to act on, so its two refusals get
@@ -6,6 +6,12 @@ types of their own rather than surfacing as a bare ``ProcessLookupError``. Each
 carries the facts a caller needs to decide what to do next — how the child
 ended, or why its platform cannot take the request — so a caller never has to
 reconstruct them by re-reading the handle.
+
+``LiveStreamError`` is the byte-stream counterpart: a live reader or the
+supervisor behind it failed, so the stream cannot report a clean closure. It
+lives beside the refusals rather than in the byte package because a caller
+imports it from ``cuprum.sh`` and the public facade must not have to import the
+byte package's internals to re-export it.
 
 They live in their own leaf module because ``cuprum.sh`` re-exports them: the
 package's public exceptions are importable from the facade even though their
@@ -17,11 +23,13 @@ The platform predicate sits here, beside the error it guards, so the answer to
 reports when it cannot.
 """
 
-from __future__ import annotations
-
 import os
 
+from cuprum.byte_streams import StreamClosure
+from cuprum.echo_events import EchoStream
+
 __all__ = [
+    "LiveStreamError",
     "SignalAfterExitError",
     "UnsupportedSignalError",
     "_arbitrary_signals_supported",
@@ -73,6 +81,53 @@ class SignalAfterExitError(ProcessLookupError):
         )
         self.exit_code = exit_code
         self.pid = pid
+
+
+class LiveStreamError(RuntimeError):
+    """Raised when a live byte stream fails before it reaches a clean end.
+
+    The failure belongs to one stream: the drain or the supervisor that feeds
+    it raised, so the reader cannot report the closure it would have reported
+    for an ordinary end. The original exception is chained as ``__cause__``, so
+    a caller can inspect it without the public message having to repeat it.
+
+    A reader whose queue publishes
+    :attr:`~cuprum.byte_streams.StreamClosure.FAILED` raises this from both
+    iteration and ``wait_eof()``. The other stream is unaffected unless the
+    whole run failed; it settles as
+    :attr:`~cuprum.byte_streams.StreamClosure.TRUNCATED_BY_SETTLEMENT` when the
+    run ends because of this failure.
+
+    Attributes
+    ----------
+    stream : EchoStream
+        The stream whose drain or supervisor failed.
+    closure : StreamClosure
+        Always :attr:`~cuprum.byte_streams.StreamClosure.FAILED`. The field
+        exists so a caller that catches the error does not have to infer the
+        terminal status from the exception type.
+
+    Examples
+    --------
+    >>> error = LiveStreamError(EchoStream.STDERR)
+    >>> error.stream.value
+    'stderr'
+    >>> error.closure.value
+    'failed'
+    """
+
+    def __init__(
+        self,
+        stream: EchoStream,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        """Record the failed stream and chain *cause* when one was supplied."""
+        super().__init__(f"live {stream.value} stream failed")
+        self.stream = stream
+        self.closure = StreamClosure.FAILED
+        if cause is not None:
+            self.__cause__ = cause
 
 
 class UnsupportedSignalError(RuntimeError):

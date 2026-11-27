@@ -34,6 +34,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
+from cuprum._stream_spawn_types import _StreamSpawnOptions
 from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
@@ -47,6 +48,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._execution_tracking import _ExecutionTracking
+    from cuprum._stream_live import _LiveStreamSinks
     from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 __all__ = [
@@ -124,6 +126,8 @@ async def _start_handle_run(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
     default_timeout: float | None = None,
+    *,
+    live: _LiveStreamSinks | None = None,
 ) -> _HandleRun:
     """Spawn the child, announce it, and take ownership of its tasks.
 
@@ -155,6 +159,9 @@ async def _start_handle_run(
     default_timeout : float | None, default=None
         The deadline every wait on the handle falls back to, already resolved
         from ``start()``'s argument, the context, and the scoped default.
+    live : _LiveStreamSinks | None, default=None
+        The per-stream byte taps a ``start_bytes()`` handle attaches to its
+        consumers. ``None`` keeps the ordinary text wiring.
 
     Returns
     -------
@@ -183,7 +190,12 @@ async def _start_handle_run(
     process = await _spawn_subprocess(execution)
     try:
         execution.observation.emit("start", _EventDetails(pid=process.pid))
-        ownership = await _attach_run_tasks(process, execution)
+        if live is None:
+            # The text path keeps the exact call shape it had, so a test seam
+            # replacing this helper needs no byte-run parameter it never uses.
+            ownership = await _attach_run_tasks(process, execution)
+        else:
+            ownership = await _attach_run_tasks(process, execution, live=live)
     except BaseException:
         # Imported here so this module and the control module do not import
         # each other at module scope.
@@ -227,6 +239,8 @@ def _launch_idle_monitor(execution: _SubprocessExecution) -> None:
 async def _attach_run_tasks(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
+    *,
+    live: _LiveStreamSinks | None = None,
 ) -> _RunTaskOwnership:
     """Start the stdin writer and the stream consumers for an owned child.
 
@@ -259,7 +273,11 @@ async def _attach_run_tasks(
     # anything, so failure here needs no cleanup. The preparation helper
     # resolves both stream configs, which is what keeps each stream's capture
     # accumulator reachable from reconciliation.
-    spawn = _prepare_stream_spawn(execution, process.pid)
+    spawn = _prepare_stream_spawn(
+        execution,
+        process.pid,
+        options=_StreamSpawnOptions(live=live),
+    )
     started: list[asyncio.Task[typ.Any]] = []
     try:
         ownership = _build_run_task_ownership(

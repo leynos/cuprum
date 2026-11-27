@@ -36,11 +36,16 @@ from cuprum.sh.execution import ExecutionContext, StdinInput
 from cuprum.sh.output import RunOutputOptions
 
 if typ.TYPE_CHECKING:
+    from cuprum._stream_live import _LiveStreamSinks
     from cuprum.capture_policy import CapturePolicy
     from cuprum.sh import SafeCmd
 
 
-def _reject_redirected_handle_streams(output: RunOutputOptions) -> None:
+def _reject_redirected_handle_streams(
+    output: RunOutputOptions,
+    *,
+    entry_point: str = "SafeCmd.start()",
+) -> None:
     """Reject streams a running handle cannot read from parent-side pipes.
 
     Raises
@@ -55,7 +60,7 @@ def _reject_redirected_handle_streams(output: RunOutputOptions) -> None:
     ]
     if redirected:
         msg = (
-            "SafeCmd.start() always captures output, so "
+            f"{entry_point} always captures output, so "
             f"{', '.join(redirected)} cannot be redirected. "
             "Use run() or run_sync() to redirect streams."
         )
@@ -114,13 +119,22 @@ def _with_capture(output: RunOutputOptions | None) -> RunOutputOptions:
     return _handle_capture_options(resolved)
 
 
-async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
+async def _spawn_owned_run(
+    cmd: SafeCmd,
+    state: _ExecutionState,
+    *,
+    live: _LiveStreamSinks | None = None,
+) -> _HandleRun:
     """Prepare *cmd*, spawn its child, and hand back the owned record.
 
     The spawn owns its own child: ``_start_handle_run`` terminates and reaps
     anything it started before letting a failure out. What it cannot own is the
     session the execution was prepared against, so that framing is closed here,
     on the one path that can fail after preparation returned.
+
+    *live* is the per-stream byte tap a ``start_bytes()`` run attaches. It is
+    passed through unchanged so the text and byte entry points share one
+    spawn, one announcement, and one reclaim.
 
     Returns
     -------
@@ -140,6 +154,7 @@ async def _spawn_owned_run(cmd: SafeCmd, state: _ExecutionState) -> _HandleRun:
             _build_handle_execution(prepared.execution),
             prepared.tracking,
             state.timeout,
+            live=live,
         )
     except BaseException as run_error:
         await _finalize_prepared_command_failure(

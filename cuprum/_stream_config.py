@@ -40,6 +40,8 @@ if typ.TYPE_CHECKING:
     from cuprum._bounded_delivery import _DeliveryWorker
     from cuprum._capture_types import CaptureSink
     from cuprum._stream_drain_state import _MirrorCursor
+    from cuprum._stream_live import _LiveStreamSinks
+    from cuprum._stream_tap import _StreamTap
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum.capture_policy import CapturePolicy
     from cuprum.sinks.base import OutputSession
@@ -81,6 +83,8 @@ def _build_stream_config(
     execution: _SubprocessExecution,
     discard_on_cancel: asyncio.Event,
     settlement_started: asyncio.Event | None = None,
+    *,
+    live: _LiveStreamSinks | None = None,
 ) -> _StreamConfig:
     """Build the stdout ``_StreamConfig`` for an execution context.
 
@@ -105,6 +109,12 @@ def _build_stream_config(
     stdout_sink = _resolve_stream_sink(
         execution.sink_session, execution.ctx.stdout_sink, sys.stdout
     )
+    read_size = _current_read_size()
+    if live is not None:
+        # A live byte run caps each read at its queue's bound, so an ordinary
+        # read fits one reservation. The queue still splits anything larger;
+        # this is a sizing choice, not the correctness mechanism.
+        read_size = min(read_size, live.max_buffered_bytes)
     return _StreamConfig(
         capture=execution.capture_stdout,
         echo_output=execution.echo_stdout,
@@ -118,7 +128,8 @@ def _build_stream_config(
         errors=execution.ctx.errors,
         discard_on_cancel=discard_on_cancel,
         settlement_started=settlement_started,
-        read_size=_current_read_size(),
+        read_size=read_size,
+        tap=None if live is None else live.stdout,
         activity=execution.idle.note_activity if execution.idle is not None else None,
     )
 
@@ -126,6 +137,8 @@ def _build_stream_config(
 def _resolve_stream_configs(
     execution: _SubprocessExecution,
     stdout_config: _StreamConfig,
+    *,
+    stderr_tap: _StreamTap | None = None,
 ) -> tuple[_StreamConfig, _StreamConfig]:
     """Derive the stderr config, and the stdout config's final cursor.
 
@@ -160,6 +173,7 @@ def _resolve_stream_configs(
         sink=stderr_sink,
         stream=EchoStream.STDERR,
         mirror=execution.idle.mirror if execution.idle is not None else None,
+        tap=stderr_tap,
     )
     if stdout_config.sink is stderr_config.sink:
         stdout_config = dc.replace(stdout_config, mirror=stderr_config.mirror)
@@ -219,6 +233,11 @@ class _StreamConfig:
     # whether it would land mid-line.
     activity: cabc.Callable[[], None] | None = None
     mirror: _MirrorCursor | None = None
+    # The live byte tap a ``start_bytes()`` run attaches to this stream, or
+    # ``None`` for every text run. It is part of the configuration because the
+    # tap, the read-size cap, and the capture mode are resolved together, so a
+    # drain needs no extra parameter to serve either mode.
+    tap: _StreamTap | None = None
     # The accumulator *capture* is retained in, derived from the policy, mode,
     # and encoding above rather than passed in. Held on the config rather than
     # built inside the drain because a drain cancelled while awaiting its line

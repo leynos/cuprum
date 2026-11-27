@@ -34,6 +34,7 @@ from cuprum._subprocess_streams import (
     _build_run_task_ownership,
     _prepare_stream_spawn,
     _StreamSpawnInputs,
+    _StreamSpawnOptions,
 )
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.line_stream_events import LineStreamPhase
@@ -181,8 +182,10 @@ async def _start_or_abandon(
         progress.spawn = _prepare_stream_spawn(
             execution,
             pid,
-            discard_on_cancel=setup.discard_on_cancel,
-            settlement_started=setup.settlement_started,
+            options=_StreamSpawnOptions(
+                discard_on_cancel=setup.discard_on_cancel,
+                settlement_started=setup.settlement_started,
+            ),
         )
         # The same wiring ``run()`` uses, so iterating lines can never silently
         # diverge from it on capture, echo, or sink selection. The record is

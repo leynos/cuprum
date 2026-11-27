@@ -414,6 +414,7 @@ def test_command_result_type_hints_resolve_at_runtime() -> None:
         # same: the handle it names has to be a runtime import for this to hold,
         # which is what stops ``RunningCommand`` drifting into a type-only name.
         ("SafeCmd.start", "RunningCommand"),
+        ("SafeCmd.start_bytes", "RunningBytesCommand"),
         ("SafeCmd.run_bytes", "BytesCommandResult"),
         ("SafeCmd.run_bytes_sync", "BytesCommandResult"),
         # The detached entry points name their receipt for the same reason:

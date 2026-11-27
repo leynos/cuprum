@@ -46,7 +46,13 @@ _LINE_BOUND_BUCKETS = (
 
 @dc.dataclass(frozen=True, slots=True)
 class _LineConsumption:
-    """Inputs for draining a stream while publishing decoded lines."""
+    """Inputs for draining a stream while publishing decoded lines.
+
+    A live byte tap travels on ``config.tap`` and is invoked by the drain's
+    single fan-out, before this publisher's decoder. The publisher therefore
+    only decodes: invoking the tap here as well would deliver every raw chunk
+    to the live queue twice.
+    """
 
     config: _StreamConfig
     on_line: _LineSink

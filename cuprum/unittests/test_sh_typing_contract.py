@@ -66,6 +66,31 @@ _INVALID_CALLS: typ.Final[dict[str, tuple[str, tuple[str, ...]]]] = {
         ),
         ("unresolved-attribute",),
     ),
+    "live-reader-has-no-chunk-attribute": (
+        (
+            "async def f() -> None:\n"
+            "    handle = await b().start_bytes()\n"
+            "    handle.stdout.data"
+        ),
+        ("unresolved-attribute",),
+    ),
+    "live-result-is-not-text": (
+        (
+            "async def f() -> None:\n"
+            "    handle = await b().start_bytes()\n"
+            "    result: str = (await handle.wait()).stdout"
+        ),
+        ("invalid-assignment",),
+    ),
+    "live-chunk-data-is-bytes-not-text": (
+        (
+            "async def f() -> None:\n"
+            "    handle = await b().start_bytes()\n"
+            "    async for chunk in handle.stdout:\n"
+            "        chunk.data.strip('x')"
+        ),
+        ("invalid-argument-type",),
+    ),
 }
 
 _SNIPPET_HEADER = "from cuprum import ECHO, sh\n\nb = sh.make(ECHO)\n"
