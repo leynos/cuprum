@@ -104,12 +104,10 @@ class Guard:
         """Record one setup, call, or teardown report."""
         if report.failed:
             self.failed.add(report.nodeid)
-        elif report.skipped:
-            outcome = self.xfailed if _was_expected_to_fail(report) else self.skipped
-            outcome.add(report.nodeid)
-        elif report.passed and report.when == "call":
-            outcome = self.xpassed if _was_expected_to_fail(report) else self.passed
-            outcome.add(report.nodeid)
+        if report.skipped:
+            _record_outcome(report, expected=self.xfailed, unexpected=self.skipped)
+        if report.passed and report.when == "call":
+            _record_outcome(report, expected=self.xpassed, unexpected=self.passed)
 
     def verdict(self) -> dict[str, tuple[str, ...]]:
         """Return every broken promise, keyed by its diagnostic category.
@@ -170,6 +168,17 @@ _REGISTRY = _Registry()
 def _was_expected_to_fail(report: pytest.TestReport) -> bool:
     """Report whether pytest marked this report as an expected failure."""
     return getattr(report, "wasxfail", None) is not None
+
+
+def _record_outcome(
+    report: pytest.TestReport,
+    *,
+    expected: set[str],
+    unexpected: set[str],
+) -> None:
+    """Record *report* in the set its expected-failure mark selects."""
+    target = expected if _was_expected_to_fail(report) else unexpected
+    target.add(report.nodeid)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

@@ -74,8 +74,13 @@ def _command(*argv: str) -> tuple[sh.SafeCmd, ProgramCatalogue]:
     return sh.make(program, catalogue=catalogue)(*argv), catalogue
 
 
-def _wait_for_file(path: pathlib.Path, timeout_s: float) -> None:
-    """Block until *path* exists, so the descendant is known to be running.
+def _wait_for_recorded_pid(path: pathlib.Path, timeout_s: float) -> None:
+    """Block until *path* names a positive pid, so the descendant is running.
+
+    Existence alone is not enough: the child creates the file before writing
+    its content, so a reader that stops at ``exists()`` can see an empty file
+    and record no descendant. Only a parseable pid proves the descendant was
+    spawned and written down.
 
     A synchronous poll is deliberate: this runs inside an observe hook, which
     must not await. The child is a separate process, so its progress does not
@@ -84,14 +89,18 @@ def _wait_for_file(path: pathlib.Path, timeout_s: float) -> None:
     Raises
     ------
     AssertionError
-        If *path* does not appear within *timeout_s*.
+        If *path* does not record a pid within *timeout_s*.
     """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        if path.exists():
+        try:
+            recorded = path.read_text(encoding="ascii").strip()
+        except OSError:
+            recorded = ""
+        if recorded.isdigit() and int(recorded) > 0:
             return
         time.sleep(0.01)
-    msg = f"{path} was not written within {timeout_s}s"
+    msg = f"{path} did not record a pid within {timeout_s}s"
     raise AssertionError(msg)
 
 
@@ -105,7 +114,7 @@ def _fail_start_once_the_descendant_is_recorded(
         """Wait for the recorded pid on ``start``, then fail."""
         events.append(event)
         if event.phase == "start":
-            _wait_for_file(pid_file, _PID_FILE_WAIT_S)
+            _wait_for_recorded_pid(pid_file, _PID_FILE_WAIT_S)
             raise _StartHookError
 
     return hook
@@ -161,3 +170,26 @@ def test_owned_group_start_failure_stops_the_descendant(tmp_path: pathlib.Path) 
         for pid in pids:
             _abandon(pid)
         _kill_descendant(descendant_pid)
+
+
+def test_an_empty_pid_file_is_not_a_recorded_descendant(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A file that exists but names no pid is not readiness.
+
+    The child creates the file before writing to it, so this is the state the
+    hook used to treat as ready. Waiting on existence alone made the case race
+    the write and read no pid at all.
+    """
+    pid_file = tmp_path / "descendant.pid"
+    pid_file.write_text("", encoding="ascii")
+    with pytest.raises(AssertionError, match="did not record a pid"):
+        _wait_for_recorded_pid(pid_file, 0.1)
+
+
+def test_a_written_pid_is_accepted(tmp_path: pathlib.Path) -> None:
+    """A parseable pid is the readiness the hook waits for."""
+    pid_file = tmp_path / "descendant.pid"
+    pid_file.write_text("4242", encoding="ascii")
+    _wait_for_recorded_pid(pid_file, 4.0)
+    assert _recorded_pid(pid_file) == 4242, "the helper must read the written pid"

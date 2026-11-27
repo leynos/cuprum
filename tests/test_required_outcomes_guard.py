@@ -185,38 +185,49 @@ def test_a_collection_error_is_named(tmp_path: pth.Path) -> None:
     assert "  collection-error (1)" in output, output
 
 
-def test_an_unexpected_deselection_fails(tmp_path: pth.Path) -> None:
-    """A case removed without the manifest predicting it would go unobserved."""
-    completed = _run(
-        tmp_path,
+_DESELECTION_CASES = (
+    (
+        "unexpected-deselection",
         f"{_PASSES}\ndef test_other() -> None:\n    assert True\n",
-        "--deselect",
+        ("--deselect", f"{_MODULE}::test_other"),
         f"{_MODULE}::test_other",
-        "--required-outcome",
-        f"{_MODULE}::test_passes",
-    )
-    output = _output(completed)
-    assert completed.returncode != 0, output
-    assert "  unexpected-deselection (1)" in output, output
-    assert f"{_MODULE}::test_other" in output, output
+    ),
+    (
+        "stale-deselection",
+        _PASSES,
+        (
+            "--deselect",
+            f"{_MODULE}::test_absent",
+            "--expected-deselect",
+            f"{_MODULE}::test_absent",
+        ),
+        f"{_MODULE}::test_absent",
+    ),
+)
 
 
-def test_a_stale_deselection_fails(tmp_path: pth.Path) -> None:
-    """A predicted removal that matches nothing would hide a renamed case."""
+@pytest.mark.parametrize(
+    "case",
+    _DESELECTION_CASES,
+    ids=["unexpected", "stale"],
+)
+def test_a_deselection_the_manifest_did_not_predict_fails(
+    tmp_path: pth.Path,
+    case: tuple[str, str, tuple[str, ...], str],
+) -> None:
+    """An unpredicted removal, or a predicted one that matched nothing, fails."""
+    category, source, deselection, named = case
     completed = _run(
         tmp_path,
-        _PASSES,
-        "--deselect",
-        f"{_MODULE}::test_absent",
-        "--expected-deselect",
-        f"{_MODULE}::test_absent",
+        source,
+        *deselection,
         "--required-outcome",
         f"{_MODULE}::test_passes",
     )
     output = _output(completed)
     assert completed.returncode != 0, output
-    assert "  stale-deselection (1)" in output, output
-    assert f"{_MODULE}::test_absent" in output, output
+    assert f"  {category} (1)" in output, output
+    assert named in output, output
 
 
 def test_an_expected_deselection_is_accepted(tmp_path: pth.Path) -> None:

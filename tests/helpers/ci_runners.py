@@ -101,8 +101,7 @@ UBICLOUD_LABEL = "ubicloud-standard-2"
 UBICLOUD_VCPUS = 2
 GITHUB_LABEL = "ubuntu-latest"
 WINDOWS_LABEL = "windows-2022"
-#: The macOS image the advisory process-lifecycle leg runs on. Ubicloud offers
-#: Linux only, so the leg's evidence can only come from a hosted Mac.
+#: The macOS image the advisory lifecycle leg runs on; Ubicloud has no Mac.
 MACOS_LABEL = "macos-latest"
 
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
@@ -233,10 +232,8 @@ RUNNER_NAMED_JOBS: typ.Final = (("rust-boundaries.yml", "native"),)
 WINDOWS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "ci.yml": ("extension-tests-windows",),
 }
-#: The advisory POSIX-without-procfs leg. It is classified separately from
-#: `GITHUB_HOSTED_JOBS` because it is neither an administrative lane nor a
-#: fork-reachable Linux gate: it exists to execute behaviour only macOS can
-#: show, and its absence from the required contexts is deliberate.
+#: The advisory POSIX-without-procfs leg, kept out of `GITHUB_HOSTED_JOBS`
+#: because its absence from the required contexts is deliberate.
 MACOS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "macos-lifecycle.yml": ("lifecycle",),
 }
