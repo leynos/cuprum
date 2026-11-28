@@ -245,12 +245,42 @@ def test_the_merge_guard_rejects_a_glob_that_hides_a_compiler_module() -> None:
     )
 
 
-def test_the_opt_in_target_runs_the_driver_and_propagates_its_status() -> None:
-    """Require a nonzero driver status to reach `make`.
+def test_a_failing_driver_reaches_make_with_a_nonzero_status() -> None:
+    """Execute the opt-in recipe with a failing runner and observe the status.
 
-    A target that swallowed the status would let CI report a green candidate
-    whose tests failed, which is the one failure mode the experiment cannot
-    survive.
+    Printing the command proves the recipe names the driver; it does not prove
+    Make sees a failure. This runs the rendered recipe body with a stub that
+    exits 7 and asserts the status survives, which is the property a green CI
+    candidate depends on.
+    """
+    stub = _stub_runner()
+    rendered = _rendered_opt_in_recipe(stub)
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the recipe body.
+        ["/bin/bash", "-c", rendered],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(pth.Path.cwd()),
+    )
+
+    assert completed.returncode == 7, (
+        "a failing driver must reach the caller as its own status, got "
+        f"{completed.returncode}: {completed.stderr}"
+    )
+
+
+def _rendered_opt_in_recipe(stub: str) -> str:
+    """Return the opt-in target's recipe as one runnable shell command.
+
+    Parameters
+    ----------
+    stub : str
+        Path to the failing runner the recipe should invoke.
+
+    Returns
+    -------
+    str
+        The recipe body with its continuations joined, ready for `bash -c`.
     """
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
         [  # ruff: ignore[start-process-with-partial-path] - make is on PATH.
@@ -258,17 +288,16 @@ def test_the_opt_in_target_runs_the_driver_and_propagates_its_status() -> None:
             "--no-print-directory",
             "-n",
             OPT_IN_TARGET,
-            f"PYTEST_LAYOUT_RUNNER={_stub_runner()}",
+            f"PYTEST_LAYOUT_RUNNER={stub}",
         ],
         capture_output=True,
         text=True,
         check=False,
     )
-
-    assert completed.returncode == 0, completed.stderr
-    assert "stub_runner.py run" in completed.stdout, (
-        "the opt-in target must invoke the driver's run subcommand"
-    )
+    body = completed.stdout.replace("\\\n", " ")
+    lines = [line for line in body.splitlines() if "stub_runner.py" in line]
+    assert lines, f"the rendered recipe must invoke the stub, got: {body}"
+    return "\n".join(lines)
 
 
 def _stub_runner() -> str:

@@ -105,6 +105,23 @@ Failing any of these, the arm is rejected or reported `inconclusive`, and this
 record is amended rather than quietly overturned. A fresh sample is a new
 experiment, not a revision of this one.
 
+## Scope reconciliation
+
+Two of the plan's own instructions are deliberately not followed, and this
+section is the record that review asked for.
+
+The plan's Stage 5 removes unadopted experimental wiring after a deferral. The
+wiring is retained, because the evidence the decision waits on cannot be
+collected without it. Retention is bounded: the verdict fails closed, so an
+instrument that cannot prove its sample reports `inconclusive` rather than
+`adopted`, and the rollback section names every file to delete.
+
+The plan budgeted 1,200 net code lines. The change adds roughly five times
+that. The growth is the fail-closed work: complete-evidence preconditions, a
+loader separated from the decision rule, multiset and outcome fidelity, and
+executable contracts for failure propagation. A smaller instrument that could
+still report `adopted` on absent evidence would be the more expensive outcome.
+
 ## Consequences
 
 - **Positive.** The default suite is untouched, so no contributor pays for an

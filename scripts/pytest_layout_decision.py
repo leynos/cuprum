@@ -135,6 +135,8 @@ def _usable(pairs: cabc.Sequence[Pair]) -> tuple[Pair, ...]:
         and pair.candidate.cache_state == "warm"
         and not pair.control.failed
         and not pair.candidate.failed
+        and pair.control.exit_status == 0
+        and pair.candidate.exit_status == 0
         and pair.saving_seconds is not None
     )
 
@@ -195,6 +197,12 @@ def _thin_leg_reason(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | No
     for pair in pairs:
         leg = pair.control.python_version
         counts[leg] = counts.get(leg, 0) + 1
+    if len(counts) > 1:
+        return (
+            "the sample spans more than one interpreter leg "
+            f"({sorted(counts)}); the plan requires a median per leg, and a "
+            "pooled median would mix incomparable suites"
+        )
     thin = {leg: count for leg, count in counts.items() if count < minimum_pairs}
     return _report(
         thin,
@@ -254,6 +262,8 @@ def _fingerprints_differ(control: RunRecord, candidate: RunRecord) -> bool:
     for field_name in ("runner_label", "toolchain"):
         left = getattr(control, field_name)
         right = getattr(candidate, field_name)
+        if left is None or right is None:
+            return True
         if left != right:
             return True
     return False
@@ -261,6 +271,8 @@ def _fingerprints_differ(control: RunRecord, candidate: RunRecord) -> bool:
 
 def _collections_differ(control: RunRecord, candidate: RunRecord) -> bool:
     """Return whether two runs collected different node multisets."""
+    if not control.node_ids or not candidate.node_ids:
+        return True
     return sorted(control.node_ids) != sorted(candidate.node_ids)
 
 
@@ -275,16 +287,18 @@ def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
     bool
         Whether the candidate's total whole-job seconds are not greater.
     """
-    usable = [
+    if not pairs:
+        return True
+    timed = [
         pair
         for pair in pairs
         if pair.control.job_seconds is not None
         and pair.candidate.job_seconds is not None
     ]
-    if not usable:
-        return True
-    control_total = sum(pair.control.job_seconds or 0.0 for pair in usable)
-    candidate_total = sum(pair.candidate.job_seconds or 0.0 for pair in usable)
+    if len(timed) != len(pairs):
+        return False
+    control_total = sum(pair.control.job_seconds or 0.0 for pair in timed)
+    candidate_total = sum(pair.candidate.job_seconds or 0.0 for pair in timed)
     return candidate_total <= control_total
 
 

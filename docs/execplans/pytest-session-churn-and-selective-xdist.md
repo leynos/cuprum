@@ -212,6 +212,21 @@ deferred. Retaining the current layout is a valid, expected outcome.
 
 ## Decision log
 
+- **2026-11-28 - The code budget is exceeded, deliberately.** The Tolerances
+  section budgeted 1,200 net code lines. The change adds roughly 5,000, because
+  review required the measurement instrument to fail closed: complete-evidence
+  preconditions, multiset and outcome fidelity, a loader separated from the
+  rule, and executable contracts. A cheap instrument that can report `adopted`
+  on absent evidence is worse than none, so the budget yields to correctness.
+  The overspend is recorded here rather than absorbed silently.
+- **2026-11-28 - Retained wiring after a deferral, on review advice.** This
+  plan's Stage 5 says to remove unadopted experimental wiring after a deferral.
+  ADR-0030 retains it instead, and CodeRabbit's assessment endorsed retaining
+  it only if the verdict fails closed and the scope is recorded as
+  deferral-only. Both now hold: `decide` refuses a verdict unless every
+  precondition is met, and the ADR states the deferral explicitly. The rollback
+  in ADR-0030 lists every file to delete if the work is abandoned.
+
 - **2026-11-22 - Baseline is the current `main`, not the issue's citation.**
   Issue #607 quotes `24c3965` (11 entries). The implementation baseline is
   `87de64c2c` (32 entries, 31 processes, 679 files). Measuring the citation

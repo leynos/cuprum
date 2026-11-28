@@ -49,8 +49,10 @@ class _Spec:
     """
 
     seconds: float | None = 100.0
-    nodes: tuple[str, ...] = ()
+    nodes: tuple[str, ...] = ("node",)
     failed: bool = False
+    runner: str | None = "runner-a"
+    toolchain: str | None = "toolchain-a"
 
 
 def _run(run_id: str, layout: str, spec: _Spec | None = None) -> RunRecord:
@@ -66,6 +68,9 @@ def _run(run_id: str, layout: str, spec: _Spec | None = None) -> RunRecord:
         node_ids=facts.nodes,
         exit_status=1 if facts.failed else 0,
         failed=facts.failed,
+        outcomes=tuple((node, "passed") for node in facts.nodes),
+        runner_label=facts.runner,
+        toolchain=facts.toolchain,
     )
 
 
