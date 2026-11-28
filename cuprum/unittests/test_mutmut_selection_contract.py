@@ -2,7 +2,7 @@
 
 The mutation run collects both suite roots and omits the test modules that
 cannot run against a mutated ``cuprum``: two build an environment of their own,
-two read the scheduled coroutine through mutmut's async trampoline, one parses
+two read the scheduled coroutine through mutmut's async trampoline, two parse
 the Makefile with a binary only the Makefile installs, and three are the
 ``act`` scenarios that ``make test`` runs only from ``test-act``. The exclusion
 is pinned here so it cannot widen silently, and each excluded module is checked
@@ -55,10 +55,10 @@ _SELECTED_ROOTS: tuple[str, ...] = ("tests/", "cuprum/unittests/")
 #: beside them stay selected: their attribution predicate recognizes the
 #: trampoline's renamed copies.
 #:
-#: The Makefile-selector contract parses the Makefile with ``makeutil``. Only
+#: The Makefile-reading contracts parse the Makefile with ``makeutil``. Only
 #: the Makefile's own ``makeutil`` target installs that binary, and a mutation
 #: run invokes pytest directly, so the parser is absent on a runner and the
-#: contract correctly refuses rather than reading the selector as empty.
+#: contracts correctly refuse rather than reading the selector as empty.
 #:
 #: The three ``act`` scenarios need a container runtime. ``make test`` already
 #: runs them only from ``test-act``, so collecting them here would make the
@@ -73,6 +73,7 @@ _SANDBOX_EXCLUDED_MODULES: tuple[str, ...] = (
     "cuprum/unittests/test_observe_hook_dispatch_properties.py",
     "cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "tests/test_ci_exemption_contract.py",
+    "tests/test_ci_recipe_flow_contract.py",
     "tests/integration/test_workflow_integration.py",
     "tests/integration/test_experimental_leg_integration.py",
     "tests/integration/test_extension_typecheck_integration.py",

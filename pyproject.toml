@@ -420,11 +420,12 @@ source_paths = ["cuprum/"]
 # because their attribution predicate (`_observe_hook_dispatch_code`) knows
 # the trampoline's renamed copies.
 #
-# The Makefile-selector contract also stays out. It parses the Makefile with
+# The Makefile-reading contracts also stay out. They parse the Makefile with
 # `makeutil`, a Rust binary that only the Makefile's own `makeutil` target
 # installs; a mutation run invokes pytest directly and never runs that target,
-# so the parser is absent and the contract refuses rather than reading the
-# selector as empty. The shared failure capture confirmed this on a runner.
+# so the parser is absent and the contracts refuse rather than reading the
+# selector as empty. The shared failure capture confirmed this on a runner,
+# first in test_ci_exemption_contract and then in test_ci_recipe_flow_contract.
 pytest_add_cli_args_test_selection = [
     "tests/",
     "cuprum/unittests/",
@@ -433,6 +434,7 @@ pytest_add_cli_args_test_selection = [
     "--ignore=cuprum/unittests/test_observe_hook_dispatch_properties.py",
     "--ignore=cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "--ignore=tests/test_ci_exemption_contract.py",
+    "--ignore=tests/test_ci_recipe_flow_contract.py",
     "--ignore=tests/integration/test_workflow_integration.py",
     "--ignore=tests/integration/test_experimental_leg_integration.py",
     "--ignore=tests/integration/test_extension_typecheck_integration.py",
