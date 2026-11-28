@@ -167,9 +167,10 @@ class _ByteQueue:
         """Enqueue *data* losslessly, splitting it to respect the bound.
 
         While the queue is live the producer waits for capacity; no byte is
-        dropped. Once settlement has begun the remaining bytes are discarded
-        and counted rather than blocking teardown, because capture already
-        holds them.
+        dropped. Once settlement has begun the producer never waits: bytes
+        that still fit are enqueued, and only the remainder is discarded and
+        counted. That keeps a clean end clean — a tail that fits is delivered,
+        so the reader reports ``EOF`` — while still bounding teardown.
 
         Parameters
         ----------
@@ -180,11 +181,14 @@ class _ByteQueue:
             return
         offset = 0
         while offset < len(data):
-            if self._ending is not None or self._settling:
+            if self._ending is not None:
                 self._discard(len(data) - offset)
                 return
             available = self._capacity - self._buffered_bytes
             if available <= 0:
+                if self._settling:
+                    self._discard(len(data) - offset)
+                    return
                 self._space_ready.clear()
                 # Re-check after clearing: a consumer that freed space before
                 # the clear already set the event, and no other task can run
@@ -256,9 +260,9 @@ class _ByteQueue:
         case, because the exit wait can return before the final read — but if
         every chunk still fitted the queue, the reader did receive the whole
         stream and ``EOF`` is the honest state. Any discarded byte makes the
-        terminal state ``TRUNCATED_BY_SETTLEMENT`` instead. An already
-        published state is left alone, so a reader close or a failure cannot
-        be overwritten by a later EOF.
+        terminal state ``TRUNCATED_BY_SETTLEMENT`` instead. A published
+        reader close or failure is left alone, so a later EOF cannot overwrite
+        it.
         """
         if self._discarded_bytes:
             self._publish(StreamClosure.TRUNCATED_BY_SETTLEMENT)
@@ -266,12 +270,13 @@ class _ByteQueue:
             self._publish(StreamClosure.EOF)
 
     def begin_settlement(self) -> None:
-        """Stop accepting live chunks and wake a producer blocked on space.
+        """Stop waiting for space and wake a producer blocked on capacity.
 
         This is the provisional half of settlement. It publishes no status:
         the drain may still reach a clean EOF during the reconciliation
         window, and :meth:`finalize_settlement` publishes the truncation only
-        for a queue that never got one.
+        for a queue that never got one. A chunk that fits is still enqueued;
+        only the remainder is discarded.
         """
         self._settling = True
         self._space_ready.set()
@@ -288,6 +293,11 @@ class _ByteQueue:
     def fail(self, cause: BaseException) -> None:
         """Publish ``FAILED`` with *cause* stored out of band.
 
+        A failure outranks every other terminal state, including one already
+        published: the drain has failed, so a reader must never be told the
+        stream ended cleanly. Queued items are released because a failed
+        stream cannot deliver them; the capture still holds the bytes.
+
         Parameters
         ----------
         cause : BaseException
@@ -296,8 +306,9 @@ class _ByteQueue:
         if self._failure is None:
             self._failure = cause
         self._settling = True
-        if self._ending is None:
-            self._ending = StreamClosure.FAILED
+        self._ending = StreamClosure.FAILED
+        self._items.clear()
+        self._buffered_bytes = 0
         self._release_waiters()
 
     def close_reader(self) -> None:

@@ -125,10 +125,12 @@ class ByteStreamReader:
             raise StopAsyncIteration
         data = await self._queue.get()
         if data is None:
-            self._closed = True
             failure = self._queue.failure
             if failure is not None:
+                # A failed reader must keep raising: closing it silently would
+                # report ordinary exhaustion for a stream that never ended.
                 raise LiveStreamError(self._stream, cause=failure) from failure
+            self._closed = True
             raise StopAsyncIteration
         chunk = ByteChunk(self._stream, data, self._sequence)
         self._sequence += 1

@@ -110,21 +110,31 @@ async def _prefix_story() -> _LiveObservation:
 
 async def _independent_eof_story() -> _LiveObservation:
     """Close stdout in the child while stderr and the child remain live."""
+    released = asyncio.Event()
+
+    async def produce() -> cabc.AsyncIterator[bytes]:
+        """Yield the stderr token only after stdout's EOF is observed."""
+        await released.wait()
+        yield b"go\n"
+
     code = (
-        "import os, sys, time\n"
+        "import os, sys\n"
         "sys.stdout.buffer.write(b'out')\n"
         "sys.stdout.buffer.flush()\n"
         "null = os.open(os.devnull, os.O_WRONLY)\n"
         "os.dup2(null, 1)\n"
+        "sys.stdin.buffer.readline()\n"
         "sys.stderr.buffer.write(b'err')\n"
         "sys.stderr.buffer.flush()\n"
-        "time.sleep(1.0)\n"
     )
-    async with await _PYTHON("-c", code).start_bytes() as handle:
+    async with await _PYTHON("-c", code).start_bytes(
+        stdin=StdinStream(produce()),
+    ) as handle:
         out = await _read_all(handle.stdout)
         stdout_closure = handle.stdout.closure
         stderr_was_live = handle.stderr.closure is None
         child_was_live = handle.result is None
+        released.set()
         err = await _read_all(handle.stderr)
         stderr_closure = handle.stderr.closure
         result = await handle.wait()

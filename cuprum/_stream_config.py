@@ -114,7 +114,7 @@ def _build_stream_config(
         # A live byte run caps each read at its queue's bound, so an ordinary
         # read fits one reservation. The queue still splits anything larger;
         # this is a sizing choice, not the correctness mechanism.
-        read_size = min(read_size, live.max_buffered_bytes)
+        read_size = live.read_size_for(read_size)
     return _StreamConfig(
         capture=execution.capture_stdout,
         echo_output=execution.echo_stdout,

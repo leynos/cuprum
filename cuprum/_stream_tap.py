@@ -31,10 +31,16 @@ type _EofSink = cabc.Callable[[], None]
 
 @dc.dataclass(frozen=True, slots=True)
 class _StreamTap:
-    """One stream's live observers, in the shape the drain accepts."""
+    """One stream's live observers, in the shape the drain accepts.
+
+    ``on_failure`` publishes the drain task's own failure so a reader learns
+    about it without waiting for settlement to start. It is optional because a
+    tap built by a unit test may not own a queue.
+    """
 
     on_chunk: _ChunkSink
     on_eof: _EofSink
+    on_failure: cabc.Callable[[BaseException], None] | None = None
 
 
 __all__ = ["_ChunkSink", "_EofSink", "_StreamTap"]

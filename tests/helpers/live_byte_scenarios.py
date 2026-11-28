@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -114,22 +115,32 @@ async def prefix_before_input() -> None:
 
 async def independent_eof() -> None:
     """Observe stdout EOF while stderr and the child remain live."""
+    released = asyncio.Event()
+
+    async def produce() -> cabc.AsyncIterator[bytes]:
+        """Yield the stderr token only after stdout's EOF is observed."""
+        await released.wait()
+        yield b"go\n"
+
     code = (
-        "import os, sys, time\n"
+        "import os, sys\n"
         "sys.stdout.buffer.write(b'out')\n"
         "sys.stdout.buffer.flush()\n"
         "null = os.open(os.devnull, os.O_WRONLY)\n"
         "os.dup2(null, 1)\n"
+        "sys.stdin.buffer.readline()\n"
         "sys.stderr.buffer.write(b'err')\n"
         "sys.stderr.buffer.flush()\n"
-        "time.sleep(1.0)\n"
     )
-    async with await _PYTHON("-c", code).start_bytes() as handle:
+    async with await _PYTHON("-c", code).start_bytes(
+        stdin=StdinStream(produce()),
+    ) as handle:
         out = await _read_all(handle.stdout)
         _require(out == b"out", f"stdout was {out!r}")
         _require(handle.stdout.closure is StreamClosure.EOF, "stdout must reach EOF")
         _require(handle.stderr.closure is None, "stderr must remain live")
         _require(handle.result is None, "the child must still be running")
+        released.set()
         err = await _read_all(handle.stderr)
         result = await handle.wait()
     _require(err == b"err", f"stderr was {err!r}")
@@ -312,24 +323,29 @@ async def _descendant_scenario(*, own_group: bool) -> None:
     _require(result.ok, f"the leader exited {result.exit_code}")
     _require(marker.is_file(), "the descendant PID marker was not written")
     descendant = int(marker.read_text(encoding="utf-8"))
-    if own_group:
-        _require(
-            _wait_dead(descendant, _DESCENDANT_WAIT_S),
-            "an owned group must reap the descendant holding the pipe",
-        )
-        _require(
-            handle.stdout.closure is StreamClosure.EOF,
-            "the group stop should let stdout reach EOF, got "
-            f"{handle.stdout.closure!r}",
-        )
-    else:
-        _require(_is_alive(descendant), "an inherited descendant must survive")
-        _require(
-            handle.stdout.closure is StreamClosure.TRUNCATED_BY_SETTLEMENT,
-            "an inherited descendant must truncate the reader, got "
-            f"{handle.stdout.closure!r}",
-        )
+    try:
+        if own_group:
+            _require(
+                _wait_dead(descendant, _DESCENDANT_WAIT_S),
+                "an owned group must reap the descendant holding the pipe",
+            )
+            _require(
+                handle.stdout.closure is StreamClosure.EOF,
+                "the group stop should let stdout reach EOF, got "
+                f"{handle.stdout.closure!r}",
+            )
+        else:
+            _require(_is_alive(descendant), "an inherited descendant must survive")
+            _require(
+                handle.stdout.closure is StreamClosure.TRUNCATED_BY_SETTLEMENT,
+                "an inherited descendant must truncate the reader, got "
+                f"{handle.stdout.closure!r}",
+            )
+    finally:
+        # The survival assertion above must run before this cleanup; a failed
+        # assertion must not leave a 30-second sleeper behind.
         _kill_and_reap(descendant)
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 async def descendant_own_group() -> None:

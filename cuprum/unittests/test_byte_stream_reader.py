@@ -177,3 +177,22 @@ def test_close_after_eof_keeps_the_clean_terminal_state() -> None:
         )
 
     asyncio.run(scenario())
+
+
+def test_failed_iteration_keeps_raising_on_a_later_attempt() -> None:
+    """A failed reader never reports ordinary exhaustion on a second pass."""
+
+    async def scenario() -> None:
+        """Fail a reader, consume the error, then attempt iteration again."""
+        reader, queue = _reader()
+        cause = RuntimeError("drain broke")
+        queue.fail(cause)
+        with pytest.raises(LiveStreamError):
+            await anext(reader)
+        with pytest.raises(LiveStreamError) as raised:
+            await anext(reader)
+        assert raised.value.__cause__ is cause, (
+            "the repeated attempt must still carry the original cause"
+        )
+
+    asyncio.run(scenario())

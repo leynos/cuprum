@@ -18,17 +18,18 @@ from __future__ import annotations
 import functools
 import typing as typ
 
-from cuprum._delivery_lifecycle import _close_delivery_worker
 from cuprum._process_handle.coordinator import (
-    _build_handle_result,
+    _close_handle_delivery,
     _finalize_settled_run,
-    _handle_outcome,
     _ReconcileHooks,
+)
+from cuprum._process_handle.results import (
+    _assemble_handle_result,
+    _handle_outcome,
 )
 from cuprum._process_handle.settlement import _expiry_error, _SettlementPlan
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_handle_errors import LiveStreamError
-from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_startup_abandon import _release_output_transports
 from cuprum._subprocess_wait import (
@@ -97,6 +98,17 @@ async def _settle_bytes_handle_run(
     """  # ruff: ignore[docstring-extraneous-exception] - the monitored failures propagate
     execution = run.execution
     _launch_idle_monitor(execution)
+    # Every exit path releases the live queues before reconciliation and the
+    # output transports after it; only the success path also closes the
+    # delivery worker, and only after the result's figures are settled.
+    hooks = _ReconcileHooks(
+        before=streams.begin_settlement,
+        after=functools.partial(
+            _release_output_transports,
+            run.process,
+            execution,
+        ),
+    )
     try:
         exit_code, exited_at = await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(run.process, execution),
@@ -111,7 +123,7 @@ async def _settle_bytes_handle_run(
                 run,
                 execution,
                 preserve=False,
-                hooks=_ReconcileHooks(before=streams.begin_settlement),
+                hooks=hooks,
             )
         finally:
             streams.finalize_settlement()
@@ -124,47 +136,23 @@ async def _settle_bytes_handle_run(
             run,
             execution,
             preserve=True,
-            hooks=_ReconcileHooks(
-                before=streams.begin_settlement,
-                after=functools.partial(
-                    _release_output_transports,
-                    run.process,
-                    execution,
-                ),
-            ),
+            hooks=hooks,
         )
     except BaseException:
         streams.finalize_settlement()
         raise
 
-    late_failure = _consumer_failure(run.ownership)
-    if late_failure is not None:
-        streams.fail(late_failure[0], late_failure[1])
+    late_failure = _publish_consumer_failures(run.ownership, streams)
     streams.finalize_settlement()
     if late_failure is not None:
         index, cause = late_failure
         raise LiveStreamError(_STREAM_NAMES[index], cause=cause)
 
-    # Handle results and after-hooks must see write failures and undelivered
-    # bytes discovered only when the shared delivery worker settles, so the
-    # worker closes before the outcome is built.
-    await _shielded_cleanup(
-        _close_delivery_worker(
-            execution.delivery_worker,
-            drain_grace_s=execution.delivery_grace_s,
-        )
-    )
-    # Imported here, not at module scope: ``cuprum._bytes_run`` imports the
-    # ``cuprum.sh`` result modules, and this module is reached while that
-    # package is still initializing.
-    from cuprum._bytes_run import _require_bytes_command_result
-
-    return _require_bytes_command_result(
-        _build_handle_result(
-            run,
-            _handle_outcome(exit_code, exited_at, drained),
-            capture_bytes=True,
-        )
+    await _close_handle_delivery(execution)
+    return _assemble_handle_result(
+        run,
+        _handle_outcome(exit_code, exited_at, drained),
+        capture_bytes=True,
     )
 
 
@@ -186,56 +174,62 @@ def _publish_early_failure(
     BaseException
         The error the settlement should raise.
     """
-    index = _consumer_index(ownership, error)
-    if index is None:
+    failures = _failed_consumers(ownership)
+    for index, failure in failures:
+        streams.fail(index, failure)
+    selected = next(
+        (index for index, failure in failures if failure is error),
+        None,
+    )
+    if selected is None:
         streams.begin_settlement()
         return error
-    streams.fail(index, error)
-    return LiveStreamError(_STREAM_NAMES[index], cause=error)
+    return LiveStreamError(_STREAM_NAMES[selected], cause=error)
 
 
-def _consumer_failure(
+def _failed_consumers(
     ownership: _RunTaskOwnership,
-) -> tuple[int, BaseException] | None:
-    """Return a consumer's non-cancellation failure, in stream order.
+) -> tuple[tuple[int, BaseException], ...]:
+    """Return every consumer's non-cancellation failure, in stream order.
 
     The reconciliation gathers consumers with ``return_exceptions=True`` so a
     failed reader cannot mask the run's own error. That also means a reader
     that failed during the final drain would otherwise be reported as an empty
-    capture, so the failure is re-read here and given precedence over the
+    capture, so the failures are re-read here and given precedence over the
     successful result. The rendezvous helper is reused rather than restated:
-    both callers ask exactly "which settled consumer failed, if any".
+    both callers ask exactly "did this task fail".
+
+    Returns
+    -------
+    tuple[tuple[int, BaseException], ...]
+        The stream index and failure of each failed consumer, stdout first.
+    """
+    failures: list[tuple[int, BaseException]] = []
+    for index, task in enumerate(ownership.consumers):
+        failure = _stdin_writer_failure(task)
+        if failure is not None:
+            failures.append((index, failure))
+    return tuple(failures)
+
+
+def _publish_consumer_failures(
+    ownership: _RunTaskOwnership,
+    streams: _ByteStreams,
+) -> tuple[int, BaseException] | None:
+    """Publish every failed consumer's state; return the first for the run.
+
+    Publishing each failure before the queues are finalized is what lets a
+    reader whose drain failed report ``LiveStreamError`` even when another
+    stream failed first. The returned failure keeps stdout-first precedence
+    for the error the shared settlement raises.
 
     Returns
     -------
     tuple[int, BaseException] | None
-        The stream index and the failure, or ``None`` when no consumer failed.
+        The first failed stream and its failure, or ``None`` when no consumer
+        failed.
     """
-    for index, task in enumerate(ownership.consumers):
-        failure = _stdin_writer_failure(task)
-        if failure is not None:
-            return index, failure
-    return None
-
-
-def _consumer_index(
-    ownership: _RunTaskOwnership,
-    error: BaseException,
-) -> int | None:
-    """Return which consumer raised *error* by identity, if one did.
-
-    Identity is the only reliable provenance test: a callback can raise
-    ``TimeoutError`` itself, and a type check would confuse that with the run's
-    deadline. The rendezvous raises the very object the task carries, so the
-    comparison is exact.
-
-    Returns
-    -------
-    int | None
-        ``0`` for stdout, ``1`` for stderr, or ``None`` when no consumer
-        raised *error*.
-    """
-    found = _consumer_failure(ownership)
-    if found is not None and found[1] is error:
-        return found[0]
-    return None
+    failures = _failed_consumers(ownership)
+    for index, failure in failures:
+        streams.fail(index, failure)
+    return failures[0] if failures else None

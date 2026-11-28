@@ -161,6 +161,8 @@ def test_echo_write_precedes_the_byte_tap() -> None:
         order: list[str] = []
 
         class _Sink(io.StringIO):
+            """A text sink that records each write in the shared order list."""
+
             def write(self, text: str) -> int:
                 """Record the echo write before delegating."""
                 order.append(f"sink:{text.strip()}")

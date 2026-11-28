@@ -101,6 +101,7 @@
       'cuprum/_process_handle/coordinator.py',
       'cuprum/_process_handle/owned_start.py',
       'cuprum/_process_handle/reporting.py',
+      'cuprum/_process_handle/results.py',
       'cuprum/_process_handle/settle.py',
       'cuprum/_process_handle/settlement.py',
       'cuprum/_process_handle/state.py',

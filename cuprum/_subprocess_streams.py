@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import functools
 import typing as typ
 
 from cuprum._line_callbacks import (
@@ -69,6 +70,7 @@ from cuprum._subprocess_wait_types import _RunTaskOwnership
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum._stream_live import _LiveStreamSink
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_wait_types import _ConsumerPair, _StreamConsumerTask
@@ -276,7 +278,7 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
     """
     if not wiring.is_pipe:
         return None
-    return asyncio.create_task(
+    task = asyncio.create_task(
         _consume_stream(
             wiring.stream,
             wiring.config,
@@ -284,6 +286,29 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
             relay_diagnostics=wiring.relay_diagnostics,
         ),
     )
+    tap = wiring.config.tap
+    if tap is not None and tap.on_failure is not None:
+        # A drain can fail while the child is still running. Publishing the
+        # task's own failure here is what lets a live reader observe FAILED
+        # without waiting for a caller to start settlement.
+        task.add_done_callback(functools.partial(_publish_consumer_failure, tap))
+    return task
+
+
+def _publish_consumer_failure(
+    tap: _LiveStreamSink,
+    task: asyncio.Task[typ.Any],
+) -> None:
+    """Publish a consumer task's own failure to its live queue.
+
+    Cancellation is the teardown's ordinary stop and publishes nothing: only a
+    task that ended with an exception reports a failed stream.
+    """
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None and tap.on_failure is not None:
+        tap.on_failure(error)
 
 
 def _prepare_stream_spawn(
@@ -352,6 +377,7 @@ __all__ = [
     "_build_task_ownership",
     "_create_stream_callback",
     "_prepare_stream_spawn",
+    "_publish_consumer_failure",
     "_resolve_stream_configs",
     "_resolve_stream_sink",
     "_spawn_stream_consumers",

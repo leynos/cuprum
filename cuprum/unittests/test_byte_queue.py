@@ -223,3 +223,39 @@ async def _drain(source: cabc.AsyncIterator[bytes]) -> None:
     """Consume an iterator to completion, for the cancellation case."""
     async for _chunk in source:
         pass
+
+
+def test_a_tail_that_fits_after_settlement_is_still_delivered() -> None:
+    """Settlement stops waiting but does not discard a chunk that fits."""
+
+    async def scenario() -> None:
+        """Begin settlement, enqueue a fitting chunk, then publish EOF."""
+        queue = _ByteQueue(8)
+        queue.begin_settlement()
+        await queue.put(b"tail")
+        queue.producer_eof()
+        assert queue.discarded_bytes == 0, "a fitting tail must not be discarded"
+        assert queue.ending is StreamClosure.EOF, (
+            "a clean end with nothing discarded must report EOF"
+        )
+        assert await queue.get() == b"tail", "the fitting tail must be readable"
+
+    asyncio.run(scenario())
+
+
+def test_failure_overrides_an_already_published_eof() -> None:
+    """A failure recorded after EOF is the terminal state readers observe."""
+
+    async def scenario() -> None:
+        """Publish EOF, then fail the stream."""
+        queue = _ByteQueue(8)
+        queue.producer_eof()
+        cause = RuntimeError("late drain failure")
+        queue.fail(cause)
+        assert queue.ending is StreamClosure.FAILED, (
+            "a recorded failure must override a clean EOF"
+        )
+        assert await queue.get() is None, "a failed stream yields no items"
+        assert queue.failure is cause, "the original cause must be retained"
+
+    asyncio.run(scenario())

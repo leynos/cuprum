@@ -2005,12 +2005,16 @@ for each stream's queue and also caps each stream's read size. The bound covers
 queued live bytes only: it excludes the capture policy's retention, the chunk
 being written, transport buffers, and the operating system's pipe buffer.
 
-Once settlement begins, a queue that has not reached a clean end stops
-accepting live chunks, wakes a blocked producer, and reports truncation.
-Capture is unaffected, so the settled `BytesCommandResult` still carries every
-byte the child wrote. Consume to end-of-stream before awaiting the result when
-the live stream and the capture must agree; a `wait()` that starts first is
-already a settlement.
+Once settlement begins, a queue that has not reached a clean end stops waiting
+for capacity: a chunk that still fits is enqueued, the remainder is discarded
+and counted, and a blocked producer is woken. The reader reports
+`TRUNCATED_BY_SETTLEMENT` only if a byte was discarded; if the drain then
+reaches the end without losing one, it reports `EOF`. Queue release does not
+change capture, so the settled `BytesCommandResult` reports whatever the active
+capture policy retained: `FullCapture` keeps every byte, while a bounded or
+file-backed policy may discard or spill and records that on its capture record.
+Consume to end-of-stream before awaiting the result when the live stream and
+the capture must agree; a `wait()` that starts first is already a settlement.
 
 `start_bytes()` accepts the same `StdinSource` as `run()`: a complete
 `StdinInput` payload or a `StdinStream` producer. A streaming producer is

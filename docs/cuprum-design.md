@@ -5804,9 +5804,11 @@ run's contract, so its queue applies backpressure instead.
   chunk exceeds it.
 - Terminal state is out of band. A reader can observe EOF while queued items
   remain, and iteration then drains those items before stopping.
-- `release()` wakes a blocked `put` and makes later chunks discard rather than
-  block. It is used for `READER_CLOSED` and for settlement.
-- A failure is stored out of band and outranks pending items.
+- `release()` wakes a blocked `put` and makes a later chunk that does not fit
+  discard rather than block. It is used for `READER_CLOSED` and for settlement.
+- A failure is stored out of band, outranks pending items, and overrides any
+terminal state already published, so a reader can never be told a failed stream
+ended cleanly.
 
 The read size of a byte run is capped at
 `min(configured_read_size, max_buffered_bytes)` through `_StreamConfig`, so a
@@ -5841,8 +5843,11 @@ runs, so a cancelled drain never claims EOF.
 
 #### 13.11.5 Supervisor and settlement
 
-The settlement task is also the supervisor. It races the child's exit against
-the stdin writer and both stream consumers through
+Each byte drain also publishes its own task's failure as soon as it happens,
+without waiting for settlement to start: a reader that is iterating a live
+stream has not called `wait()`, so a late `FAILED` would otherwise suspend it
+forever. The settlement task is also the supervisor. It races the child's exit
+against the stdin writer and both stream consumers through
 `_await_exit_or_writer_failure`, so it inherits the fixed rendezvous
 precedence: a settled exit wins, then the stdin writer, then stdout, then
 stderr. An early consumer failure cancels the exit wait, whose cancellation
@@ -5853,8 +5858,9 @@ remains a non-fatal observation.
 
 Settlement runs in three steps under one shield:
 
-1. Release both queues for settlement. A blocked `put` wakes; a subsequent
-   chunk that does not fit is discarded and counted while capture continues.
+1. Release both queues for settlement. A blocked `put` wakes and stops
+   waiting; a chunk that still fits is enqueued, and only the remainder is
+   discarded and counted while capture continues.
 2. Reconcile the run's tasks with the ordinary capture EOF grace. A drain that
    reaches EOF publishes `EOF` when nothing was discarded, otherwise
    `TRUNCATED_BY_SETTLEMENT`; a drain that does not reach EOF is finalized as
@@ -5862,9 +5868,11 @@ Settlement runs in three steps under one shield:
 3. Release the child's output transports and close the delivery worker.
 
 If reconciliation discovers that a consumer task ended with a non-cancellation
-exception, that reader is published as `FAILED` and the run settles with the
-chained `LiveStreamError` rather than reporting a successful result. A drain
-failure therefore cannot hide behind a short capture.
+exception, every failed stream's reader is published as `FAILED` and the run
+settles with the chained `LiveStreamError` rather than reporting a successful
+result. The error the settlement raises keeps stdout-first precedence, while
+each failed reader reports its own cause. A drain failure therefore cannot hide
+behind a short capture, and a failure cannot leave a clean `EOF` observable.
 
 The handle keeps the existing deadline rule: `wait(timeout=...)` bounds one
 caller's wait, stops the child on expiry, and raises `TimeoutExpired` carrying

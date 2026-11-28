@@ -67,8 +67,16 @@ class _ByteStreams:
         stdout_tap = _QueueTap(self.stdout_queue)
         stderr_tap = _QueueTap(self.stderr_queue)
         return _LiveStreamSinks(
-            stdout=_LiveStreamSink(stdout_tap.on_chunk, self.stdout_queue.producer_eof),
-            stderr=_LiveStreamSink(stderr_tap.on_chunk, self.stderr_queue.producer_eof),
+            stdout=_LiveStreamSink(
+                stdout_tap.on_chunk,
+                self.stdout_queue.producer_eof,
+                self.stdout_queue.fail,
+            ),
+            stderr=_LiveStreamSink(
+                stderr_tap.on_chunk,
+                self.stderr_queue.producer_eof,
+                self.stderr_queue.fail,
+            ),
             max_buffered_bytes=self.stdout_queue.capacity,
         )
 
