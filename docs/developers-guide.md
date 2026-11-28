@@ -161,13 +161,15 @@ Table 1: GitHub Actions jobs, workflows, and runners
 | `publish-release`         | `release.yml`                | `ubuntu-latest`       | none            | 10      |
 | `build-native-wheels`     | `build-wheels.yml`           | `${{ matrix.os }}`    | none            | 45      |
 | `native`                  | `rust-boundaries.yml`        | `${{ matrix.os }}`    | none            | 20      |
+| `lifecycle`               | `macos-lifecycle.yml`        | `macos-latest`        | none            | 20      |
 
 The hosted rows are hosted for a reason, not by omission. `loom-smoke` is a
 cheap gate job that gates no required check; `workflow-harness`, `loom`, and
-`extended` run only on a schedule or a dispatch; and `rust-boundaries.yml`'s
-verifier lanes stay on GitHub-hosted Linux by this repository's own decision.
-Placing `verus` or `loom-smoke` on the paid lane is a separate question needing
-its own measurements.
+`extended` run only on a schedule or a dispatch; `lifecycle` is the advisory
+macOS leg described [below](#the-macos-process-lifecycle-leg); and
+`rust-boundaries.yml`'s verifier lanes stay on GitHub-hosted Linux by this
+repository's own decision. Placing `verus` or `loom-smoke` on the paid lane is
+a separate question needing its own measurements.
 
 A job that a paid lane waits on runs on the paid lane too, however trivial its
 work. `changes` is a five-second paths filter, but `benchmark-ratchet`, a
@@ -920,6 +922,101 @@ Two jobs survive that look like duplicates and are not:
 
 The nextest installer is gone from this repository. Nothing here runs nextest
 directly any more; the coverage action installs its own.
+
+### The macOS process-lifecycle leg
+
+`macos-lifecycle.yml` runs the POSIX process-lifecycle subset on
+`macos-latest`. Every other Python suite runs on Linux, where procfs answers
+the process-state questions macOS answers with `ps`, so behaviour that only a
+POSIX host without procfs can exercise had no execution on the platform it was
+written for. The immediate case was the `ps` route of
+`tests/helpers/process_exit.py`; the same silence covered the process-group,
+cancellation, deadline, and detached-launch promises.
+
+The leg is advisory. Its check context is absent from the live
+`main-required-checks` ruleset, because macOS arm64 runners queue for a long
+time in this repository and a required leg would put that queue on every pull
+request. It runs on a path-filtered pull request, a weekly schedule at
+`41 5 * * 3`, and an input-free dispatch. The schedule is deliberately not the
+Monday `23 4 * * 1` slot that `rust-boundaries.yml` uses, so the two
+long-queueing lanes do not start together.
+
+The job runs Python 3.13, the interpreter the coverage lane uses, and binds
+`UV_PYTHON` to the same version so uv cannot select a different patch. It
+installs the locked development environment with
+`uv sync --locked --group dev`, then runs
+`uv run python -m tests.helpers.macos_lifecycle`. It builds no Rust extension:
+the leg exercises the Python backend, so the manifest fixes
+`CUPRUM_STREAM_BACKEND=python` and removes any ambient
+`CUPRUM_REQUIRE_RUST_EXTENSION` before pytest imports the repository conftest.
+The hosted image provides `os.waitid` with `WNOWAIT`, which the zombie fixture
+requires; a host without it would skip those cases, which the guard below
+reports as a failure rather than a pass.
+
+#### The selection and its guard
+
+`tests/helpers/macos_lifecycle.py` is the single declaration. `TARGETS` names
+the twenty modules: the probe and the #720 descendant regression, then the
+process-group ownership, signal, cancellation, deadline, and detached-launch
+families. `REQUIRED_PASSING` names the seven cases whose passing is the
+acceptance evidence: the three `[ps]` probe cases and the four cancellation
+cases. `DESELECTED` records every case the leg does not run, with a reason:
+
+- The `[procfs]` parameter of each probe case skips on Darwin because there is
+  no procfs to read. The `[ps]` parameter of the same case runs and is required.
+- `test_the_launch_leaves_no_descriptor_behind` counts `/proc/self/fd`, which
+  Darwin does not provide. A portable readiness helper is tracked in #738.
+- Eighteen Rust-backend arms of `test_direct_start_ownership.py` and
+  `test_pipeline_post_exit_deadline.py` need the compiled extension this leg
+  deliberately does not build. The Python-backend arm of each case runs and is
+  guarded.
+
+`tests/helpers/required_outcomes.py` is an opt-in pytest plugin, loaded only by
+this leg and by its controls. It fails the run for an empty selection, a
+collection error, a skipped or failed phase, an xfail or xpass, a selected case
+with no passing call, an unexpected or stale deselection, and a required node
+ID that was not selected or did not pass. The terminal summary names each
+category and the node IDs that broke it. A predicted removal that no longer
+matches fails as a stale deselection, so a renamed case cannot silently shrink
+the leg. The plugin refuses an xdist-distributed run, because it cannot observe
+a skip in another worker; the manifest passes `-p no:xdist`.
+
+`tests/test_required_outcomes_guard.py` drives every category with synthetic
+suites and pins the difference against plain pytest.
+`tests/test_macos_lifecycle_manifest.py` checks every target, deselection, and
+required ID against the collection pytest produces, and that both new
+root-level modules are routed by `PYTEST_TARGETS`.
+`tests/test_ci_macos_lifecycle_workflow_contract.py` pins the workflow's
+triggers, path coverage, runner, interpreter, locked sync, command,
+permissions, and the absence of `continue-on-error`.
+
+The first hosted run executed 141 of the 163 collected cases, with all 22
+predicted deselections matching. The three `[ps]` probe cases and all four
+cancellation cases passed, so the route macOS depends on ran rather than
+skipped. The run exposed one test defect: an owned-group liveness assertion used
+`kill(pid, 0)`, which counts an unreaped zombie as running, while Darwin
+refuses a group signal whose only member is a zombie and treats the group as
+settled before the host reaper collects it. The owned-group tests now use
+`observe_exit` for descendant liveness and exit waits, which is what made the
+second run green. That run passed all 141 selected cases in 78 seconds of test
+time, in a job that took 1 minute 35 seconds once the macOS queue released it,
+so the 20-minute ceiling leaves ample headroom.
+
+The leg does not run every POSIX-gated lifecycle module. Outside its first
+subset are the adjacent cancellation, transport-release, reaping, and
+startup-abandonment cases: `test_pipeline_teardown_cancellation.py`,
+`test_post_exit_timeout_telemetry.py`,
+`test_run_no_stream_writer_settlement.py`, `test_stdin_settle_cancellation.py`,
+`test_stream_exit_transport_release.py`,
+`test_stream_run_owned_group_post_exit.py`, `test_wait4_process_reaping.py`,
+`test_startup_abandon.py`, and `test_startup_abandon_read_failure.py`. They
+exercise the same POSIX boundary, but each adds runtime and a surface that
+needs its own Darwin triage. Widening the subset, and replacing the procfs-only
+readiness helper, are tracked in #738.
+
+The local command is the two commands above, run from the repository root on a
+Mac. The workflow's summary step repeats the outcome and, on failure, points at
+the `required outcomes guard` section of the log.
 
 ### Coverage ownership
 
@@ -2753,7 +2850,10 @@ that assert a descendant was killed, or that it survived, should use this
 helper; `process_is_running` in `tests/helpers/timeouts.py` remains correct
 only for a process the test itself reaps.
 `cuprum/unittests/test_process_exit_probe.py` pins the three states on both
-routes by withholding procfs from the probe.
+routes by withholding procfs from the probe. The macOS leg described under
+[GitHub Actions runners](#the-macos-process-lifecycle-leg) executes the `ps`
+route on `macos-latest`: its three `[ps]` cases are required to pass there, and
+a skip fails the leg.
 
 ## Detached command launch internals
 

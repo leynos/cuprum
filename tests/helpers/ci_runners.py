@@ -62,6 +62,8 @@ __all__ = (
     "CACHE_SAVE",
     "FORK_FIELD",
     "FROZEN_HOSTED_LABELS",
+    "MACOS_HOSTED_JOBS",
+    "MACOS_LABEL",
     "ROOT",
     "RUNNER_NAMED_JOBS",
     "WORKFLOW_DIR",
@@ -99,6 +101,8 @@ UBICLOUD_LABEL = "ubicloud-standard-2"
 UBICLOUD_VCPUS = 2
 GITHUB_LABEL = "ubuntu-latest"
 WINDOWS_LABEL = "windows-2022"
+#: The macOS image the advisory lifecycle leg runs on; Ubicloud has no Mac.
+MACOS_LABEL = "macos-latest"
 
 CACHE_KEYS_ACTION = "./.github/actions/cache-keys"
 CACHE_KEYS_ACTION_FILE = ROOT / ".github" / "actions" / "cache-keys" / "action.yml"
@@ -227,6 +231,11 @@ RUNNER_NAMED_JOBS: typ.Final = (("rust-boundaries.yml", "native"),)
 #: offers Linux capacity only.
 WINDOWS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
     "ci.yml": ("extension-tests-windows",),
+}
+#: The advisory POSIX-without-procfs leg, kept out of `GITHUB_HOSTED_JOBS`
+#: because its absence from the required contexts is deliberate.
+MACOS_HOSTED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {
+    "macos-lifecycle.yml": ("lifecycle",),
 }
 #: Jobs that restore at least one cache through the shared renderer.
 CACHED_JOBS: typ.Final[cabc.Mapping[str, tuple[str, ...]]] = {

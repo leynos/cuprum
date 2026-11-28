@@ -30,6 +30,7 @@ ESTATE_WORKFLOWS = frozenset({
     "delayed-pr-comment.yml",
     "dependabot-automerge.yml",
     "loom.yml",
+    "macos-lifecycle.yml",
     "mutation-testing.yml",
     "release.yml",
     "rust-boundaries.yml",

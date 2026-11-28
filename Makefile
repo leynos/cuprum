@@ -187,6 +187,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_ci_*.py \
   tests/test_distribution_artefacts.py \
   tests/test_distribution_build.py \
+  tests/test_macos_lifecycle_manifest.py \
   tests/test_native_sdist.py \
   tests/test_native_pipeline_hand_off_support.py \
   tests/test_native_pipeline_liveness.py \
@@ -197,6 +198,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   tests/test_process_state_degradations.py \
   tests/test_process_state_helper.py \
   tests/test_py_typed_marker.py \
+  tests/test_required_outcomes_guard.py \
   tests/test_rust_pump_writer_handoff_terminal_paths.py \
   tests/test_running_command_children_contract.py \
   scripts/tests/test_boundary_*.py \

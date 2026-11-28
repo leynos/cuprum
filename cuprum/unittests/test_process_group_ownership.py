@@ -26,11 +26,14 @@ from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
+    _descendant_has_exited,
+    _descendant_is_running,
     _kill_ignoring_missing,
     _posix_only,
     _spawn_immune_child,
     _spawn_owned_run,
     _terminate_owned_run,
+    _wait_for_descendant_exit,
 )
 from tests.helpers.timeouts import (
     process_is_running,
@@ -59,13 +62,14 @@ def test_owned_group_teardown_terminates_a_grandchild_that_ignores_sigterm(
     async def run_case() -> None:
         """Tear down an owned group while its grandchild is still up."""
         run = await _spawn_owned_run(tmp_path)
-        assert process_is_running(run.grandchild_pid), (
+        assert _descendant_is_running(run.grandchild_pid), (
             "the grandchild must be running before teardown, or this test "
             "cannot observe what the teardown does"
         )
         await _terminate_owned_run(run)
-        assert not process_is_running(run.grandchild_pid), (
-            "the grandchild must be gone once the owned group is torn down"
+        _wait_for_descendant_exit(
+            run.grandchild_pid,
+            context="owned-group teardown",
         )
 
     asyncio.run(run_case())
@@ -107,7 +111,7 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
         run = await _spawn_owned_run(tmp_path)
         try:
             await _terminate_owned_run(run)
-            assert process_is_running(run.unrelated_pid), (
+            assert _descendant_is_running(run.unrelated_pid), (
                 "a process outside the owned group must survive its teardown"
             )
         finally:
@@ -138,7 +142,7 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
                 _TeardownPolicy(0.5, owns_group=False),
             )
             await run.process.wait()
-            assert process_is_running(run.grandchild_pid), (
+            assert _descendant_is_running(run.grandchild_pid), (
                 "an unowned teardown must not reach the grandchild"
             )
         finally:
@@ -233,7 +237,7 @@ def test_owned_teardown_reaches_a_group_its_reaped_leader_left_behind(
             pid_file,
             context="member left behind by the reaped leader",
         )
-        assert process_is_running(member_pid), (
+        assert _descendant_is_running(member_pid), (
             "the member must outlive the leader this case is built around"
         )
         assert process.returncode is not None, (
@@ -245,9 +249,9 @@ def test_owned_teardown_reaches_a_group_its_reaped_leader_left_behind(
                 (process,),
                 _TeardownPolicy(0.5, owns_group=True),
             )
-            assert not process_is_running(member_pid), (
-                "a reaped leader must not settle an owned group that still "
-                "holds a descendant"
+            _wait_for_descendant_exit(
+                member_pid,
+                context="owned group whose leader was already reaped",
             )
         finally:
             _kill_ignoring_missing(process.pid, group=True)
@@ -296,15 +300,15 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             # teardown rather than after it — if the escalation had already
             # run, this fails loudly instead of the test passing without ever
             # interrupting cleanup.
-            assert process_is_running(run.grandchild_pid), (
+            assert _descendant_is_running(run.grandchild_pid), (
                 "the grandchild must outlive the grace phase, so the repeated "
                 "cancellation interrupts a teardown that is still working"
             )
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            assert not process_is_running(run.grandchild_pid), (
-                "cleanup must finish even when the caller cancels twice"
+            assert _descendant_has_exited(run.grandchild_pid), (
+                "cleanup must finish before the cancellation propagates"
             )
         finally:
             # The assertions above can fail while the teardown is still in

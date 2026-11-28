@@ -30,9 +30,11 @@ if typ.TYPE_CHECKING:
 CHILD_STDOUT = "child-stdout-marker"
 CHILD_STDERR = "child-stderr-marker"
 
-# Long enough that the child cannot plausibly exit on its own, so a run that
-# ends can only have ended because the deadline expired.
-_BLOCK_SECONDS = 300
+# Above pytest's 30-second per-test timeout, so the child cannot plausibly
+# exit on its own during a test, while keeping a descendant left to the host
+# reaper bounded. The suite's own timeout is what ends any test that would
+# need longer.
+_BLOCK_SECONDS = 60
 
 _CHILD_SOURCE = "; ".join((
     "import sys, pathlib, time",

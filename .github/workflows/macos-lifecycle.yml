@@ -1,0 +1,147 @@
+---
+name: macOS process lifecycle
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/macos-lifecycle.yml'
+      - 'conftest.py'
+      - 'tests/helpers/macos_lifecycle.py'
+      - 'tests/helpers/required_outcomes.py'
+      - 'tests/helpers/catalogue.py'
+      - 'tests/helpers/detached.py'
+      - 'tests/helpers/execution.py'
+      - 'tests/helpers/process_exit.py'
+      - 'tests/helpers/process_state.py'
+      - 'tests/helpers/timeouts.py'
+      - 'cuprum/unittests/_adapter_test_support.py'
+      - 'cuprum/unittests/conftest.py'
+      - 'cuprum/unittests/_cqrs_fixtures.py'
+      - 'cuprum/unittests/_pipeline_deadline_support.py'
+      - 'cuprum/unittests/_post_exit_teardown_support.py'
+      - 'cuprum/unittests/_process_group_ownership_support.py'
+      - 'cuprum/unittests/_process_signal_identity_support.py'
+      - 'cuprum/unittests/_start_ownership_support.py'
+      - 'cuprum/unittests/_startup_abandon_support.py'
+      - 'cuprum/unittests/_wait4_process_support.py'
+      - 'cuprum/unittests/test_process_exit_probe.py'
+      - 'cuprum/unittests/test_cancelled_run_descendant_tree.py'
+      - 'cuprum/unittests/test_process_group_policy.py'
+      - 'cuprum/unittests/test_process_group_ownership.py'
+      - 'cuprum/unittests/test_process_group_liveness.py'
+      - 'cuprum/unittests/test_direct_start_ownership.py'
+      - 'cuprum/unittests/test_owned_group_start_failure.py'
+      - 'cuprum/unittests/test_group_settlement_duration.py'
+      - 'cuprum/unittests/test_pipeline_process_group_ownership.py'
+      - 'cuprum/unittests/test_pipeline_process_group_run.py'
+      - 'cuprum/unittests/test_process_signal_identity.py'
+      - 'cuprum/unittests/test_process_signal_failure_reporting.py'
+      - 'cuprum/unittests/test_stream_run_owned_group_cancellation.py'
+      - 'cuprum/unittests/test_stream_run_owned_group_deadline.py'
+      - 'cuprum/unittests/test_detached_launch.py'
+      - 'cuprum/unittests/test_detached_launch_lifecycle.py'
+      - 'cuprum/unittests/test_pipeline_post_exit_deadline.py'
+      - 'cuprum/unittests/test_run_no_stream_post_exit_deadline.py'
+      - 'cuprum/unittests/test_safe_cmd_lines_post_exit_deadline.py'
+      - 'cuprum/unittests/test_safe_cmd_lines_paused_timeout.py'
+      - 'cuprum/_process*.py'
+      - 'cuprum/_group_teardown.py'
+      - 'cuprum/_detached*.py'
+      - 'cuprum/_subprocess*.py'
+      - 'cuprum/_pipeline*.py'
+      - 'cuprum/_stream_drain*.py'
+      - 'cuprum/_wait4_process*.py'
+      - 'cuprum/_line_stream/**'
+      - 'cuprum/line_stream_events.py'
+      - 'cuprum/line_stream_observation.py'
+      - 'cuprum/__init__.py'
+      - 'cuprum/_backend.py'
+      - 'cuprum/_observability.py'
+      - 'cuprum/_teardown_policy.py'
+      - 'cuprum/_testing.py'
+      - 'cuprum/adapters/metrics_adapter.py'
+      - 'cuprum/catalogue.py'
+      - 'cuprum/context/**'
+      - 'cuprum/events.py'
+      - 'cuprum/lines.py'
+      - 'cuprum/program.py'
+      - 'cuprum/sh/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  # Weekly, and deliberately not the Monday slot the boundary verifiers use:
+  # a macOS arm64 runner can queue for a long time, and the two lanes should
+  # not compete for the same window.
+  schedule:
+    - cron: '41 5 * * 3'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: '3.13'
+  # Bind uv, and therefore `uv sync` and `uv run`, to the interpreter the leg
+  # reports. uv's own discovery could otherwise select a different patch.
+  UV_PYTHON: '3.13'
+  UV_CACHE_DIR: .uv-cache
+  UV_TOOL_DIR: .uv-tools
+
+jobs:
+  lifecycle:
+    name: POSIX process lifecycle
+    # Advisory by design: this job is not a required context. A required
+    # macOS leg has a real queueing cost, and the evidence it produces is the
+    # point, not a merge gate. See docs/developers-guide.md.
+    runs-on: macos-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: false
+
+      - name: Install the locked development environment
+        run: uv sync --locked --group dev
+
+      - name: Run the guarded macOS lifecycle subset
+        id: lifecycle
+        run: uv run python -m tests.helpers.macos_lifecycle
+
+      - name: Record the lifecycle result
+        if: always()
+        env:
+          LIFECYCLE_OUTCOME: ${{ steps.lifecycle.outcome }}
+          LIFECYCLE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            printf '### macOS process lifecycle\n\n'
+            printf '| item | value |\n| --- | --- |\n'
+            printf '| outcome | %s |\n' "${LIFECYCLE_OUTCOME}"
+            printf '| runner | %s |\n' "${RUNNER_OS}"
+            printf '| python | %s |\n' "${PYTHON_VERSION}"
+            printf '| run | %s |\n\n' "${LIFECYCLE_RUN_URL}"
+            printf 'The guarded step fails on any skip, xfail, or empty '
+            printf 'selection. Triage from the `required outcomes guard` '
+            printf 'section of its log: each line names the promise and the '
+            printf 'node IDs that broke it.\n\n'
+            printf 'Every removal the leg predicts is recorded with a reason '
+            printf 'in `tests/helpers/macos_lifecycle.py`; a Darwin-only defect '
+            printf 'is fixed there or tracked in issue #738.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
