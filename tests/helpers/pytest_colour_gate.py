@@ -5,11 +5,12 @@ session runs under a fixed colour environment. The driving machinery lives
 here so that module stays a set of assertions and each unit here keeps a
 single responsibility.
 
-A stubbed `uv` records what each session was given and never starts pytest, so
-a driven run needs no virtual environment and costs one short process per
-session. The stub also starts a child with no `env=` argument: exporting the
-policy is only useful if an ordinary child, the kind a test spawns without
-replacing the environment, inherits it.
+`tests/helpers/pytest_colour_stub.py` owns the controlled `uv` double and the
+transcript it writes. The double never starts pytest, so a driven run needs no
+virtual environment and costs one short process per session; it also starts a
+child with no `env=` argument, because exporting the policy is only useful if
+an ordinary child, the kind a test spawns without replacing the environment,
+inherits it.
 
 The recipes run with their prerequisite targets excluded, so nothing builds,
 syncs, or probes a host tool. The Makefile is read only to learn which
@@ -21,21 +22,20 @@ cannot have the caller's list reported as though the Makefile declared it.
 from __future__ import annotations
 
 import functools
-import json
 import os
 import re
-import shlex
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, drives the local Makefile.
-import sys
-import textwrap
 import typing as typ
 
 from tests.helpers.ci_documents import require
 from tests.helpers.docs import repo_root
+from tests.helpers.pytest_colour_stub import read_calls, write_stub
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
+
+    from tests.helpers.pytest_colour_stub import UvCall
 
 #: The variables that ask an interpreter or tool for colour. The gate must
 #: remove all three; `PY_COLORS` is unset rather than zeroed because pytest
@@ -80,83 +80,6 @@ _CONDITIONAL_ASSIGNMENT: typ.Final = re.compile(
 #: `make test`; an inherited jobserver flag makes the nested `make` warn.
 _MAKE_BOOKKEEPING: typ.Final = frozenset({"MAKEFLAGS", "MAKELEVEL", "MFLAGS"})
 
-#: The stub's recorder. It accepts only the `uv run pytest` shape the recipes
-#: use, records the environment the session was given, starts a child with no
-#: `env=` argument so the child report shows what an ordinary spawn inherits,
-#: and never starts pytest.
-_RECORDER_SOURCE: typ.Final = textwrap.dedent(
-    """\
-    import json
-    import os
-    import pathlib
-    import subprocess
-    import sys
-
-    VARIABLES = (
-        "FORCE_COLOR",
-        "NO_COLOR",
-        "PYTHON_COLORS",
-        "PY_COLORS",
-        "CLICOLOR_FORCE",
-        "CUPRUM_COLOUR_SENTINEL",
-    )
-
-    def report():
-        return {name: os.environ.get(name) for name in VARIABLES}
-
-    def child_report():
-        reporter = pathlib.Path(__file__).with_name("report_environment.py")
-        completed = subprocess.run(
-            [sys.executable, str(reporter)],
-            capture_output=True,
-            check=False,
-            text=True,
-        )
-        completed.check_returncode()
-        return json.loads(completed.stdout)
-
-    argv = sys.argv[1:]
-    if argv[:2] != ["run", "pytest"]:
-        raise SystemExit(64)
-    record = {
-        "argv": argv[2:],
-        "environment": report(),
-        "child": child_report(),
-    }
-    with pathlib.Path(os.environ["PYTEST_COLOUR_LOG"]).open("a") as log:
-        print(json.dumps(record), file=log)
-    """
-)
-
-#: The child the recorder starts. It is a separate file so the recorder can
-#: invoke it with no `env=` argument, which makes the report evidence about
-#: inheritance rather than about a mapping the recorder rebuilt.
-_REPORTER_SOURCE: typ.Final = textwrap.dedent(
-    """\
-    import json
-    import os
-
-    VARIABLES = (
-        "FORCE_COLOR",
-        "NO_COLOR",
-        "PYTHON_COLORS",
-        "PY_COLORS",
-        "CLICOLOR_FORCE",
-        "CUPRUM_COLOUR_SENTINEL",
-    )
-
-    print(json.dumps({name: os.environ.get(name) for name in VARIABLES}))
-    """
-)
-
-
-class UvCall(typ.TypedDict):
-    """One environment report recorded by the stubbed `uv`."""
-
-    argv: list[str]
-    environment: dict[str, str | None]
-    child: dict[str, str | None]
-
 
 class SelectorFiles(typ.NamedTuple):
     """The individual and grouped selector files a driven run declares."""
@@ -200,27 +123,6 @@ def _caller_owned_names() -> frozenset[str]:
     return overridable | _MAKE_BOOKKEEPING
 
 
-def write_stub(bin_directory: Path) -> None:
-    """Write the stub `uv`, its recorder, and the child reporter.
-
-    The `uv` stub is a POSIX shell wrapper so the recipes' own `PATH` prefix
-    resolves it, and it hands straight to the absolute interpreter running this
-    test, independent of whichever `uv` and interpreter `PATH` would select.
-    """
-    recorder = bin_directory / "record_uv_call.py"
-    recorder.write_text(_RECORDER_SOURCE, encoding="utf-8")
-    (bin_directory / "report_environment.py").write_text(
-        _REPORTER_SOURCE, encoding="utf-8"
-    )
-    stub = bin_directory / "uv"
-    stub.write_text(
-        "#!/bin/sh\n"
-        f'exec {shlex.quote(sys.executable)} {shlex.quote(str(recorder))} "$@"\n',
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-
-
 def write_selectors(tmp_path: Path) -> SelectorFiles:
     """Create the empty selector files a driven run declares.
 
@@ -246,14 +148,6 @@ def write_selectors(tmp_path: Path) -> SelectorFiles:
             ),
         )
     return selectors
-
-
-def read_calls(log: Path) -> list[UvCall]:
-    """Read the stub's JSON-lines transcript in the order sessions ran."""
-    return [
-        typ.cast("UvCall", json.loads(line))
-        for line in log.read_text(encoding="utf-8").splitlines()
-    ]
 
 
 def _gate_selections(
