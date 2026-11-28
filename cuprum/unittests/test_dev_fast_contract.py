@@ -54,10 +54,14 @@ def _dry_run(*goals: str, variables: dict[str, str] | None = None) -> str:
             *goals,
         ],
         capture_output=True,
-        check=True,
+        check=False,
         cwd=repo_root(),
         env={**os.environ, "MAKEFLAGS": ""},
         text=True,
+    )
+    assert completed.returncode == 0, (
+        "the Makefile must evaluate the protected routes; "
+        f"make exited {completed.returncode}: {completed.stderr}"
     )
     return completed.stdout
 

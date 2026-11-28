@@ -88,18 +88,30 @@ _SANDBOX_EXCLUDED_MODULES: tuple[str, ...] = (
 #: file exercises ``cuprum`` behaviour, so only the parser-dependent tests are
 #: deselected rather than the whole module.
 _SANDBOX_DESELECTED_TESTS: tuple[str, ...] = (
-    "tests/test_ci_rust_boundaries.py::"
-    "test_the_download_integration_target_supplies_its_opt_in",
-    "tests/test_ci_selection_guard_controls.py::"
-    "test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard",
-    "tests/test_ci_selection_guard_controls.py::"
-    "test_a_module_the_selector_drops_is_reported_as_uncovered",
-    "tests/test_ci_selection_guard_controls.py::"
-    "test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected",
-    "tests/test_ci_selection_guard_controls.py::"
-    "test_the_exception_mechanism_reports_an_uncovered_module",
-    "tests/test_distribution_artefacts.py::"
-    "test_makefile_groups_both_distribution_consumers",
+    (
+        "tests/test_ci_rust_boundaries.py::"
+        "test_the_download_integration_target_supplies_its_opt_in"
+    ),
+    (
+        "tests/test_ci_selection_guard_controls.py::"
+        "test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard"
+    ),
+    (
+        "tests/test_ci_selection_guard_controls.py::"
+        "test_a_module_the_selector_drops_is_reported_as_uncovered"
+    ),
+    (
+        "tests/test_ci_selection_guard_controls.py::"
+        "test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected"
+    ),
+    (
+        "tests/test_ci_selection_guard_controls.py::"
+        "test_the_exception_mechanism_reports_an_uncovered_module"
+    ),
+    (
+        "tests/test_distribution_artefacts.py::"
+        "test_makefile_groups_both_distribution_consumers"
+    ),
 )
 
 #: Hypothesis profile every mutmut pytest invocation loads.
