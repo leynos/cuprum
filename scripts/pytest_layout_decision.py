@@ -143,12 +143,11 @@ def _usable(pairs: cabc.Sequence[Pair]) -> tuple[Pair, ...]:
 def _evidence_gap(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
     """Return what the sample still lacks, or ``None`` when it is complete.
 
-    A median is only evidence if the sample is the one the plan predeclared:
-    five warm pairs *per interpreter*, on comparable runners and toolchains,
-    over runs that collected the same suite, at no extra whole-job cost. A
-    check applies only when both sides recorded the fact it needs, so a
-    partially-populated artefact is reported through the fields it does carry
-    rather than silently excused.
+    A median is evidence only when the sample is the one the plan predeclared:
+    enough warm pairs per interpreter, on comparable runners and toolchains,
+    over runs that collected the same suite, at no extra whole-job cost. Each
+    condition is asked in turn and the first unmet one is reported, so a
+    reviewer learns the next thing to fix rather than a list.
 
     Parameters
     ----------
@@ -162,33 +161,61 @@ def _evidence_gap(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
     str or None
         The reason the sample is incomplete, or ``None`` when it is complete.
     """
+    for reason in (
+        _thin_leg_reason(pairs, minimum_pairs),
+        _fingerprint_reason(pairs),
+        _collection_reason(pairs),
+        _cost_reason(pairs),
+    ):
+        if reason is not None:
+            return reason
+    return None
+
+
+def _thin_leg_reason(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
+    """Return why an interpreter leg is under-sampled, or ``None``."""
     counts: dict[str, int] = {}
     for pair in pairs:
         leg = pair.control.python_version
         counts[leg] = counts.get(leg, 0) + 1
     thin = {leg: count for leg, count in counts.items() if count < minimum_pairs}
-    if thin:
-        return (
-            f"these interpreter legs have fewer than {minimum_pairs} warm "
-            f"pairs: {thin}; a median per leg is what the plan requires"
-        )
+    if not thin:
+        return None
+    return (
+        f"these interpreter legs have fewer than {minimum_pairs} warm pairs: "
+        f"{thin}; a median per leg is what the plan requires"
+    )
+
+
+def _fingerprint_reason(pairs: cabc.Sequence[Pair]) -> str | None:
+    """Return why a pair ran on an incomparable runner, or ``None``."""
     mismatched = [
         pair.control.run_id
         for pair in pairs
         if _fingerprints_differ(pair.control, pair.candidate)
     ]
-    if mismatched:
-        return f"these pairs compare different runners or toolchains: {mismatched}"
+    if not mismatched:
+        return None
+    return f"these pairs compare different runners or toolchains: {mismatched}"
+
+
+def _collection_reason(pairs: cabc.Sequence[Pair]) -> str | None:
+    """Return why a pair collected a different suite, or ``None``."""
     divergent = [
         pair.control.run_id
         for pair in pairs
         if _collections_differ(pair.control, pair.candidate)
     ]
-    if divergent:
-        return f"these pairs collected different suites: {divergent}"
-    if not _cost_is_non_positive(pairs):
-        return "the candidate's whole-job seconds exceed the control's"
-    return None
+    if not divergent:
+        return None
+    return f"these pairs collected different suites: {divergent}"
+
+
+def _cost_reason(pairs: cabc.Sequence[Pair]) -> str | None:
+    """Return why the arm's whole-job cost rose, or ``None``."""
+    if _cost_is_non_positive(pairs):
+        return None
+    return "the candidate's whole-job seconds exceed the control's"
 
 
 def _fingerprints_differ(control: RunRecord, candidate: RunRecord) -> bool:
