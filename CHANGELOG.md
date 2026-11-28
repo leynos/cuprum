@@ -151,6 +151,14 @@
   two tooling contracts that build their own environment, and the configuration
   contract pins the complete list
   ([#592](https://github.com/leynos/cuprum/issues/592)).
+- **The Makefile-selector contract leaves the mutation selection:**
+  `tests/test_ci_exemption_contract.py` parses the Makefile with `makeutil`, a
+  Rust binary that only the Makefile's own `makeutil` target installs. A
+  mutation run invokes pytest directly and never runs that target, so the
+  parser was absent on a runner and the contract refused instead of reading the
+  selector as empty. The module still runs in every `make test` and
+  pull-request gate; the configuration contract pins its omission
+  ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **The observe-hook dispatch tests survive the mutation harness:** mutmut runs
   every mutated function through a trampoline that forwards to a renamed copy
   (`x_<name>__mutmut_orig` and `x_<name>__mutmut_<n>`), so the named examples'

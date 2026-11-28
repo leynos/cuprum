@@ -8578,6 +8578,13 @@ function's own code object and the renamed copies mutmut's trampoline builds
 (`x_<name>__mutmut_orig` and `x_<name>__mutmut_<n>`), instead of comparing
 identity.
 
+`tests/test_ci_exemption_contract.py` is omitted for a fourth reason: it parses
+the Makefile with `makeutil`, a Rust binary that only the Makefile's own
+`makeutil` target installs. The mutation workflow invokes pytest directly and
+never runs that target, so the parser is absent on a run and the contract
+correctly refuses rather than reading the selector as empty. The pinned failure
+diagnostics from a canary run on a runner recorded exactly that error.
+
 The omitted modules keep running in every `make test`, pull-request gate, and
 direct `uv run pytest` invocation; only the mutation harness omits them.
 `test_mutmut_selection_contract.py` pins the exclusion list, so widening it
