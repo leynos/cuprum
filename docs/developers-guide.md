@@ -478,16 +478,21 @@ and reports a plausible hit rate either way:
   lanes. For the GitHub-hosted `loom`, and for every fork arm, the Actions
   cache service really is GitHub's and would compete with the Windows and macOS
   lanes for the per-repository quota.
-- `gha` exports `SCCACHE_GHA_ENABLED=true` and nothing else. It is for an
-  Ubicloud lane that has already run `export-ubicloud-cache-credentials`, which
-  republishes the runner's cache-proxy address and token through `GITHUB_ENV`
-  and clears `ACTIONS_CACHE_SERVICE_V2`, so sccache reaches Ubicloud's proxy
-  instead of GitHub's v2 results service. The step fails closed when
-  `ACTIONS_CACHE_URL` or `ACTIONS_RUNTIME_TOKEN` is empty: a server started
-  without them caches the whole build to a directory that dies with the runner
-  and stays green. Only `ci.yml`'s `coverage` and `coverage-main.yml`'s
-  `coverage-upload` use it, and a contract requires the credentials step ahead
-  of the setup step in both. `coverage` is fork-reachable, so it passes
+- `gha` exports `SCCACHE_GHA_ENABLED=true`, plus `SCCACHE_GHA_VERSION` when
+  the optional `namespace` input names one, and its install step publishes the
+  selected store as the `backend` output that the evidence record compares with
+  the store the server reports. The namespace is a fixed identifier, so two
+  build shapes sharing the repository's store cannot collide, and the action
+  refuses one with the `local` backend. The store is for an Ubicloud lane that
+  has already run `export-ubicloud-cache-credentials`, which republishes the
+  runner's cache-proxy address and token through `GITHUB_ENV` and clears
+  `ACTIONS_CACHE_SERVICE_V2`, so sccache reaches Ubicloud's proxy instead of
+  GitHub's v2 results service. The step fails closed when `ACTIONS_CACHE_URL` or
+  `ACTIONS_RUNTIME_TOKEN` is empty: a server started without them caches the
+  whole build to a directory that dies with the runner and stays green. Only
+  `ci.yml`'s `coverage` and `coverage-main.yml`'s `coverage-upload` use it, and
+  a contract requires the credentials step ahead of the setup step in both.
+  `coverage` is fork-reachable, so it passes
   `${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}` and
   guards the credentials step with `!github.event.pull_request.head.repo.fork`:
   the fork arm runs GitHub-hosted, where there is no proxy and the credentials
@@ -607,6 +612,36 @@ Cuprum's Ubicloud cache listing was empty before this migration, because
 `benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's
 entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
 land in Ubicloud's store rather than GitHub's.
+
+#### Compiler-cache evidence tooling
+
+The backend experiment records what each bracketed compile step measured rather
+than trusting a green job. The tooling lives in small responsibility-split
+modules: `scripts/compiler_cache_schema.py` owns the closed vocabularies and
+pure classifiers, `compiler_cache_probe.py` is the only code that runs
+`sccache` and `rustc`, `compiler_cache_evidence.py` writes one redacted JSONL
+line per bracket, `compiler_cache_records.py` owns the filesystem and JSON
+boundaries, `compiler_cache_pairs.py` pairs control and candidate observations,
+`compiler_cache_cost.py` turns whole-job seconds into the family-scoped cost
+view, `compiler_cache_summary.py` evaluates the predeclared gate, and
+`compiler_cache_report.py` owns the command line and Markdown view.
+`docs/ci-compiler-cache-evidence.md` is the contract.
+
+The composite action runs the writer by file path, so it sets `PYTHONPATH` to
+the workspace root; without it Python puts `scripts/` on `sys.path` and the
+`scripts.compiler_cache_*` imports fail while `continue-on-error` keeps the job
+green. `tests/test_ci_compiler_cache_execution.py` runs the writer that way
+from another directory as a regression guard. The record carries the runner
+class (`runner.environment`), so the Ubicloud lane and the fork fallback can
+never be paired as if one cache backend explained their difference.
+
+The workflow-contract helpers that keep this wiring honest are also shared test
+support: `tests/helpers/ci_expressions.py` tokenizes and evaluates the workflow
+expression subset, `ci_expression_arms.py` reads a two-arm
+`condition && 'a' || 'b'` value, `ci_cache_wiring.py` holds the
+wrapper/namespace/privileged-workflow rules, and `ci_compiler_gate.py` scripts
+observations for the gate arithmetic. Keep workflow facts in those helpers
+rather than adding another parser to a test module.
 
 ### Test selection
 

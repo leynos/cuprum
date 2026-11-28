@@ -173,7 +173,7 @@ runs:
     # in place because the name carries the attempt number.
     - name: Upload the compiler-cache records
       id: upload
-      if: ${{ inputs.mode == 'upload' && !cancelled() }}
+      if: ${{ always() && inputs.mode == 'upload' }}
       continue-on-error: true
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:

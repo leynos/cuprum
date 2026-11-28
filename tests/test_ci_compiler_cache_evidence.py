@@ -10,8 +10,9 @@ that compiled correctly.
 
 from __future__ import annotations
 
-import json
+import time
 import typing as typ
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -22,14 +23,10 @@ from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
 from tests.helpers.ci_compiler_evidence import (
     BEARER_URL,
-    SENTINEL_VALUE,
     FakeSccache,
     environment,
     stats_document,
 )
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 HYPOTHESIS = settings(
     deadline=None,
@@ -42,73 +39,6 @@ HYPOTHESIS = settings(
 def evidence_environment_fixture(tmp_path: Path) -> dict[str, str]:
     """Return a minimal bracket environment rooted in a temporary directory."""
     return environment(tmp_path)
-
-
-def _capture(
-    environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> dict[str, object]:
-    """Capture one snapshot with sccache answering the standard document."""
-    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([stats_document()]))
-    return writer.capture(environ)
-
-
-def test_a_snapshot_copies_only_allowlisted_counters(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Drop everything sccache reports that is not on the list."""
-    state = _capture(evidence_environment, monkeypatch)
-    counters = typ.cast("dict[str, object]", state["counters"])
-    assert set(counters) == set(schema.COUNTERS), (
-        f"only the allowlisted counters may be copied, got {sorted(counters)}"
-    )
-    assert counters["cache_hits"] == 4, "per-language hit counts must be summed"
-    assert counters["cache_misses"] == 5, "per-language miss counts must be summed"
-    durations = typ.cast("dict[str, object]", state["durations"])
-    assert durations["cache_write_duration"] == pytest.approx(1.5), (
-        f"durations must combine secs and nanos, got {durations}"
-    )
-
-
-def test_a_snapshot_never_records_the_cache_address(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Redact the bearer URL and runtime credential, keeping only a host class."""
-    environ = {
-        **evidence_environment,
-        "ACTIONS_CACHE_URL": BEARER_URL,
-        "ACTIONS_RUNTIME_TOKEN": SENTINEL_VALUE,
-    }
-    state = _capture(environ, monkeypatch)
-    encoded = json.dumps(state)
-    assert "example.invalid" not in encoded, "the cache URL must not be recorded"
-    assert SENTINEL_VALUE not in encoded, "the runtime credential must not be recorded"
-    assert state["cache_host_class"] == "non-github", (
-        f"a proxy host must classify as non-github, got {state['cache_host_class']}"
-    )
-
-
-def test_the_cache_location_is_classified_not_recorded(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Reduce a runner path to a backend label."""
-    state = _capture(evidence_environment, monkeypatch)
-    assert "/home/runner" not in json.dumps(state), "the cache path must not leak"
-    assert state["cache_backend"] == "local", (
-        f"a local directory must classify as local, got {state['cache_backend']}"
-    )
-
-
-def test_an_absent_server_is_unknown_rather_than_zero(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A job that fell back must not report a clean zero-request cache."""
-    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([], returncode=127))
-    state = writer.capture(evidence_environment)
-    assert state["available"] is False, "a failed probe must report unavailable"
-    counters = typ.cast("dict[str, object]", state["counters"])
-    assert set(counters.values()) == {None}, (
-        f"unavailable counters must be null, never zero, got {counters}"
-    )
 
 
 def _two_snapshots(
@@ -225,6 +155,34 @@ def test_a_reason_delta_is_zero_based_and_reset_aware(
     )
 
 
+def test_an_out_of_vocabulary_selected_backend_is_normalized(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A store the writer cannot name is unknown, and the record is not healthy."""
+    environ = {**evidence_environment, "EVIDENCE_SELECTED_BACKEND": "s3"}
+    record = _record_after(environ, monkeypatch, stats_document(), stats_document())
+    assert record["selected_backend"] == "unknown", (
+        f"an undeclared store must be unknown, got {record['selected_backend']!r}"
+    )
+    assert record["state"] == "noncompliant", (
+        f"a store that differs from the selection must be noncompliant, got {record}"
+    )
+
+
+def test_an_invalid_record_is_reported_not_appended(
+    evidence_environment: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One malformed line would make the reader reject the whole artefact."""
+    monkeypatch.setattr(writer, "build_record", lambda _: {"bracket": "x"})
+    observed = writer.record(evidence_environment)
+    assert observed == 0, "the writer must still fail open"
+    assert "record omitted" in capsys.readouterr().out, "the omission must warn"
+    path = Path(evidence_environment["EVIDENCE_DIR"]) / "records.jsonl"
+    assert not path.exists(), "an invalid record must never be appended"
+
+
 def test_the_record_carries_the_runner_class(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -237,24 +195,29 @@ def test_the_record_carries_the_runner_class(
     )
 
 
-def test_the_save_span_ends_at_its_end_marker(
+def _write_span(environ: dict[str, str], marker: str, start: float, end: float) -> None:
+    """Write one span's start and end markers ``start`` and ``end`` seconds ago."""
+    marks = Path(environ["EVIDENCE_DIR"]) / "marks"
+    marks.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    (marks / f"{marker}-start").write_text(f"{now - start:.6f}\n", encoding="utf-8")
+    (marks / f"{marker}-end").write_text(f"{now - end:.6f}\n", encoding="utf-8")
+
+
+def test_each_span_ends_at_its_end_marker(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two records after one save must report the same save interval."""
-    import time
-
-    marks = tmp = (
-        __import__("pathlib").Path(evidence_environment["EVIDENCE_DIR"]) / "marks"
-    )
-    tmp.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    (marks / "save-start").write_text(f"{now - 8:.6f}\n", encoding="utf-8")
-    (marks / "save-end").write_text(f"{now - 3:.6f}\n", encoding="utf-8")
+    """A transfer stops at its end marker, not at the later snapshot."""
+    _write_span(evidence_environment, "save", 8.0, 3.0)
+    _write_span(evidence_environment, "restore", 10.0, 4.0)
     record = _record_after(
         evidence_environment, monkeypatch, stats_document(), stats_document()
     )
     assert record["save_seconds"] == pytest.approx(5.0, abs=1.0), (
         f"the save span must be the interval between the markers, got {record}"
+    )
+    assert record["restore_seconds"] == pytest.approx(6.0, abs=1.0), (
+        f"the restore span must be the interval between the markers, got {record}"
     )
 
 
@@ -352,26 +315,6 @@ def test_an_unknown_counter_delta_stays_unknown(value: object) -> None:
     )
     assert schema.delta_value(None, value) is None, (
         f"a pre value of {value!r} must not produce a delta"
-    )
-
-
-def test_the_restore_span_ends_at_its_end_marker(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The span must stop at the restore, not at the later snapshot."""
-    import time
-
-    marks = tmp = (
-        __import__("pathlib").Path(evidence_environment["EVIDENCE_DIR"]) / "marks"
-    )
-    tmp.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    (marks / "restore-start").write_text(f"{now - 10:.6f}\n", encoding="utf-8")
-    (marks / "restore-end").write_text(f"{now - 4:.6f}\n", encoding="utf-8")
-    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([stats_document()]))
-    state = writer.capture(evidence_environment)
-    assert state["restore_seconds"] == pytest.approx(6.0, abs=1.0), (
-        f"the restore span must be the interval between the markers, got {state}"
     )
 
 

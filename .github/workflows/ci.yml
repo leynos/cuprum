@@ -1004,6 +1004,11 @@ jobs:
       || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-latest' || 'ubicloud-standard-2' }}
     timeout-minutes: 45
+    env:
+      # The evidence record names the toolchain this job's Rust steps use.
+      # The Makefile pins the same value; leaving it unset would record
+      # `unknown` for every observation of the extension family.
+      DEV_FAST_TOOLCHAIN: 'nightly-2026-08-23'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

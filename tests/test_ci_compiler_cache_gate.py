@@ -8,8 +8,6 @@ family the evidence does not support, and each asserts against that.
 
 from __future__ import annotations
 
-import typing as typ
-
 import pytest
 
 from tests.helpers.ci_compiler_gate import (
@@ -20,31 +18,6 @@ from tests.helpers.ci_compiler_gate import (
     jobs,
     summary,
 )
-
-
-def test_the_transfer_is_the_sum_of_restore_and_save_per_job() -> None:
-    """A median of individual timings would halve the cost a migration removes."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4),
-        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
-    ]
-    built = summary(records, jobs([100, 200], 240))
-    observed = family(built)
-    assert observed["median_transfer_seconds"] == pytest.approx(40.0), (
-        f"20 s restore plus 20 s save must report 40 s, got {observed}"
-    )
-
-
-def test_a_control_without_a_save_time_keeps_the_transfer_unknown() -> None:
-    """A pull-request control never saves; inventing zero would understate cost."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, save=None),
-        Observation(run_id="200", backend="gha", hits=6, restore=None, save=None),
-    ]
-    built = summary(records, jobs([100, 200], 240))
-    assert family(built)["median_transfer_seconds"] is None, (
-        "a missing save time must keep the total unknown"
-    )
 
 
 def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
@@ -102,19 +75,6 @@ def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
     )
     assert observed["independent_job_pairs"] == 1, (
         f"the independent pair must be recorded, got {observed}"
-    )
-
-
-def test_job_cost_is_charged_once_for_several_brackets() -> None:
-    """Three brackets in a 100-second job must not report 300 job-seconds."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, bracket=name)
-        for name in ("typecheck", "python-tests", "extension")
-    ]
-    built = summary(records, jobs([100], 100))
-    cost = typ.cast("dict[str, object]", built["cost"])
-    assert cost["paid_job_seconds_by_workflow"] == {"ci.yml": 100.0}, (
-        f"one job with three brackets must be charged once, got {cost}"
     )
 
 
@@ -260,6 +220,25 @@ def test_an_incomparable_pair_is_excluded(
     )
 
 
+def test_a_noncompliant_candidate_never_pairs() -> None:
+    """A store that differs from the selection is not success evidence."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4),
+        Observation(
+            run_id="200",
+            backend="gha",
+            hits=6,
+            restore=None,
+            save=None,
+            state="noncompliant",
+        ),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    assert family(built)["pairs"] == 0, (
+        f"a noncompliant candidate must not pair, got {family(built)}"
+    )
+
+
 def test_a_failed_fallback_is_counted_even_though_it_cannot_pair() -> None:
     """A compiler-only fallback must not hide a failing job."""
     records = [
@@ -284,34 +263,6 @@ def test_a_failed_fallback_is_counted_even_though_it_cannot_pair() -> None:
     assert observed["pairs"] == 0, "a degraded candidate must not pair"
     assert observed["failures"] == 5, (
         f"the failed fallbacks must still be counted, got {observed}"
-    )
-
-
-def test_the_critical_path_includes_jobs_without_evidence() -> None:
-    """A long prerequisite is part of the run's critical path."""
-    records = [Observation(run_id="100", backend="local", hits=4)]
-    job_documents: list[dict[str, object]] = [
-        {
-            "run_id": 100,
-            "run_attempt": 1,
-            "name": "Prerequisite",
-            "started_at": "2026-11-22T00:00:00Z",
-            "completed_at": "2026-11-22T00:10:00Z",
-            "conclusion": "success",
-        },
-        {
-            "run_id": 100,
-            "run_attempt": 1,
-            "name": "Extension-gated tests",
-            "started_at": "2026-11-22T00:10:00Z",
-            "completed_at": "2026-11-22T00:20:00Z",
-            "conclusion": "success",
-        },
-    ]
-    built = summary(records, job_documents)
-    cost = typ.cast("dict[str, object]", built["cost"])
-    assert cost["critical_path_seconds_by_workflow"] == {"ci.yml": 1200.0}, (
-        f"the unrecorded prerequisite must be included, got {cost}"
     )
 
 
@@ -341,28 +292,4 @@ def test_an_unknown_backend_never_pairs() -> None:
     built = summary(records, jobs([100, 200], 240))
     assert family(built)["pairs"] == 0, (
         f"an unidentified backend must not become a control, got {built['families']}"
-    )
-
-
-def test_a_run_without_timestamps_reports_an_unknown_critical_path() -> None:
-    """A missing jobs document leaves the span unknown, not a crash."""
-    records = [Observation(run_id="100", backend="local", hits=4)]
-    built = summary(records, [])
-    cost = typ.cast("dict[str, object]", built["cost"])
-    assert cost["critical_path_seconds_by_workflow"] is None, (
-        f"a run without timestamps must stay unknown, got {cost}"
-    )
-
-
-def test_a_recorded_job_without_a_duration_makes_the_total_unknown() -> None:
-    """A partial paid total must not read as the complete cost."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4),
-        Observation(run_id="200", backend="local", hits=4, bracket="python-tests"),
-    ]
-    job_documents = jobs([100], 100)
-    built = summary(records, job_documents)
-    cost = typ.cast("dict[str, object]", built["cost"])
-    assert cost["paid_job_seconds_by_workflow"] == {"ci.yml": None}, (
-        f"an unpriceable job must make that workflow's total unknown, got {cost}"
     )

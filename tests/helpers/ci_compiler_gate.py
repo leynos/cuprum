@@ -52,6 +52,7 @@ class Observation:
         return record_fixture(
             run_id=self.run_id,
             backend=self.backend,
+            selected_backend=self.backend,
             counters=counters,
             restore_hit=self.restore_hit,
             restore_seconds=self.restore,

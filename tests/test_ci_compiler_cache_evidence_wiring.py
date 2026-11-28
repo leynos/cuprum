@@ -20,7 +20,9 @@ from tests.helpers.ci_compiler_evidence import (
     EVIDENCE_ACTION_PATH,
 )
 from tests.helpers.ci_runners import CACHE_RESTORE, ROOT, step_inputs, steps
+from tests.helpers.ci_workflows import job
 from tests.helpers.composite_actions import action_document
+from tests.helpers.makefile_pins import makefile_default
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -180,6 +182,31 @@ def test_each_writer_step_puts_the_repository_root_on_pythonpath() -> None:
             f"the {step.get('name')!r} step must run with the repository root "
             f"on PYTHONPATH, got {env.get('PYTHONPATH')!r}"
         )
+
+
+def test_the_upload_step_runs_even_after_cancellation() -> None:
+    """A cancelled attempt keeps the records it already wrote in cost evidence."""
+    document = action_document(EVIDENCE_ACTION)
+    runs = typ.cast("dict[str, object]", document["runs"])
+    uploads = [
+        step
+        for step in typ.cast("list[dict[str, object]]", runs["steps"])
+        if step.get("id") == "upload"
+    ]
+    assert len(uploads) == 1, "the action must have one upload step"
+    assert str(uploads[0].get("if")).strip() == (
+        "${{ always() && inputs.mode == 'upload' }}"
+    ), "the upload must run after a cancellation, or paid time disappears"
+
+
+def test_the_extension_job_declares_its_dev_fast_toolchain() -> None:
+    """An unset toolchain would be recorded as unknown for the whole family."""
+    declared = typ.cast(
+        "dict[str, object]", job("ci.yml", "extension-tests").get("env")
+    )
+    assert declared.get("DEV_FAST_TOOLCHAIN") == makefile_default(
+        "DEV_FAST_TOOLCHAIN"
+    ), f"the extension job must pin the Makefile's toolchain, got {declared}"
 
 
 def test_the_record_step_carries_the_runner_class() -> None:

@@ -53,6 +53,7 @@ from pathlib import Path
 
 from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
+from scripts.compiler_cache_validation import validate_record
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -141,8 +142,7 @@ def mark(environ: cabc.Mapping[str, str]) -> int:
     Returns
     -------
     int
-        Always zero. A missing marker makes one timing field ``unknown``; it
-        must not fail the step that measures a paid transfer.
+        Always zero; a missing marker leaves one timing unknown, never fails.
     """
     marker = environ.get("EVIDENCE_MARKER", "")
     if marker not in {"restore", "restore-end", "save", "save-end"}:
@@ -159,9 +159,8 @@ def snapshot(environ: cabc.Mapping[str, str]) -> int:
     Returns
     -------
     int
-        Zero when the snapshot was persisted. A missing sccache still writes a
-        snapshot carrying ``available: false``; an unusable bracket or phase,
-        or an unwritable directory, is reported and also returns zero.
+        Zero when persisted. A missing sccache writes ``available: false``; an
+        unusable bracket or an unwritable directory is reported, also zero.
     """
     try:
         state = capture(environ)
@@ -355,6 +354,7 @@ def _normalize(record: dict[str, object]) -> None:
         "setup_status": ("absent", schema.SETUP_STATUSES),
         "compiler_shape": ("unknown", schema.COMPILER_SHAPES),
         "backend": ("unknown", schema.BACKENDS),
+        "selected_backend": ("unknown", schema.BACKENDS),
         "cache_host_class": ("absent", schema.CACHE_HOSTS),
     }
     for name, (fallback, vocabulary) in fallbacks.items():
@@ -368,11 +368,11 @@ def record(environ: cabc.Mapping[str, str]) -> int:
     Returns
     -------
     int
-        Always zero; an invalid record is reported, never persisted, and
-        telemetry cannot fail a build that compiled correctly.
+        Always zero; an invalid record is reported, never persisted.
     """
     try:
-        document = build_record(environ)
+        # One malformed line makes the reader reject the whole artefact.
+        document = validate_record(build_record(environ))
         encoded = json.dumps(document, separators=(",", ":"))
         path = Path(environ["EVIDENCE_DIR"]) / "records.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,7 @@ True
 
 from __future__ import annotations
 
+import math
 import typing as typ
 
 from scripts import compiler_cache_jobs as jobs_reader
@@ -236,7 +237,10 @@ def _transfer_total(record: cabc.Mapping[str, object]) -> float | None:
     save = validation.number_or_none(record.get("save_seconds"))
     if restore is None or save is None:
         return None
-    return round(restore + save, 3)
+    total = restore + save
+    # Two finite durations can still sum to infinity; a non-finite total is
+    # unknown, and must not reach the JSON report as `Infinity`.
+    return round(total, 3) if math.isfinite(total) else None
 
 
 def _comparable(

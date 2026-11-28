@@ -56,19 +56,38 @@ def test_the_server_start_is_the_last_step_and_follows_the_install() -> None:
     )
 
 
+class _Expectation(typ.NamedTuple):
+    """The environment name the start must see, and its required value."""
+
+    name: str
+    value: str | None
+
+
 @pytest.mark.parametrize(
-    ("backend", "credentials", "expected"),
+    ("inputs", "credentials", "expected"),
     [
-        ("local", {}, "SCCACHE_DIR"),
-        ("gha", PROXY_CREDENTIALS, "SCCACHE_GHA_ENABLED"),
+        ({"backend": "local"}, {}, _Expectation("SCCACHE_DIR", None)),
+        (
+            {"backend": "gha"},
+            PROXY_CREDENTIALS,
+            _Expectation("SCCACHE_GHA_ENABLED", None),
+        ),
+        (
+            {"backend": "gha", "namespace": "py3.13-debug"},
+            PROXY_CREDENTIALS,
+            _Expectation("SCCACHE_GHA_VERSION", "py3.13-debug"),
+        ),
     ],
-    ids=["local-directory", "actions-service"],
+    ids=["local-directory", "actions-service", "namespaced"],
 )
 def test_the_server_process_sees_what_the_install_exported(
-    tmp_path: Path, backend: str, credentials: dict[str, str], expected: str
+    tmp_path: Path,
+    inputs: dict[str, str],
+    credentials: dict[str, str],
+    expected: _Expectation,
 ) -> None:
     """The start runs in a later process, so it sees only what was exported."""
-    installed = _run_install(tmp_path, {"backend": backend}, credentials)
+    installed = _run_install(tmp_path, inputs, credentials)
     assert installed.returncode == 0, installed.stderr
     binary = tmp_path / ".local" / "bin" / "sccache"
     seen = tmp_path / "environment-at-start"
@@ -106,60 +125,15 @@ def test_the_server_process_sees_what_the_install_exported(
         for line in seen.read_text(encoding="utf-8").splitlines()
         if "=" in line
     )
-    assert expected in environment_at_start, (
-        f"the server must start with {expected} from the install step in its "
-        f"environment, saw {sorted(environment_at_start)}"
+    assert expected.name in environment_at_start, (
+        f"the server must start with {expected.name} from the install step in "
+        f"its environment, saw {sorted(environment_at_start)}"
     )
+    if expected.value is not None:
+        assert environment_at_start[expected.name] == expected.value, (
+            f"the server must start with the namespace the install step "
+            f"exported, saw {environment_at_start[expected.name]!r}"
+        )
     assert environment_at_start.get("RUSTC_WRAPPER") == installed.exported.get(
         "RUSTC_WRAPPER"
     ), "the server must see the wrapper the install step exported"
-
-
-def test_the_namespace_reaches_the_server_process(tmp_path: Path) -> None:
-    """A namespaced family must bind its own entries, not the default ones."""
-    installed = _run_install(
-        tmp_path,
-        {"backend": "gha", "namespace": "py3.13-debug"},
-        PROXY_CREDENTIALS,
-    )
-    assert installed.returncode == 0, installed.stderr
-    binary = tmp_path / ".local" / "bin" / "sccache"
-    seen = tmp_path / "environment-at-start"
-    binary.write_text(
-        "#!/usr/bin/env bash\n"
-        'if [ "$1" = "--start-server" ]; then\n'
-        f'  env > "{seen}"\n'
-        "fi\n"
-        'if [ "$1" = "--stop-server" ]; then\n'
-        '  echo "Error: couldn\'t connect to server" >&2\n'
-        "  exit 1\n"
-        "fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    binary.chmod(0o755)
-    outputs = tmp_path / "github_output"
-    outputs.touch()
-    runner_temp = tmp_path / "runner-temp"
-    runner_temp.mkdir(exist_ok=True)
-
-    started = run_step(
-        step_script(ACTION, START_STEP),
-        workdir=tmp_path,
-        environment={
-            **installed.exported,
-            "RUNNER_TEMP": str(runner_temp),
-            "GITHUB_OUTPUT": str(outputs),
-        },
-    )
-
-    assert started.returncode == 0, started.stderr
-    environment_at_start = dict(
-        line.split("=", 1)
-        for line in seen.read_text(encoding="utf-8").splitlines()
-        if "=" in line
-    )
-    assert environment_at_start.get("SCCACHE_GHA_VERSION") == "py3.13-debug", (
-        "the server must start with the namespace the install step exported, "
-        f"saw {sorted(environment_at_start)}"
-    )

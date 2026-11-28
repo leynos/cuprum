@@ -179,7 +179,12 @@ def _break_even(
     known = population is not None and transfer is not None and saving is not None
     if not known or saving <= 0:
         return None
-    return math.ceil((population + transfer) / saving)
+    # Finite operands can still sum to infinity; `math.ceil` would raise
+    # `OverflowError`, which is not an `InvalidEvidenceError`.
+    ratio = (population + transfer) / saving
+    if not math.isfinite(ratio):
+        return None
+    return math.ceil(ratio)
 
 
 class Measurements(typ.NamedTuple):
