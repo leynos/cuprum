@@ -26,6 +26,8 @@ the package is the stable public and internal entry point.
 
 from __future__ import annotations
 
+from cuprum._byte_stream.handle import RunningBytesCommand
+from cuprum._byte_stream.reader import ByteStreamReader
 from cuprum._command_internals import (
     _build_subprocess_execution as _build_subprocess_execution,
 )
@@ -51,6 +53,7 @@ from cuprum._process_handle.tasks import (
     _build_handle_execution as _build_handle_execution,
 )
 from cuprum._process_handle.tasks import _start_handle_run as _start_handle_run
+from cuprum._process_handle_errors import LiveStreamError as LiveStreamError
 from cuprum._process_handle_errors import (
     SignalAfterExitError as SignalAfterExitError,
 )
@@ -63,6 +66,8 @@ from cuprum._stream_consumer_errors import (
     ConsumerCancelledError as ConsumerCancelledError,
 )
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout
+from cuprum.byte_streams import ByteChunk as ByteChunk
+from cuprum.byte_streams import StreamClosure as StreamClosure
 from cuprum.capture_policy import (
     BoundedCapture,
     CapturedStream,
@@ -131,6 +136,8 @@ __all__ = [
     "ArgValue",
     "BoundedCapture",
     "BoundedDelivery",
+    "ByteChunk",
+    "ByteStreamReader",
     "BytesCommandResult",
     "BytesPipelineResult",
     "CapturePolicy",
@@ -145,10 +152,12 @@ __all__ = [
     "FullCapture",
     "IOOptions",
     "LineStream",
+    "LiveStreamError",
     "Pipeline",
     "PipelineResult",
     "ProcessGroupPolicy",
     "RunOutputOptions",
+    "RunningBytesCommand",
     "RunningCommand",
     "RunningEventLoopError",
     "SafeCmd",
@@ -159,6 +168,7 @@ __all__ = [
     "StdinSourceError",
     "StdinStream",
     "StdioTarget",
+    "StreamClosure",
     "TimeoutExpired",
     "UnknownProgramError",
     "UnsupportedSignalError",

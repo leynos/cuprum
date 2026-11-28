@@ -1,4 +1,4 @@
-# Architectural decision record (ADR) 0030: The pytest session layout is deferred, not consolidated
+# Architectural decision record (ADR) 030: The pytest session layout is deferred, not consolidated
 
 ## Status
 

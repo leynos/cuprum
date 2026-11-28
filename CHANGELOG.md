@@ -4,6 +4,29 @@
 
 ### Added
 
+- **Owned live byte streams with bounded per-stream queues:** `SafeCmd` gains
+  `start_bytes()`, which returns a `RunningBytesCommand` whose `stdout` and
+  `stderr` are independent `ByteStreamReader`s over the running child's bytes.
+  Each reader yields `ByteChunk` values in per-stream order, reports its own
+  terminal `StreamClosure`, and can be closed without touching the other stream
+  or the child. Delivery is lossless while a reader is live — a stalled
+  consumer applies backpressure to the child rather than losing a byte — and
+  each queue is bounded by `max_buffered_bytes` (64 KiB by default). Once
+  settlement begins the queues stop waiting, a tail that still fits is
+  delivered, and a discarded remainder makes the reader report
+  `TRUNCATED_BY_SETTLEMENT`; capture follows the configured policy, and the
+  settled result is a `BytesCommandResult`. The settlement task races the
+  child's exit against the stdin writer and both consumers through the existing
+  rendezvous precedence, so an early consumer failure stops the child and
+  surfaces as a chained `LiveStreamError` while a producer failure remains a
+  `StdinSourceError`; a held handle also stops its child when either the stdin
+  producer or a drain fails. Capture defaults on, but an explicit
+  `capture=False` or per-stream opt-out is honoured because the live readers
+  remain the primary channel. A caller-supplied `on_line` observer and non-pipe
+  output targets are refused before a child exists. The text `RunningCommand`,
+  `lines()`, and `run_bytes()` contracts are unchanged. The feature is
+  unreleased and absent from `0.2.0-beta2`
+  ([#706](https://github.com/leynos/cuprum/issues/706)).
 - **Detached command launch with explicit ownership transfer:** `SafeCmd` gains
   `launch_detached()` and `launch_detached_sync()`, which start a command in
   its own POSIX session and process group with all three standard streams on

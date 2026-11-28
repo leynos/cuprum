@@ -117,6 +117,7 @@ def _build_subprocess_execution(
             stdio=_resolve_stdio(state.stdin_data, state.output),
             on_line=state.output.on_line,
             capture_bytes=state.capture_bytes,
+            live_streams=state.live_streams,
             process_group=state.context.resolved_process_group,
             idle=_build_command_idle_monitor(
                 cmd,

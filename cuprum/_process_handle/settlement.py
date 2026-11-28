@@ -42,6 +42,7 @@ the error the first caller never got to return.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import typing as typ
 
 from cuprum._command_internals import (
@@ -51,17 +52,37 @@ from cuprum._command_internals import (
 from cuprum._process_exit import _observed_exit_code
 from cuprum._process_handle.control import _terminate_shielded
 from cuprum._process_handle.coordinator import _settle_handle_run
+from cuprum._result_types import _AnyCommandResult
 from cuprum._subprocess_context import _sh_module
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cuprum._process_handle.tasks import _HandleRun
     from cuprum._subprocess_spawn import _SubprocessExecution
-    from cuprum.sh import CommandResult, TimeoutExpired
+    from cuprum.sh import BytesCommandResult, CommandResult, TimeoutExpired
 
-__all__ = ["_Settlement"]
+__all__ = ["_TEXT_SETTLEMENT", "_Settlement", "_SettlementPlan", "_expiry_error"]
 
 
-class _Settlement:
+@dc.dataclass(frozen=True, slots=True)
+class _SettlementPlan[ResultT: _AnyCommandResult]:
+    """How one kind of handle turns a settled run into its result.
+
+    The settlement task, the deadline rule, and the failure finalization are
+    identical for every owned handle. What differs is only the result type and
+    the error a caller's expired deadline is reported as, so that pair travels
+    as this record rather than as two overridable methods on the handle.
+    """
+
+    settle: cabc.Callable[[_HandleRun], cabc.Awaitable[ResultT]]
+    expiry: cabc.Callable[
+        [_SubprocessExecution, ResultT, float],
+        TimeoutExpired,
+    ]
+
+
+class _Settlement[ResultT: _AnyCommandResult]:
     """The single settlement of one handle, and the outcome it produced.
 
     Held by the handle rather than derived from it, because the state that
@@ -72,34 +93,43 @@ class _Settlement:
     at most once. The task is started under the same lock that reads the
     outcome, so two callers arriving together cannot both decide to start one,
     and a caller arriving after the outcome exists starts nothing at all.
+
+    *plan* is the only thing that differs between a text handle and a byte
+    handle: it assembles that handle's result type and names the expiry that
+    type carries. The settlement task itself is shared.
     """
 
-    __slots__ = ("_deadline", "_handle", "_lock", "_result", "_task")
+    __slots__ = ("_deadline", "_handle", "_lock", "_plan", "_result", "_task")
 
-    def __init__(self, handle: _HandleRun) -> None:
+    def __init__(
+        self,
+        handle: _HandleRun,
+        plan: _SettlementPlan[ResultT],
+    ) -> None:
         """Hold *handle*'s run, with no settlement yet begun."""
         self._handle = handle
+        self._plan = plan
         self._lock = asyncio.Lock()
         #: The deadline the first expiring caller named, if one has expired.
         self._deadline: float | None = None
-        #: The outcome a completed settlement left, for ``RunningCommand.result``.
-        self._result: CommandResult | None = None
+        #: The outcome a completed settlement left, for the handle's ``result``.
+        self._result: ResultT | None = None
         #: The task driving the run, while one is running or has failed.
-        self._task: asyncio.Task[CommandResult] | None = None
+        self._task: asyncio.Task[ResultT] | None = None
 
     @property
-    def result(self) -> CommandResult | None:
+    def result(self) -> ResultT | None:
         """The outcome a completed settlement left, if there is one.
 
         Returns
         -------
-        CommandResult | None
+        ResultT | None
             The settled outcome, or ``None`` while the child is still running.
             Never waits; use :meth:`outcome` to block until there is one.
         """
         return self._result
 
-    async def outcome(self, deadline: float | None = None) -> CommandResult:
+    async def outcome(self, deadline: float | None = None) -> ResultT:
         """Return the run's outcome, settling it if nobody has yet.
 
         Parameters
@@ -110,7 +140,7 @@ class _Settlement:
 
         Returns
         -------
-        CommandResult
+        ResultT
             The outcome of the one settlement, whichever caller started it and
             whichever route — an ordinary exit, a stop, a kill, or another
             caller's deadline — produced it.
@@ -138,12 +168,12 @@ class _Settlement:
             # driving the run and the child is stopped here rather than left.
             return await self._expire(deadline)
 
-    async def settle_and_record(self) -> CommandResult:
+    async def settle_and_record(self) -> ResultT:
         """Settle the run and keep what it produced; used by the task itself.
 
         Returns
         -------
-        CommandResult
+        ResultT
             The command's outcome, also stored for :attr:`result`.
 
         Raises
@@ -158,7 +188,7 @@ class _Settlement:
         # task is driven by no clock, so nothing here can expire on its own.
         execution = run.execution
         try:
-            result = await _settle_handle_run(run)
+            result = await self._plan.settle(run)
         except BaseException as run_error:
             await _finalize_command_run_failure(
                 execution,
@@ -195,17 +225,17 @@ class _Settlement:
                 execution,
                 run.tracking,
                 result,
-                _expiry_error(execution, result, deadline),
+                self._plan.expiry(execution, result, deadline),
             )
         self._result = result
         return result
 
-    async def _await_settlement(self) -> CommandResult:
+    async def _await_settlement(self) -> ResultT:
         """Await the one settlement, driving it if nobody has yet.
 
         Returns
         -------
-        CommandResult
+        ResultT
             The outcome the shared settlement recorded.
         """
         async with self._lock:
@@ -224,7 +254,7 @@ class _Settlement:
             self._task = None
         return awaited
 
-    async def _expire(self, deadline: float) -> CommandResult:
+    async def _expire(self, deadline: float) -> ResultT:
         """Stop the child this caller gave up on and raise this caller's expiry.
 
         The deadline is recorded before the child is stopped, so the settlement
@@ -257,7 +287,7 @@ class _Settlement:
 
         Returns
         -------
-        CommandResult
+        ResultT
             The recorded outcome when the run had already settled, or the
             outcome the child produced on its own when the deadline fired
             after it had exited. History, either way, rather than something a
@@ -268,7 +298,7 @@ class _Settlement:
         TimeoutExpired
             The expiry the caller's own deadline produced, carrying the output
             the settled run captured.
-        """  # ruff: ignore[docstring-missing-exception, docstring-extraneous-exception] - the raise names a factory the call returns a TimeoutExpired from
+        """  # ruff: ignore[docstring-extraneous-exception] - the raise names a factory the call returns a TimeoutExpired from
         run = self._handle
         async with self._lock:
             settled = self._result
@@ -300,7 +330,7 @@ class _Settlement:
         async with self._lock:
             self._result = result
             self._task = None
-        raise _expiry_error(run.execution, result, deadline)
+        raise self._plan.expiry(run.execution, result, deadline)
 
     def _record_deadline(self, deadline: float) -> None:
         """Keep the first deadline that expired, for the settlement to finalize with."""
@@ -310,7 +340,7 @@ class _Settlement:
 
 def _expiry_error(
     execution: _SubprocessExecution,
-    result: CommandResult,
+    result: CommandResult | BytesCommandResult,
     deadline: float,
 ) -> TimeoutExpired:
     """Build the expiry a deadline-ran-out caller is owed.
@@ -331,3 +361,11 @@ def _expiry_error(
         output=result.stdout,
         stderr=result.stderr,
     )
+
+
+# The text handle's plan. It is built here, beside the expiry it names, so the
+# two cannot drift; the byte handle builds its own beside its result assembly.
+_TEXT_SETTLEMENT = _SettlementPlan(
+    settle=_settle_handle_run,
+    expiry=_expiry_error,
+)

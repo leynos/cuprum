@@ -23,6 +23,7 @@ from cuprum._process_lifecycle import (
     _ShieldedStepFailure,
     _TerminationOutcome,
 )
+from cuprum._result_types import _AnyCommandResult
 from cuprum.control_events import ControlOutcome
 from cuprum.control_observation import _complete_control
 
@@ -30,7 +31,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum.control_observation import _ControlMeasurement
-    from cuprum.sh import CommandResult
 
 __all__ = [
     "_settle_after_stop",
@@ -80,10 +80,10 @@ def _stop_outcome_from(measured: _StopRecord | None) -> ControlOutcome:
     return ControlOutcome.REFUSED_EXITED
 
 
-async def _settle_after_stop(
+async def _settle_after_stop[ResultT: _AnyCommandResult](
     stop: cabc.Awaitable[_StopRecord],
-    settle: cabc.Callable[[], cabc.Awaitable[CommandResult]],
-) -> CommandResult:
+    settle: cabc.Callable[[], cabc.Awaitable[ResultT]],
+) -> ResultT:
     """Run a public stop and settle the run however that stop ended.
 
     The stop's control measurement is completed before the settle is awaited,
@@ -114,9 +114,9 @@ async def _settle_after_stop(
     return await _weigh(stop_step, settle_step, settle)
 
 
-async def _settle_teardown[T](
+async def _settle_teardown[T, ResultT: _AnyCommandResult](
     stop: cabc.Awaitable[T],
-    settle: cabc.Callable[[], cabc.Awaitable[CommandResult]],
+    settle: cabc.Callable[[], cabc.Awaitable[ResultT]],
     exc: BaseException | None,
 ) -> None:
     """Settle the child on every exit from an ``async with`` block.
@@ -187,11 +187,11 @@ def _arbitrate[U, V](
         raise failure
 
 
-async def _weigh[T, U](
+async def _weigh[T, U, ResultT: _AnyCommandResult](
     stop_step: _ShieldedStepFailure[T],
     settle_step: _ShieldedStepFailure[U],
-    settle: cabc.Callable[[], cabc.Awaitable[CommandResult]],
-) -> CommandResult:
+    settle: cabc.Callable[[], cabc.Awaitable[ResultT]],
+) -> ResultT:
     """Raise the error the two steps owe the caller, or read the outcome.
 
     Both errors are held for the whole of both steps rather than raised as they

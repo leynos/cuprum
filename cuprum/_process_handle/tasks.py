@@ -34,6 +34,7 @@ import dataclasses as dc
 import typing as typ
 
 from cuprum._pipeline_types import _EventDetails
+from cuprum._stream_spawn_types import _StreamSpawnOptions
 from cuprum._subprocess_spawn import (
     _spawn_subprocess,
     _SubprocessExecution,
@@ -47,14 +48,18 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from cuprum._execution_tracking import _ExecutionTracking
+    from cuprum._stream_live import _LiveStreamSinks
     from cuprum._subprocess_wait_types import _RunTaskOwnership
 
 __all__ = [
     "_HandleRun",
+    "_attach_handle_tasks",
     "_attach_run_tasks",
     "_build_handle_execution",
     "_detach_run_tasks",
     "_launch_idle_monitor",
+    "_reclaim_failed_start",
+    "_sample_handle_start",
     "_start_handle_run",
 ]
 
@@ -120,10 +125,84 @@ def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecu
     return dc.replace(execution, timeout=None)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _HandleStart:
+    """The pre-spawn readings one handle start takes, and the stamped bundle."""
+
+    started_at: float
+    wall_clock_started_at: float
+    execution: _SubprocessExecution
+
+
+def _sample_handle_start(execution: _SubprocessExecution) -> _HandleStart:
+    """Take the pre-spawn clocks and stamp the bundle with their reference.
+
+    Both readings come from the observation rather than this module's clock:
+    the bundle's line callbacks subtract that same callable when stamping each
+    ``LineEvent``, so a reference from a different clock would turn every stamp
+    into a difference between two clocks under injection. The monotonic reading
+    travels on the bundle because the line callbacks read it to timestamp each
+    line; left at its zero default, every ``LineEvent.at`` would report the
+    machine's monotonic uptime instead of seconds since the command started.
+
+    Returns
+    -------
+    _HandleStart
+        The two clocks and the bundle stamped with the monotonic reference.
+    """
+    started_at = execution.observation.monotonic_clock()
+    wall_clock_started_at = execution.observation.wall_clock()
+    return _HandleStart(
+        started_at=started_at,
+        wall_clock_started_at=wall_clock_started_at,
+        execution=dc.replace(execution, started_at=started_at),
+    )
+
+
+async def _attach_handle_tasks(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    live: _LiveStreamSinks | None,
+) -> _RunTaskOwnership:
+    """Attach the run's tasks, preserving the text path's call shape.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The writer and consumers, with their reconciliation record.
+    """
+    if live is None:
+        return await _attach_run_tasks(process, execution)
+    return await _attach_run_tasks(process, execution, live=live)
+
+
+async def _reclaim_failed_start(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate and reap a child whose announcement or attachment failed.
+
+    The import is local so this module and the control module do not import
+    each other at module scope. Termination is transactional with attachment:
+    whatever it managed to start before failing has already reclaimed itself,
+    so the child is the only thing left to own here.
+    """
+    from cuprum._process_handle.control import _terminate_shielded
+
+    await _terminate_shielded(
+        process,
+        execution.ctx.cancel_grace,
+        owns_group=execution.owns_process_group,
+        observation=execution.observation,
+    )
+
+
 async def _start_handle_run(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
     default_timeout: float | None = None,
+    *,
+    live: _LiveStreamSinks | None = None,
 ) -> _HandleRun:
     """Spawn the child, announce it, and take ownership of its tasks.
 
@@ -155,6 +234,9 @@ async def _start_handle_run(
     default_timeout : float | None, default=None
         The deadline every wait on the handle falls back to, already resolved
         from ``start()``'s argument, the context, and the scoped default.
+    live : _LiveStreamSinks | None, default=None
+        The per-stream byte taps a ``start_bytes()`` handle attaches to its
+        consumers. ``None`` keeps the ordinary text wiring.
 
     Returns
     -------
@@ -168,45 +250,25 @@ async def _start_handle_run(
         Whatever the ``start`` emission or the task attachment raised, once the
         child has been terminated and reaped.
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission or the attachment raised
-    # Read from the observation rather than this module's clock: the bundle's
-    # line callbacks subtract this reference from that same callable when
-    # stamping each ``LineEvent``, so a reference from a different clock would
-    # turn every stamp into a difference between two clocks under injection.
-    started_at = execution.observation.monotonic_clock()
-    wall_clock_started_at = execution.observation.wall_clock()
-    # Set on the bundle before the spawn, because the record this returns is
-    # what the spawn was driven with and the line callbacks built from the
-    # bundle read ``started_at`` to timestamp each line: left at its zero
-    # default, every ``LineEvent.at`` would report the machine's monotonic
-    # uptime instead of seconds since the command started.
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
+    start = _sample_handle_start(execution)
+    process = await _spawn_subprocess(start.execution)
     try:
-        execution.observation.emit("start", _EventDetails(pid=process.pid))
-        ownership = await _attach_run_tasks(process, execution)
+        start.execution.observation.emit(
+            "start",
+            _EventDetails(pid=process.pid),
+        )
+        ownership = await _attach_handle_tasks(process, start.execution, live)
     except BaseException:
-        # Imported here so this module and the control module do not import
-        # each other at module scope.
-        from cuprum._process_handle.control import _terminate_shielded
-
         # Attaching is inside the guard for the same reason the emission is:
         # a child nobody is driving — no writer started, or consumers nobody
-        # has been told about — is still a child nobody would reap. Attaching
-        # is transactional, so a partial set of tasks is never what reaches
-        # here; whatever it managed to start before failing it has already
-        # reclaimed.
-        await _terminate_shielded(
-            process,
-            execution.ctx.cancel_grace,
-            owns_group=execution.owns_process_group,
-            observation=execution.observation,
-        )
+        # has been told about — is still a child nobody would reap.
+        await _reclaim_failed_start(process, start.execution)
         raise
     return _HandleRun(
         process=process,
-        execution=execution,
-        started_at=started_at,
-        wall_clock_started_at=wall_clock_started_at,
+        execution=start.execution,
+        started_at=start.started_at,
+        wall_clock_started_at=start.wall_clock_started_at,
         tracking=tracking,
         ownership=ownership,
         default_timeout=default_timeout,
@@ -227,6 +289,8 @@ def _launch_idle_monitor(execution: _SubprocessExecution) -> None:
 async def _attach_run_tasks(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
+    *,
+    live: _LiveStreamSinks | None = None,
 ) -> _RunTaskOwnership:
     """Start the stdin writer and the stream consumers for an owned child.
 
@@ -259,7 +323,11 @@ async def _attach_run_tasks(
     # anything, so failure here needs no cleanup. The preparation helper
     # resolves both stream configs, which is what keeps each stream's capture
     # accumulator reachable from reconciliation.
-    spawn = _prepare_stream_spawn(execution, process.pid)
+    spawn = _prepare_stream_spawn(
+        execution,
+        process.pid,
+        options=_StreamSpawnOptions(live=live),
+    )
     started: list[asyncio.Task[typ.Any]] = []
     try:
         ownership = _build_run_task_ownership(

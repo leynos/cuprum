@@ -673,58 +673,58 @@ exclude = ["unittests/**"]
 [[tool.duplication_gate.allow]]
 members = [
     "cuprum/_pipeline_types.py",
-    "cuprum/_pipeline_finalize.py",
-    "cuprum/_pipeline_results.py",
     "cuprum/_subprocess_spawn.py",
-    "cuprum/_command_internals.py",
-    "cuprum/_pipeline_collect.py",
+    "cuprum/_pipeline_results.py",
+    "cuprum/_stream_config.py",
+    "cuprum/_line_event_emitter.py",
     "cuprum/_pipeline_records.py",
+    "cuprum/_stream_drain.py",
+    "cuprum/_subprocess_stream_run.py",
+    "cuprum/_line_iteration.py",
+    "cuprum/_pipeline_collect.py",
+    "cuprum/_pipeline_finalize.py",
+    "cuprum/_subprocess_context.py",
     "cuprum/_subprocess_execution.py",
-    "cuprum/_subprocess_outcome.py",
+    "cuprum/_subprocess_wait_types.py",
+    "cuprum/_command_execution_config.py",
+    "cuprum/_command_internals.py",
     "cuprum/_line_stream/coordinator.py",
     "cuprum/_line_stream/drain.py",
-    "cuprum/_subprocess_stream_run.py",
-    "cuprum/_line_callbacks.py",
-    "cuprum/_line_event_emitter.py",
-    "cuprum/_line_iteration.py",
+    "cuprum/_pipeline_config.py",
     "cuprum/_pipeline_native_pump_types.py",
     "cuprum/_pipeline_settlement.py",
     "cuprum/_pipeline_stream_results.py",
-    "cuprum/_process_handle/state.py",
-    "cuprum/_stream_drain.py",
-    "cuprum/_subprocess_context.py",
-    "cuprum/_subprocess_timeout.py",
+    "cuprum/_process_handle/base.py",
+    "cuprum/_subprocess_outcome.py",
     "cuprum/_subprocess_streams.py",
-    "cuprum/_subprocess_wait_types.py",
-    "cuprum/_line_stream/telemetry.py",
-    "cuprum/_result_types.py",
-    "cuprum/_stream_config.py",
-    "cuprum/context/registration.py",
     "cuprum/_line_stream/line_queue.py",
-    "cuprum/_observability.py",
-    "cuprum/_pipeline_config.py",
-    "cuprum/_stdio_ownership.py",
-    "cuprum/_command_prepare.py",
-    "cuprum/_pipeline_stage_streams.py",
-    "cuprum/_process_handle/coordinator.py",
-    "cuprum/_result_assembly.py",
-    "cuprum/_stream_drain_finish.py",
-    "cuprum/_stream_line_consumer.py",
-    "cuprum/adapters/pump_metrics.py",
-    "cuprum/context/_scope.py",
-    "cuprum/events.py",
-    "cuprum/_command_finalization.py",
-    "cuprum/_command_execution_config.py",
     "cuprum/_line_stream/spawn.py",
-    "cuprum/_pipeline_spawn.py",
-    "cuprum/_subprocess_stream_exit.py",
-    "cuprum/_subprocess_wait.py",
-    "cuprum/_pipeline_internals.py",
+    "cuprum/_line_stream/telemetry.py",
+    "cuprum/_observability.py",
+    "cuprum/_result_types.py",
+    "cuprum/_stream_drain_loop.py",
+    "cuprum/_stream_spawn_types.py",
+    "cuprum/context/registration.py",
     "cuprum/sh/line_options.py",
     "cuprum/_pipeline_stream_native_completion.py",
-    "cuprum/_subprocess_stdin_stream.py",
+    "cuprum/_process_handle/results.py",
+    "cuprum/_process_handle/settlement.py",
+    "cuprum/_stdio_ownership.py",
+    "cuprum/_stream_line_consumer.py",
+    "cuprum/_subprocess_stream_exit.py",
+    "cuprum/_subprocess_timeout.py",
+    "cuprum/_subprocess_wait.py",
+    "cuprum/adapters/pump_metrics.py",
+    "cuprum/_byte_stream/settlement.py",
+    "cuprum/_command_prepare.py",
+    "cuprum/_pipeline_spawn.py",
+    "cuprum/_pipeline_stage_streams.py",
+    "cuprum/_result_assembly.py",
+    "cuprum/_stream_drain_finish.py",
+    "cuprum/context/_scope.py",
+    "cuprum/events.py",
 ]
-reason = "Fifty-one modules whose `if typ.TYPE_CHECKING:` block repeats. The entry names the modules this tree's detector reports, as the union of the family each side of the merge recorded. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry. Both parents' module splits contribute members: the capture work added `_command_execution_config.py`, `_command_finalization.py`, `_command_internals.py`, `_pipeline_config.py`, `_pipeline_finalize.py`, `_pipeline_records.py`, `_pipeline_results.py`, `_pipeline_stage_streams.py`, `_stream_config.py`, and `_subprocess_execution.py`; the bounded-delivery work added `_line_stream/spawn.py`, `_pipeline_spawn.py`, `_subprocess_stream_exit.py`, and `_subprocess_wait.py`. `_pipeline_internals.py` joins here with the capture work too: its own `TYPE_CHECKING` prologue repeats the same guard, but only a merged tree sees it in the same family as the modules both parents split out. `cuprum/sh/line_options.py` joins with the deferred-line-stream work, which split `SafeCmd.lines()`'s pre-flight out of `safe_cmd.py` and left the new module with the same type-only import prologue as the modules it was split from. The post-exit deadline work adds `_line_stream/drain.py`: its collect step observes the readers through `asyncio.wait`, and the type-only names that needs — `_Consumer`, `_DrainContext`, and `_DrainPair` — take the block past the line threshold at which the detector pairs it with the family. It belongs here on the same terms as the rest: the block is that module's declared dependency surface, not an operation written twice. `_line_stream/coordinator.py` is already a member above, and the merge kept it there: its type-checking block still declares the capture record and policy names the drain pair carries, on top of the bundle it now reads from the run rather than accepting as an argument. Widened from forty-three to forty-five while bounding the pipeline's post-exit drain: `_pipeline_settlement.py` is new and declares the same type-only collaborators, and `_pipeline_stream_results.py`'s block grew to name the `_DrainContext` its settlement now takes, taking it past the line threshold at which the detector pairs the block with the family. Widened from forty-five to forty-six when the direct run's result assembly moved into `cuprum/_subprocess_outcome.py`: the new module is a split of the orchestration module, so its `if typ.TYPE_CHECKING:` block declares the same type-only collaborators and joins on identical terms. Widened from forty-six to forty-seven when `cuprum/_subprocess_timeout.py` became the single construction point for the run-scoped timeout context and the run exit event: consolidating those three duplicated construction sites left its guard block naming both payload slots it now forwards, which takes it past the line threshold at which the detector pairs it with the family. Widened from forty-eight to forty-nine when the native pump's completion cleanup moved out of `cuprum/_pipeline_stream_native_cleanup.py` into `cuprum/_pipeline_stream_native_completion.py`: the split module declares the same type-only collaborators — `asyncio`, `collections.abc`, `concurrent.futures`, and the completion and state records — so its guard block joins on identical terms. Widened from forty-nine to fifty when the native pump's completion cleanup moved out of `cuprum/_pipeline_stream_native_cleanup.py` into `cuprum/_pipeline_stream_native_completion.py`: the split module declares the same type-only collaborators — `asyncio`, `collections.abc`, `concurrent.futures`, and the completion and state records — so its guard block joins on identical terms. Widened from fifty to fifty-one when the streaming stdin writer began publishing its failure before it unwinds: the log it publishes to is a type-only collaborator, so `cuprum/_subprocess_stdin_stream.py`'s guard block names one more record and reaches the line threshold at which the detector pairs the block with the family. It belongs on the same terms as the rest — the block is that module's declared dependency surface, not an operation written twice."
+reason = "Fifty-one modules whose `if typ.TYPE_CHECKING:` block repeats. The entry names the modules this tree's detector reports, as the union of the family each side of the merge recorded. Every body names that module's own collaborators (`from cuprum.sh import ...`, `from cuprum.program import Program`, and so on), so the guard and the type-only convention are the whole overlap; import declarations cannot be factored into a shared helper. This is one idiom recorded once. The entry is deliberately whole-module rather than symbol-keyed, so a module that joins the family is one more line here, and the detector's stale-entry report names it when the list falls behind. A family must match *every* key of an entry. Both parents' module splits contribute members: the capture work added `_command_execution_config.py`, `_command_finalization.py`, `_command_internals.py`, `_pipeline_config.py`, `_pipeline_finalize.py`, `_pipeline_records.py`, `_pipeline_results.py`, `_pipeline_stage_streams.py`, `_stream_config.py`, and `_subprocess_execution.py`; the bounded-delivery work added `_line_stream/spawn.py`, `_pipeline_spawn.py`, `_subprocess_stream_exit.py`, and `_subprocess_wait.py`. `_pipeline_internals.py` joins here with the capture work too: its own `TYPE_CHECKING` prologue repeats the same guard, but only a merged tree sees it in the same family as the modules both parents split out. `cuprum/sh/line_options.py` joins with the deferred-line-stream work, which split `SafeCmd.lines()`'s pre-flight out of `safe_cmd.py` and left the new module with the same type-only import prologue as the modules it was split from. The post-exit deadline work adds `_line_stream/drain.py`: its collect step observes the readers through `asyncio.wait`, and the type-only names that needs — `_Consumer`, `_DrainContext`, and `_DrainPair` — take the block past the line threshold at which the detector pairs it with the family. It belongs here on the same terms as the rest: the block is that module's declared dependency surface, not an operation written twice. `_line_stream/coordinator.py` is already a member above, and the merge kept it there: its type-checking block still declares the capture record and policy names the drain pair carries, on top of the bundle it now reads from the run rather than accepting as an argument. Widened from forty-three to forty-five while bounding the pipeline's post-exit drain: `_pipeline_settlement.py` is new and declares the same type-only collaborators, and `_pipeline_stream_results.py`'s block grew to name the `_DrainContext` its settlement now takes, taking it past the line threshold at which the detector pairs the block with the family. Widened from forty-five to forty-six when the direct run's result assembly moved into `cuprum/_subprocess_outcome.py`: the new module is a split of the orchestration module, so its `if typ.TYPE_CHECKING:` block declares the same type-only collaborators and joins on identical terms. Widened from forty-six to forty-seven when `cuprum/_subprocess_timeout.py` became the single construction point for the run-scoped timeout context and the run exit event: consolidating those three duplicated construction sites left its guard block naming both payload slots it now forwards, which takes it past the line threshold at which the detector pairs it with the family. Widened from forty-eight to forty-nine when the native pump's completion cleanup moved out of `cuprum/_pipeline_stream_native_cleanup.py` into `cuprum/_pipeline_stream_native_completion.py`: the split module declares the same type-only collaborators — `asyncio`, `collections.abc`, `concurrent.futures`, and the completion and state records — so its guard block joins on identical terms. Widened from forty-nine to fifty when the native pump's completion cleanup moved out of `cuprum/_pipeline_stream_native_cleanup.py` into `cuprum/_pipeline_stream_native_completion.py`: the split module declares the same type-only collaborators — `asyncio`, `collections.abc`, `concurrent.futures`, and the completion and state records — so its guard block joins on identical terms. Widened from fifty to fifty-one when the streaming stdin writer began publishing its failure before it unwinds: the log it publishes to is a type-only collaborator, so `cuprum/_subprocess_stdin_stream.py`'s guard block names one more record and reaches the line threshold at which the detector pairs the block with the family. It belongs on the same terms as the rest — the block is that module's declared dependency surface, not an operation written twice. Reconciled with the scan after the owned live-byte work (and again when its result assembly moved into `_process_handle/results.py`, and when the byte settlement guard joined the family): `_process_handle/base.py`, `_stream_drain_loop.py`, `_stream_spawn_types.py`, and `_process_handle/settlement.py` joined the family, while five modules whose prologues no longer share the shape left it."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -732,13 +732,6 @@ members = [
     "cuprum/adapters/stream_metrics.py",
 ]
 reason = "Two modules importing the four names of the stream-event vocabulary. The shared block is the vocabulary's public surface, which both must bind to their own module."
-
-[[tool.duplication_gate.allow]]
-members = [
-    "cuprum/_streams.py",
-    "cuprum/_streams_pump.py",
-]
-reason = "Two stream drivers that import the three stream-operation recorders plus the same type-only measurement import. The import list is the whole overlap; the drivers diverge immediately below it."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -788,9 +781,10 @@ reason = "Six adapter constructors that each bind their own collector to the nam
 members = [
     "cuprum/events.py::ExecEvent",
     "cuprum/line_stream_events.py::LineStreamEvent",
+    "cuprum/_stream_drain_loop.py::_DrainState",
     "cuprum/_pipeline_types.py::_EventDetails",
 ]
-reason = "Three distinct event schemas. The overlap is the shape every event record shares — an identifier, a phase, an optional payload — not one schema written three times. No field is interchangeable between them."
+reason = "Four distinct event schemas. Widened from three after the live drain state joined the family: it shares the same identifier-and-state record shape, but its fields are the drain's own and none is interchangeable with an event's. The overlap is the shape every event record shares — an identifier, a phase, an optional payload — not one schema written three times. No field is interchangeable between them."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -1111,3 +1105,10 @@ include = [
     { path = "rust/rust-toolchain.toml", format = "sdist" },
     { path = "rust/dylint.toml", format = "sdist" },
 ]
+
+[[tool.duplication_gate.allow]]
+members = [
+    "cuprum/_pipeline_results.py",
+    "cuprum/_process_handle/results.py",
+]
+reason = "Two result-assembly modules importing the four shared result-building helpers: the capture-record flattener, the byte and text narrowers, and the measurements record. The import list is the whole overlap. Pipeline stages and owned handles build different result classes from different settled facts, and a shared importer would only hide which module owns which construction."

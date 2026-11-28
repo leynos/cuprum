@@ -3701,6 +3701,52 @@ A stream that was never attached is the one payload the drain does not render:
 `_empty_capture` reports `b""` or `""` according to the mode, matching
 `_consume_stream_without_lines`.
 
+## Owned live byte-stream internals
+
+`SafeCmd.start_bytes()` is a separate immediate owner, not a flag on
+`run_bytes()` or `start()`. It returns `RunningBytesCommand`, which shares the
+process record, settlement task, stop lock, control operations, and shielded
+`async with` teardown with `RunningCommand` through
+`cuprum/_process_handle/base.py`; only the result type and the reader surface
+differ. `cuprum/_byte_stream/handle.py` owns that handle.
+
+The live surface is two `ByteStreamReader`s fed from the existing single drain.
+`cuprum/_stream_tap.py` carries the per-stream chunk, end-of-stream, failure,
+and completion callbacks; `cuprum/_stream_drain_loop.py` invokes them from the
+one fan-out, after capture and echo and before line decoding. A byte run and a
+text run therefore call the same consume entry point with the same argument
+counts. The tap is a field on `_StreamConfig`, not an extra parameter, and it
+must be invoked by exactly one layer: composing it into the line feeder as well
+delivers every chunk twice.
+
+`cuprum/_byte_stream/byte_queue.py` owns the lossless byte-bounded queue. While
+the reader is live, `put` waits for capacity and never drops a byte; settlement
+sets a provisional release that lets a blocked `put` finish with the part that
+fits and count the rest. The first terminal state published is final — `FAILED`,
+`EOF`, `READER_CLOSED`, or `TRUNCATED_BY_SETTLEMENT` — and a failure recorded
+after another state is retained for settlement without rewriting the reader's
+closure. `cuprum/_byte_stream/reader.py` turns the queue into `ByteChunk`
+values, publishes `capacity_waiting` from the queue's outstanding `put` count,
+and raises `LiveStreamError` only for a `FAILED` closure;
+`cuprum/_byte_stream/wiring.py` builds the queues, readers, and taps, so a
+reader cannot be wired to the other stream's queue.
+
+`cuprum/_byte_stream/settlement.py` owns the byte-specific settlement half: it
+releases both queues before waiting for the child, races the exit against the
+stdin writer and both consumers, publishes a failed consumer as
+`LiveStreamError`, keeps a producer failure a `StdinSourceError`, and raises a
+recorded stop cause even when the stop made the child exit first. The generic
+coordinator, delivery close, and result assembly belong to the text handle; the
+byte path reuses them through `_SettlementPlan` and `_assemble_handle_result`.
+
+Re-use policy: a new live-reader behaviour belongs in the queue or the drain
+tap, not in a second pipe reader; a new terminal state belongs in
+`StreamClosure` and must be added to the queue's publish rule and the reader's
+iteration rule together. The public vocabulary (`ByteChunk`, `StreamClosure`,
+`ByteStreamReader`, `RunningBytesCommand`, `LiveStreamError`) is re-exported
+from `cuprum` and `cuprum.sh`; see design section 13.11.6 for the module
+boundaries and the users' guide for the caller-visible contract.
+
 ### Aggregate Python stream-operation observation
 
 The pure-Python stream paths expose opt-in aggregate completion telemetry

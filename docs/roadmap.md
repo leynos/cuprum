@@ -5,6 +5,25 @@ commitments. Phases are ordered and build on one another. Steps group related
 workstreams. Tasks are measurable and must meet acceptance criteria to count as
 done.
 
+## Unreleased
+
+- [x] Owned live byte streams (issue `#706`): `SafeCmd.start_bytes()` returns a
+  `RunningBytesCommand` whose `stdout` and `stderr` are independent
+  `ByteStreamReader`s over lossless, byte-bounded per-stream queues, with
+  per-stream EOF, explicit settlement truncation, an eager supervisor, and a
+  settled `BytesCommandResult`. The decision is recorded in
+  [ADR-031](adrs/adr-0031-owned-live-byte-streams.md), and the motivating
+  consumer is
+  [leynos/cmd-mox#469](https://github.com/leynos/cmd-mox/issues/469).
+  - [x] Record the ownership and reuse decision, and specify the reader,
+    closure, and queue contracts in the design.
+  - [x] Compose the byte tap and the end-of-stream hook into the single drain,
+    and prove the lossless byte bound.
+  - [x] Implement the byte handle, its settlement, and the eager supervisor.
+  - [x] Prove the contract with real-child, externally supervised scenarios,
+    including POSIX process-group containment.
+  - [x] Document the interface, its availability, and its limits.
+
 ## 0.2.0 — Direct stdin input (issue `#30`)
 
 - [x] `StdinInput` parameter object with mutual-exclusion enforcement in

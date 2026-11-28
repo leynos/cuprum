@@ -125,6 +125,9 @@ class _SubprocessExecution:
     # decoded text. Defaulted for the tests that build this bundle directly and
     # for every text-mode caller; only the binary entry points set it.
     capture_bytes: bool = False
+    # Whether a live byte handle consumes both streams, independently of
+    # capture and echo. Set by ``start_bytes()`` so the spawn keeps the pipes.
+    live_streams: bool = False
     # Defaulted for the tests that build this bundle directly, and resolved by
     # ``RunOutputOptions.__post_init__`` on the production path, so the value
     # reaching the stream config is always a member, never a raw spelling.
@@ -177,6 +180,7 @@ class _SubprocessExecution:
             or self.echo_stdout
             or self.idle is not None
             or self.on_line is not None
+            or self.live_streams
         )
 
     @property
@@ -187,6 +191,7 @@ class _SubprocessExecution:
             or self.echo_stderr
             or self.idle is not None
             or self.on_line is not None
+            or self.live_streams
         )
 
     @property

@@ -206,6 +206,7 @@ def _spawn_inputs(state: _State) -> object:
         discard_on_cancel=asyncio.Event(),
         relay_diagnostics=context.relay_diagnostics,
         idle=None,
+        live=None,
         spawn_context=context,
     )
 

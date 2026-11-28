@@ -5710,3 +5710,233 @@ the child's silence. It is not detached from the execution bundle, and that is
 load-bearing in the other direction: the monitor's presence is what decides
 whether the child's streams are piped at all, so detaching it would change how
 the child is wired.
+
+### 13.11 Owned live byte-stream handle
+
+`SafeCmd.start()` keeps a child alive but exposes its output only after the run
+settles. `SafeCmd.start_bytes()` is the live counterpart: it returns a
+`RunningBytesCommand` whose two streams can be consumed incrementally as bytes
+while the child is running, with the same owned process, stdin writer,
+supervisor, and settlement guarantees. The decision and its rejected
+alternatives are recorded in
+[ADR-031](adrs/adr-0031-owned-live-byte-streams.md); the module boundaries this
+section describes follow
+[ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md), and the
+live queue is deliberately distinct from the presentation queue of
+[ADR-025](adrs/adr-0025-bounded-output-delivery.md).
+
+#### 13.11.1 Ownership and reuse
+
+`start_bytes()` is a second `start`, not a second implementation of one. It
+enforces the allowlist, defaults the execution context, resolves the default
+wait deadline, accepts a `StdinSource`, reuses `_prepare_owned_command`, the
+spawn and announcement in `_start_handle_run`, the partial-attachment reclaim,
+the stop lock, the control operations, and the single-settlement rule. It
+differs in exactly four resolved inputs:
+
+- capture defaults on and the run is marked `capture_bytes=True`, so the
+  settled result is a `BytesCommandResult` carrying the child's bytes; an
+  explicit `capture=False` or per-stream opt-out is honoured, and both streams
+  still use library-owned pipes so the live readers are always fed;
+- the caller-supplied `on_line` observer is rejected before the spawn, because
+  a live byte consumer and a line observer would give one stream two
+  contradictory presentation contracts;
+- a non-pipe stdout or stderr target is rejected, because a handle reads both
+  streams through parent-side pipes;
+- one live sink per stream is attached to the existing single consumer.
+
+`RunningBytesCommand` and `RunningCommand` share an internal base that owns
+`pid`, `exec_id`, `signal`, `terminate`, `kill`, `__aenter__`, `__aexit__`, and
+the stop/settle arbitration in `cuprum/_process_handle/settle.py`. The public
+text class keeps its own `wait`, `result`, and every existing annotation; the
+byte class re-types `wait` and `result` to `BytesCommandResult` and adds
+`stdout` and `stderr`. Ownership transfer is explicit at the call site rather
+than selected by a flag on one class.
+
+The handle does not add an execution phase and does not widen `LineEvent`. A
+registered line observer still receives decoded lines during a byte run,
+because observation and capture are independent channels; only the
+*caller-supplied* `on_line` is refused, exactly as `run_bytes()` refuses it.
+
+#### 13.11.2 Readers and byte events
+
+Each stream is a `ByteStreamReader` over a per-stream queue. Iterating a reader
+yields `ByteChunk` values:
+
+- `stream` names `EchoStream.STDOUT` or `EchoStream.STDERR`;
+- `data` is the child's bytes for that chunk, untouched;
+- `sequence` is a zero-based per-stream counter, so order can be asserted
+  without relying on read sizes.
+
+Per-stream order is the only order promised. Chunks are the parent's reads, not
+the child's writes, so a consumer must not infer protocol record boundaries
+from them. There is no total cross-stream order: the two pipes are drained by
+two tasks, and the event loop may interleave them arbitrarily.
+
+A reader reaches its own end independently of the other stream and of the
+process. `wait_eof()` waits for the producer-side terminal status and returns
+the `StreamClosure`; `at_eof` reports whether that status is `EOF`; `closure`
+reports the terminal status, or `None` while the reader is live.
+`capacity_waiting` reports a `put` parked on this stream's full queue, which is
+the only direct evidence of an outstanding backpressure wait; a full queue
+alone is not, because a read can end exactly at the bound. `aclose()` stops one
+reader without touching the other, the child, or the capture.
+
+`StreamClosure` has four members. `EOF` means the drain observed the empty read
+and no byte was discarded. `READER_CLOSED` means the consumer closed the
+reader; queued items are discarded and later live chunks are dropped from the
+reader while capture continues. `TRUNCATED_BY_SETTLEMENT` means settlement
+began before the reader reached a clean end. `FAILED` means the drain or the
+supervisor failed, and both iteration and `wait_eof()` raise `LiveStreamError`,
+chained to the original cause.
+
+Normal terminal statuses drain queued items before iteration stops. `FAILED`
+takes precedence over pending items: a protocol consumer must see the failure
+rather than a silently shortened stream. The first terminal state is final, so
+`FAILED` is published only when it is the first state reached; a later failure
+is retained for settlement and never rewrites a reader's closure.
+
+#### 13.11.3 Lossless observation queue
+
+The queue is deliberately not `BoundedDelivery`. Presentation and observation
+have opposite saturation policies: a blocked presentation sink must not stall
+the run, so `BoundedDelivery` drops and reports; a live observer is part of the
+run's contract, so its queue applies backpressure instead.
+
+- Capacity is accounted in actual payload bytes.
+- A `put` that cannot fit waits for capacity; it never drops a byte while the
+  reader is live.
+- A chunk larger than the capacity is split into ordered pieces, each of which
+  waits for space, so the bound holds even when a single read or a producer's
+  chunk exceeds it.
+- Terminal state is out of band. A reader can observe EOF while queued items
+  remain, and iteration then drains those items before stopping.
+- `release()` wakes a blocked `put` and makes a later chunk that does not fit
+  discard rather than block. It is used for `READER_CLOSED` and for settlement.
+- A failure is stored out of band and outranks pending items. The *first*
+  terminal state is final, so a failure that arrives after `EOF`,
+  `READER_CLOSED`, or `TRUNCATED_BY_SETTLEMENT` was published is recorded for
+  the run's settlement without rewriting what the reader observed. A reader
+  told a clean end is not then told it failed, and a closed reader is not owed
+  bytes its consumer refused.
+
+The read size of a byte run is capped at
+`min(configured_read_size, max_buffered_bytes)` through `_StreamConfig`, so a
+normal read fits one reservation. The split path remains the correctness
+mechanism for a chunk the transport returns larger than the cap or for a queue
+whose bound a caller set below the read size.
+
+`max_buffered_bytes` covers queued live bytes only. It does not cover the
+capture policy's retention, the chunk currently being written to the queue, the
+transport buffers, or the operating system's pipe buffer. A caller who also
+enables a full capture therefore retains up to the capture policy's own bound
+in addition to this one.
+
+#### 13.11.4 The single drain and the byte tap
+
+The live tap travels on `_StreamConfig`, so a byte run and a text run call the
+same consume entry points with the same argument counts. The drain's single
+fan-out invokes the tap before the line feeder. A chunk is therefore handled in
+one order by one task: capture first, then echo, then the byte tap, then line
+decoding and line observation. Composing the tap into the line feeder as well
+would deliver every chunk to the live queue twice, which is why the feeder only
+decodes. Capture and echo failures keep their existing meaning: a capture
+*storage* failure stops further writes and reports `storage_failed` without
+ending the run, any other exception raised by the capture sink stops the drain
+and the run, and an echo failure follows the configured broken-pipe policy. A
+byte-tap failure is a queue-internal invariant failure and is reported as
+`FAILED`; it cannot silently drop a chunk.
+
+EOF is a separate, synchronous `on_eof` hook on the drain. It is called only
+when the read loop observes the empty read, and before `_finish_drain`
+finalizes the capture. It is deliberately not called when a read is cancelled,
+when a chunk's delivery fails, or when a preserving line-stream finalization
+runs, so a cancelled drain never claims EOF. The hook only *notes* the end: the
+reader's terminal state is published when the drain task completes
+successfully, so a finalization failure publishes `FAILED` instead of leaving a
+reader with an EOF it observed before the failure.
+
+#### 13.11.5 Supervisor and settlement
+
+Each byte drain also publishes its own task's failure as soon as it happens,
+without waiting for settlement to start: a reader that is iterating a live
+stream has not called `wait()`, so a late `FAILED` would otherwise suspend it
+forever. The settlement task is also the supervisor. It races the child's exit
+against the stdin writer and both stream consumers through
+`_await_exit_or_writer_failure`, so it inherits the fixed rendezvous
+precedence: a settled exit wins, then the stdin writer, then stdout, then
+stderr. An early consumer failure cancels the exit wait, whose cancellation
+handler terminates the child, and the failure is published as a
+`LiveStreamError` on that reader and propagated through settlement. A producer
+failure remains a `StdinSourceError`. A child that closes its stdin early
+remains a non-fatal observation.
+
+Settlement releases both queues *before* it waits for the child. A blocked
+`put` wakes and stops waiting; a chunk that still fits is enqueued, and only
+the remainder is discarded and counted while capture continues. Releasing
+before the exit wait is what stops a stalled consumer from keeping the child
+alive: a full queue blocks the drain, the full pipe blocks the child, and the
+exit the wait is for would never arrive.
+
+A drain that fails while the child is still running publishes `FAILED` on its
+queue from the task's own done callback and records a stop request. The handle
+binds that request to the run's stop lock, so the child is stopped and reaped
+without waiting for a caller to ask for an outcome; settlement awaits the same
+task before reconciling.
+
+The remaining settlement steps run under one shield:
+
+1. Reconcile the run's tasks with the ordinary capture EOF grace. A drain that
+   reaches EOF publishes `EOF` when nothing was discarded, otherwise
+   `TRUNCATED_BY_SETTLEMENT`; a drain that does not reach EOF is finalized as
+   `TRUNCATED_BY_SETTLEMENT`.
+2. Release the child's output transports and close the delivery worker.
+
+If reconciliation discovers that a consumer task ended with a non-cancellation
+exception, every failed stream's reader is published as `FAILED` and the run
+settles with the chained `LiveStreamError` rather than reporting a successful
+result. The error the settlement raises keeps stdout-first precedence, while
+each failed reader reports its own cause. A drain failure therefore cannot hide
+behind a short capture, and a failure cannot leave a clean `EOF` observable.
+
+The handle keeps the existing deadline rule: `wait(timeout=...)` bounds one
+caller's wait, stops the child on expiry, and raises `TimeoutExpired` carrying
+the bytes drained before the deadline. The settlement task itself carries no
+deadline. `start_bytes(timeout=...)` supplies the default for every `wait()`.
+
+Every owned reader and writer is settled. Repeated cancellation is absorbed by
+the same shield as the text path, so a second cancellation cannot skip the
+reconciliation or the transport release. No task is abandoned: the two drains,
+the stdin writer, and the settlement task are either awaited, cancelled and
+gathered, or reclaimed by the attachment failure path.
+
+#### 13.11.6 Module boundaries
+
+- `cuprum/byte_streams.py` owns the public vocabulary: `ByteChunk`,
+  `StreamClosure`, and the re-exported reader.
+- `cuprum/_byte_stream/byte_queue.py` owns the lossless, byte-bounded queue and
+  its terminal state.
+- `cuprum/_byte_stream/reader.py` owns `ByteStreamReader`, the iterator,
+  closure, and capacity-wait surface over one queue.
+- `cuprum/_byte_stream/wiring.py` builds the per-stream taps the stream spawn
+  attaches, and owns the read-size cap decision.
+- `cuprum/_byte_stream/owned_start.py` owns `start_bytes()` and the spawn that
+  reuses the text handle's preparation.
+- `cuprum/_byte_stream/handle.py` owns `RunningBytesCommand`.
+- `cuprum/_byte_stream/settlement.py` owns the bytes result assembly, the
+  settlement release point, the late-failure reconciliation, and the transport
+  release.
+- `cuprum/_process_handle_errors.py` owns `LiveStreamError`, beside the signal
+  refusals, so the public facade can re-export it without importing the byte
+  package.
+
+The core stream modules were split to stay inside the 400-line ceiling, along
+the seams the byte work exposed rather than around it: `cuprum/_stream_tap.py`
+owns the per-stream tap record and the chunk and EOF callback types,
+`cuprum/_stream_drain_loop.py` owns the drain state, read loop, and per-chunk
+fan-out, and `cuprum/_stream_spawn_types.py` owns the records a run resolves
+before its consumers exist. `cuprum/_process_handle/base.py` holds the
+lifecycle the two public handles share, so neither reimplements a stop, a
+signal, or the shielded teardown. `cuprum._streams` and
+`cuprum._subprocess_streams` re-export the moved names, so the existing import
+paths and test seams keep working.

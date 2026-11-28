@@ -14,6 +14,7 @@ import math
 import threading
 import typing as typ
 
+from cuprum._byte_bound import _validate_positive_byte_bound
 from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
@@ -114,12 +115,10 @@ def _validate_delivery_options(
 
 def _validate_queue_capacity(max_queued_bytes: object) -> None:
     """Require a strictly positive integer queue capacity."""
-    if isinstance(max_queued_bytes, bool) or not isinstance(max_queued_bytes, int):
-        msg = "BoundedDelivery max_queued_bytes must be an integer"
-        raise TypeError(msg)
-    if max_queued_bytes <= 0:
-        msg = "BoundedDelivery max_queued_bytes must be positive"
-        raise ValueError(msg)
+    _validate_positive_byte_bound(
+        max_queued_bytes,
+        field="BoundedDelivery max_queued_bytes",
+    )
 
 
 def _normalize_drain_grace(drain_grace_s: object) -> float | None:
