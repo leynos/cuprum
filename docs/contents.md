@@ -151,15 +151,15 @@ and the content boundary.
   before timed work, give each run a private writable home and target
   directory, record preparation separately from the workload, and use external
   compiler admission unchanged.
-- [ADR-030: Expose bounded live byte streams through an owned handle][adr-030] -
+- [ADR-030: The pytest session layout is deferred, not consolidated][adr-030] -
+  proposed decision to keep the serial one-process-per-entry suite, ship an
+  opt-in layout runner and session-evidence plugin, and adopt consolidation or
+  selective `pytest-xdist` only on matched CI evidence.
+- [ADR-031: Expose bounded live byte streams through an owned handle][adr-031] -
   accepted decision to add `SafeCmd.start_bytes()` and a separately typed
   `RunningBytesCommand`, with independent per-stream readers fed from the
   existing single drain, lossless byte-bounded queues while live, and explicit
   truncation once settlement begins.
-- [ADR-031: The pytest session layout is deferred, not consolidated][adr-031] -
-  proposed decision to keep the serial one-process-per-entry suite, ship an
-  opt-in layout runner and session-evidence plugin, and adopt consolidation or
-  selective `pytest-xdist` only on matched CI evidence.
 
 ## Requests for comments
 
@@ -245,8 +245,8 @@ and the content boundary.
 [adr-027]: adrs/adr-0027-compile-contracts-in-the-build-graph.md
 [adr-028]: adrs/adr-0028-detached-command-launch.md
 [adr-029]: adrs/adr-0029-shared-build-resources-and-prepared-cargo-state.md
-[adr-030]: adrs/adr-0030-owned-live-byte-streams.md
-[adr-031]: adrs/adr-0031-pytest-session-layout-is-deferred.md
+[adr-030]: adrs/adr-0030-pytest-session-layout-is-deferred.md
+[adr-031]: adrs/adr-0031-owned-live-byte-streams.md
 [local-validation]: local-validation-of-github-actions-with-act-and-pytest.md
 [migration-020]: v0-2-0-migration-guide.md
 [rstest-bdd-guide]: rstest-bdd-users-guide.md

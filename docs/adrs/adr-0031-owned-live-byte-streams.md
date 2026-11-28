@@ -1,4 +1,6 @@
-# Architectural decision record (ADR) 030: Expose bounded live byte streams through an owned handle
+# Architectural decision record (ADR) 031: Expose bounded live byte streams through an owned handle
+
+Renumbered from 0030 on 2026-11-28 (duplicate number).
 
 ## Status
 

@@ -111,7 +111,7 @@ repository, so the budgets are conservative rather than historical.
   byte-result modules.
 - [x] (2026-11-27) Branch renamed and Lody session titled.
 - [x] (2026-11-27) Issue comment with the Lody session link posted.
-- [x] (2026-11-27) `EP-M1` ADR-0030, design §13.11, `ByteChunk`,
+- [x] (2026-11-27) `EP-M1` ADR-0031, design §13.11, `ByteChunk`,
   `StreamClosure`, and `LiveStreamError`.
 - [x] (2026-11-27) `EP-M2` drain `on_eof`, the composed byte tap, the lossless
   byte queue, and their unit tests.
@@ -128,8 +128,13 @@ repository, so the budgets are conservative rather than historical.
 
 - Observation: the plan names `docs/adrs/adr-0029-...`, but ADR-0029 already
   exists (`adr-0029-shared-build-resources-and-prepared-cargo-state.md`).
-  Evidence: `ls docs/adrs`. Impact: the new decision is recorded as ADR-0030;
-  the cross-references to ADR-007, ADR-025 and ADR-028 are unchanged.
+  Evidence: `ls docs/adrs`. Impact: the new decision was first recorded as
+  ADR-0030; the cross-references to ADR-007, ADR-025 and ADR-028 are unchanged.
+- Observation: rebasing onto live `main` found that the base had since added its
+  own ADR-0030 (the deferred pytest session layout). The unmerged live-byte ADR
+  is the newcomer, so it took the next free number, ADR-0031, and records
+  "Renumbered from 0030 on 2026-11-28 (duplicate number)" under its title; the
+  base ADR keeps 0030 and every inbound link was updated.
 - Observation: the drain was split after the issue was written.
   `_StreamConfig` now lives in `cuprum/_stream_config.py`, `_finish_drain` in
   `cuprum/_stream_drain_finish.py`, and the line feeder composes through
@@ -183,8 +188,11 @@ repository, so the budgets are conservative rather than historical.
   failure rather than a silently shortened stream, while a clean end must not
   drop bytes the consumer can still read. Date/Author: 2026-11-27,
   implementation agent.
-- D5. Decision: the new ADR is ADR-0030. Rationale: ADR-0029 is taken; the
-  plan's number is stale. Date/Author: 2026-11-27, implementation agent.
+- D5. Decision: the new ADR is ADR-0031. Rationale: ADR-0029 was taken when the
+  plan was written, and the base later added ADR-0030 for the deferred pytest
+  session layout. The unmerged live-byte ADR is the newcomer, so it takes the
+  next free number with the required duplicate-number note. Date/Author:
+  2026-11-27 (renumbered 2026-11-28), implementation agent.
 - D6. Decision: the live tap is a field on `_StreamConfig`, not extra parameters
   on the consume entry points. Rationale: a stream's tap is per-stream state
   exactly as its capture policy is; keeping it on the config preserves every
@@ -262,7 +270,7 @@ Test and gate commands:
 
 - Issue #706, "Expose bounded live byte streams with owned control".
 - ADR-0007 (subprocess execution module boundaries), ADR-0025 (bounded output
-  delivery), ADR-0028 (detached command launch), and the new ADR-0030.
+  delivery), ADR-0028 (detached command launch), and the new ADR-0031.
 - `docs/cuprum-design.md` §13.10 (owned running-command handle) and the new
   §13.11.
 - `docs/users-guide.md` "Hold a running child and decide when to stop it".
@@ -270,7 +278,7 @@ Test and gate commands:
 Trace chain:
 
 ```plaintext
-issue-706 acceptance -> ADR-0030 -> design §13.11 -> EP-M1..EP-M5
+issue-706 acceptance -> ADR-0031 -> design §13.11 -> EP-M1..EP-M5
 EP-M2 -> byte queue tests -> EP-M4 real-child exchange tests
 EP-M3 -> public API/typing tests -> EP-M5 gated example
 ```
@@ -313,7 +321,7 @@ Non-vacuity:
 
 ### EP-M1 — vocabulary, ownership decision, and design
 
-Create ADR-0030, design §13.11, `cuprum/byte_streams.py` (`ByteChunk`,
+Create ADR-0031, design §13.11, `cuprum/byte_streams.py` (`ByteChunk`,
 `StreamClosure`), `LiveStreamError`, and the `docs/contents.md` link.
 Acceptance: `make markdownlint`, `make nixie`, and import smoke checks.
 

@@ -12,7 +12,7 @@ done.
   `ByteStreamReader`s over lossless, byte-bounded per-stream queues, with
   per-stream EOF, explicit settlement truncation, an eager supervisor, and a
   settled `BytesCommandResult`. The decision is recorded in
-  [ADR-030](adrs/adr-0030-owned-live-byte-streams.md), and the motivating
+  [ADR-031](adrs/adr-0031-owned-live-byte-streams.md), and the motivating
   consumer is
   [leynos/cmd-mox#469](https://github.com/leynos/cmd-mox/issues/469).
   - [x] Record the ownership and reuse decision, and specify the reader,

@@ -5719,7 +5719,7 @@ settles. `SafeCmd.start_bytes()` is the live counterpart: it returns a
 while the child is running, with the same owned process, stdin writer,
 supervisor, and settlement guarantees. The decision and its rejected
 alternatives are recorded in
-[ADR-030](adrs/adr-0030-owned-live-byte-streams.md); the module boundaries this
+[ADR-031](adrs/adr-0031-owned-live-byte-streams.md); the module boundaries this
 section describes follow
 [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md), and the
 live queue is deliberately distinct from the presentation queue of
