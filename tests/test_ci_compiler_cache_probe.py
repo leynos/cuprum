@@ -12,9 +12,11 @@ from __future__ import annotations
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - CompletedProcess stand-in only.
 import typing as typ
 
+from scripts import compiler_cache_evidence as writer
 from scripts import compiler_cache_jobs as jobs_reader
 from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
+from tests.helpers.ci_compiler_evidence import environment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -155,4 +157,37 @@ def test_the_ghac_scheme_classifies_as_the_actions_backend() -> None:
     location = "ghac, name: actions-cache, prefix: repo/"
     assert schema.backend_of(location) == "gha", (
         f"a ghac location must classify as gha, got {schema.backend_of(location)!r}"
+    )
+
+
+def _sccache_files(home: Path, sizes: tuple[int, ...]) -> None:
+    """Write one cache file of each requested size under ``home``."""
+    root = home / ".cache" / "sccache"
+    root.mkdir(parents=True)
+    for index, size in enumerate(sizes):
+        (root / f"object-{index}").write_bytes(b"x" * size)
+
+
+def test_the_directory_size_is_the_exact_sum(tmp_path: Path) -> None:
+    """The archive size is the sum of the files, not an estimate."""
+    _sccache_files(tmp_path, (3, 5, 7))
+    assert probe.directory_bytes({"HOME": str(tmp_path)}) == 15, (
+        "the summed sizes must be reported exactly"
+    )
+
+
+def test_an_absent_cache_directory_has_no_size(tmp_path: Path) -> None:
+    """A directory that does not exist is unknown, never zero."""
+    assert probe.directory_bytes({"HOME": str(tmp_path)}) is None, (
+        "an absent directory must be unknown"
+    )
+
+
+def test_the_directory_size_reaches_the_record(tmp_path: Path) -> None:
+    """The probe value must be persisted as the snapshot's byte count."""
+    _sccache_files(tmp_path, (11, 13))
+    environ = environment(tmp_path)
+    state = writer.capture(environ)
+    assert state["restore_bytes"] == 24, (
+        f"the snapshot must carry the measured size, got {state['restore_bytes']}"
     )

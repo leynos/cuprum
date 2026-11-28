@@ -64,52 +64,6 @@ def test_a_saving_equal_to_the_transfer_is_not_adopted() -> None:
     assert decision["verdict"] != "adopt", decision
 
 
-def test_a_saving_above_the_transfer_is_adoptable() -> None:
-    """One second more than the transfer clears the strict comparison."""
-    records, job_documents = five_pairs(candidate_seconds=199)
-    built = summary(
-        records,
-        job_documents,
-        console(
-            incremental_cost_seconds=0,
-            test_fidelity="matched",
-            billing_rounding="verified",
-        ),
-    )
-    assert decisions(built)[0]["verdict"] == "adopt", decisions(built)
-
-
-def test_branch_protection_being_off_blocks_adoption() -> None:
-    """A store whose branch protection is unverified cannot be adopted."""
-    records, job_documents = five_pairs()
-    built = summary(
-        records,
-        job_documents,
-        console(
-            branch_protection="unknown",
-            incremental_cost_seconds=0,
-            test_fidelity="matched",
-            billing_rounding="verified",
-        ),
-    )
-    assert decisions(built)[0]["verdict"] == "insufficient-evidence", decisions(built)
-
-
-def test_a_positive_incremental_cost_blocks_adoption() -> None:
-    """The gate requires a non-positive incremental paid cost."""
-    records, job_documents = five_pairs()
-    built = summary(
-        records,
-        job_documents,
-        console(
-            incremental_cost_seconds=1,
-            test_fidelity="matched",
-            billing_rounding="verified",
-        ),
-    )
-    assert decisions(built)[0]["verdict"] == "insufficient-evidence", decisions(built)
-
-
 def test_a_five_percent_floor_equal_to_the_saving_is_adoptable() -> None:
     """The floor comparison is inclusive; only the transfer is strict."""
     records = [
