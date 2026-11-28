@@ -5,12 +5,14 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: COMPLETE — pull request #743 is open and ready for review. All six
-commit gates pass at `fb1da7d8b`; the later commits are documentation-only and
-carry their own formatting, Markdown and Mermaid runs. The experiment baseline
-remains `87de64c2c`, recorded on 22 November 2026. No candidate family is
-adopted by this change; the deliverable is the measured-qualification apparatus
-plus a reviewable adopt/reject record.
+Status: COMPLETE — pull request #743 is open and ready for review. The latest
+recorded six-gate run is `60bf7f227`; this header tracks the latest gate run,
+and the full commit history is in `Progress`. The code-changing commits since
+the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e` and
+`60bf7f2`. The experiment baseline remains `87de64c2c`, recorded on
+22 November 2026. No candidate family is adopted by this change; the
+deliverable is the measured-qualification apparatus plus a reviewable
+adopt/reject record.
 
 ## Purpose / big picture
 
@@ -209,6 +211,14 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `389583edf` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-389583edf.log`.
+- [x] 28 November 2026: the third review round added the missing loader and
+      probe tests, a `--jobs` CLI join assertion, Hypothesis properties for the
+      threshold, classification order, pairing bound, duplicate pairs and
+      duplicate cost, and folded the duplicated adoption cases into the
+      parameterized test.
+- [x] 28 November 2026: M5 re-gates at `60bf7f227` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-60bf7f227.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
