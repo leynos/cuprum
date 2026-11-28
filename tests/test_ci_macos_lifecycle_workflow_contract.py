@@ -32,6 +32,7 @@ BACKEND_ENV = "CUPRUM_REQUIRE_RUST_EXTENSION"
 #: The support helpers and production modules the selected cases import. A
 #: change to any of them can change what the leg measures.
 SUPPORT_PATHS = frozenset({
+    "conftest.py",
     "tests/helpers/macos_lifecycle.py",
     "tests/helpers/required_outcomes.py",
     "tests/helpers/catalogue.py",
@@ -42,6 +43,7 @@ SUPPORT_PATHS = frozenset({
     "tests/helpers/timeouts.py",
     "cuprum/unittests/_adapter_test_support.py",
     "cuprum/unittests/_cqrs_fixtures.py",
+    "cuprum/unittests/conftest.py",
     "cuprum/unittests/_pipeline_deadline_support.py",
     "cuprum/unittests/_post_exit_teardown_support.py",
     "cuprum/unittests/_process_group_ownership_support.py",
