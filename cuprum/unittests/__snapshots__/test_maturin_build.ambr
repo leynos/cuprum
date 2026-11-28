@@ -131,6 +131,7 @@
       'cuprum/_subprocess_direct_run.py',
       'cuprum/_subprocess_execution.py',
       'cuprum/_subprocess_outcome.py',
+      'cuprum/_subprocess_output_discard.py',
       'cuprum/_subprocess_rendezvous.py',
       'cuprum/_subprocess_spawn.py',
       'cuprum/_subprocess_startup_abandon.py',

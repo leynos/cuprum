@@ -2576,13 +2576,20 @@ sequenceDiagram
   child's output transports: a reader cancelled before end-of-file leaves its
   descriptor with the transport that owns it, and a descendant holding an
   inherited write end prevents the end-of-file that would otherwise close it.
-  The streamed exit wait releases them from each of its failure handlers,
-  composed with the reconciliation under one shield so a cancellation
-  interrupting the settling cannot skip the release. The line-stream
-  coordinator and the streamed route's own post-exit collection do not release
-  transports yet: a descendant surviving either leaves the parent-side
-  descriptor to the collector. That divergence is recorded in the developers'
-  guide. The exit wait is passed in already constructed, so each caller resolves
+  `_release_output_transports` and the `_releasing_output_transports` context
+  manager it is composed through live in
+  `cuprum/_subprocess_startup_abandon.py`, so every early stop uses one
+  primitive. The streamed exit wait releases them from each of its failure
+  handlers; the streamed route's own post-exit collection does so in
+  `_settle_group_and_reconcile_consumers`; the line stream does so in
+  `_run_line_stream_teardown`, which every line-stream early stop reaches, and
+  in the shielded abandonment of a run whose startup failed, heartbeat stop
+  included. Each composes the release with its reconciliation under one shield,
+  so a cancellation interrupting the settling cannot skip it. The pipeline
+  coordinator does not release transports itself: `cuprum/_pipeline_collect.py`
+  waits for every stage and reconciles its readers afterwards, and its
+  early-close behaviour is tracked by issue #552. The exit wait is passed in
+  already constructed, so each caller resolves
   `_wait_for_exit_code_within_timeout` from its own module namespace. It was
   split out of `_subprocess_wait`, which re-exports the name, so the
   single-command run, the line-stream coordinator, and the timeout test modules

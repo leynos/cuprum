@@ -38,7 +38,12 @@ aborting the rest:
    the capture drain's own EOF grace, then close the output transports. Reading
    is what lets a parent-side transport disconnect; the wait is bounded because
    a descendant that inherited a pipe can outlive the group teardown — the limit
-   ADR 021 records. With no end-of-file, the close releases the descriptor.
+   ADR 021 records. With no end-of-file, the close releases the descriptor. The
+   bounded discard itself lives in :mod:`cuprum._subprocess_output_discard`;
+   what this module owns is the release obligation every early-stop route
+   shares, through :func:`_release_output_transports` and the
+   :func:`_releasing_output_transports` context manager that composes it with a
+   route's own cleanup under that route's shield.
 4. release the capture accumulators, now that no consumer can still be writing
    into them. A drain cancelled rather than settled never builds the result
    that would have carried its spill handle, so the accumulator is the last
@@ -59,13 +64,14 @@ sequential ones.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import typing as typ
 
 from cuprum._capture_cleanup import _cleanup_capture_sinks
 from cuprum._process_lifecycle import _shielded_cleanup, _terminate_all_shielded
 from cuprum._reclaim_reporting import _report_reclaim_failure
-from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
 from cuprum._stream_transport import _stream_transport
+from cuprum._subprocess_output_discard import _discard_outputs
 from cuprum._teardown_policy import _TeardownPolicy
 
 if typ.TYPE_CHECKING:
@@ -73,11 +79,6 @@ if typ.TYPE_CHECKING:
 
     from cuprum._capture_types import CaptureSink
     from cuprum._subprocess_execution import _SubprocessExecution
-
-# Chunk size for the discard read. Reading to EOF in bounded pieces rather than
-# with a bare ``read()`` keeps a child that wrote a large backlog before it was
-# stopped from being copied into memory all at once; the bytes are discarded.
-_DISCARD_CHUNK_BYTES = 64 * 1024
 
 
 def _record_started(
@@ -234,66 +235,22 @@ async def _release_pipes(
     await _release_output_transports(process, execution)
 
 
-async def _discard_outputs(process: asyncio.subprocess.Process) -> None:
-    """Discard both output streams within the capture drain's single grace.
+@contextlib.asynccontextmanager
+async def _releasing_output_transports(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> cabc.AsyncIterator[None]:
+    """Release the child's output transports however the block ends.
 
-    One window covers both readers, as in the drain itself
-    (:func:`cuprum._stream_drain._await_eof_grace`): two pipes kept open by a
-    descendant cost one grace, not one each — the documented bound.
-    """
-    streams = tuple(
-        stream for stream in (process.stdout, process.stderr) if stream is not None
-    )
-    if not streams:
-        return
-    reads = tuple(asyncio.ensure_future(_discard_to_eof(stream)) for stream in streams)
-    await _discard_within_grace(reads)
-
-
-async def _discard_within_grace(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
-    """Wait within the capture drain's grace, settle the reads, then report.
-
-    Raises
+    Yields
     ------
-    TimeoutError
-        When the grace expired with a read still pending and none failed.
+    None
+        Control, with the release owed on every exit from the block.
     """
     try:
-        _, pending = await asyncio.wait(reads, timeout=_CAPTURE_EOF_GRACE_S)
+        yield
     finally:
-        await _settle_reads(reads)
-    failure = _first_read_failure(reads)
-    if failure is not None:
-        raise failure
-    if pending:
-        raise TimeoutError
-
-
-async def _settle_reads(reads: cabc.Sequence[asyncio.Task[None]]) -> None:
-    """Cancel and gather every read, so none outlives the discard."""
-    for task in reads:
-        task.cancel()
-    await asyncio.gather(*reads, return_exceptions=True)
-
-
-def _first_read_failure(reads: cabc.Sequence[asyncio.Task[None]]) -> Exception | None:
-    """Return the first ordinary read failure, in stream order.
-
-    Only an ordinary ``Exception`` counts, and the failure is preferred to the
-    grace's expiry so the operator still sees why the discard ended.
-
-    Returns
-    -------
-    Exception | None
-        The first ordinary failure in stream order, or ``None`` if none.
-    """
-    for task in reads:
-        if task.cancelled():
-            continue
-        error = task.exception()
-        if isinstance(error, Exception):
-            return error
-    return None
+        await _release_output_transports(process, execution)
 
 
 async def _release_output_transports(
@@ -385,13 +342,6 @@ async def _release_captures(
             operation="capture_cleanup",
             error=error,
         )
-
-
-async def _discard_to_eof(stream: asyncio.StreamReader) -> None:
-    """Read a stream to end-of-file, discarding it, in bounded pieces."""
-    chunk = await stream.read(_DISCARD_CHUNK_BYTES)
-    while chunk:
-        chunk = await stream.read(_DISCARD_CHUNK_BYTES)
 
 
 __all__ = ["_abandon_started_process", "_record_started"]

@@ -3211,27 +3211,19 @@ it. Cuprum terminates and reaps that child before the hook's exception
 propagates, releases its stdin, stdout, and stderr pipes, and leaves no writer
 or consumer task behind. Any capture spill file that setup had already opened
 is removed too, so a failed start never leaves a temporary file behind. That
-guarantee holds on `run()`, `run_sync()`, and each stage of a pipeline, and on
-`lines()` when its builder fails partway and hands the partial run to the
-reclaim. It does not hold in full on `start()`, nor on `lines()` whose tasks
-were all built and whose `start` hook then raised: both reap the child and
-settle its tasks, but neither closes an output transport. The next paragraph
-records why.
+guarantee holds on `run()`, `run_sync()`, `lines()`, and each stage of a
+pipeline. `start()` reaps the child and settles its tasks through a separate
+unwind helper that does not close an output transport, so a descendant that
+escaped the process group can hold the parent's descriptor open on that route
+until the transport is collected; that gap belongs to the running-command
+ownership work and is not covered by the startup reclaim.
 
 A failure in the setup that follows the spawn — creating the stdin writer or
 starting a stream consumer — is reclaimed the same way on `run()`,
 `run_sync()`, and `lines()`. The line iterator builds its tasks inside the same
 guard, so a builder that fails partway still has every task it had already
 started cancelled and settled, and the child is stopped, reaped, and its pipes
-and capture accumulators released. `start()` reaches its own outcome through a
-separate unwind helper: it reaps the child, settles every task the failed setup
-had started, and releases the capture accumulators, but it does not close an
-output transport. A descendant that escaped the process group can therefore
-still hold the parent's descriptor open on that route until the transport is
-collected; that gap belongs to the running-command ownership work and is not
-covered by the startup reclaim. `lines()` shares that gap for a failure that
-happens after its tasks are built — a raising `start` hook — because that path
-drains the consumers rather than closing the transports.
+and capture accumulators released.
 
 When the run owns its process group (`OWN_GROUP`), the teardown signals that
 group rather than the child alone. The output discard is bounded: a descendant
@@ -3239,9 +3231,11 @@ that escaped the group can hold a pipe end open, so Cuprum waits no longer than
 its fixed end-of-file grace for stdout and stderr to reach end-of-file, and
 then closes its own end of each pipe rather than leave the descriptor to be
 collected later. That close happens on every route that releases transports:
-`run()`, `run_sync()`, `lines()` whose builder failed partway, and each stage
-of a pipeline. `start()` omits it, and so does `lines()` when a raising `start`
-hook leaves a whole run to drain instead, as the paragraphs above record; see
+`run()`, `run_sync()`, each stage of a pipeline, and every `lines()` route that
+stops a run before its streams have necessarily drained — a failing `on_line`
+callback, the configured deadline, an early `aclose()`, a post-exit expiry or
+cancellation, and a raising `start` hook once the run was fully built.
+`start()` omits it, as the paragraphs above record; see
 [ADR-021](adrs/adr-0021-process-group-ownership.md). That grace bounds the
 discard step alone. A cleanup step that fails is reported and suppressed, so
 the error the caller meets is always the setup failure that ended the run,
