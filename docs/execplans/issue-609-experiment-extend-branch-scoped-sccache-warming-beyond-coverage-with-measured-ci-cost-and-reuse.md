@@ -6,10 +6,10 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `87bb4142d`; this header tracks the latest gate run,
+recorded six-gate run is `7e228aa91`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
 the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
-`07ff587`, `68697ea` and `87bb414`. The experiment baseline remains
+`07ff587`, `68697ea`, `87bb414` and `7e228aa`. The experiment baseline remains
 `87de64c2c`, recorded on 22 November 2026. No candidate family is adopted by
 this change; the deliverable is the measured-qualification apparatus plus a
 reviewable adopt/reject record.
@@ -247,6 +247,14 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `87bb4142d` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-87bb4142d.log`.
+- [x] 28 November 2026: `directory_bytes` now stats its root inside the guarded
+      block (a failed status is `unreadable`, a missing one `absent`) and takes
+      one `entry.stat` per entry to classify and measure it, so a vanished or
+      unclassifiable entry fails the walk. Tests cover a failing root status
+      and an entry that disappears mid-walk.
+- [x] 28 November 2026: M5 re-gates at `7e228aa91` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-7e228aa91.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
