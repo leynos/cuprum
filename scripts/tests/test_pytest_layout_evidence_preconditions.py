@@ -134,7 +134,8 @@ def test_a_partial_outcome_mapping_is_not_identical() -> None:
     """Reject a fidelity verdict when only some collected nodes have outcomes.
 
     Both sides collecting ``a`` and ``b`` while recording only ``a`` leaves
-    ``b``'s result unknown, so the reports cannot be called identical.
+    ``b``'s result unknown. The mappings are equal, so only a completeness
+    check can reject them.
     """
     from scripts.pytest_layout_analysis import fidelity
 
@@ -146,8 +147,9 @@ def test_a_partial_outcome_mapping_is_not_identical() -> None:
         ),
     )
     partial = dataclasses.replace(control[0], outcomes=(("a", "passed"),))
-
-    report = fidelity(control, (partial,))
+    # Both sides carry the same partial mapping: a comparison that ignored
+    # completeness would call these identical.
+    report = fidelity((dataclasses.replace(control[0]),), (partial,))
 
     assert report["identical"] is False, (
         "a partially recorded outcome set must not be identical"

@@ -31,6 +31,21 @@ from tests.helpers.pytest_session_evidence import (
 if typ.TYPE_CHECKING:
     import pytest
 
+_FIXTURE_SKIP_SUITE = '''"""A suite whose only test is skipped from a fixture."""
+
+import pytest
+
+
+@pytest.fixture
+def unavailable() -> None:
+    """Skip before the test body runs, as an unavailable resource would."""
+    pytest.skip("deliberate fixture skip")
+
+
+def test_skipped_by_fixture(unavailable: None) -> None:
+    """Never run: the fixture skips during setup."""
+'''
+
 _PASSING_SUITE = '''"""One passing test."""
 
 
