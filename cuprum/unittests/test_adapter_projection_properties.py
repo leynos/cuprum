@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import typing as typ
 from pathlib import Path
 
@@ -213,13 +214,26 @@ def _expected_projection(event: ExecEvent) -> dict[str, object]:
     return expected
 
 
+# mutmut runs the suite more than once in one process, so a class-based
+# ``@given`` test is seen from different executors even though it is correct.
+# The sandbox profile already suppresses that check, but a test's own
+# ``@settings`` replaces the profile's list, so this module adds the check back
+# only while the mutation harness is running. Ordinary runs keep it enabled.
+_SANDBOX_SUPPRESSIONS: tuple[HealthCheck, ...] = (
+    (HealthCheck.differing_executors,) if os.environ.get("MUTANT_UNDER_TEST") else ()
+)
+
+
 class TestAdapterProjectionProperties:
     """Hypothesis checks for common telemetry field projections."""
 
     @settings(
         deadline=None,
         max_examples=50,
-        suppress_health_check=[HealthCheck.function_scoped_fixture],
+        suppress_health_check=[
+            HealthCheck.function_scoped_fixture,
+            *_SANDBOX_SUPPRESSIONS,
+        ],
     )
     @given(event=_events())
     def test_projection_includes_exactly_the_non_none_fields(
@@ -243,7 +257,10 @@ class TestAdapterProjectionProperties:
     @settings(
         deadline=None,
         max_examples=50,
-        suppress_health_check=[HealthCheck.function_scoped_fixture],
+        suppress_health_check=[
+            HealthCheck.function_scoped_fixture,
+            *_SANDBOX_SUPPRESSIONS,
+        ],
     )
     @given(event=_events())
     def test_adapters_agree_on_common_keys_modulo_prefix(

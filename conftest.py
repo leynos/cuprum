@@ -7,6 +7,13 @@ benchmark filter paths for workflow contract and behaviour tests.
 Use these fixtures to access optional backends without repeating availability
 checks in each test module.
 
+Importing this module must not import ``cuprum``: the mutation sandbox runs
+its probe with the mutated package armed to raise on the first trampolined
+call, and a conftest import failure is reported as a pytest usage error that
+mutmut refuses. Imports of the package under test therefore stay inside the
+fixtures that need them, and the plugin modules are declared below rather than
+imported.
+
 Example
 -------
 def test_pumps_bytes(rust_streams):
@@ -16,20 +23,49 @@ def test_pumps_bytes(rust_streams):
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 import typing as typ
+from pathlib import Path
 
 import pytest
-from hypothesis import settings
+from hypothesis import HealthCheck, settings
 
-from cuprum import _rust_backend
-from cuprum._backend import _check_rust_available, get_stream_backend
-from tests.helpers.catalogue import PythonCatalogue, build_python_catalogue_env
-from tests.helpers.extension_requirement import (
+
+def _purge_imported_bytecode() -> None:
+    """Remove copied interpreter caches before any project package is imported.
+
+    The bootstrap is inlined rather than imported: ``tests/helpers/__init__``
+    imports the helpers eagerly, so importing the purger would already have
+    loaded those modules, possibly from a cache copied into the sandbox. Only
+    ``__pycache__`` matters here — nothing else is consultable by the import
+    system — and the full purge below removes every generated directory.
+    """
+    if os.environ.get("MUTANT_UNDER_TEST") != "stats":
+        return
+    root = Path.cwd()
+    if root.name != "mutants" or not (root.parent / ".git").exists():
+        return
+    for cache in root.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
+
+
+_purge_imported_bytecode()
+# Recorded for the regression probe: a project package already imported at this
+# point would have been able to read copied bytecode before the purge ran.
+_PROJECT_IMPORTS_PRESENT_AT_BOOTSTRAP: bool = "tests.helpers" in sys.modules
+
+from tests.helpers.sandbox_hygiene import (  # ruff: ignore[module-import-not-at-top-of-file] - the bytecode bootstrap above must run first
+    purge_sandbox_generated_directories,
+)
+
+# The full purge runs immediately after the bootstrap so a generated directory
+# other than ``__pycache__`` is removed before the suite starts.
+_MUTATION_SANDBOX_PURGE = purge_sandbox_generated_directories(Path.cwd(), os.environ)
+
+from tests.helpers.extension_requirement import (  # ruff: ignore[module-import-not-at-top-of-file] - the sandbox purge above must run before this import
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
-)
-from tests.helpers.prepared_cargo_run import (
-    prepared_cargo_run,  # ruff: ignore[unused-import] - pytest discovers this session fixture globally
 )
 
 # Property tests assert behaviour, while pytest-timeout retains the suite-wide
@@ -37,9 +73,22 @@ from tests.helpers.prepared_cargo_run import (
 settings.register_profile("cuprum-test-suite", deadline=None)
 settings.load_profile("cuprum-test-suite")
 
+# mutmut executes the suite more than once in a single process: statistics
+# collection, then the clean baseline, then a rerun per mutant in a forked
+# worker. A class-based Hypothesis test is therefore observed from several
+# executors even though nothing is wrong with the test, and the suite-profile
+# registration above is already in place, so this profile inherits it and
+# relaxes only that harness-specific check. ``[tool.mutmut]`` selects the
+# profile through pytest_add_cli_args; ordinary runs keep the check enabled.
+settings.register_profile(
+    "mutmut-sandbox",
+    suppress_health_check=[HealthCheck.differing_executors],
+)
+
 if typ.TYPE_CHECKING:
     from types import ModuleType
 
+    from tests.helpers.catalogue import PythonCatalogue
     from tests.helpers.workflow import Workflow
 
 
@@ -141,15 +190,32 @@ if typ.TYPE_CHECKING:
 
 
 # Pytest 9 only accepts plugin declarations in the repository-root conftest.
+#
+# These modules are imported as pytest plugins rather than into this module so
+# that importing the root conftest never imports the package under test. The
+# mutation sandbox forces the mutated ``cuprum`` to raise from its first
+# trampolined call, and mutmut treats an exception escaping the run as the
+# probe's success; a conftest import failure, by contrast, is a pytest usage
+# error that mutmut refuses and aborts on.
 # `tests.helpers.pytest_session_evidence` is listed here so its module-level
 # `pytest_configure` runs; that hook registers the plugin only when
 # `CUPRUM_PYTEST_EVIDENCE_DIR` names a directory, so a run that does not ask
 # for evidence pays one small import and nothing else.
 pytest_plugins = (
+    "tests.helpers.prepared_cargo_run",
     "cuprum.unittests._safe_cmd_lines_support",
     "cuprum.unittests._safe_cmd_lines_authorization_support",
     "tests.helpers.pytest_session_evidence",
 )
+
+
+def _purge_mutation_sandbox() -> None:
+    """Report the import-time purge, re-running it for anything created since."""
+    removed = _MUTATION_SANDBOX_PURGE or purge_sandbox_generated_directories(
+        Path.cwd(), os.environ
+    )
+    if removed:
+        print(f"mutation sandbox: purged {len(removed)} generated directories")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -184,12 +250,32 @@ def pytest_configure(config: pytest.Config) -> None:
     of the requirement by skipping differently.
     """  # ruff: ignore[docstring-extraneous-exception] - ImportError propagates from is_available()
     del config
+    _purge_mutation_sandbox()
+    from cuprum import _rust_backend
+
     message = missing_extension_message(
         required=bool(os.environ.get(REQUIRE_EXTENSION_ENV)),
         available=_rust_backend.is_available(),
     )
     if message is not None:
         raise pytest.UsageError(message)
+
+
+def _rust_extension_is_available() -> bool:
+    """Report whether the native Rust extension can be imported.
+
+    The import lives here rather than at module scope so importing this
+    conftest never imports ``cuprum``; see ``pytest_plugins`` above.
+
+    Returns
+    -------
+    bool
+        ``True`` when ``cuprum._rust_backend.is_available`` reports the native
+        extension as usable.
+    """
+    from cuprum import _rust_backend
+
+    return _rust_backend.is_available()
 
 
 @pytest.fixture(name="rust_streams")
@@ -205,7 +291,7 @@ def fixture_rust_streams() -> ModuleType:
     ModuleType
         The imported ``cuprum._streams_rs`` module.
     """
-    if not _rust_backend.is_available():
+    if not _rust_extension_is_available():
         pytest.skip("Rust extension is not installed.")
     from cuprum import _streams_rs
 
@@ -225,20 +311,15 @@ def python_catalogue_env() -> PythonCatalogue:
         The catalogue, the allowlisted ``sys.executable`` program, and a
         builder bound to both.
     """
+    from tests.helpers.catalogue import build_python_catalogue_env
+
     return build_python_catalogue_env()
 
 
 @pytest.fixture(
     params=[
         pytest.param("python", id="python-backend"),
-        pytest.param(
-            "rust",
-            id="rust-backend",
-            marks=pytest.mark.skipif(
-                not _rust_backend.is_available(),
-                reason="Rust extension is not installed",
-            ),
-        ),
+        pytest.param("rust", id="rust-backend"),
     ],
 )
 def stream_backend(
@@ -249,8 +330,9 @@ def stream_backend(
 
     Sets the ``CUPRUM_STREAM_BACKEND`` environment variable so the
     dispatcher routes inter-stage pumping to the requested backend.
-    The Rust variant is automatically skipped when the extension is
-    unavailable.
+    The Rust variant is skipped during setup when the extension is
+    unavailable, because the availability probe imports ``cuprum`` and so
+    cannot run while this module is being imported.
 
     Parameters
     ----------
@@ -265,6 +347,8 @@ def stream_backend(
         The backend identifier (``"python"`` or ``"rust"``).
     """
     backend: str = request.param
+    if backend == "rust" and not _rust_extension_is_available():
+        pytest.skip("Rust extension is not installed")
     monkeypatch.setenv("CUPRUM_STREAM_BACKEND", backend)
     return backend
 
@@ -276,6 +360,8 @@ def _clear_backend_cache() -> None:
     Prevents cross-test pollution from ``lru_cache`` on
     ``_check_rust_available`` and ``get_stream_backend``.
     """
+    from cuprum._backend import _check_rust_available, get_stream_backend
+
     _check_rust_available.cache_clear()
     get_stream_backend.cache_clear()
 

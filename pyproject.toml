@@ -393,38 +393,181 @@ timeout = 30
 # Flat layout: the package lives at the repository root.
 source_paths = ["cuprum/"]
 # The suite is split between tests/ and the in-package unit tests.
-pytest_add_cli_args_test_selection = ["tests/", "cuprum/unittests/"]
+#
+# Two tooling contracts build an environment of their own inside the test and
+# are therefore unobservable from the mutation sandbox: the nextest-route tests
+# drive `uv run --frozen` (which creates a project environment without mutmut),
+# and the typing contract points ty at `sys.prefix` (an ephemeral overlay whose
+# package paths ty cannot read). mutmut rewrites every module in the sandbox to
+# import `mutmut`, so cuprum is only importable from an environment that has
+# mutmut installed; neither constructed environment does. They keep running in
+# every `make test` and pull-request gate; only the mutation selection omits
+# them, and test_mutmut_config_contract.py pins exactly which modules.
+#
+# The three act scenarios also stay out. `make test` already runs them only
+# from `test-act`, because they need a container runtime, so a mutation run
+# that collected them would behave differently on a host that has `act` from
+# one that does not: the baseline would depend on the host's scenario state
+# rather than on the source under mutation. The recorded-output parser beside
+# them is ordinary string handling and stays in the selection.
+#
+# The observe-hook dispatch oracle also stays out. Two modules compare what the
+# dispatcher scheduled by reading the task's coroutine: its code object and,
+# for the wrapped result, a frame local. mutmut runs every mutated function
+# through a trampoline that creates its own coroutine, so the oracle sees
+# `_trampoline_wrapper` instead of `_await_awaitable` and cannot see the
+# original frame locals at all. The named examples beside them still run,
+# because their attribution predicate (`_observe_hook_dispatch_code`) knows
+# the trampoline's renamed copies.
+#
+# The Makefile-reading contracts also stay out. They parse the Makefile with
+# `makeutil`, a Rust binary that only the Makefile's own `makeutil` target
+# installs; a mutation run invokes pytest directly and never runs that target,
+# so the parser is absent and the contracts refuse rather than reading the
+# selector as empty. The shared failure capture confirmed this on a runner,
+# first in test_ci_exemption_contract and then in test_ci_recipe_flow_contract.
+# Three modules are about the selector itself and are omitted whole; in the
+# mixed modules only the tests that call the real parser are deselected, so
+# the rest still run and can kill mutants.
+pytest_add_cli_args_test_selection = [
+    "tests/",
+    "cuprum/unittests/",
+    "--ignore=cuprum/unittests/test_nextest_route_floor.py",
+    "--ignore=cuprum/unittests/test_sh_typing_contract.py",
+    "--ignore=cuprum/unittests/test_observe_hook_dispatch_properties.py",
+    "--ignore=cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
+    "--ignore=tests/test_ci_exemption_contract.py",
+    "--ignore=tests/test_ci_recipe_flow_contract.py",
+    "--ignore=tests/test_ci_test_selection_contract.py",
+    "--deselect=tests/test_ci_rust_boundaries.py::test_the_download_integration_target_supplies_its_opt_in",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_a_module_the_selector_drops_is_reported_as_uncovered",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_the_exception_mechanism_reports_an_uncovered_module",
+    "--deselect=tests/test_distribution_artefacts.py::test_makefile_groups_both_distribution_consumers",
+    "--ignore=tests/integration/test_workflow_integration.py",
+    "--ignore=tests/integration/test_experimental_leg_integration.py",
+    "--ignore=tests/integration/test_extension_typecheck_integration.py",
+]
+# mutmut reruns the suite in one process, so Hypothesis sees each class-based
+# property test from more than one executor and raises its differing-executors
+# health check. The named profile, registered in conftest.py, suppresses only
+# that check; every ordinary run keeps it.
+pytest_add_cli_args = ["--hypothesis-profile=mutmut-sandbox"]
 # cuprum/unittests/ is the in-package unit-test suite and
 # cuprum/_testing.py is a test-only re-export surface for internal
 # helpers; mutants in either would be noise.
 do_not_mutate = ["cuprum/unittests/*", "cuprum/_testing.py"]
-# mutmut runs pytest from mutants/; copy the assets the suite resolves
-# relative to the repository root: the shared root conftest, the
-# benchmarks package imported by the benchmark and profiling tests, the
-# documentation exercised by the docs contract tests, the workflow and
-# action files read by the maturin pin and ratchet tests, and the Rust
-# tree the wheel-build snapshot test builds from (listed piecewise so a
-# local rust/target/ build directory is never copied; the crate
-# directory precedes the loose workspace files because mutmut creates
-# parent directories only when copying directories).
+# mutmut builds mutants/ from source_paths plus this list and its own
+# defaults (tests/, setup.cfg, pyproject.toml, and root-level test*.py).
+# Anything the baseline suite resolves relative to the repository root must
+# be named here: mutmut skips an entry that does not exist without failing,
+# so an omission surfaces only as a missing-file or import error inside the
+# sandbox.
+#
+# Directories come first. mutmut creates parent directories only when it
+# copies a directory, so a loose file listed ahead of the directory that
+# would create its parent fails with FileNotFoundError. rust/ is copied
+# piecewise rather than whole so a local rust/target/ build directory is
+# never included.
 also_copy = [
-    "conftest.py",
+    # Packages and trees imported or read by the baseline suite: benchmarks/
+    # by the benchmark tests, docs/ by the documentation contracts, .github/
+    # by the workflow and action contracts, and scripts/ by the release and
+    # helper contracts, which import it at collection time.
     "benchmarks/",
     "docs/",
     ".github/",
-    # test_changelog_records_cleanup_telemetry_contract reads the loose
-    # root-level CHANGELOG.md, and test_toolchain_pins.py reads the
-    # Makefile's tool-version defaults.
-    "CHANGELOG.md",
-    "Makefile",
+    "scripts/",
+    # test_dev_fast_contract reads config.toml and test_dev_fast_adapter
+    # executes the cargo adapter; test_dev_fast_prerequisites reads the mold
+    # version the Makefile also parses while loading; the Makefile parses the
+    # prover-tools revision while loading, so every dry-run contract reads it.
+    "tools/dev-fast/",
+    "tools/mold/",
+    "tools/rust-prover-tools/",
+    # The timeout-lane helpers read .config/nextest.toml, and the wheel-build
+    # snapshot test builds from the crates.
+    "rust/.config/",
     "rust/cuprum-rust/",
     "rust/cuprum-streams/",
     "rust/cuprum-native-io/",
+    # Loose files read from the repository root. conftest.py is the shared
+    # root fixture module; README.md is read while the documentation examples
+    # are collected; .yamllint.yml by the workflow lint provisioning contract;
+    # .concordat by the Rust build-footprint contracts; CHANGELOG.md by the
+    # cleanup telemetry contract; and Makefile by the toolchain pin tests.
+    "conftest.py",
+    "README.md",
+    ".yamllint.yml",
+    ".concordat",
+    "CHANGELOG.md",
+    "Makefile",
+    # pyproject.toml is a mutmut default, declared here so the harness inputs
+    # stay visible in one place.
+    "pyproject.toml",
+    # Loose Rust workspace files; the crate directories above have already
+    # created rust/ in the sandbox.
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/clippy.toml",
     "rust/dylint.toml",
+    "rust/rust-toolchain.toml",
 ]
+
+# Validation the shared mutation workflow runs before mutmut enumerates a
+# mutant; see leynos/shared-actions docs/mutation-preflight.md. The sandbox
+# paths repeat the also_copy inventory (directories without the trailing slash
+# mutmut's own configuration needs) so the preflight checks, against the copy
+# contract of the mutmut release the caller pins, that each entry will really
+# be materialized in mutants/ rather than merely exist in the checkout.
+[tool.mutation-preflight]
+sandbox_paths = [
+    "benchmarks",
+    "docs",
+    ".github",
+    "scripts",
+    "tools/dev-fast",
+    "tools/mold",
+    "tools/rust-prover-tools",
+    "rust/.config",
+    "rust/cuprum-rust",
+    "rust/cuprum-streams",
+    "rust/cuprum-native-io",
+    "conftest.py",
+    "README.md",
+    ".yamllint.yml",
+    ".concordat",
+    "CHANGELOG.md",
+    "Makefile",
+    "pyproject.toml",
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/clippy.toml",
+    "rust/dylint.toml",
+    "rust/rust-toolchain.toml",
+]
+
+# test_dev_fast_contract dry-runs the Makefile's protected boundary routes, so
+# the baseline needs the make executable itself, not just the copied Makefile.
+[[tool.mutation-preflight.require_commands]]
+name = "make"
+
+# The Makefile parses its root-relative pins while it loads, so a dry run is
+# the smallest command that proves those files reached the sandbox. Declared
+# as a preflight check, a missing input fails before enumeration with this
+# check's own bounded log, rather than surfacing as a failing baseline.
+[[tool.mutation-preflight.checks]]
+name = "makefile-dry-run"
+command = [
+    "make",
+    "--dry-run",
+    "CARGO=probe-cargo",
+    "boundary-kani",
+    "boundary-miri",
+    "boundary-test",
+]
+timeout_seconds = 120
 
 [tool.uv]
 package = true

@@ -4,9 +4,9 @@ The executable logic lives in the ``leynos/shared-actions`` reusable
 workflow, which carries its own unit and integration tests; cuprum's
 caller is declarative configuration. These tests parse the caller with
 PyYAML and assert the contract it must uphold, so drift (repointing the
-pin at a branch, widening permissions, or losing the mutmut caller
-configuration) fails CI on the pull request rather than surfacing in a
-scheduled or manual run.
+pin at a branch, widening permissions, losing the mutmut caller
+configuration, or opting out of the environment preflight) fails CI on
+the pull request rather than surfacing in a scheduled or manual run.
 
 The caller must reference the correct reusable workflow at a commit
 SHA; Dependabot owns the SHA value itself, so these tests match the
@@ -19,6 +19,14 @@ reusable workflow always fans a repository-root cargo-mutants target
 out for ``workflow_dispatch`` full runs, and cuprum has no
 repository-root Cargo.toml, so a Rust job cannot ride the shared
 workflow at this pin.
+
+The caller opts into the shared environment preflight. It checks the
+``[tool.mutation-preflight]`` declaration pinned by
+``cuprum/unittests/test_mutmut_config_contract.py`` before mutmut
+enumerates a mutant, and the pinned shared revision uploads both the
+preflight report and a failing baseline's bounded capture under
+``always()``. That is why the caller declares no diagnostics job of its
+own.
 """
 
 from __future__ import annotations
@@ -45,10 +53,16 @@ USES_RE = re.compile(
 
 #: The exact caller configuration: flat layout, so change detection
 #: watches the cuprum/ package and no src/ prefix is stripped before
-#: module-glob translation.
+#: module-glob translation; mutmut is pinned to 3.7.0 because 3.6.0's
+#: async-generator trampoline defers cleanup until loop shutdown, which
+#: fails the unchanged-source baseline; and the shared environment
+#: preflight is enabled so a missing sandbox input or command fails as a
+#: named finding before enumeration.
 EXPECTED_WITH = {
     "paths": "cuprum/",
     "module-prefix-strip": "",
+    "mutmut-version": "3.7.0",
+    "preflight": True,
 }
 
 
@@ -66,14 +80,16 @@ def _triggers(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
     return triggers
 
 
-def _mutation_job(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
-    """Return the single calling job."""
+def _jobs(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+    """Return the declared jobs mapping."""
     jobs = workflow.get("jobs")
     assert isinstance(jobs, dict), "the workflow must declare a jobs mapping"
-    assert list(jobs) == ["mutation-python"], (
-        f"expected a single job named 'mutation-python', found {sorted(jobs)}"
-    )
-    return jobs["mutation-python"]
+    return jobs
+
+
+def _mutation_job(workflow: dict[typ.Any, typ.Any]) -> dict[typ.Any, typ.Any]:
+    """Return the job calling the shared reusable workflow."""
+    return _jobs(workflow)["mutation-python"]
 
 
 def test_uses_reference_is_pinned_to_a_commit_sha() -> None:
@@ -141,6 +157,17 @@ def test_with_block_is_exactly_the_documented_configuration() -> None:
     with_block = _mutation_job(_load()).get("with")
     assert with_block == EXPECTED_WITH, (
         f"jobs.mutation-python.with must be exactly {EXPECTED_WITH!r} "
-        f"(flat cuprum/ layout: watch the package, strip no prefix), got "
-        f"{with_block!r}"
+        "(flat cuprum/ layout: watch the package, strip no prefix, pin the "
+        "mutmut release with the async-generator fix, and enable the shared "
+        f"environment preflight), got {with_block!r}"
+    )
+
+
+def test_jobs_are_the_single_shared_mutation_call() -> None:
+    """The caller owns no second job; the shared workflow reports diagnostics."""
+    jobs = _jobs(_load())
+    assert list(jobs) == ["mutation-python"], (
+        "the workflow must declare only the shared mutation call: the pinned "
+        "shared revision publishes preflight and failure diagnostics under "
+        f"always(); found {list(jobs)}"
     )
