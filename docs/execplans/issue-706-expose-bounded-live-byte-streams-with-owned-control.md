@@ -118,8 +118,9 @@ repository, so the budgets are conservative rather than historical.
 - [x] (2026-11-27) `EP-M3` reader, `start_bytes()`, `RunningBytesCommand`, the
   bytes settlement and eager supervisor, exports, and typing/API tests.
 - [x] (2026-11-27) `EP-M4` the scripted child, the external session watchdog,
-  seven portable scenarios, two POSIX descendant scenarios, and the BDD feature
-  and steps.
+  seven portable scenarios, three POSIX scenarios (two descendant stories and
+  one held-handle failure), a supervisor reclaim test, and the BDD feature and
+  steps.
 - [x] (2026-11-27) `EP-M5` users' guide section and gated example, changelog,
   roadmap, migration note, and contents index.
 - [ ] Commit gates, CodeRabbit review, push, draft PR, merge.
@@ -225,15 +226,16 @@ repository, so the budgets are conservative rather than historical.
 
 ## Outcomes & retrospective
 
-The feature is implemented and covered by deterministic unit tests, a
-fourteen-case supervised real-child suite, and three BDD scenarios. The text
-handle, `lines()`, `run_bytes()`, and every existing result shape are
-unchanged. The core drain and stream-spawn modules were split along seams the
-live tap exposed, and the handle lifecycle moved to a shared base so the two
-public handles cannot drift. The remaining work is the commit gates, CodeRabbit
-review, push, and merge. Lesson: the tap must be invoked by exactly one layer;
-composing it into both the drain and the line feeder duplicates every chunk,
-and the split-UTF-8 test is the cheapest detector.
+The feature is implemented and covered by deterministic unit tests, a ten-case
+supervised real-child suite (seven portable and three POSIX), a supervisor
+reclaim test, and three BDD scenarios. The text handle, `lines()`,
+`run_bytes()`, and every existing result shape are unchanged. The core drain
+and stream-spawn modules were split along seams the live tap exposed, and the
+handle lifecycle moved to a shared base so the two public handles cannot drift.
+The remaining work is the commit gates, CodeRabbit review, push, and merge.
+Lesson: the tap must be invoked by exactly one layer; composing it into both
+the drain and the line feeder duplicates every chunk, and the split-UTF-8 test
+is the cheapest detector.
 
 ## Context and orientation
 
