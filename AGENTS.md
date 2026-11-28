@@ -326,8 +326,8 @@ working on the Rust portions of the project:
     cd rust && $(LOCAL_TOOL_ENV) \
       RUSTFLAGS="$(WHITAKER_RUSTFLAGS)" $(WHITAKER) --all -- \
       $(WHITAKER_CARGO_FLAGS)
-    yamllint --strict --config-file .yamllint.yml .github/workflows .github/actions
-    actionlint -config-file .github/actionlint.yaml -shellcheck=
+    git ls-files -z '*.yml' '*.yaml' | xargs -0 -r yamllint --strict --
+    actionlint
     ```
 
     On Linux, `RUST_DEBUG_CARGO` selects `nightly-2026-08-23` with the explicit
@@ -336,13 +336,12 @@ working on the Rust portions of the project:
     verification, and MSRV paths also retain their separate toolchain and
     linker policy. The target lints every target with all features enabled,
     denies all Clippy warnings, and validates GitHub Actions workflows and the
-    composite actions they call. Keep `.yamllint.yml` compatible with GitHub's
-    unquoted `on` trigger key and require each workflow and composite action to
-    begin with `---`. CI must install yamllint with `uv tool` and use the
-    pinned, checksum-verified actionlint binary before invoking `make lint`.
-    Pass `-shellcheck=` so the gate needs no shellcheck binary and cannot reach
-    the v1.7.12 stdin deadlock (rhysd/actionlint#702, #704, #712); a clean
-    `main` can hang the same way.
+    composite actions they call. `.yamllint.yml` extends the estate base
+    `.yamllint-estate.yml`, which is a verbatim copy of the canon. CI must
+    install the pinned tools with the `install-yaml-lint` action of
+    `leynos/shared-actions` before invoking `make lint`. A very large `run:`
+    body can hit the actionlint v1.7.12 stdin deadlock (rhysd/actionlint#702,
+    #704, #712) on a host with a shrunk pipe buffer.
   - `make test` runs the Python suite first (`test-selection` and
     `test-python`), then `test-rust`. The Rust suite runs `cargo nextest run`
     when `cargo-nextest` is available and fails if that tool is older than

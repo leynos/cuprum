@@ -239,7 +239,7 @@ def test_lint_target_runs_the_leaf_hierarchy_without_wait_markers() -> None:
         "Python lint must complete before the Whitaker leaf starts"
     )
     assert output.index("probe-whitaker --all --") < output.index(
-        "yamllint --strict --config-file"
+        "yamllint --strict"
     ), "GitHub Actions lint must run after the Rust leaves"
 
 

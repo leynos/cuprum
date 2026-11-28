@@ -1,12 +1,2 @@
 ---
-extends: default
-
-rules:
-  document-start:
-    level: error
-    present: true
-  line-length:
-    max: 120
-  truthy:
-    allowed-values: ['true', 'false']
-    check-keys: false
+extends: .yamllint-estate.yml
