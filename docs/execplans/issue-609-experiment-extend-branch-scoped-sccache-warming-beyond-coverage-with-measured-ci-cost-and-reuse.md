@@ -6,13 +6,13 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `68697eac9`; this header tracks the latest gate run,
+recorded six-gate run is `87bb4142d`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
 the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
-`07ff587` and `68697ea`. The experiment baseline remains `87de64c2c`, recorded
-on 22 November 2026. No candidate family is adopted by this change; the
-deliverable is the measured-qualification apparatus plus a reviewable
-adopt/reject record.
+`07ff587`, `68697ea` and `87bb414`. The experiment baseline remains
+`87de64c2c`, recorded on 22 November 2026. No candidate family is adopted by
+this change; the deliverable is the measured-qualification apparatus plus a
+reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -240,6 +240,13 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `68697eac9` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-68697eac9.log`.
+- [x] 28 November 2026: `directory_bytes` now walks with `os.scandir` and lets
+      a traversal or entry error propagate, so an unreadable subtree reports
+      `unreadable` rather than a smaller measured total. Tests cover a failing
+      root and a failing nested subtree.
+- [x] 28 November 2026: M5 re-gates at `87bb4142d` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-87bb4142d.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
