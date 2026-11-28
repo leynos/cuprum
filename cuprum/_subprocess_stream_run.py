@@ -365,4 +365,3 @@ __all__ = [
     "_settle_owned_group_before_draining",
     "_wait_for_streamed_process_exit",
 ]
-# weave: run 'weave explain cuprum/_subprocess_stream_run.py' for per-hunk detail, 'weave check' to verify your resolution
