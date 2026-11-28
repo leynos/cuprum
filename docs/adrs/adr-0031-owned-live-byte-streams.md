@@ -101,8 +101,11 @@ teardown as `RunningCommand`. Its `wait()` and `result` are typed to
 The live surface is two `ByteStreamReader` objects, `handle.stdout` and
 `handle.stderr`. A reader is an async iterator of `ByteChunk`, which carries
 the stream name, the bytes, and a per-stream sequence number. A reader also
-exposes `wait_eof()`, an `at_eof` predicate, a `closure` property, and
-`aclose()`. `StreamClosure` has four members:
+exposes `wait_eof()`, an `at_eof` predicate, a `closure` property, a
+`capacity_waiting` predicate, and `aclose()`. `capacity_waiting` is diagnostic:
+it is true only while a `put` is parked on a full queue, which is stronger than
+observing a full queue because a read may end exactly at the bound.
+`StreamClosure` has four members:
 
 - `EOF`: the drain observed the stream's end, finalized its capture
   successfully, and every byte reached the queue or was queued before the

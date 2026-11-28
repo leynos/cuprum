@@ -1978,8 +1978,12 @@ infer record boundaries from chunks.
 Each reader reaches its own end independently of the other stream and of the
 process. `wait_eof()` waits for this stream's terminal state and returns it;
 `at_eof` reports whether that state is `EOF`; `closure` reports the terminal
-state or `None` while the reader is live. `aclose()` closes one reader without
-stopping the child, the other stream, or the capture.
+state or `None` while the reader is live; `capacity_waiting` reports whether
+the drain is parked waiting for this reader to make room. `aclose()` closes one
+reader without stopping the child, the other stream, or the capture.
+`capacity_waiting` is diagnostic only: a full queue is not by itself proof of
+backpressure, because a read can end exactly at the bound, whereas the flag is
+true only while a `put` is actually waiting for space.
 
 `StreamClosure` has four members:
 

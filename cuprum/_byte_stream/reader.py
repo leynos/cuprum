@@ -90,6 +90,23 @@ class ByteStreamReader:
         return self._queue.ending is StreamClosure.EOF
 
     @property
+    def capacity_waiting(self) -> bool:
+        """Whether this stream's producer is parked waiting for queue space.
+
+        A full queue alone does not prove the drain is blocked: a read can end
+        exactly at the bound and its ``put`` return before the next read. This
+        flag is true only while a ``put`` is actually awaiting capacity, which
+        is what a caller or a test needs to establish before acting on the
+        backpressure.
+
+        Returns
+        -------
+        bool
+            ``True`` while the drain is blocked on this stream's queue.
+        """
+        return self._queue.capacity_waiting
+
+    @property
     def buffered_bytes(self) -> int:
         """The payload bytes queued for this reader and not yet consumed.
 

@@ -248,6 +248,28 @@ def test_a_tail_that_fits_after_settlement_is_still_delivered() -> None:
     asyncio.run(scenario())
 
 
+def test_capacity_waiting_reports_an_outstanding_put() -> None:
+    """The flag is true only while a put is actually parked on a full queue."""
+
+    async def scenario() -> None:
+        """Fill the queue, park a put, assert, then release it."""
+        queue = _ByteQueue(4)
+        await queue.put(b"abcd")
+        assert not queue.capacity_waiting, (
+            "a completed put must not report an outstanding wait"
+        )
+        producer = asyncio.create_task(queue.put(b"efgh"))
+        await asyncio.sleep(0)
+        assert queue.capacity_waiting, "a parked put must be observable"
+        assert await queue.get() == b"abcd", "the parked put must not change the head"
+        await asyncio.wait_for(producer, timeout=1.0)
+        assert not queue.capacity_waiting, (
+            "a put that completed must clear the outstanding wait"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_close_wakes_a_blocked_put_and_discards_its_bytes() -> None:
     """A put blocked on capacity must not enqueue after the reader closes."""
 

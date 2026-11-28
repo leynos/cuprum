@@ -118,9 +118,9 @@ repository, so the budgets are conservative rather than historical.
 - [x] (2026-11-27) `EP-M3` reader, `start_bytes()`, `RunningBytesCommand`, the
   bytes settlement and eager supervisor, exports, and typing/API tests.
 - [x] (2026-11-27) `EP-M4` the scripted child, the external session watchdog,
-  ten portable scenarios, four POSIX scenarios (two descendant stories and two
-  held-handle failure stories), a supervisor reclaim test, and the BDD feature
-  and steps.
+  eleven portable scenarios, four POSIX scenarios (two descendant stories and
+  two held-handle failure stories), a supervisor reclaim test, and the BDD
+  feature and steps.
 - [x] (2026-11-27) `EP-M5` users' guide section and gated example, changelog,
   roadmap, migration note, and contents index.
 - [x] (2026-11-28) Hosted CodeRabbit agent review: 14 findings fixed over two
@@ -249,12 +249,12 @@ repository, so the budgets are conservative rather than historical.
   #706 in full and merge it. Re-derived with `git diff --numstat` from the
   merge base with `origin/main` (`5d2e4a91`) to the branch head, excluding
   `docs/execplans/**` (this file is outside the measured set, so revising it
-  does not change the totals): 64 files, 7,166 added and 791 deleted lines, for
-  6,375 net lines. By category:
+  does not change the totals): 64 files, 7,312 added and 791 deleted lines, for
+  6,521 net lines. By category:
 
-  - Python: 5,650 net lines over 52 files (2,443 net production over 35 files
-    and 3,207 net tests over 17 files).
-  - Documentation: 685 net lines over nine files, including `CHANGELOG.md`.
+  - Python: 5,785 net lines over 52 files (2,478 net production over 35 files
+    and 3,307 net tests over 17 files).
+  - Documentation: 696 net lines over nine files, including `CHANGELOG.md`.
   - Test fixtures: 39 net lines over two files
     (`tests/features/live_byte_streams.feature` and the Maturin wheel
     snapshot).
@@ -269,7 +269,7 @@ repository, so the budgets are conservative rather than historical.
   totals change with every source commit, so any later revision must re-derive
   them with the command above rather than trust the figures. Date/Author:
   2026-11-28, implementation agent acting on the owner's merge directive;
-  supersedes the two earlier, stale derivations.
+  supersedes the earlier, stale derivations.
 
 - D10. Decision: settlement releases both live queues before the exit wait, not
   at reconciliation. Rationale: a full queue blocks its drain, a full pipe
@@ -296,7 +296,7 @@ repository, so the budgets are conservative rather than historical.
 ## Outcomes & retrospective
 
 The feature is implemented and covered by deterministic unit tests, a
-fourteen-case supervised real-child suite (ten portable and four POSIX, with
+fifteen-case supervised real-child suite (eleven portable and four POSIX, with
 the POSIX cases run under both wait routes), a supervisor reclaim test, and
 three BDD scenarios. The text handle, `lines()`, `run_bytes()`, and every
 existing result shape are unchanged. The core drain and stream-spawn modules

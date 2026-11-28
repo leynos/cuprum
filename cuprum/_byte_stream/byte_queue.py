@@ -84,6 +84,7 @@ class _ByteQueue:
     __slots__ = (
         "_buffered_bytes",
         "_capacity",
+        "_capacity_waiting",
         "_data_ready",
         "_discarded_bytes",
         "_ending",
@@ -98,6 +99,7 @@ class _ByteQueue:
     def __init__(self, capacity: int) -> None:
         """Create an empty queue with *capacity* payload bytes of headroom."""
         self._capacity = _validate_buffered_bytes(capacity)
+        self._capacity_waiting = 0
         self._items: collections.deque[bytes] = collections.deque()
         self._buffered_bytes = 0
         self._discarded_bytes = 0
@@ -142,6 +144,18 @@ class _ByteQueue:
             ``producer_eof()`` from reporting a clean ``EOF``.
         """
         return self._discarded_bytes
+
+    @property
+    def capacity_waiting(self) -> bool:
+        """Whether a live ``put`` is parked waiting for capacity right now.
+
+        Returns
+        -------
+        bool
+            ``True`` while a ``put`` awaits space; a full queue alone does not
+            prove that, because a read can end exactly at the bound.
+        """
+        return self._capacity_waiting > 0
 
     @property
     def ending(self) -> StreamClosure | None:
@@ -222,7 +236,11 @@ class _ByteQueue:
             # these statements on this loop.
             if self._capacity - self._buffered_bytes > 0:
                 continue
-            await self._space_ready.wait()
+            self._capacity_waiting += 1
+            try:
+                await self._space_ready.wait()
+            finally:
+                self._capacity_waiting -= 1
 
     async def get(self) -> bytes | None:
         """Return the next queued chunk, or ``None`` once it has no more.

@@ -5776,8 +5776,11 @@ two tasks, and the event loop may interleave them arbitrarily.
 A reader reaches its own end independently of the other stream and of the
 process. `wait_eof()` waits for the producer-side terminal status and returns
 the `StreamClosure`; `at_eof` reports whether that status is `EOF`; `closure`
-reports the terminal status, or `None` while the reader is live. `aclose()`
-stops one reader without touching the other, the child, or the capture.
+reports the terminal status, or `None` while the reader is live.
+`capacity_waiting` reports a `put` parked on this stream's full queue, which is
+the only direct evidence of an outstanding backpressure wait; a full queue
+alone is not, because a read can end exactly at the bound. `aclose()` stops one
+reader without touching the other, the child, or the capture.
 
 `StreamClosure` has four members. `EOF` means the drain observed the empty read
 and no byte was discarded. `READER_CLOSED` means the consumer closed the
@@ -5913,8 +5916,8 @@ gathered, or reclaimed by the attachment failure path.
   `StreamClosure`, and the re-exported reader.
 - `cuprum/_byte_stream/byte_queue.py` owns the lossless, byte-bounded queue and
   its terminal state.
-- `cuprum/_byte_stream/reader.py` owns `ByteStreamReader`, the iterator and
-  closure surface over one queue.
+- `cuprum/_byte_stream/reader.py` owns `ByteStreamReader`, the iterator,
+  closure, and capacity-wait surface over one queue.
 - `cuprum/_byte_stream/wiring.py` builds the per-stream taps the stream spawn
   attaches, and owns the read-size cap decision.
 - `cuprum/_byte_stream/owned_start.py` owns `start_bytes()` and the spawn that

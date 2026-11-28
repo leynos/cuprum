@@ -19,6 +19,7 @@ import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - starts a real session leader for the reclaim test.
 import sys
+import time
 import typing as typ
 from pathlib import Path
 
@@ -256,6 +257,16 @@ async def _read_all(reader: ByteStreamReader) -> bytes:
 _FD_DIRECTORY = Path("/proc/self/fd")
 
 
+def _wait_for_marker(marker: Path, timeout: float = 10.0) -> None:
+    """Block until *marker* exists, failing after *timeout* seconds."""
+    deadline = time.monotonic() + timeout
+    while not marker.exists():
+        if time.monotonic() >= deadline:
+            message = f"the child did not create {marker} within {timeout}s"
+            raise RuntimeError(message)
+        time.sleep(0.01)
+
+
 def _open_fd_count() -> int:
     """Count this process's open descriptors."""
     return sum(1 for _ in _FD_DIRECTORY.iterdir())
@@ -287,18 +298,31 @@ def test_a_cancelled_waiter_leaves_the_settlement_running() -> None:
 
 
 @pytest.mark.timeout(20)
-def test_repeated_cancellation_during_teardown_still_settles() -> None:
-    """Cancelling a waiter and the owning context still settles exactly once."""
+def test_repeated_cancellation_during_teardown_still_settles(
+    tmp_path: Path,
+) -> None:
+    """Cancelling the owning context again during teardown still settles once."""
+    counting = _FD_DIRECTORY.is_dir()
 
     async def scenario() -> None:
         """Cancel the owning context again while its teardown is running."""
+        marker = tmp_path / "ready"
         code = (
-            "import signal, time\n"
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "import pathlib, signal, sys, time\n"
+            "try:\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "except (AttributeError, ValueError):\n"
+            "    pass\n"
+            "pathlib.Path(sys.argv[1]).write_text('ready')\n"
             "time.sleep(30)\n"
         )
-        handle = await _PYTHON("-c", code).start_bytes(
+        before = _open_fd_count() if counting else None
+        handle = await _PYTHON("-c", code, str(marker)).start_bytes(
             context=ExecutionContext(cancel_grace=0.5),
+        )
+        await asyncio.wait_for(
+            asyncio.to_thread(_wait_for_marker, marker),
+            timeout=10.0,
         )
 
         async def hold() -> None:
@@ -307,15 +331,18 @@ def test_repeated_cancellation_during_teardown_still_settles() -> None:
                 await asyncio.sleep(30)
 
         holder = asyncio.create_task(hold())
-        await asyncio.sleep(0.1)
-        holder.cancel()
-        # The child ignores SIGTERM, so teardown is still inside its grace
-        # window; these repeats land while teardown is already running.
         await asyncio.sleep(0.05)
-        assert not holder.done(), "teardown must still be running"
         holder.cancel()
-        await asyncio.sleep(0)
-        holder.cancel()
+        if os.name == "posix":
+            # The child ignores SIGTERM, so teardown is still inside its grace
+            # window; these repeats land while teardown is already running. On
+            # Windows termination is immediate, so that ordering cannot be
+            # established and only the settlement is asserted below.
+            await asyncio.sleep(0.05)
+            assert not holder.done(), "teardown must still be running"
+            holder.cancel()
+            await asyncio.sleep(0)
+            holder.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(holder, timeout=10.0)
         assert handle.result is not None, "the settlement must still be recorded"
@@ -325,6 +352,8 @@ def test_repeated_cancellation_during_teardown_still_settles() -> None:
             if task is not asyncio.current_task() and not task.done()
         ]
         assert pending == [], f"owned tasks were left pending: {pending!r}"
+        if counting:
+            assert _open_fd_count() == before, "the cancellation leaked a descriptor"
 
     asyncio.run(scenario())
 
@@ -365,7 +394,14 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
             await waiter
         result = await handle.terminate(grace=0.2)
         await asyncio.wait_for(finalized.wait(), timeout=5.0)
-        assert result.exit_code in {-15, -9}, f"the child ended as {result.exit_code}"
+        if os.name == "posix":
+            assert result.exit_code in {-15, -9}, (
+                f"the child ended as {result.exit_code}"
+            )
+        else:
+            assert result.exit_code != 0, (
+                f"a terminated child must not report success, got {result.exit_code}"
+            )
 
     asyncio.run(scenario())
 
@@ -437,9 +473,9 @@ def test_cancellation_with_blocked_output_reaps_the_child() -> None:
 
         holder = asyncio.create_task(hold())
         deadline = asyncio.get_running_loop().time() + 10.0
-        while handle.stdout.buffered_bytes < 1024:
+        while not handle.stdout.capacity_waiting:
             assert asyncio.get_running_loop().time() < deadline, (
-                "the live queue must fill to its bound"
+                "the drain must park on the full live queue"
             )
             await asyncio.sleep(0.01)
         assert handle.result is None, "nothing must settle before the cancellation"

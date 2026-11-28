@@ -3585,7 +3585,8 @@ fits and count the rest. The first terminal state published is final — `FAILED
 `EOF`, `READER_CLOSED`, or `TRUNCATED_BY_SETTLEMENT` — and a failure recorded
 after another state is retained for settlement without rewriting the reader's
 closure. `cuprum/_byte_stream/reader.py` turns the queue into `ByteChunk`
-values and raises `LiveStreamError` only for a `FAILED` closure;
+values, publishes `capacity_waiting` from the queue's outstanding `put` count,
+and raises `LiveStreamError` only for a `FAILED` closure;
 `cuprum/_byte_stream/wiring.py` builds the queues, readers, and taps, so a
 reader cannot be wired to the other stream's queue.
 

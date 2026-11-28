@@ -14,7 +14,12 @@ same external watchdog as every other scenario.
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import tempfile
+import time
 import typing as typ
+from pathlib import Path
 
 from cuprum import ExecutionContext, StdinStream, StreamClosure
 from tests.helpers.live_byte_support import (
@@ -72,9 +77,9 @@ async def cancel_context_while_output_blocked() -> None:
     # drain is parked in put and the child is parked in write, so the only way
     # out is teardown releasing the queue.
     await _wait_until(
-        lambda: handle.stdout.buffered_bytes == _QUEUE_BOUND,
+        lambda: handle.stdout.capacity_waiting,
         timeout=10.0,
-        description="the live queue to fill to its bound",
+        description="the drain to park on the full live queue",
     )
     holder.cancel()
     try:
@@ -140,46 +145,83 @@ async def cancel_waiter_while_stdin_blocked() -> None:
         raise RuntimeError(message)
     result = await handle.terminate(grace=0.2)
     await asyncio.wait_for(finalized.wait(), timeout=5.0)
-    _require(result.exit_code in {-15, -9}, f"the child ended as {result.exit_code}")
+    if os.name == "posix":
+        _require(
+            result.exit_code in {-15, -9},
+            f"the child ended as {result.exit_code}",
+        )
+    else:
+        _require(
+            result.exit_code != 0,
+            f"a terminated child must not report success, got {result.exit_code}",
+        )
     _require_clean_teardown(before)
 
 
 async def repeated_cancellation_during_teardown() -> None:
     """Cancel the owning context again while its teardown is already running."""
+    marker = Path(tempfile.mkdtemp(prefix="cuprum-live-ready-")) / "ready"
     code = (
-        "import signal, time\n"
-        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "import pathlib, signal, sys, time\n"
+        "try:\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "except (AttributeError, ValueError):\n"
+        "    pass\n"
+        "pathlib.Path(sys.argv[1]).write_text('ready')\n"
         "time.sleep(30)\n"
     )
     before = _open_fd_count()
-    handle = await _PYTHON("-c", code).start_bytes(
+    handle = await _PYTHON("-c", code, str(marker)).start_bytes(
         context=ExecutionContext(cancel_grace=0.5),
     )
-
-    async def hold() -> None:
-        """Own the handle until cancellation tears the block down."""
-        async with handle:
-            await asyncio.sleep(30)
-
-    holder = asyncio.create_task(hold())
-    await asyncio.sleep(0.2)
-    holder.cancel()
-    # The child ignores SIGTERM, so teardown stays inside the grace window;
-    # the later cancels therefore land while teardown is already running.
-    await asyncio.sleep(0.05)
-    _require(not holder.done(), "teardown must still be running")
-    holder.cancel()
-    await asyncio.sleep(0)
-    holder.cancel()
     try:
-        await asyncio.wait_for(holder, timeout=10.0)
-    except asyncio.CancelledError:
-        pass
-    else:
-        message = "the holder should have been cancelled"
-        raise RuntimeError(message)
-    _require(handle.result is not None, "teardown must settle the handle")
-    _require_clean_teardown(before)
+        # The marker is the child-ready handshake: the SIGTERM handler is
+        # installed before it is written, so a cancellation after this point
+        # cannot race the handler's installation.
+        await asyncio.wait_for(
+            asyncio.to_thread(_wait_for_marker, marker),
+            timeout=10.0,
+        )
+
+        async def hold() -> None:
+            """Own the handle until cancellation tears the block down."""
+            async with handle:
+                await asyncio.sleep(30)
+
+        holder = asyncio.create_task(hold())
+        await asyncio.sleep(0.05)
+        holder.cancel()
+        if os.name == "posix":
+            # The child ignores SIGTERM, so teardown is still inside its grace
+            # window; the later cancels land while teardown is running. On
+            # Windows termination is immediate, so only the settlement below
+            # is portable.
+            await asyncio.sleep(0.05)
+            _require(not holder.done(), "teardown must still be running")
+            holder.cancel()
+            await asyncio.sleep(0)
+            holder.cancel()
+        try:
+            await asyncio.wait_for(holder, timeout=10.0)
+        except asyncio.CancelledError:
+            pass
+        else:
+            message = "the holder should have been cancelled"
+            raise RuntimeError(message)
+        _require(handle.result is not None, "teardown must settle the handle")
+        _require_clean_teardown(before)
+    finally:
+        shutil.rmtree(marker.parent, ignore_errors=True)
+
+
+def _wait_for_marker(marker: Path, timeout: float = 10.0) -> None:
+    """Block until *marker* exists, failing after *timeout* seconds."""
+    deadline = time.monotonic() + timeout
+    while not marker.exists():
+        if time.monotonic() >= deadline:
+            message = f"the child did not create {marker} within {timeout}s"
+            raise RuntimeError(message)
+        time.sleep(0.01)
 
 
 async def stalled_then_resumed() -> None:
@@ -207,9 +249,9 @@ async def stalled_then_resumed() -> None:
     # The 16-byte prefix cannot fit the 8-byte queue, so a full queue proves
     # the drain is parked in put until this reader consumes the head.
     await _wait_until(
-        lambda: handle.stdout.buffered_bytes == _STALL_BOUND,
+        lambda: handle.stdout.capacity_waiting,
         timeout=10.0,
-        description="the live queue to fill to its bound",
+        description="the drain to park on the full live queue",
     )
     head = bytearray()
     async for chunk in handle.stdout:
