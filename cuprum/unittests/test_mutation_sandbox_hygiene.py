@@ -101,12 +101,18 @@ def test_purge_never_removes_the_root_itself(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("phase", "expected"),
-    [("stats", True), ("fail", False), ("", False), (None, False)],
+    [
+        ("stats", True),
+        ("list_all_tests", True),
+        ("fail", False),
+        ("", False),
+        (None, False),
+    ],
 )
-def test_sandbox_root_requires_the_stats_phase(
+def test_sandbox_root_requires_a_reading_phase(
     tmp_path: Path, phase: str | None, *, expected: bool
 ) -> None:
-    """Only mutmut's statistics phase is eligible to purge."""
+    """Only the phases that read the sandbox are eligible to purge."""
     (tmp_path / ".git").mkdir()
     sandbox = tmp_path / "mutants"
     sandbox.mkdir()
@@ -148,6 +154,62 @@ def test_sandbox_purge_skips_a_subprocess_temporary_directory(
     assert (work / "build" / "artefact.txt").is_file()
 
 
+#: Script the probe runs in a fresh interpreter: import the root conftest with
+#: the sandbox as its working directory, then report what it observed.
+_CONFTEST_PROBE = (
+    "import importlib.util\n"
+    "import os\n"
+    "import sys\n"
+    "import types\n"
+    "repo = sys.argv[1]\n"
+    "cache = sys.argv[2]\n"
+    "sys.path.insert(0, repo)\n"
+    "fake = types.ModuleType('cuprum')\n"
+    "backend = types.ModuleType('cuprum._rust_backend')\n"
+    "backend.is_available = lambda: False\n"
+    "fake._rust_backend = backend\n"
+    "sys.modules['cuprum'] = fake\n"
+    "sys.modules['cuprum._rust_backend'] = backend\n"
+    "spec = importlib.util.spec_from_file_location(\n"
+    "    'root_conftest', repo + '/conftest.py'\n"
+    ")\n"
+    "module = importlib.util.module_from_spec(spec)\n"
+    "spec.loader.exec_module(module)\n"
+    "print('gone_after_import', not os.path.exists(cache))\n"
+    "present = module._PROJECT_IMPORTS_PRESENT_AT_BOOTSTRAP\n"
+    "print('project_imports_present', present)\n"
+    "module.pytest_configure(None)\n"
+)
+
+
+def _sandbox_probe_environment() -> dict[str, str]:
+    """Return the probe's environment: the statistics phase, extension optional."""
+    return {
+        **os.environ,
+        "MUTANT_UNDER_TEST": "stats",
+        "CUPRUM_REQUIRE_RUST_EXTENSION": "",
+    }
+
+
+def test_purge_runs_before_collection_on_a_resumed_run(tmp_path: Path) -> None:
+    """A resumed run purges the cache it copied before listing tests."""
+    (tmp_path / ".git").mkdir()
+    sandbox = tmp_path / "mutants"
+    cache = sandbox / "scripts" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "release.cpython-313.pyc").write_bytes(b"")
+
+    removed = purge_sandbox_generated_directories(
+        sandbox, {"MUTANT_UNDER_TEST": "list_all_tests"}
+    )
+
+    assert "scripts/__pycache__" in removed, (
+        "the collection pass of a resumed run copies also_copy again, so the "
+        f"purge must run there too; removed: {removed}"
+    )
+    assert not cache.exists(), "the copied bytecode must not survive to collection"
+
+
 def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     """The root conftest runs the purge from ``pytest_configure``."""
     (tmp_path / ".git").mkdir()
@@ -161,41 +223,12 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     (sandbox / ".pytest_cache").mkdir()
     (sandbox / ".pytest_cache" / "CACHEDIR.TAG").write_text("", encoding="utf-8")
 
-    probe = (
-        "import importlib.util\n"
-        "import os\n"
-        "import sys\n"
-        "import types\n"
-        "repo = sys.argv[1]\n"
-        "cache = sys.argv[2]\n"
-        "sys.path.insert(0, repo)\n"
-        "fake = types.ModuleType('cuprum')\n"
-        "backend = types.ModuleType('cuprum._rust_backend')\n"
-        "backend.is_available = lambda: False\n"
-        "fake._rust_backend = backend\n"
-        "sys.modules['cuprum'] = fake\n"
-        "sys.modules['cuprum._rust_backend'] = backend\n"
-        "spec = importlib.util.spec_from_file_location(\n"
-        "    'root_conftest', repo + '/conftest.py'\n"
-        ")\n"
-        "module = importlib.util.module_from_spec(spec)\n"
-        "spec.loader.exec_module(module)\n"
-        "print('gone_after_import', not os.path.exists(cache))\n"
-        "present = module._PROJECT_IMPORTS_PRESENT_AT_BOOTSTRAP\n"
-        "print('project_imports_present', present)\n"
-        "module.pytest_configure(None)\n"
-    )
-    environment = {
-        **os.environ,
-        "MUTANT_UNDER_TEST": "stats",
-        "CUPRUM_REQUIRE_RUST_EXTENSION": "",
-    }
     # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv: the
     # running interpreter and a literal probe script, with no shell.
     result = subprocess.run(
-        [sys.executable, "-I", "-c", probe, str(repo_root()), str(cache)],
+        [sys.executable, "-I", "-c", _CONFTEST_PROBE, str(repo_root()), str(cache)],
         cwd=sandbox,
-        env=environment,
+        env=_sandbox_probe_environment(),
         capture_output=True,
         text=True,
         check=False,

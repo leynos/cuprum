@@ -32,8 +32,13 @@ if typ.TYPE_CHECKING:
 #: Environment variable mutmut uses to select the phase of the run.
 MUTATION_PHASE_ENV: typ.Final[str] = "MUTANT_UNDER_TEST"
 
-#: The value mutmut sets while collecting the baseline statistics.
-STATS_PHASE: typ.Final[str] = "stats"
+#: Phases in which mutmut has populated the sandbox and is about to read it.
+#:
+#: ``stats`` is the baseline statistics collection. ``list_all_tests`` is the
+#: collection pass of a resumed run: mutmut copies ``also_copy`` again, then
+#: imports every test module to list its node IDs, so copied bytecode can be
+#: consulted during collection as well.
+SANDBOX_PHASES: typ.Final[frozenset[str]] = frozenset({"stats", "list_all_tests"})
 
 #: Name mutmut gives the sandbox directory it builds beside the sources.
 SANDBOX_DIRECTORY_NAME: typ.Final[str] = "mutants"
@@ -60,7 +65,7 @@ GENERATED_DIRECTORY_NAMES: typ.Final[frozenset[str]] = frozenset({
 
 
 def is_mutation_sandbox_root(root: Path, environ: cabc.Mapping[str, str]) -> bool:
-    """Report whether ``root`` is mutmut's sandbox during the stats phase.
+    """Report whether ``root`` is mutmut's sandbox in a reading phase.
 
     Parameters
     ----------
@@ -72,8 +77,8 @@ def is_mutation_sandbox_root(root: Path, environ: cabc.Mapping[str, str]) -> boo
     Returns
     -------
     bool
-        ``True`` when the process is mutmut's statistics phase and ``root``
-        looks like the sandbox it built.
+        ``True`` when the process is one of mutmut's reading phases and
+        ``root`` looks like the sandbox it built.
 
     Notes
     -----
@@ -82,18 +87,18 @@ def is_mutation_sandbox_root(root: Path, environ: cabc.Mapping[str, str]) -> boo
     temporary directory would otherwise have that directory's ``build`` or
     ``target`` purged mid-test. The sandbox is identified by all three of its
     stable properties: mutmut's directory name, a parent that is a git
-    worktree, and the statistics phase selection.
+    worktree, and a sandbox phase selection.
 
     Examples
     --------
-    An ordinary test run, and every subprocess it starts, is never the
-    statistics phase:
+    An ordinary test run, and every subprocess it starts, is never a
+    sandbox phase:
 
     >>> is_mutation_sandbox_root(Path("/repo/mutants"), {})
     False
     """
     return (
-        environ.get(MUTATION_PHASE_ENV) == STATS_PHASE
+        environ.get(MUTATION_PHASE_ENV) in SANDBOX_PHASES
         and root.name == SANDBOX_DIRECTORY_NAME
         and (root.parent / ".git").exists()
     )
@@ -161,7 +166,7 @@ def purge_sandbox_generated_directories(
 
     Examples
     --------
-    Outside the statistics phase nothing is removed:
+    Outside a sandbox phase nothing is removed:
 
     >>> purge_sandbox_generated_directories(Path.cwd(), {})
     ()

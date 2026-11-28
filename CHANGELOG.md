@@ -137,8 +137,9 @@
   project package is imported — importing the purger itself would execute
   `tests/helpers/__init__`, which imports helpers eagerly — then runs the full
   purge and repeats it from `pytest_configure` for anything created since. The
-  purge is gated to the statistics phase, to a directory named `mutants`, and
-  to a git worktree, because every sandbox subprocess inherits
+  purge is gated to the phases that read the sandbox — statistics collection
+  and the collection pass of a resumed run — to a directory named `mutants`,
+  and to a git worktree, because every sandbox subprocess inherits
   `MUTANT_UNDER_TEST`. A regression test populates one directory of every
   generated name and proves the cache is already gone when the conftest
   finishes importing ([#592](https://github.com/leynos/cuprum/issues/592)).

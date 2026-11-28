@@ -8489,12 +8489,13 @@ during mutmut's statistics phase, before any test observes them. The root
 `__pycache__` before any project package is imported — importing the purger
 itself would execute `tests/helpers/__init__`, which imports helpers eagerly —
 then runs the full purge immediately after, and re-runs it from
-`pytest_configure` for anything created since. That phase runs once, in the
-process that owns the sandbox, and every subprocess the suite starts inherits
-`MUTANT_UNDER_TEST`, so both calls also require the directory to be named
-`mutants` inside a git worktree. mutmut captures the statistics output and
-dumps it only when that phase fails; a purge appears there as
-`mutation sandbox: purged N generated directories`.
+`pytest_configure` for anything created since. Those phases run in the process
+that owns the sandbox — statistics collection and the collection pass of a
+resumed run, which copies `also_copy` again before listing tests — and every
+subprocess the suite starts inherits `MUTANT_UNDER_TEST`, so both calls also
+require the directory to be named `mutants` inside a git worktree. mutmut
+captures the statistics output and dumps it only when that phase fails; a purge
+appears there as `mutation sandbox: purged N generated directories`.
 `cuprum/unittests/test_mutation_sandbox_hygiene.py` covers a populated cache
 tree, the import-time boundary, and each guard.
 
