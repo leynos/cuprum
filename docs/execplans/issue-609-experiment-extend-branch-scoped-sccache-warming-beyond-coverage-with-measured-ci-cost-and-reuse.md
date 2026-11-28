@@ -198,6 +198,17 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `fb1da7d8b` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-fb1da7d8b.log`.
+- [x] 28 November 2026: the resumed review's remaining rows were addressed.
+      Unknown provenance values are incomparable; the gate suite covers the
+      floor and transfer edges, protection and cost terms, four pairs, and the
+      remaining incomparable fields; the summary's examples run under pytest.
+      Clocks are injected into `capture`, `build_record` and `write_mark`,
+      `build_summary` is clock-free, and the CLI stamps `generated_at`.
+      `seconds_since` was removed, and the ExecPlan header, M2 modes, and
+      verification obligation 8 now match the code at head.
+- [x] 28 November 2026: M5 re-gates at `389583edf` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-389583edf.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
