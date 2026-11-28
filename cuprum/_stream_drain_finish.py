@@ -66,7 +66,7 @@ async def _finish_drain(
         if state.capture is None or _discard_on_cancel(state.config):
             raise asyncio.CancelledError
         _flush_echo_decoder(state)
-        return await _finalize(state)
+        return dc.replace(await _finalize(state), reached_eof=False)
     _flush_echo_decoder(state)
     captured = await _finalize(state) if state.capture is not None else _CapturedDrain()
     _complete_stream_operation(measurement, StreamOperationOutcome.EOF)
@@ -89,11 +89,19 @@ class _CapturedDrain:
     closes the file: :func:`_finalize_drain_handles` reads it off this record
     at the result-construction site, while the teardown path closes the same
     file through :meth:`cuprum._capture_types.CaptureSink.cleanup`.
+
+    ``reached_eof`` is what separates a completed drain from one that stopped
+    short while still keeping its prefix. A preserving cancellation returns a
+    capture — the bytes already absorbed — so the record and its payload look
+    exactly like an end-of-file drain's; only this marker says the stream was
+    cut off. The single-command supervisors read it to report a consumer that
+    stopped early, and the pipeline and owned-handle routes ignore it.
     """
 
     payload: str | bytes | None = None
     capture: CapturedStream | None = None
     handle: SpillHandle | None = None
+    reached_eof: bool = True
 
     def parts(self) -> _DrainParts:
         """Report the three pieces separately, in their documented order.

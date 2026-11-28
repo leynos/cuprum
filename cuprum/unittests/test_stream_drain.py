@@ -8,16 +8,19 @@ import typing as typ
 
 import pytest
 
+from cuprum._stream_line_consumer import _consume_stream_with_lines, _LineConsumption
 from cuprum._streams import _drain, _StreamConfig
 from cuprum.capture_policy import FullCapture
 from cuprum.unittests._stream_drain_support import (
-    CapturedOrNone,
     CapturedPair,
     _ChunkedReader,
     _config,
     _decode_chunks,
     _reader,
 )
+
+if typ.TYPE_CHECKING:
+    from cuprum._stream_drain_finish import _CapturedDrain
 
 
 def test_drain_empty_capture_returns_empty_text() -> None:
@@ -29,6 +32,7 @@ def test_drain_empty_capture_returns_empty_text() -> None:
     assert drained.capture is not None, (
         "a captured stream must report a record when its payload is empty"
     )
+    assert drained.reached_eof is True, "an empty drain still reached end of stream"
     assert not sink.getvalue(), "non-echoing empty streams must not write to sink"
 
 
@@ -114,16 +118,22 @@ def test_discarding_a_cancelled_capture_skips_decoding() -> None:
 def test_cancelled_capture_retains_buffered_text() -> None:
     """Cancellation returns buffered capture when cleanup does not discard it."""
 
-    async def run_case() -> CapturedOrNone:
+    async def run_case() -> _CapturedDrain:
         """Cancel a reader after it buffers text and blocks awaiting EOF."""
         reader = asyncio.StreamReader()
         reader.feed_data(b"partial output")
         task = asyncio.create_task(_drain(reader, _config(io.StringIO())))
         await asyncio.sleep(0)
         task.cancel()
-        return (await task).payload
+        return await task
 
-    assert asyncio.run(run_case()) == "partial output"
+    drained = asyncio.run(run_case())
+    assert drained.payload == "partial output", (
+        f"the buffered prefix must survive cancellation, got {drained.payload!r}"
+    )
+    assert drained.reached_eof is False, (
+        "a cancelled read stopped short of end of stream, so the drain must say so"
+    )
 
 
 def test_cancelled_capture_flushes_replacement_echo() -> None:
@@ -142,4 +152,49 @@ def test_cancelled_capture_flushes_replacement_echo() -> None:
     assert asyncio.run(run_case()) == (
         "\N{REPLACEMENT CHARACTER}",
         "\N{REPLACEMENT CHARACTER}",
+    )
+
+
+def test_line_consumer_preserving_cancellation_reports_a_short_drain() -> None:
+    """A preserving line-stream teardown keeps its prefix and marks the stop."""
+
+    async def run_case() -> _CapturedDrain:
+        """Cancel a line-observing drain while its settlement is preserving."""
+        settlement_started = asyncio.Event()
+        settlement_started.set()
+        config = _StreamConfig(
+            capture=FullCapture(),
+            echo_output=False,
+            sink=io.StringIO(),
+            encoding="utf-8",
+            errors="replace",
+            settlement_started=settlement_started,
+        )
+
+        # RUF029: the drain seam is awaited by the consumer, so the double must
+        # be a coroutine function even though its first step is the raise.
+        async def cancel_drain(  # ruff: ignore[unused-async]
+            *_args: object,
+            **_kwargs: object,
+        ) -> _CapturedDrain:
+            """Stop the drain at the point a cancellation reaches it."""
+            raise asyncio.CancelledError
+
+        stream = typ.cast("asyncio.StreamReader", object())
+        return await _consume_stream_with_lines(
+            stream,
+            _LineConsumption(
+                config=config,
+                on_line=lambda _line: None,
+                drain=cancel_drain,
+                relay_diagnostics=None,
+            ),
+        )
+
+    drained = asyncio.run(run_case())
+    assert drained.capture is not None, (
+        "a preserving teardown must still report the capture it kept"
+    )
+    assert drained.reached_eof is False, (
+        "a cancellation before end of stream must not read as a completed drain"
     )

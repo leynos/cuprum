@@ -416,7 +416,7 @@ stateDiagram-v2
     Prepared --> [*]
 ```
 
-*Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
+*Figure 1: Scope-manager lifecycle: preparation, entry, nested reuse and LIFO
 restoration.*
 
 Scope lifecycle records use `DEBUG` for entry and successful exit, and
@@ -806,8 +806,6 @@ active scoped catalogue applies, and `DEFAULT_CATALOGUE` applies only outside
 any catalogue scope. The resolved catalogue is looked up at construction, which
 either rejects the program or binds the catalogue to the returned builder.
 
-Figure 3: `sh.make` catalogue resolution order and construction-time lookup
-
 ```mermaid
 flowchart TD
     A["sh.make(program, catalogue=None)"] --> B{Explicit catalogue?}
@@ -821,6 +819,8 @@ flowchart TD
     G -->|Missing| H[UnknownProgramError]
     G -->|Found| I[Return builder with catalogue bound]
 ```
+
+*Figure 2: `sh.make` catalogue resolution order and construction-time lookup.*
 
 `sh.make` returns a `SafeCmdBuilder`: a callable that accepts positional and
 keyword arguments, each of which must be a `str`, `int`, `float`, `bool`, or
@@ -928,7 +928,13 @@ assert text is not None
   noise rules and documentation links visible to downstream hooks without an
   extra lookup.
 
-The following diagram summarizes the relationships in the typed command core:
+For screen readers: The following class diagram shows the relationships in the
+typed command core. `ProgramCatalogue.lookup` returns a `ProgramEntry`, which
+pairs a `Program` with its `ProjectSettings`. `SafeCmd` carries both the
+program and the project settings, so a downstream hook can read the owning
+settings without another lookup. `SafeCmdBuilder` accepts an `ArgValue` and
+builds a `SafeCmd`, and the `sh` module uses the catalogue and returns builders
+that construct commands.
 
 ```mermaid
 classDiagram
@@ -985,6 +991,8 @@ classDiagram
     sh_module --> SafeCmdBuilder : returns
     sh_module --> SafeCmd : constructs
 ```
+
+*Figure 3: Relationships among the typed command core types.*
 
 Under the hood, this produces a `Pipeline[str]` instance, starts all component
 processes concurrently, and streams data between them.
@@ -1344,9 +1352,6 @@ returns a `CommandResult` carrying the recorded fallback. The clause matches
 failure is affected by this policy, and the unencodable-payload recovery above
 keeps its own unconditional handling.
 
-Figure 4: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
-the failing write or flush to the disabled drain and its bounded projections
-
 ```mermaid
 flowchart TD
     A[Echo write or flush] --> B{BrokenPipeError?}
@@ -1365,6 +1370,9 @@ flowchart TD
     K --> L
 ```
 
+*Figure 4: Broken-pipe echo recovery under `BrokenPipePolicy.BEST_EFFORT`, from
+the failing write or flush to the disabled drain and its bounded projections.*
+
 For screen readers: The following sequence diagram retells the same broken-pipe
 recovery as a message exchange between the caller, `run_sync`, one stream's
 echo drain, the echo sink, and the returned `CommandResult`. The caller invokes
@@ -1381,10 +1389,6 @@ a `CommandResult` carrying the recorded fallback. Under the default
 through the run, so no result is produced and the caller receives the error.
 The two arms therefore differ in outcome rather than in detection: best-effort
 yields a result with a recorded fallback, strict yields an exception.
-
-Figure 5: Broken-pipe echo recovery as a message sequence, from the `run_sync`
-call through the drain and sink to the returned `CommandResult` or the
-propagated error
 
 ```mermaid
 sequenceDiagram
@@ -1409,6 +1413,10 @@ sequenceDiagram
         Run-->>Caller: error
     end
 ```
+
+*Figure 5: Broken-pipe echo recovery as a message sequence, from the `run_sync`
+call through the drain and sink to the returned `CommandResult` or the
+propagated error.*
 
 #### Observation-hook coroutine disposal boundary
 
@@ -1829,9 +1837,6 @@ stderr sink, resolved at emission time, so it never enters capture, echo, line
 observers, or the activity tracker. An `on_idle` callback is synchronous and
 replaces the built-in renderer rather than joining it.
 
-Figure 6: Per-stream echo resolution and fd gating, from RunOutputOptions to
-stream consumers
-
 For screen readers: The following flowchart shows how per-stream echo
 resolution and fd gating flow from `RunOutputOptions` to the stream consumers.
 `RunOutputOptions.__post_init__` first resolves the `echo` shorthand into the
@@ -1868,6 +1873,9 @@ flowchart TD
     J --> L[_create_stage_capture_tasks]
     K --> L
 ```
+
+*Figure 6: Per-stream echo resolution and fd gating, from RunOutputOptions to
+stream consumers.*
 
 Beyond the tee sinks above, a run may opt into a *presentation sink* through
 `RunOutputOptions.sink` (see ADR-013). A presentation sink reshapes the
@@ -2292,8 +2300,6 @@ was stored; if it is enabled it takes the lock, pops the recorded start time —
 removing the entry, so the store cannot grow without bound — releases the lock,
 computes `duration_s`, and logs the `cuprum.exit` record.
 
-Figure 7: Sequence of start/exit logging hook execution
-
 ```mermaid
 sequenceDiagram
     actor User
@@ -2337,6 +2343,8 @@ sequenceDiagram
     SafeCmd-->>User: CommandResult
 ```
 
+*Figure 7: Sequence of start/exit logging hook execution.*
+
 For screen readers: The following sequence diagram shows how a subprocess
 timeout is turned into the public `TimeoutExpired`.
 `_handle_subprocess_timeout` first calls `_resolve_timeout_payload`, passing
@@ -2346,9 +2354,6 @@ stderr, and the exit time. It then reads the process exit code through
 `_get_exit_code`, emits an exit event via `_emit_exit_event` using
 `_ExitEventDetails`, and finally calls `_raise_timeout_expired`, which raises
 `TimeoutExpired` back to the caller.
-
-Figure 8: Subprocess timeout handling, from payload resolution to
-`TimeoutExpired`
 
 ```mermaid
 sequenceDiagram
@@ -2368,6 +2373,9 @@ sequenceDiagram
     _handle_subprocess_timeout->>_raise_timeout_expired: _TimeoutContext, exc
     _raise_timeout_expired-->>Caller: TimeoutExpired (exception)
 ```
+
+*Figure 8: Subprocess timeout handling, from payload resolution to
+`TimeoutExpired`.*
 
 Both timeout variants converge on one payload, so the resulting
 `TimeoutExpired` reports a concrete timeout whichever path expired: a
@@ -2427,9 +2435,6 @@ is returned instead. The streamed run and the direct run guard their own
 post-spawn setup the same way, passing the tasks and captures each had recorded
 by the point of failure.
 
-Figure 9: Startup abandonment after a post-spawn failure, from
-`_start_owned_process` to `_abandon_started_process`
-
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -2457,6 +2462,9 @@ sequenceDiagram
     end
     Note over Caller,Abandon: Streamed and direct runs guard their own setup,<br/>passing recorded tasks and captures.
 ```
+
+*Figure 9: Startup abandonment after a post-spawn failure, from
+`_start_owned_process` to `_abandon_started_process`.*
 
 - `cuprum/_subprocess_stream_run.py` owns streamed single-command execution:
   waiting for process exit, reconciling the stdin writer and both stream
@@ -2533,33 +2541,54 @@ sequenceDiagram
   coordinator, and the timeout test modules keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-27.
+- `cuprum/_stream_consumer_errors.py` is the leaf that owns
+  `ConsumerCancelledError` and the `ConsumerStreamName` literal. The error is
+  the public spelling of a consumer that ended cancelled before end of stream;
+  both `cuprum` and `cuprum.sh` re-export it, and the stream vocabulary is
+  cross-checked against `cuprum.lines.LineStreamName` in the public-surface
+  tests.
+- `cuprum/_subprocess_task_outcomes.py` owns the classification of a settled
+  monitored task: the writer's pre-unwind `_StdinWriterLog` publication, the
+  writer and consumer outcome queries, and the completion-ordered post-exit wait
+  `_await_consumer_outcomes`. The rendezvous imports `_consumer_failure` and
+  `_stdin_writer_failure` from it. See the ADR-007 addendum of 2026-11-27.
 - `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stream
   task's failure rather than on the child's exit.
   `_await_exit_or_writer_failure` waits on the exit wait, the stdin writer, and
   the observed stream consumers together, and a settled exit is its outcome
   outright even while a monitored task is still pending. A producer that dies,
   or a callback that raises while the child would still be running, therefore
-  surfaces as its own error instead of being reported as `TimeoutExpired`. Only
-  a failed task is an outcome; one that merely finishes leaves the exit wait
-  running. The owned-handle and pipeline routes do not race their readers: they
-  wait for the process, or every stage, and reconcile afterwards, so a reader
-  failure there surfaces at finalization. A route that stops the run before its
-  streams drained also has to release the child's output transports: a reader
-  cancelled before end-of-file leaves its descriptor with the transport that
-  owns it, and a descendant holding an inherited write end prevents the
-  end-of-file that would otherwise close it. The streamed exit wait releases
-  them from each of its failure handlers, composed with the reconciliation
-  under one shield so a cancellation interrupting the settling cannot skip the
-  release. The line-stream coordinator and the streamed route's own post-exit
-  collection do not release transports yet: a descendant surviving either
-  leaves the parent-side descriptor to the collector. That divergence is
-  recorded in the developers' guide. The exit wait is passed in already
-  constructed, so each caller resolves `_wait_for_exit_code_within_timeout`
-  from its own module namespace. It was split out of `_subprocess_wait`, which
-  re-exports the name, so the single-command run, the line-stream coordinator,
-  and the timeout test modules keep one import path. See the
+  surfaces as its own error instead of being reported as `TimeoutExpired`. A
+  consumer that ends cancelled, or returns while preserving a partial capture,
+  is an outcome too: its pipe is undrained, so the run ends there and reports a
+  `ConsumerCancelledError` naming the stream rather than waiting on an exit
+  that cannot arrive. A cancelled stdin writer remains quiet teardown, and a
+  task that merely finishes leaves the exit wait running. After the exit, both
+  single-command supervisors share `_await_consumer_outcomes`, which classifies
+  completions in order and stops on the first failure. Every settled consumer
+  is classified before it is dropped, including one whose done callback has not
+  run yet, and consumers already settled when the wait begins are attributed in
+  stream order. The `_CapturedDrain.reached_eof` marker is what distinguishes a
+  short preserving drain from an end-of-file one. The owned-handle and pipeline
+  routes do not race their readers: they wait for the process, or every stage,
+  and reconcile afterwards, so a reader failure there surfaces at finalization.
+  A route that stops the run before its streams drained also has to release the
+  child's output transports: a reader cancelled before end-of-file leaves its
+  descriptor with the transport that owns it, and a descendant holding an
+  inherited write end prevents the end-of-file that would otherwise close it.
+  The streamed exit wait releases them from each of its failure handlers,
+  composed with the reconciliation under one shield so a cancellation
+  interrupting the settling cannot skip the release. The line-stream
+  coordinator and the streamed route's own post-exit collection do not release
+  transports yet: a descendant surviving either leaves the parent-side
+  descriptor to the collector. That divergence is recorded in the developers'
+  guide. The exit wait is passed in already constructed, so each caller resolves
+  `_wait_for_exit_code_within_timeout` from its own module namespace. It was
+  split out of `_subprocess_wait`, which re-exports the name, so the
+  single-command run, the line-stream coordinator, and the timeout test modules
+  keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
-  2026-09-27 and 2026-11-15.
+  2026-09-27, 2026-11-15, and 2026-11-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside
@@ -2630,8 +2659,6 @@ the captured payload is returned. If grace expires while readers remain
 pending, telemetry records the expiry, consumers are settled once, and their
 deterministic captured result is returned.
 
-Figure 10: Capturing drain EOF-grace sequence
-
 ```mermaid
 sequenceDiagram
     participant Drain as _stream_drain
@@ -2651,6 +2678,8 @@ sequenceDiagram
         Consumers-->>Drain: deterministic captured result
     end
 ```
+
+*Figure 10: Capturing drain EOF-grace sequence.*
 
 - `cuprum/_pipeline_settlement.py` owns the one sequence that ends an expired
   pipeline and reports what its readers had captured: terminate the stages,
@@ -2775,9 +2804,6 @@ object once `exec` succeeds and a PID exists. `_launch_detached` builds the
 `DetachedLaunch` receipt from that object. Once the receipt reaches the caller,
 the worker is the caller's to terminate and reap.
 
-Figure 11: Detached launch sequence, from `launch_detached_sync` through the
-spawn to the caller-owned receipt
-
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -2801,6 +2827,9 @@ sequenceDiagram
     SafeCmd-->>Caller: ownership transferred
     Note over Caller,Worker: Caller terminates and reaps the worker
 ```
+
+*Figure 11: Detached launch sequence, from `launch_detached_sync` through the
+spawn to the caller-owned receipt.*
 
 On success the caller receives a `DetachedLaunch` receipt carrying the worker's
 actual PID, program, and resolved executable path. The receipt is a name, not a
@@ -2836,9 +2865,6 @@ failure while building the receipt or a cancellation at that boundary abandons
 the worker, which cuprum kills and reaps. Every path ends with no child, a
 reported error, or a worker the caller owns.
 
-Figure 12: Detached launch outcomes, from validation to a caller-owned worker
-or a stopped one
-
 ```mermaid
 stateDiagram-v2
     [*] --> Validating
@@ -2853,6 +2879,9 @@ stateDiagram-v2
     StartupFailed --> [*]: underlying error
     CallerOwned --> [*]: caller terminates and reaps
 ```
+
+*Figure 12: Detached launch outcomes, from validation to a caller-owned worker
+or a stopped one.*
 
 ### 8.2 Pipelines and Structured Concurrency
 
@@ -2948,9 +2977,6 @@ outcome per selected target, and the fail-fast caller counts only outcomes that
 verify process exit. When the reducer selects no stages — every other stage has
 already settled — no tasks are created and no gather occurs.
 
-Figure 13: Fail-fast termination selection via the `_stages_to_terminate`
-reducer
-
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -2975,6 +3001,9 @@ sequenceDiagram
         _terminate_pipeline_remaining_stages-->>Caller: return without gathering
     end
 ```
+
+*Figure 13: Fail-fast termination selection via the `_stages_to_terminate`
+reducer.*
 
 Keeping the selection in `_stages_to_terminate` makes the rule testable without
 processes: it excludes the failed stage, which owns its own exit, and any stage
@@ -3147,9 +3176,6 @@ the result aggregator; and releases the semaphore. Once all have finished, the
 aggregator returns the results in submission order and `run_concurrent` returns
 a `ConcurrentResult` carrying the results, the failures, and the `ok` flag.
 
-Figure 14: Concurrent execution flow with allowlist validation and semaphore
-gating
-
 ```mermaid
 sequenceDiagram
     participant Caller
@@ -3180,6 +3206,9 @@ sequenceDiagram
     run_concurrent-->>Caller: ConcurrentResult<br/>(results, failures, ok)
 ```
 
+*Figure 14: Concurrent execution flow with allowlist validation and semaphore
+gating.*
+
 For screen readers: The following sequence diagram shows what changes when
 fail-fast mode is enabled. The caller invokes `run_concurrent` with a config
 whose `fail_fast` is true. Every command is launched as a task in a task group.
@@ -3192,8 +3221,6 @@ results — the commands that *completed*; cancelled ones produced no
 `ConcurrentResult` carrying those, compacted, alongside `submission_indices`
 mapping each back to its original position and the failure indices within the
 compacted tuple.
-
-Figure 15: Fail-fast mode cancellation behaviour
 
 ```mermaid
 sequenceDiagram
@@ -3219,6 +3246,8 @@ sequenceDiagram
     TaskGroup-->>run_concurrent: Completed results only<br/>(cancelled produced none)
     run_concurrent-->>Caller: ConcurrentResult<br/>(compacted results,<br/>submission indices,<br/>failure indices)
 ```
+
+*Figure 15: Fail-fast mode cancellation behaviour.*
 
 ### 8.4 Telemetry Adapter Design Decisions
 
@@ -3373,8 +3402,6 @@ each operation in turn: a `_CounterOp` becomes
 `inc_counter(name, value, labels)` on the collector, and a `_HistogramOp`
 becomes `observe_histogram(name, value, labels)`.
 
-Figure 16: Metrics hook dispatch, from `ExecEvent` to collector calls
-
 ```mermaid
 sequenceDiagram
     participant ExecEvent
@@ -3401,13 +3428,7 @@ sequenceDiagram
     end
 ```
 
-For screen readers: an `ExecEvent` calls the `MetricsHook`, which asks
-`_metric_operations` for that event's operations and receives a tuple of
-`_MetricOp` records. If the tuple is empty the hook returns immediately,
-without computing labels. Otherwise it extracts the labels once and then loops
-over the operations, applying each: a `_CounterOp` calls
-`inc_counter(name, value, labels)` on the collector, and a `_HistogramOp` calls
-`observe_histogram(name, value, labels)`.
+*Figure 16: Metrics hook dispatch, from `ExecEvent` to collector calls.*
 
 The loop is the contract, and it is deliberately **not** atomic. Each event
 yields a sequence of operations, applied as independent collector calls in that
@@ -3906,6 +3927,8 @@ flowchart TD
     J -. Phase 2 candidate .-> G
 ```
 
+*Figure 17: Stream-backend selection between the Python and Rust pathways.*
+
 For screen readers: The following state diagram shows the lifecycle of a
 `SafeCmd.lines()` iteration. It moves from creation through the first
 `__anext__()` call to the streaming state, then ends either by publishing the
@@ -3918,9 +3941,6 @@ Creation only prepares the run; the first `__anext__()` re-checks the allowlist
 and re-resolves the timeout in the task that pulls it, so a scope entered after
 `lines()` returns can still refuse the spawn (transitioning straight to
 `Refused`) or shorten its deadline.
-
-Figure 17: Lifecycle of a `SafeCmd.lines()` iteration from creation through
-streaming to completion, timeout, or cancellation-driven teardown
 
 ```mermaid
 stateDiagram-v2
@@ -3940,6 +3960,9 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+*Figure 18: Lifecycle of a `SafeCmd.lines()` iteration from creation through
+streaming to completion, timeout, or cancellation-driven teardown.*
+
 For screen readers: The following state diagram shows the lifecycle of a
 `SafeCmd.lines()` stream at the seam that implements deferred authorization. A
 prepared stream is not permission to run: the first `__anext__()` under a
@@ -3955,9 +3978,6 @@ actually ran under. Only then does `_start_line_stream_run()` spawn the
 subprocess and its consumers. Once streaming, the run ends either by publishing
 the `CommandResult` or by closing through `aclose()` or cancellation.
 
-Figure 18: Seam-level lifecycle of a `SafeCmd.lines()` stream, from preparation
-through deferred authorization and spawning to completion or close
-
 ```mermaid
 stateDiagram-v2
     [*] --> Prepared: SafeCmd.lines()
@@ -3972,13 +3992,13 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+*Figure 19: Seam-level lifecycle of a `SafeCmd.lines()` stream, from
+preparation through deferred authorization and spawning to completion or close.*
+
 For screen readers: The following flowchart shows how each decoded output line
 is fanned out to observe hooks, the synchronous line hook, the line-stream
 queue, capture, and echo. Observe hooks produce `ExecEvent` records; the hook
 and queue produce `LineEvent` records for their respective consumers.
-
-Figure 19: Line observation fan-out from decoded output to lifecycle events,
-line events, capture, and echo
 
 ```mermaid
 flowchart LR
@@ -3994,6 +4014,9 @@ flowchart LR
     decoded --> echo[Echo]
 ```
 
+*Figure 20: Line observation fan-out from decoded output to lifecycle events,
+line events, capture, and echo.*
+
 For screen readers: The following sequence diagram shows one full
 `SafeCmd.lines()` iteration. The caller receives a `LineStream` from
 `SafeCmd.lines()`, the first `__anext__()` call re-checks the allowlist and
@@ -4005,9 +4028,6 @@ published, and iteration ends with `StopAsyncIteration` before the caller reads
 the `result` attribute. The re-authorization step is what lets a scope entered
 after `lines()` returned still govern the run: a forbidden command ends
 iteration with `ForbiddenProgramError` before any process or task exists.
-
-Figure 20: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
-per-line events to the published `CommandResult` and `StopAsyncIteration`
 
 ```mermaid
 sequenceDiagram
@@ -4036,6 +4056,9 @@ sequenceDiagram
     LineStream-->>Caller: StopAsyncIteration
     Caller->>LineStream: result
 ```
+
+*Figure 21: Sequence of a `SafeCmd.lines()` iteration from `lines()` through
+per-line events to the published `CommandResult` and `StopAsyncIteration`.*
 
 ### 13.3 API Boundary
 
@@ -4282,6 +4305,8 @@ sequenceDiagram
     PyShim-->>PyCaller: decoded text
 ```
 
+*Figure 22: Python-to-Rust call flow for `rust_consume_stream`.*
+
 For screen readers: The following flowchart outlines the decision flow inside
 `decode_utf8_replace`, including how valid UTF-8 prefixes, invalid sequences,
 and incomplete trailing bytes are handled.
@@ -4315,6 +4340,8 @@ flowchart TD
     R --> F
     Q -->|No| F
 ```
+
+*Figure 23: Decision flow inside `decode_utf8_replace`.*
 
 The extension accepts raw file descriptors rather than asyncio stream objects.
 This enables operation outside the Python runtime whilst the dispatcher handles
@@ -4525,6 +4552,8 @@ flowchart TD
     N --> P
 ```
 
+*Figure 24: Selector backend-selection algorithm and its availability probe.*
+
 ### 13.5 Performance Characteristics
 
 The following table summarizes when each pathway is recommended:
@@ -4536,6 +4565,8 @@ The following table summarizes when each pathway is recommended:
 | Many concurrent pipelines      | Rust                | Reduced GIL contention                  |
 | Debugging/tracing output lines | Python              | Capture path remains Python-based       |
 | Platform without a Rust wheel  | Python              | Automatic fallback                      |
+
+*Table 1: Recommended pathway by scenario.*
 
 Current Rust acceleration applies to inter-stage pipeline pumping, not
 stdout/stderr capture.
@@ -4818,6 +4849,8 @@ sequence:
 | Pipe      | Socket         | Platform-dependent |
 | File      | Pipe           | No (fallback)      |
 | File      | File           | No (fallback)      |
+
+*Table 2: `splice()` support by source and destination descriptor type.*
 
 For maximum benefit, ensure pipeline stages use pipes (the default for
 `Pipeline` execution) rather than temporary files.
@@ -5498,9 +5531,6 @@ record. Once the run is reconciled and its result published, the handle is
 closed: no work it owns is outstanding, and every later wait or stop reports
 the recorded outcome rather than starting again.
 
-Figure 21: Lifecycle of a `SafeCmd.start()` handle from creation through
-waiting to completion, timeout, or control-driven termination
-
 ```mermaid
 stateDiagram-v2
     [*] --> Running: SafeCmd.start() spawns the child
@@ -5517,6 +5547,9 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+*Figure 25: Lifecycle of a `SafeCmd.start()` handle from creation through
+waiting to completion, timeout, or control-driven termination.*
+
 For screen readers: The following sequence diagram shows one handle stopping
 and then settling a cooperative child. The caller starts the child, receives a
 handle, and leaves the child running for as long as it chooses. When the caller
@@ -5527,9 +5560,6 @@ the pairing of two separately requested signals. The wait that follows observes
 the death, and its result is handed back from `terminate()` itself as the
 handle's one `CommandResult`. Every later `wait()` on the same handle reports
 that same result rather than building another.
-
-Figure 22: Sequence of a handle owned through `SafeCmd.start()`, from spawn
-through `terminate()` to the single published `CommandResult`
 
 ```mermaid
 sequenceDiagram
@@ -5554,6 +5584,9 @@ sequenceDiagram
     Caller->>Handle: wait()
     Handle-->>Caller: the same CommandResult, nothing redelivered
 ```
+
+*Figure 26: Sequence of a handle owned through `SafeCmd.start()`, from spawn
+through `terminate()` to the single published `CommandResult`.*
 
 #### 13.10.6 Observing control operations
 

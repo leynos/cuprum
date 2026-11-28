@@ -758,6 +758,47 @@ module population is settled before the loop that reads it. The dependency is
 also ordered rather than incidental — the bootstrap is a prerequisite, so it
 completes before the selector-driven loop starts.
 
+### Colour environment for the test gate
+
+`make test` stops at the first failing pytest session, so one colour-sensitive
+assertion hides every later session and the whole Rust suite. CPython 3.14 and
+later colour `argparse` help when the environment asks for it, and an agent
+harness, terminal, or CI wrapper that exports `FORCE_COLOR=1` is enough to turn
+a captured help transcript into ANSI escape sequences. The coloured renderer
+also consumes the backticks in a description as markup, so stripping the
+escapes afterwards would not recover the plain text either.
+
+The `PYTEST_COLOUR_ENV` prefix therefore starts all three sessions
+[Test selection](#test-selection) describes — the `test-selection` bootstrap,
+the individual loop, and the grouped `--dist loadgroup` run. It removes
+`FORCE_COLOR`, `CLICOLOR_FORCE` and `PY_COLORS`, and exports `NO_COLOR=1` and
+`PYTHON_COLORS=0`.
+
+The two exports are not redundant. CPython reads `PYTHON_COLORS` first and it
+outranks every other colour control, but an interpreter started with `-E` or
+`-I` ignores it along with the rest of the `PYTHON*` family; `NO_COLOR=1`
+covers those interpreters and any other tool that follows the convention.
+pytest gives `PY_COLORS` the highest precedence of its own controls, so it is
+unset rather than set to `0`. `CLICOLOR_FORCE` is not read by CPython or
+pytest, but it is the older force-colour spelling that other tools still
+honour, and removing it costs nothing.
+
+The prefix sits outside `$(PYTEST)`, so `make test PYTEST=…` still applies it;
+`make test PYTEST_COLOUR_ENV=` is the deliberate opt-out. The policy belongs to
+the gate, not to the Cuprum CLI or the benchmark scripts, which keep honouring
+the caller's environment for real users. `pylint-integration`, `test-act` and
+`test-extension` are not prefixed: they run outside `make test`, and the
+contract below pins the three sessions the gate owns. A test that replaces a
+child's environment rather than inheriting it is outside the policy's reach, as
+is a tool with a colour flag of its own; pin colour inside such a test with
+`monkeypatch`, which also makes a direct `pytest` run independent of the
+caller's environment.
+
+`tests/test_ci_pytest_colour_contract.py` drives the real `test-python` recipe
+with a stubbed `uv` and asserts the exact session sequence, the policy in each
+session's environment and in a child spawned without an `env=` mapping, and the
+same result when `PYTEST` is overridden on the command line.
+
 ### One execution per suite
 
 Each suite runs once per event. The coverage job is the only place the Rust
@@ -3107,10 +3148,10 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_held_pairs`                | none      |
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
-six in Table 1 above. The `outcome` label is also closed: it is exactly
-`submitted`, `blocking_setup_failed`, `drain_failed`, `drain_cancelled`,
-`hold_observer_shutdown`, `submission_abandoned`,
-`executor_submission_rejected`, `native_load_failed`,
+six `cuprum_reason` values in the decline-reason table above. The `outcome`
+label is also closed: it is exactly `submitted`, `blocking_setup_failed`,
+`drain_failed`, `drain_cancelled`, `hold_observer_shutdown`,
+`submission_abandoned`, `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`,
 `native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, or
 `windows_raw_handle_rejected`. The last value records the deliberate Windows
@@ -6549,8 +6590,8 @@ was transferred, no state outlived the attempt, and the hop is perfectly
 serviceable on the Python pump. Re-raising it left the writer transport open,
 so the downstream stage never saw EOF and the pipeline hung until its deadline
 — an intermittent wedge that only the native fast path could produce. The
-decline records its own `duplicate_fds_unavailable` reason in Table 1 above,
-alongside `blocking_mode_unavailable`.
+decline records its own `duplicate_fds_unavailable` reason in the
+decline-reason table above, alongside `blocking_mode_unavailable`.
 
 The acquisition is deliberately separate from blocking activation. The pair is
 acquired before the drain, but it is only switched to blocking mode and handed
@@ -9513,11 +9554,17 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_stdio_binding_guards.py`, `cuprum/_stdio_diagnostics.py`,
 `cuprum/stdio_events.py`, `cuprum/_subprocess_timeout.py`,
 `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
+`cuprum/_subprocess_task_outcomes.py`, `cuprum/_stream_consumer_errors.py`,
 `cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`,
 `cuprum/_subprocess_direct_run.py`, `cuprum/_command_finalization.py`, and
-`cuprum/_pipeline_settlement.py`. Pipeline startup has its own boundary in
-`cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
-spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
+`cuprum/_pipeline_settlement.py`. `cuprum/_subprocess_task_outcomes.py` owns
+the classification of a settled stdin writer or stream consumer — the
+`_StdinWriterLog` publication, the writer and consumer outcome queries, and the
+completion-ordered post-exit wait `_await_consumer_outcomes` — while
+`cuprum/_stream_consumer_errors.py` is the leaf that owns
+`ConsumerCancelledError` and `ConsumerStreamName`. Pipeline startup has its own
+boundary in `cuprum/_pipeline_spawn.py`, which starts the stages and tears down
+a partial spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
 `_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
 decisions teardown makes about a single process — what a signal is delivered
 to, and what a completed teardown waits for. The two idle-heartbeat modules,
@@ -9754,44 +9801,54 @@ still be running surfaces as its own error instead of being reported as a
 timeout. The consumer arm exists for the same arithmetic from the other end of
 the pipe: a raising `on_line` callback ends the task draining the child's
 output, nothing reads the pipe any more, and a child that keeps writing blocks
-on a full pipe rather than exiting. Only a task that *failed* is an outcome:
-one that merely finishes first is the ordinary case — a producer exhausted, a
-stream closed — and the exit wait then keeps running, so the run still ends on
-the child's exit. It is a monitored failure, or the caller's own cancellation,
-that cancels the exit wait, and that cancellation is itself the termination,
-since the wait's own cancellation handler escalates through
-`_terminate_all_shielded`. The cancellation grace and the termination policy
-are not restated here.
+on a full pipe rather than exiting. A task that *failed* is an outcome, and so
+is a consumer that ended **cancelled** or returned while preserving a partial
+capture: either leaves the pipe undrained, so the run ends there rather than
+waiting for an exit that cannot arrive. A task that merely finishes first — a
+producer exhausted, a stream reaching EOF — is the ordinary case, and the exit
+wait keeps running, so the run still ends on the child's exit. A cancelled
+*writer* is quiet teardown, not a failure. It is a monitored failure or a
+consumer cancellation, or the caller's own cancellation, that cancels the exit
+wait, and that cancellation is itself the termination, since the wait's own
+cancellation handler escalates through `_terminate_all_shielded`. The
+cancellation grace and the termination policy are not restated here.
 
 The precedence between those sources is fixed rather than first-past-the-post,
 because `asyncio.wait` reports a settled *set* with no completion order. A
 settled exit wins outright; then the stdin writer; then the consumers in
-stdout-then-stderr order, selected by `_first_early_failure` over
-`_stdin_writer_failure` and `_consumer_failure`. That order decides once that
-the run must stop; the writer alone is then asked again after the exit wait's
-cancellation has terminated the child, because a stdin writer unwinding its own
-cleanup settles on its failure only during that termination. The consumers are
-deliberately not re-read: terminating the child makes its pipes reach EOF, so a
-reader still draining can fail on what that leaves behind — a truncated
-sequence flushed by a strict decoder, say — and that artefact would replace the
-callback failure already selected whenever it landed on stdout while the
-callback failed on stderr. Neither writer read is enough alone, because the
-window has two ends. A writer that has already raised is still *running* while
-it unwinds — its producer's finalizer is the caller's code, run inside a window
-of its own — so a read taken during that unwinding sees a task that has not
-failed. The writer therefore publishes its failure to the `_StdinWriterLog` the
-run creates for it, before the raise and so before that unwinding, and both
-writer reads consult the publication ahead of the task. That ordering covers
-the payload writer as well, whose unwinding suspends: its pipe close waits,
-within a bound, for the child-side reader to reach EOF, so a publication made
-after the close would be invisible to a race asking during it. Without the
-hand-off, a bad `encoding` would report the output decoder's `LookupError` in
-place of the `StdinSourceError` the input contract promises, because an unknown
-encoding fails the writer and both decoders, and the decoders settle first.
-Consumer tasks are never cancelled or gathered here: they belong to the caller,
-whose reconciliation on every failure route settles them, and doing it here as
-well would settle them twice and race that teardown. What the rendezvous does
-owe every caller is provenance.
+stdout-then-stderr order, selected by `_first_early_failure` over the writer
+query `_stdin_writer_failure` and the consumer query `_consumer_outcome`
+(through `_consumer_failure`). `_subprocess_rendezvous.py` imports
+`_consumer_failure` and `_stdin_writer_failure` from
+`cuprum/_subprocess_task_outcomes.py`, which owns both queries and the shared
+post-exit wait `_await_consumer_outcomes` described below. A consumer that
+ended cancelled is reported as `ConsumerCancelledError` naming its stream, with
+the task's own cancellation chained as its cause when one is retrievable; a
+cancelled writer remains quiet. That order decides once that the run must stop;
+the writer alone is then asked again after the exit wait's cancellation has
+terminated the child, because a stdin writer unwinding its own cleanup settles
+on its failure only during that termination. The consumers are deliberately not
+re-read: terminating the child makes its pipes reach EOF, so a reader still
+draining can fail on what that leaves behind — a truncated sequence flushed by
+a strict decoder, say — and that artefact would replace the callback failure
+already selected whenever it landed on stdout while the callback failed on
+stderr. Neither writer read is enough alone, because the window has two ends. A
+writer that has already raised is still *running* while it unwinds — its
+producer's finalizer is the caller's code, run inside a window of its own — so
+a read taken during that unwinding sees a task that has not failed. The writer
+therefore publishes its failure to the `_StdinWriterLog` the run creates for
+it, before the raise and so before that unwinding, and both writer reads
+consult the publication ahead of the task. That ordering covers the payload
+writer as well, whose unwinding suspends: its pipe close waits, within a bound,
+for the child-side reader to reach EOF, so a publication made after the close
+would be invisible to a race asking during it. Without the hand-off, a bad
+`encoding` would report the output decoder's `LookupError` in place of the
+`StdinSourceError` the input contract promises, because an unknown encoding
+fails the writer and both decoders, and the decoders settle first. Consumer
+tasks are never cancelled or gathered here: they belong to the caller, whose
+reconciliation on every failure route settles them, and doing it here as well
+would settle them twice and race that teardown. What the rendezvous does owe
+every caller is provenance.
 `_is_early_failure(error, stdin_task, consumers, *, stdin_log=None)` answers,
 by identity, whether a caught error is a monitored task's own failure — or the
 failure its writer published — and that is what lets each caller tell a
@@ -9799,6 +9856,24 @@ callback's `TimeoutError` from its own expired deadline: `TimeoutError` is an
 `OSError` subclass, so a type check cannot. A task that failed *after* the exit
 settled is left to the caller's post-exit await, whose existing check already
 reports it.
+
+The same classification serves both supervisors *after* the exit.
+`_await_consumer_outcomes` records completion order through done callbacks,
+classifies each settled consumer, and stops on the first failure rather than
+spending the budget on a wedged sibling. Every settled consumer is classified
+before it is dropped, even one whose done callback has not run yet; a consumer
+that settled between the wait's completion set and its callback would otherwise
+escape as a raw `CancelledError` or as success. If several consumers were
+already settled when the wait began, the callback registration order — stdout
+before stderr — is the deterministic tie-break. The streamed `run()` raises the
+failure through its ordinary failure handler; `lines()` returns it from
+`_await_consumers`, which adds the line stream's remaining budget to the shared
+wait and publishes the error on the iterator's result future.
+`_CapturedDrain.reached_eof` is what lets a preserving drain that returned a
+partial capture be recognized as a short stop; pipelines and owned handles
+ignore the marker. The supervisor's own cancellation is never reclassified: the
+rendezvous forwards it to the exit wait and re-raises the `CancelledError` it
+was given.
 
 Its three call sites are the non-streaming single-command path
 (`_run_subprocess_without_streams` in `cuprum/_subprocess_direct_run.py`), the
@@ -9847,6 +9922,15 @@ Three fire: the `subprocess_teardown_drain_failed` `ERROR` record on the
 `teardown_error` observe event whose note names the same failing streams. The
 run then settles once with `terminal_outcome=error` (`TerminalOutcome.ERROR`),
 which is the event a consumer watching only the phase stream sees.
+
+A consumer that ends *cancelled* takes the same terminal route but not the same
+per-stream records. The caller receives `ConsumerCancelledError` naming the
+stream, because the cancellation was classified before the teardown; by the
+time reconciliation runs, the consumer's own `CancelledError` is what the drain
+collects, and the drain deliberately filters that type out of its failure
+records. The `settled` event still reports `terminal_outcome=error`, and
+`cuprum/unittests/test_consumer_failure_telemetry.py` pins that terminal
+outcome for a callback-raised cancellation on both entry points.
 
 A dedicated signal for the decision would be a new `ExecPhase` member, and that
 literal is matched exhaustively by consumers — `MetricsHook` raises

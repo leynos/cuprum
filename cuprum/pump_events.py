@@ -35,8 +35,9 @@ class RustPumpDeclineReason(enum.StrEnum):
     system and asyncio transport combination cannot safely use the native Rust
     pump. ``DUPLICATE_FDS_UNAVAILABLE`` means a transport's pipe description
     could not be re-opened or duplicated for the native worker: the
-    descriptors existed when extraction read them, but one was already closed
-    by the time duplication re-opened it.
+    descriptors existed when extraction read them, but one may already have
+    been closed by the time duplication re-opened it, or the process may have
+    exhausted its descriptors.
 
     Examples
     --------

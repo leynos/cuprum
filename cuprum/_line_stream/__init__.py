@@ -38,10 +38,7 @@ from cuprum._line_stream.line_queue import (
     _observed_line_hook,
     _queue_line_sink,
 )
-from cuprum._line_stream.reader_wait import (
-    _await_consumers,
-    _first_reader_failure,
-)
+from cuprum._line_stream.reader_wait import _await_consumers
 from cuprum._line_stream.spawn import (
     _abandon_unstarted_run,
     _start_line_stream_run,
@@ -65,7 +62,6 @@ __all__ = [
     "_coordinate_line_stream",
     "_discard_drain",
     "_finalize_line_stream_captures",
-    "_first_reader_failure",
     "_line_event_queue",
     "_observed_line_hook",
     "_queue_line_sink",

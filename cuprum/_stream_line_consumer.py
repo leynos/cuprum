@@ -150,12 +150,30 @@ async def _consume_stream_with_lines(
 async def _finalize_cancelled_capture(
     consumption: _LineConsumption,
 ) -> _CapturedDrain | None:
-    """Keep bytes absorbed before a preserving teardown cancelled line output."""
+    """Keep bytes absorbed before a preserving teardown cancelled line output.
+
+    The returned drain reports ``reached_eof=False``, because the cancellation
+    that brought control here is precisely what stopped the read short of end
+    of stream. Without that marker the preserved prefix is indistinguishable
+    from a completed drain, and a supervisor reading the result cannot tell
+    that nothing will read this pipe again.
+
+    Returns
+    -------
+    _CapturedDrain | None
+        The preserved capture, marked as stopping short of end of stream, or
+        ``None`` when no preserving settlement owned this stream.
+    """
     capture_sink = _capture_sink_for_preserving_settlement(consumption.config)
     if capture_sink is None:
         return None
     final = await capture_sink.finalize()
-    return _CapturedDrain(final.payload, final.capture, final.handle)
+    return _CapturedDrain(
+        final.payload,
+        final.capture,
+        final.handle,
+        reached_eof=False,
+    )
 
 
 def _capture_sink_for_preserving_settlement(

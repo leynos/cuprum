@@ -23,7 +23,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, sh
+from cuprum import ConsumerCancelledError, RunOutputOptions, sh
 from cuprum.events import TerminalOutcome
 from cuprum.unittests._wait4_process_support import _abandon
 from tests.helpers.catalogue import python_builder as build_python_builder
@@ -98,6 +98,11 @@ def _fail(_event: object) -> None:
     raise _SENTINEL
 
 
+def _cancel(_event: object) -> None:
+    """End the callback's consumer cancelled at the point it is invoked."""
+    raise asyncio.CancelledError
+
+
 def _only_started_pid(events: cabc.Sequence[ExecEvent], context: str) -> int:
     """Return the one child the run started, insisting there is exactly one."""
     pids = started_pids(events)
@@ -105,15 +110,19 @@ def _only_started_pid(events: cabc.Sequence[ExecEvent], context: str) -> int:
     return pids[0]
 
 
-def _drive(command: SafeCmd, entry_point: str) -> None:
+def _drive(
+    command: SafeCmd,
+    entry_point: str,
+    hook: cabc.Callable[[object], None] = _fail,
+) -> None:
     """Drive one entry point to the callback failure it must report."""
 
     async def invoke() -> None:
         """Run the selected entry point until the callback raises."""
         if entry_point == "run":
-            await command.run(output=RunOutputOptions(on_line=_fail))
+            await command.run(output=RunOutputOptions(on_line=hook))
             return
-        async for _event in command.lines(output=RunOutputOptions(on_line=_fail)):
+        async for _event in command.lines(output=RunOutputOptions(on_line=hook)):
             pass
 
     asyncio.run(asyncio.wait_for(invoke(), _WATCHDOG_S))
@@ -243,5 +252,43 @@ def test_early_consumer_failure_reports_every_channel(
         # A run that failed to terminate its child must not leak it into the
         # rest of the suite; ``_abandon`` signals only a child this process
         # still owns, so a reaped pid that was recycled is left alone.
+        for pid in started_pids(events):
+            _abandon(pid)
+
+
+@pytest.mark.parametrize("entry_point", ["run", "lines"])
+def test_cancelled_callback_settles_the_run_as_an_error(
+    entry_point: str,
+) -> None:
+    """A callback-raised cancellation settles once, as a failed run.
+
+    The run's outcome is ``ConsumerCancelledError``, which is what the caller
+    reads; the teardown absorbs the consumer's own cancellation, so the
+    per-stream drain records are not expected here. What must survive is the
+    terminal event: the run ended rather than returning as a success.
+    """
+    events: list[ExecEvent] = []
+    context = f"{entry_point} after a cancelled callback"
+    command = build_python_builder()("-c", _CHILD_SCRIPT.format(stream="stdout"))
+    try:
+        with sh.observe(events.append), pytest.raises(ConsumerCancelledError) as caught:
+            _drive(command, entry_point, _cancel)
+        assert caught.value.stream == "stdout", (
+            f"{context} must name stdout, got {caught.value.stream!r}"
+        )
+        assert not isinstance(caught.value, asyncio.CancelledError), (
+            f"{context} must not surface an unrequested cancellation"
+        )
+        _only_started_pid(events, context)
+        terminal = [item for item in events if item.phase == "settled"]
+        assert len(terminal) == 1, (
+            f"{context} must settle exactly once, got "
+            f"{[item.phase for item in events]!r}"
+        )
+        assert terminal[0].terminal_outcome is TerminalOutcome.ERROR, (
+            f"{context} must settle as a failed run, got "
+            f"{terminal[0].terminal_outcome!r}"
+        )
+    finally:
         for pid in started_pids(events):
             _abandon(pid)

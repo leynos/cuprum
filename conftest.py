@@ -197,10 +197,15 @@ if typ.TYPE_CHECKING:
 # trampolined call, and mutmut treats an exception escaping the run as the
 # probe's success; a conftest import failure, by contrast, is a pytest usage
 # error that mutmut refuses and aborts on.
+# `tests.helpers.pytest_session_evidence` is listed here so its module-level
+# `pytest_configure` runs; that hook registers the plugin only when
+# `CUPRUM_PYTEST_EVIDENCE_DIR` names a directory, so a run that does not ask
+# for evidence pays one small import and nothing else.
 pytest_plugins = (
     "tests.helpers.prepared_cargo_run",
     "cuprum.unittests._safe_cmd_lines_support",
     "cuprum.unittests._safe_cmd_lines_authorization_support",
+    "tests.helpers.pytest_session_evidence",
 )
 
 

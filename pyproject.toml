@@ -994,13 +994,13 @@ members = [
     "cuprum/_pipeline_stream_fds.py",
     "cuprum/_sink_lifecycle.py",
     "cuprum/_subprocess_context.py",
-    "cuprum/_subprocess_rendezvous.py",
+    "cuprum/_subprocess_task_outcomes.py",
     "cuprum/context/_policy.py",
     "cuprum/context/env_overlay.py",
     "cuprum/context/executable_overlay.py",
     "cuprum/sh/execution.py",
 ]
-reason = "`if <field> is None: return None` occurs at eleven optional-value boundaries across ten modules: an interval, stream, sink, subprocess executable, writer task, timeout, environment overlay, executable overlay, stdin payload, bounded-delivery options, and drain-grace override. These guards share a None-tolerance idiom, but the two delivery validators enforce different contracts and should remain independently understandable. The entries preserve the current main-side sites and add the bounded-delivery sites."
+reason = "`if <field> is None: return None` occurs at eleven optional-value boundaries across ten modules: an interval, stream, sink, subprocess executable, writer task, timeout, environment overlay, executable overlay, stdin payload, bounded-delivery options, and drain-grace override. These guards share a None-tolerance idiom, but the two delivery validators enforce different contracts and should remain independently understandable. The writer-task guard moved from `_subprocess_rendezvous.py` to `_subprocess_task_outcomes.py` with the task it inspects, so the entry follows it."
 
 [[tool.duplication_gate.allow]]
 members = [
@@ -1047,9 +1047,10 @@ reason = "`SafeCmd.__or__` and `Pipeline.__or__` both delegate to `Pipeline.conc
 [[tool.duplication_gate.allow]]
 members = [
     "cuprum/adapters/_metrics_operations.py::__init__",
+    "cuprum/_stream_consumer_errors.py::__init__",
     "cuprum/catalogue.py::__init__",
 ]
-reason = "Two exception constructors that build a message and pass it to `super()`. They store different attributes (`phase` against `project_name`), interpolate different text, and belong to modules that do not import each other."
+reason = "Three exception constructors that build a message and pass it to `super()`. They store different attributes (`phase`, `stream`, `project_name`), interpolate different text, and belong to modules that do not import each other. The consumer-cancellation initializer joined the same message-building idiom rather than sharing a base class with two unrelated errors."
 
 [[tool.duplication_gate.allow]]
 members = [

@@ -23,7 +23,7 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, StdinStream, sh
+from cuprum import ConsumerCancelledError, RunOutputOptions, StdinStream, sh
 from cuprum._process_exit import _NON_REAPING_PROBE_AVAILABLE, _child_was_collected
 from cuprum.unittests._wait4_process_support import _abandon
 from tests.helpers.catalogue import python_builder as build_python_builder
@@ -220,6 +220,151 @@ async def _drive_failure(case: _FailureCase) -> None:
         _only_started_pid(case.events, case.entry_point),
         f"{case.entry_point} after a callback failure",
     )
+
+
+async def _drive_cancelled_consumer(case: _FailureCase) -> ConsumerCancelledError:
+    """Drive one entry point and return its stream-labelled cancellation."""
+
+    async def invoke() -> None:
+        """Drive the selected entry point to a cancelled consumer."""
+        if case.entry_point == "run":
+            await case.command.run(output=case.output)
+            return
+        async for _event in case.command.lines(output=case.output):
+            pass
+
+    with pytest.raises(ConsumerCancelledError) as caught:
+        await invoke()
+    error = caught.value
+    assert not isinstance(error, asyncio.CancelledError), (
+        f"{case.entry_point} must not hand the caller a cancellation it did not issue"
+    )
+    left = pending_tasks()
+    assert not left, (
+        f"{case.entry_point} must leave no unfinished owned tasks behind, got "
+        f"{sorted(task.get_name() for task in left)!r}"
+    )
+    _assert_child_already_reaped(
+        _only_started_pid(case.events, case.entry_point),
+        f"{case.entry_point} after a cancelled consumer",
+    )
+    return error
+
+
+@pytest.mark.parametrize("entry_point", ["run", "lines"])
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("callback_kind", ["sync", "async"])
+def test_cancelled_output_callback_ends_the_run(
+    entry_point: str,
+    stream: str,
+    callback_kind: str,
+) -> None:
+    """A callback that ends cancelled is an early failure, not a hang."""
+    events: list[ExecEvent] = []
+    case = _FailureCase(
+        command=build_python_builder()("-c", _CHILD_SCRIPT.format(stream=stream)),
+        output=RunOutputOptions(
+            on_line=_failing_callback(callback_kind, asyncio.CancelledError()),
+        ),
+        entry_point=entry_point,
+        sentinel=asyncio.CancelledError(),
+        events=events,
+    )
+    try:
+        with sh.observe(events.append):
+            try:
+                error = asyncio.run(
+                    asyncio.wait_for(
+                        _drive_cancelled_consumer(case),
+                        _WATCHDOG_S,
+                    ),
+                )
+            except TimeoutError:
+                pytest.fail(
+                    f"{entry_point} did not end within {_WATCHDOG_S}s of a "
+                    f"{callback_kind} {stream} callback ending cancelled, so it "
+                    "waited on a child that could never exit"
+                )
+        assert error.stream == stream, (
+            f"the error must name the {stream} consumer, got {error.stream!r}"
+        )
+        wait_for_process_death(
+            _only_started_pid(events, entry_point),
+            seconds=3.0,
+            context=f"{entry_point} after a cancelled {stream} callback",
+        )
+    finally:
+        _kill_leftovers(events)
+
+
+async def _cancel_after_child_start(
+    command: SafeCmd,
+    entry_point: str,
+    events: list[ExecEvent],
+) -> None:
+    """Start one entry point, wait for its child, then cancel the run."""
+    started = asyncio.Event()
+
+    def observe(event: ExecEvent) -> None:
+        """Record every event and report the child's start."""
+        events.append(event)
+        if event.phase == "start":
+            started.set()
+
+    async def invoke() -> None:
+        """Run the selected entry point until the caller cancels it."""
+        if entry_point == "run":
+            await command.run()
+            return
+        async for _event in command.lines():
+            pass
+
+    with sh.observe(observe):
+        task = asyncio.ensure_future(invoke())
+        try:
+            await asyncio.wait_for(started.wait(), _WATCHDOG_S)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    assert not pending_tasks(), (
+        f"{entry_point} must leave no unfinished owned tasks after a caller "
+        f"cancellation, got {sorted(task.get_name() for task in pending_tasks())!r}"
+    )
+    _assert_child_already_reaped(
+        _only_started_pid(events, f"{entry_point} after a caller cancellation"),
+        f"{entry_point} after a caller cancellation",
+    )
+
+
+@pytest.mark.parametrize("entry_point", ["run", "lines"])
+def test_a_caller_cancellation_still_reaches_the_caller(entry_point: str) -> None:
+    """Cancelling the run itself stays a ``CancelledError`` and reaps the child."""
+    events: list[ExecEvent] = []
+    command = build_python_builder()("-c", _CHILD_SCRIPT.format(stream="stdout"))
+    try:
+        try:
+            asyncio.run(
+                asyncio.wait_for(
+                    _cancel_after_child_start(command, entry_point, events),
+                    _WATCHDOG_S,
+                ),
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"{entry_point} did not settle within {_WATCHDOG_S}s of a "
+                "caller cancellation, so the child was left running"
+            )
+        wait_for_process_death(
+            _only_started_pid(events, entry_point),
+            seconds=3.0,
+            context=f"{entry_point} after a caller cancellation",
+        )
+    finally:
+        _kill_leftovers(events)
 
 
 def _kill_leftovers(events: cabc.Sequence[ExecEvent]) -> None:

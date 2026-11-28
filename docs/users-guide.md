@@ -464,6 +464,19 @@ own teardown runs — for a payload, before the pipe close that can leave that
 teardown waiting — so a run that ends during the teardown still reports it
 rather than the callback's error; the callback's error is then not reported.
 
+A consumer can also end **cancelled** rather than failed: an output callback
+may raise `asyncio.CancelledError`, or something may cancel the consumer task
+while the run is still live. That ending leaves the child's pipe undrained
+exactly as a failure does, so the run ends there too. It reports
+`ConsumerCancelledError`, which carries the affected stream in its `stream`
+attribute and is deliberately not an `asyncio.CancelledError`: a caller
+cancelling the run itself still receives `CancelledError`, and neither
+`except asyncio.CancelledError` nor `asyncio.timeout` can mistake the
+consumer's ending for its own. Cuprum terminates and reaps the child on this
+route as well. Pipelines and running-command handles differ: they settle their
+readers only after the process, or every stage, has exited, so a consumer
+cancellation there is reported at finalization rather than ending the run early.
+
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
 `max_line_chars` decoded characters (64 Ki by default) for one line, and
@@ -759,6 +772,8 @@ and `capture_stderr`:
 | `BoundedCapture(max_bytes=N)` | The last `N` bytes, held in memory.                      |
 | `FileBackedCapture(...)`      | Text in memory until the threshold, then a named file.   |
 
+_Table 3: Capture policies and what each stream reports._
+
 For `run()` and pipelines, a per-stream field left at `None` inherits
 `capture`, and a per-stream value always wins for its own stream:
 `capture=True, capture_stderr=False` captures stdout in full and nothing on
@@ -937,6 +952,8 @@ stream, or that the payload is a file rather than text:
 | `owned`          | Whether this run still must remove that file. |
 | `storage_failed` | Whether the spill failed, as above.           |
 | `truncated`      | Derived: `dropped_bytes > 0`.                 |
+
+_Table 4: Fields of a captured stream record._
 
 For a kept spill, `record.read_text()` reads the path synchronously and may
 block. A memory-backed record raises `ValueError`; a missing or unreadable path
@@ -1504,7 +1521,7 @@ assert result.stdout == before.stdout == f"{Path(workdir).name}\n"
 Path(workdir).rmdir()
 ```
 
-Table 3 maps the other common `subprocess` arguments.
+Table 5 maps the other common `subprocess` arguments.
 
 | `subprocess`                             | Cuprum                                                                                            |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -1519,7 +1536,7 @@ Table 3 maps the other common `subprocess` arguments.
 | `stdout=None` (inherit the terminal)     | `output=RunOutputOptions(capture=False, echo=True)`                                               |
 | `subprocess.Popen` and `.terminate()`    | `await cmd.start()`; see [Hold a running child](#hold-a-running-child-and-decide-when-to-stop-it) |
 
-_Table 3: Where each `subprocess` argument goes in Cuprum._
+_Table 5: Where each `subprocess` argument goes in Cuprum._
 
 Note the environment row: `subprocess` replaces the child's environment with
 `env=`, whereas Cuprum layers `ExecutionContext.env` over the parent's unless
@@ -1531,27 +1548,28 @@ upgrading from Cuprum 0.1 should also read the
 
 ## Troubleshoot a run
 
-| Symptom                                                    | Check                                                                                                 |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `ImportError` or `AttributeError` for a name in this guide | An older Cuprum may be installed; see [Install Cuprum](#install-cuprum).                              |
-| `UnknownProgramError`                                      | Register the exact program in the builder's catalogue, or in the active `scoped(catalogue=...)`.      |
-| `ForbiddenProgramError`                                    | Inspect the active scope and parent allowlist; see [Two enforcement points](#two-enforcement-points). |
-| `TypeError` while building a command                       | The message names the problem: an unsupported value type, `None`, or a reserved execution option.     |
-| `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                      |
-| `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                   |
-| `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                              |
-| `ValueError` naming a redirected stream                    | See the rejected combinations in [Send a stream to a file](#send-a-stream-to-a-file-or-the-parent).   |
-| `StdinSourceError`                                         | The stdin producer failed; its own exception is chained as `__cause__`.                               |
-| `RedactionError`                                           | A redaction rule failed; nothing was exported unredacted. Check the rule it names.                    |
-| `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                     |
-| `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                  |
-| Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                             |
-| No visible output                                          | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`.             |
-| No heartbeat                                               | Supply a positive `idle_after`; output activity resets its clock.                                     |
-| Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.     |
-| No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                           |
+| Symptom                                                    | Check                                                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `ImportError` or `AttributeError` for a name in this guide | An older Cuprum may be installed; see [Install Cuprum](#install-cuprum).                                                  |
+| `UnknownProgramError`                                      | Register the exact program in the builder's catalogue, or in the active `scoped(catalogue=...)`.                          |
+| `ForbiddenProgramError`                                    | Inspect the active scope and parent allowlist; see [Two enforcement points](#two-enforcement-points).                     |
+| `TypeError` while building a command                       | The message names the problem: an unsupported value type, `None`, or a reserved execution option.                         |
+| `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                                          |
+| `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                                       |
+| `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                                                  |
+| `ValueError` naming a redirected stream                    | See the rejected combinations in [Send a stream to a file](#send-a-stream-to-a-file-or-the-parent).                       |
+| `StdinSourceError`                                         | The stdin producer failed; its own exception is chained as `__cause__`.                                                   |
+| `ConsumerCancelledError`                                   | An output consumer ended cancelled before end of stream; inspect `.stream`, and do not treat it as your own cancellation. |
+| `RedactionError`                                           | A redaction rule failed; nothing was exported unredacted. Check the rule it names.                                        |
+| `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                                         |
+| `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                                      |
+| Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                                                 |
+| No visible output                                          | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`.                                 |
+| No heartbeat                                               | Supply a positive `idle_after`; output activity resets its clock.                                                         |
+| Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.                         |
+| No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                                               |
 
-_Table 4: First checks for common execution outcomes._
+_Table 6: First checks for common execution outcomes._
 
 For the optional native extension, see
 [Choosing a stream backend](#choosing-a-stream-backend) and
@@ -2272,7 +2290,7 @@ Registrations are context-local, like the policy registrations in
 | Rust-pump routing     | `observe_pump(hook)`             | A `PumpEvent` per routing decision; see [Counting pump routing decisions](#counting-pump-routing-decisions)                                         | `PumpMetricsHook` in `cuprum.adapters.pump_metrics`                 |
 | Rust-pump hop spans   | `observe_pump_span(tracer)`      | A span per native hop; see [Rust-pump executor-hop spans](#rust-pump-executor-hop-spans)                                                            | Not applicable                                                      |
 
-_Table 5: Observation channels and their metrics adapters._
+_Table 7: Observation channels and their metrics adapters._
 
 Echo and stream-operation hooks are synchronous and should return `None`.
 Cuprum closes a returned native coroutine without awaiting it; it does not
@@ -3644,7 +3662,7 @@ aggregate fields, and nothing else:
 | `operation_count`  | `int`   | Completed operations in the group.                               |
 | `duration_seconds` | `float` | Sum of monotonic operation durations, in seconds, for the group. |
 
-_Table 6: Aggregate fields of each `stream_telemetry` group._
+_Table 8: Aggregate fields of each `stream_telemetry` group._
 
 The telemetry observes only the pure-Python drain and pipeline-transfer paths. A
 `pipeline_transfer` group may therefore be absent when the Rust backend
@@ -3694,16 +3712,16 @@ Each fall-back is recorded at `DEBUG` on the `cuprum._pipeline_streams` logger
 with a `cuprum_action` of `rust_pump_declined` and one of these `cuprum_reason`
 values:
 
-| `cuprum_reason`             | Meaning                                                                                        |
-| --------------------------- | ---------------------------------------------------------------------------------------------- |
-| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over    |
-| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, so it was left unpaused |
-| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor        |
-| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                   |
-| `duplicate_fds_unavailable` | a transport descriptor closed before the worker's copy of it could be made                     |
-| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use      |
+| `cuprum_reason`             | Meaning                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over                                                       |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, so it was left unpaused                                                    |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor                                                           |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                                                                      |
+| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be opened or duplicated — for example, it had closed, or the process ran out of descriptors |
+| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use                                                         |
 
-_Table 7: Reasons an inter-stage hop declines the Rust pump._
+_Table 9: Reasons an inter-stage hop declines the Rust pump._
 
 These records sit at `DEBUG` rather than `WARNING` because a fall-back is a
 routing decision, not a fault; on platforms where the fast path does not apply,
@@ -3925,7 +3943,7 @@ assert all(name.startswith("cuprum_rust_pump_") for name in pump_counters)
 | `cuprum_rust_pump_handoff_total`               | `outcome` | a Rust writer-resource hand-off outcome was reached              |
 | `cuprum_rust_pump_held_pairs`                  | none      | a hand-off acquired or released the pair held across a drain     |
 
-_Table 8: Metrics emitted by `PumpMetricsHook`._
+_Table 10: Metrics emitted by `PumpMetricsHook`._
 
 `cuprum_rust_pump_held_pairs` is a gauge rather than a counter: it is set to
 the number of descriptor pairs currently held across pending buffered drains. A
@@ -4011,8 +4029,8 @@ raw-handle rejection exposed by the Python shim. `outcome` is the only label on
 this counter. Descriptor numbers, Windows handle values, errno values,
 exception types, exception messages, and tracebacks never become metric labels.
 
-The `reason` label takes exactly the values in Table 7, plus `unknown`, and
-nothing else. Table 7's values are published as the `RustPumpDeclineReason`
+The `reason` label takes exactly the values in Table 9, plus `unknown`, and
+nothing else. Table 9's values are published as the `RustPumpDeclineReason`
 enum and `unknown` as `cuprum.adapters.pump_metrics.UNKNOWN_DECLINE_REASON`, so
 a dashboard can enumerate the series it will see:
 

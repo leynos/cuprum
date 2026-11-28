@@ -210,6 +210,7 @@ PYTEST_TARGETS ?= cuprum/unittests/test_*.py \
   scripts/tests/test_check_fmt_import_order_contract.py \
   scripts/tests/test_install_pypy312.py \
   scripts/tests/test_prepare_cargo_state.py \
+  scripts/tests/test_pytest_*.py \
   scripts/tests/test_rust_lint_baseline_contract.py \
   scripts/tests/test_sync_tool_pins.py \
   tests/behaviour/test_[a-h]*.py \
@@ -249,6 +250,10 @@ EXTENSION_TEST_TARGETS ?= cuprum/unittests/test_rust_streams.py \
   tests/behaviour/test_rust_extension_behaviour.py \
   tests/behaviour/test_stream_backend_pipeline.py
 shell_quote = '$(subst ','"'"',$(1))'
+# Standard `make` idioms for emitting a literal space, needed to join and split
+# selector lists into the layout's `|`- and `+`-separated form.
+empty :=
+space := $(empty) $(empty)
 UV_ENV = UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools
 UV ?= uv
 
@@ -286,6 +291,28 @@ RUFF = $(RUFF_ENV) $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ruff==$(R
 TY_VERSION ?= 0.0.74
 TY = $(UV_RUN_ENV) uv tool run --from $(call shell_quote,ty==$(TY_VERSION)) ty
 PYTEST = $(UV_RUN_ENV) uv run pytest
+# Pin the colour environment for every pytest session `make test` runs. CPython
+# 3.14 and later colour `argparse` help whenever the environment asks for it, so
+# a test that compares captured help text with plain prose fails on the escape
+# sequences, and `make test` stops at the first failing pytest session, hiding
+# the rest of the suite. `NO_COLOR=1` covers tools that read the convention,
+# including an interpreter started with `-E`, which ignores `PYTHON_COLORS`;
+# `PYTHON_COLORS=0` is CPython's narrowest control and outranks both. `PY_COLORS`
+# is unset rather than zeroed because pytest gives it the highest precedence.
+# The prefix sits outside `$(PYTEST)` so a command-line `PYTEST` override keeps
+# the policy. Each recipe writes the separating `;` itself, leaving the variable
+# without a trailing one, so the prologue is its own shell command: the recipe
+# readers in tests/helpers then still see `$(PYTEST)` as the program the suite
+# invokes rather than a control prefix glued to it. Pass `PYTEST_COLOUR_ENV=` on
+# the command line to opt out. See "Colour environment for the test gate" in
+# docs/developers-guide.md.
+PYTEST_COLOUR_ENV = unset FORCE_COLOR CLICOLOR_FORCE PY_COLORS; export NO_COLOR=1 PYTHON_COLORS=0
+# The recipes read this name rather than the policy directly. An empty override
+# (`PYTEST_COLOUR_ENV=`) is the documented opt-out, and the `;` each recipe
+# writes would otherwise start a command list: `:` is the shell's no-op, so the
+# opt-out runs the gate instead of stopping it with a syntax error. Keeping the
+# name also means the recipe text still shows one command before the loop.
+PYTEST_COLOUR_COMMAND = $(if $(strip $(PYTEST_COLOUR_ENV)),$(PYTEST_COLOUR_ENV),:)
 # Interrogate the whole Python estate, not only the production package: tests,
 # benchmarks, scripts, and the root conftest document their definitions too.
 # The [tool.interrogate] section in pyproject.toml excludes overload signatures,
@@ -633,14 +660,39 @@ makeutil: ## Verify the Makefile parser used by contract tests
 test: test-selection test-python test-rust ## Run the Python and Rust suites sequentially
 
 test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
-	@for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
+	@$(PYTEST_COLOUR_COMMAND); for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) $(PYTEST_GROUPED_DESELECT) "$$@" || exit $$?; \
 	done
-	@set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
+	@$(PYTEST_COLOUR_COMMAND); set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
 	if [ "$$#" -gt 0 ]; then \
 	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
 	fi
+
+# The layout runner expresses the same selection as `test-python`, so #607 can
+# compare groupings without changing what runs. `PYTEST_LAYOUT_BASELINE` is the
+# recipe above written as data: one `+`-joined group per individual entry, each
+# carrying the grouped modules' deselections, then one group for the grouped
+# command. `PYTEST_LAYOUT_GROUPS` is empty until a candidate is qualified.
+#
+# Both are rendered from the existing selectors rather than restated, so this
+# cannot drift into a second source of truth for what the suite collects.
+PYTEST_LAYOUT ?= baseline
+PYTEST_LAYOUT_RUNNER ?= scripts/pytest_batches.py
+PYTEST_LAYOUT_BASELINE ?= $(subst $(space),|,$(strip   $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),    $(target)$(subst $(space),,$(foreach skip,$(PYTEST_GROUPED_TARGETS),+-$(skip))))  $(if $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)),    $(subst $(space),+,$(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)))+!loadgroup)))
+PYTEST_LAYOUT_GROUPS ?=
+PYTEST_PARALLEL_TARGETS ?=
+PYTEST_PARALLEL_WORKERS ?= 2
+
+# The opt-in route. It exists so a candidate layout can be run on the same
+# commit as its control; it is not part of `test` or of any default target.
+test-python-layout: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite in $(PYTEST_LAYOUT)
+	CUPRUM_PYTEST_LAYOUT_BASELINE="$(PYTEST_LAYOUT_BASELINE)" \
+	 CUPRUM_PYTEST_LAYOUT_GROUPS="$(PYTEST_LAYOUT_GROUPS)" \
+	 RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(UV_RUN_ENV) uv run python $(PYTEST_LAYOUT_RUNNER) run \
+	  --layout $(call shell_quote,$(PYTEST_LAYOUT)) \
+	  --workers $(PYTEST_WORKERS) \
+	  $(if $(strip $(PYTEST_PARALLEL_TARGETS)),--parallel $(call shell_quote,$(PYTEST_PARALLEL_TARGETS)))
 
 # `PYTEST_TARGETS` is the selector that decides what `test-python` collects, so
 # every assertion about it lives in a module *that selector collects* — and a
@@ -649,7 +701,7 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 # prerequisite of both routes, so the selector's agreement with the module
 # population is settled before the loop that depends on it.
 test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against the module population
-	@$(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
+	@$(PYTEST_COLOUR_COMMAND); $(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
 
 # The scenario half of the harness: it runs the real `changes` job under `act`
 # against a throwaway repository, one scenario at a time. It is opt-in because

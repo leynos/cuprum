@@ -16,21 +16,26 @@ raising ``on_line`` callback ends the task draining the output, nothing reads
 the pipe, and a child that keeps writing blocks on a full pipe rather than
 exiting — so the exit the coordinator waits for never arrives.
 
-The resolution is deliberately narrow. A writer or consumer that *finishes*
-first is the ordinary case — a producer exhausted, a stream closed — and the
-run continues to the child's exit as it always did. Only a task that *failed*
-is an outcome, and the exit wait is then cancelled, which is itself the
-termination: ``_wait_for_exit_code``'s cancellation handler escalates through
-``_terminate_all_shielded``. No termination policy is restated here.
+The resolution is deliberately narrow. A writer that *finishes* first, or a
+consumer that reaches end of stream, is the ordinary case, and the run
+continues to the child's exit as it always did. A task that *failed* is an
+outcome, and so is a consumer that ended cancelled or returned while preserving
+a partial capture: in either case its pipe is undrained, so waiting for the
+exit would hang exactly as the #551 failure did. The exit wait is then
+cancelled, which is itself the termination: ``_wait_for_exit_code``'s
+cancellation handler escalates through ``_terminate_all_shielded``. No
+termination policy is restated here.
 
 The precedence between the early-failure sources is state-based and fixed, so a
 run with several failing tasks reports the same one every time: a settled exit
 wins outright, then the stdin writer, then the stream consumers in
 stdout-then-stderr order. The consumer that failed first is *not* tracked,
 because ``asyncio.wait`` reports a set rather than an order; the stream order
-is the deterministic choice instead. This module only *selects* the failure.
-Settling the tasks it reports on is its callers' work, through the
-reconciliation each already performs.
+is the deterministic choice instead. What a settled consumer's outcome *means*,
+and the post-exit wait that classifies it, is
+``cuprum._subprocess_task_outcomes``'s; this module only *selects* among the
+outcomes those helpers report. Settling the tasks it reports on is its callers'
+work, through the reconciliation each already performs.
 
 The precedence is read twice, and the second read is the writer's alone. A
 stdin writer raises before its cleanup releases the pipe, so it can still be
@@ -49,96 +54,24 @@ starts unwinding, and precedence reads that publication before the task.
 from __future__ import annotations
 
 import asyncio
-import dataclasses as dc
 import typing as typ
 
 from cuprum._process_lifecycle import _shielded_cleanup
+from cuprum._subprocess_task_outcomes import (
+    _await_consumer_outcomes as _await_consumer_outcomes,
+)
+from cuprum._subprocess_task_outcomes import (
+    _consumer_failure as _consumer_failure,
+)
+from cuprum._subprocess_task_outcomes import (
+    _stdin_writer_failure as _stdin_writer_failure,
+)
+from cuprum._subprocess_task_outcomes import (
+    _StdinWriterLog as _StdinWriterLog,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-
-
-@dc.dataclass(slots=True)
-class _StdinWriterLog:
-    """The failure a stdin writer published before its own cleanup ran.
-
-    A writer raises its failure and then unwinds, and that unwinding takes
-    time: the producer's finalizer is the caller's code, run inside a window of
-    its own. Asking the task during that window answers "not yet", so
-    precedence would fall through to the consumer failure the writer's own
-    failure caused — an unrecognized ``encoding`` fails the writer and both
-    decoders, and the decoders settle first. Writing before the raise and
-    reading from the race is one hand-off, not shared state.
-    """
-
-    error: BaseException | None = None
-
-    def publish(self, error: BaseException) -> None:
-        """Publish *error* as this writer's failure before it unwinds."""
-        self.error = error
-
-
-def _stdin_writer_failure(task: asyncio.Task[object] | None) -> BaseException | None:
-    """Return one monitored task's own failure, or ``None`` when it did not fail.
-
-    A task that is still running has not failed yet, and a cancelled one was
-    torn down rather than broken. Both conditions are checked before
-    :meth:`asyncio.Task.exception` is called, which would itself raise
-    :class:`asyncio.CancelledError` on a cancelled task — so the order here is
-    the contract, not a style choice.
-
-    The name predates the consumers it now also answers for; every monitored
-    task, stdin writer and stream reader alike, is asked the same question.
-
-    Parameters
-    ----------
-    task : asyncio.Task[object] | None
-        The run's stdin writer or one of its stream consumers, if it has one.
-
-    Returns
-    -------
-    BaseException | None
-        The exception the task ended on, or ``None`` for a task that succeeded,
-        is still running, was cancelled, or does not exist.
-    """
-    # Written as two guards rather than one chained condition so each rejection
-    # reads as the distinct contract it is: no task, versus a task whose
-    # outcome is not yet or not a failure.
-    if task is None:
-        return None
-    if not task.done():
-        return None
-    if task.cancelled():
-        return None
-    return task.exception()
-
-
-def _consumer_failure(
-    consumers: cabc.Sequence[asyncio.Task[object] | None],
-) -> BaseException | None:
-    """Return the first failed consumer's exception, in stream order.
-
-    stdout is checked before stderr so a run with two failing readers reports
-    the same one on every attempt. ``asyncio.wait`` reports a *set* of settled
-    tasks, which carries no completion order, so the pair's own order is the
-    only deterministic tie-break available.
-
-    Parameters
-    ----------
-    consumers : collections.abc.Sequence[asyncio.Task[object] | None]
-        The run's stream consumers in stream order. A slot cuprum holds no pipe
-        for is ``None`` and is skipped.
-
-    Returns
-    -------
-    BaseException | None
-        The first consumer's own failure, or ``None`` when none has failed.
-    """
-    for task in consumers:
-        failure = _stdin_writer_failure(task)
-        if failure is not None:
-            return failure
-    return None
 
 
 def _writer_failure(
@@ -263,6 +196,12 @@ async def _await_first_settlement(
     The caller's cancellation is handed to the exit wait before it propagates:
     that wait owns the child's termination, and an abandoned wait would leave
     the child running behind the caller's teardown.
+
+    This arm is deliberately blind to *what* was cancelled. A cancellation of
+    this wait is the supervisor's own cancellation, so it must stay an
+    :class:`asyncio.CancelledError` and must not be reclassified as a consumer
+    failure. A consumer that ends cancelled is observed separately, after the
+    wait returns, while the supervisor is still live.
     """
     try:
         await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -300,9 +239,21 @@ def _unfinished(
     pending: set[asyncio.Task[object]],
     exit_task: asyncio.Task[tuple[int, float]],
 ) -> set[asyncio.Task[object]]:
-    """Drop the tasks that settled without failing; keep the exit wait."""
-    # The finished ones would otherwise make the next wait return at once, and
-    # the exit wait stays whatever its state because the loop reads it next.
+    """Drop the tasks that settled quietly; keep the exit wait.
+
+    This runs *after* :func:`_first_early_failure` has read the same settled
+    tasks, so a consumer that ended cancelled or short of end of stream has
+    already been raised as the run's outcome and never reaches here. What is
+    left to drop is a producer exhausted or a stream that reached EOF: the
+    ordinary way a stream ends, which must not make the next wait return at
+    once. The exit wait stays whatever its state because the loop reads it
+    next.
+
+    Returns
+    -------
+    set[asyncio.Task[object]]
+        The tasks still worth waiting on, with the exit wait always present.
+    """
     return {task for task in pending if task is exit_task or not task.done()}
 
 
@@ -317,9 +268,16 @@ async def _await_exit_or_writer_failure(
 
     A task that *fails* is the run's outcome even while the child runs: the
     exit wait is cancelled, which is itself the termination, and the failure is
-    raised by :func:`_stop_on_early_failure`. A task that merely *finishes*
-    first changes nothing, because a producer exhausting its chunks or a
-    stream reaching EOF is the ordinary way a stream ends.
+    raised by :func:`_stop_on_early_failure`. A consumer that ended
+    *cancelled* is such an outcome too, reported as
+    :class:`~cuprum._stream_consumer_errors.ConsumerCancelledError` for its
+    stream: the pipe is undrained either way, so waiting for an exit that
+    cannot arrive would hang the run exactly as the #551 failure did. So is a
+    consumer that returned while preserving a partial capture, which
+    :attr:`~cuprum._stream_drain_finish._CapturedDrain.reached_eof` marks. A
+    task that merely *finishes* first changes nothing, because a producer
+    exhausting its chunks or a stream reaching EOF is the ordinary way a
+    stream ends.
 
     The precedence is fixed, so the reported failure does not depend on which
     task the loop happened to settle first: a settled exit wins, then the stdin
@@ -329,7 +287,9 @@ async def _await_exit_or_writer_failure(
 
     Consumer tasks are neither cancelled nor gathered here: they belong to the
     caller, whose reconciliation settles them, and doing it here too would
-    settle them twice.
+    settle them twice. The supervisor's own cancellation is not one of these
+    outcomes: it is forwarded to the exit wait and re-raised as a
+    ``CancelledError``, so a caller still sees the cancellation it issued.
 
     ``exit_wait`` arrives constructed: each caller resolves the wait helper
     from its own module namespace, where the test seams replace it.
@@ -369,7 +329,9 @@ async def _await_exit_or_writer_failure(
             # The exit wins outright, even over a sibling that failed in the
             # same step: its own result or exception is this call's outcome.
             return await exit_task
-        failure = _first_early_failure(stdin_task, monitored, stdin_log=stdin_log)
+        # The *original* slots, not the filtered tuple: the position is what
+        # labels a cancelled consumer with its stream.
+        failure = _first_early_failure(stdin_task, consumers, stdin_log=stdin_log)
         if failure is not None:
             # Raised outside any ``try`` on purpose: a handler would catch
             # this very raise and re-raise only by accident of ordering.
@@ -379,6 +341,7 @@ async def _await_exit_or_writer_failure(
 
 __all__ = [
     "_StdinWriterLog",
+    "_await_consumer_outcomes",
     "_await_exit_or_writer_failure",
     "_cancel_exit_wait",
     "_consumer_failure",
