@@ -244,6 +244,11 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   in isolation and the test gate rerun exited 0. Hosted CI run 46083744425 is
   green and CodeScene passes. The later test-strengthening and plan-record
   commit is covered by the final gate run recorded in the delivery ledger.
+- [x] Regression red/green evidence: with the unrecorded-settled pass disabled,
+  seven of the eight new regressions fail (the already-settled ordering pin
+  passes, because it does not depend on that pass); restoring the pass returns
+  all eight to green. The probe was not committed. The final candidate head's
+  six-gate run is recorded in the delivery ledger and the PR conversation.
 - [x] First confirmation: both assessments reported the defects resolved on
   `512b20a12`, and the plan assessment asked for the ordering test to settle
   stderr first and for this plan's gate record to name the repaired head. Both
