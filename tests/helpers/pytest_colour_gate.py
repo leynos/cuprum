@@ -51,6 +51,18 @@ PINNED_VARIABLES: typ.Final = {"NO_COLOR": "1", "PYTHON_COLORS": "0"}
 SENTINEL_NAME: typ.Final = "CUPRUM_COLOUR_SENTINEL"
 SENTINEL_VALUE: typ.Final = "kept"
 
+#: The hostile colour environment the gate is driven under. Every value asks for
+#: colour, and `NO_COLOR` is deliberately empty so it is not the control that
+#: happens to switch the others off. The opt-out case asserts this mapping is
+#: inherited untouched in every session and child.
+HOSTILE_COLOUR_ENVIRONMENT: typ.Final = {
+    "FORCE_COLOR": "1",
+    "PYTHON_COLORS": "1",
+    "PY_COLORS": "1",
+    "CLICOLOR_FORCE": "1",
+    "NO_COLOR": "",
+}
+
 #: A driven run only spawns the stub, so the budget is generous rather than
 #: tight; the test's own pytest-timeout marker sits above it.
 GATE_TIMEOUT_SECONDS: typ.Final = 120
@@ -273,14 +285,10 @@ def _gate_environment(log: Path, home: Path) -> dict[str, str]:
         for key, value in os.environ.items()
         if key not in _caller_owned_names()
     }
+    environment.update(HOSTILE_COLOUR_ENVIRONMENT)
     environment.update({
         "HOME": str(home),
         "PYTEST_COLOUR_LOG": str(log),
-        "FORCE_COLOR": "1",
-        "PYTHON_COLORS": "1",
-        "PY_COLORS": "1",
-        "CLICOLOR_FORCE": "1",
-        "NO_COLOR": "",
         SENTINEL_NAME: SENTINEL_VALUE,
     })
     return environment

@@ -47,6 +47,10 @@ EXPECTED_CLI_OPTIONS = (
 )
 REQUIRED_CLI_OPTIONS = ("--repository", "--workflow", "--artifact-name", "--output-dir")
 ARGUMENT_ERROR_EXIT_CODE = 2
+#: The colour controls CPython and pytest read. Every case starts with all of
+#: them removed, so its name describes the environment it exercises even though
+#: `make test` exports the gate's policy into this process.
+_COLOUR_VARIABLES = ("FORCE_COLOR", "PYTHON_COLORS", "PY_COLORS", "NO_COLOR")
 #: Ambient colour settings the help case must be immune to. CPython 3.14 and
 #: later colour ``argparse`` help whenever the environment asks for it, and the
 #: coloured renderer consumes the backticks around ``main`` as markup, so the
@@ -84,6 +88,8 @@ def test_cli_help_documents_every_option(
     ambient_colour: cabc.Mapping[str, str],
 ) -> None:
     """``--help`` should exit cleanly and describe each supported option."""
+    for variable in _COLOUR_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
     for variable, value in ambient_colour.items():
         monkeypatch.setenv(variable, value)
     _pin_plain_help(monkeypatch)

@@ -24,6 +24,7 @@ import pytest
 
 from tests.helpers.pytest_colour_gate import (
     GATE_TIMEOUT_SECONDS,
+    HOSTILE_COLOUR_ENVIRONMENT,
     assert_policy,
     drive_gate,
     gate_skip_reason,
@@ -87,8 +88,10 @@ def test_the_documented_opt_out_keeps_the_gate_runnable(tmp_path: Path) -> None:
     The recipes separate the prologue from their first command with `;`, so an
     empty expansion would leave a leading separator and stop the gate before
     pytest starts. The recorded sessions prove the gate ran, and the inherited
-    `FORCE_COLOR` proves the opt-out actually skipped the policy rather than
-    applying it and merely surviving.
+    hostile environment proves the opt-out actually skipped the policy rather
+    than applying it and merely surviving. Every session and its ordinary child
+    is checked, because a fallback wired into only one recipe would still be
+    caught by that recipe's own record.
     """
     records, _selectors = drive_gate(tmp_path, override_pytest=False, opt_out=True)
 
@@ -96,7 +99,11 @@ def test_the_documented_opt_out_keeps_the_gate_runnable(tmp_path: Path) -> None:
         "the opt-out must still run the bootstrap, individual and grouped "
         f"sessions; recorded {len(records)}: {[r['argv'] for r in records]!r}"
     )
-    assert records[0]["environment"]["FORCE_COLOR"] == "1", (
-        "the opt-out must leave the caller's colour environment in place; got "
-        f"{records[0]['environment']['FORCE_COLOR']!r}"
-    )
+    for index, record in enumerate(records):
+        for surface in ("environment", "child"):
+            observed = record[surface]
+            for variable, value in HOSTILE_COLOUR_ENVIRONMENT.items():
+                assert observed[variable] == value, (
+                    f"the opt-out must leave session {index} {surface} with the "
+                    f"caller's {variable}={value!r}; got {observed[variable]!r}"
+                )
