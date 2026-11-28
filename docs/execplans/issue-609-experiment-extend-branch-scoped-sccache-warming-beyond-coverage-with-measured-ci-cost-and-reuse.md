@@ -185,6 +185,19 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `99aebe676` — all six gates pass in a
       clean environment with the ambient tool order. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-99aebe676.log`.
+- [x] 28 November 2026: the paused review's open threads and assessment were
+      addressed. The upload step runs with `always()`, so a cancelled attempt
+      keeps the records it already wrote. The extension job declares
+      `DEV_FAST_TOOLCHAIN`. The writer normalizes an out-of-vocabulary
+      `selected_backend` and validates before appending, and the reader treats
+      a non-finite transfer or payback ratio as unknown rather than writing
+      `Infinity` or raising `OverflowError`. The gate fixture's
+      `selected_backend` matches its backend, and the developers' guide
+      documents the namespace, backend output, evidence tooling, and shared
+      expression helpers.
+- [x] 28 November 2026: M5 re-gates at `fb1da7d8b` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-fb1da7d8b.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
