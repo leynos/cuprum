@@ -78,3 +78,25 @@ def test_every_python_gate_session_pins_colour(
     for index, record in enumerate(records):
         assert_policy(record["environment"], subject=f"session {index} environment")
         assert_policy(record["child"], subject=f"session {index} child environment")
+
+
+@pytest.mark.timeout(GATE_TIMEOUT_SECONDS + 30)
+def test_the_documented_opt_out_keeps_the_gate_runnable(tmp_path: Path) -> None:
+    """`PYTEST_COLOUR_ENV=` must skip the policy without breaking the shell.
+
+    The recipes separate the prologue from their first command with `;`, so an
+    empty expansion would leave a leading separator and stop the gate before
+    pytest starts. The recorded sessions prove the gate ran, and the inherited
+    `FORCE_COLOR` proves the opt-out actually skipped the policy rather than
+    applying it and merely surviving.
+    """
+    records, _selectors = drive_gate(tmp_path, override_pytest=False, opt_out=True)
+
+    assert len(records) == 3, (
+        "the opt-out must still run the bootstrap, individual and grouped "
+        f"sessions; recorded {len(records)}: {[r['argv'] for r in records]!r}"
+    )
+    assert records[0]["environment"]["FORCE_COLOR"] == "1", (
+        "the opt-out must leave the caller's colour environment in place; got "
+        f"{records[0]['environment']['FORCE_COLOR']!r}"
+    )

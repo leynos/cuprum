@@ -245,7 +245,11 @@ def read_calls(log: Path) -> list[UvCall]:
 
 
 def _gate_selections(
-    bin_directory: Path, selectors: SelectorFiles, *, override_pytest: bool
+    bin_directory: Path,
+    selectors: SelectorFiles,
+    *,
+    override_pytest: bool,
+    opt_out: bool,
 ) -> list[str]:
     """Return the command-line assignments that stub the recipe's tools."""
     tool_path = f"{bin_directory}{os.pathsep}{os.environ.get('PATH', '')}"
@@ -257,6 +261,8 @@ def _gate_selections(
     ]
     if override_pytest:
         selections.append(f"PYTEST={bin_directory / 'uv'} run pytest")
+    if opt_out:
+        selections.append("PYTEST_COLOUR_ENV=")
     return selections
 
 
@@ -325,7 +331,7 @@ def _run_gate(selections: list[str], environment: dict[str, str]) -> None:
 
 
 def drive_gate(
-    tmp_path: Path, *, override_pytest: bool
+    tmp_path: Path, *, override_pytest: bool, opt_out: bool = False
 ) -> tuple[list[UvCall], SelectorFiles]:
     """Drive `test-python` with stubbed tools under a hostile colour environment.
 
@@ -338,6 +344,10 @@ def drive_gate(
         Whether to replace `PYTEST` on the command line with the stub. The
         policy prefix sits outside that variable, so both cases must produce
         the same reports.
+    opt_out : bool
+        Whether to pass the documented `PYTEST_COLOUR_ENV=` opt-out. The
+        recipes must still run every session, with the hostile environment
+        inherited rather than replaced.
 
     Returns
     -------
@@ -354,7 +364,7 @@ def drive_gate(
     home.mkdir()
     selectors = write_selectors(tmp_path)
     selections = _gate_selections(
-        bin_directory, selectors, override_pytest=override_pytest
+        bin_directory, selectors, override_pytest=override_pytest, opt_out=opt_out
     )
     _run_gate(selections, _gate_environment(log, home))
     return read_calls(log), selectors

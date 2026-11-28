@@ -302,6 +302,12 @@ PYTEST = $(UV_RUN_ENV) uv run pytest
 # the command line to opt out. See "Colour environment for the test gate" in
 # docs/developers-guide.md.
 PYTEST_COLOUR_ENV = unset FORCE_COLOR CLICOLOR_FORCE PY_COLORS; export NO_COLOR=1 PYTHON_COLORS=0
+# The recipes read this name rather than the policy directly. An empty override
+# (`PYTEST_COLOUR_ENV=`) is the documented opt-out, and the `;` each recipe
+# writes would otherwise start a command list: `:` is the shell's no-op, so the
+# opt-out runs the gate instead of stopping it with a syntax error. Keeping the
+# name also means the recipe text still shows one command before the loop.
+PYTEST_COLOUR_COMMAND = $(if $(strip $(PYTEST_COLOUR_ENV)),$(PYTEST_COLOUR_ENV),:)
 # Interrogate the whole Python estate, not only the production package: tests,
 # benchmarks, scripts, and the root conftest document their definitions too.
 # The [tool.interrogate] section in pyproject.toml excludes overload signatures,
@@ -649,11 +655,11 @@ makeutil: ## Verify the Makefile parser used by contract tests
 test: test-selection test-python test-rust ## Run the Python and Rust suites sequentially
 
 test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python suite
-	@$(PYTEST_COLOUR_ENV); for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
+	@$(PYTEST_COLOUR_COMMAND); for pattern in $(foreach target,$(PYTEST_INDIVIDUAL_TARGETS),$(call shell_quote,$(target))); do \
 	  set -- $$pattern; [ -e "$$1" ] || continue; \
 	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) $(PYTEST_GROUPED_DESELECT) "$$@" || exit $$?; \
 	done
-	@$(PYTEST_COLOUR_ENV); set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
+	@$(PYTEST_COLOUR_COMMAND); set -- $(filter $(PYTEST_GROUPED_TARGETS),$(PYTEST_SELECTED_TARGETS)); \
 	if [ "$$#" -gt 0 ]; then \
 	  RUSTFLAGS="$(PYTEST_RUSTFLAGS)" $(PYTEST) -v -n $(PYTEST_WORKERS) --dist loadgroup "$$@" || exit $$?; \
 	fi
@@ -665,7 +671,7 @@ test-python: test-selection build uv $(VENV_TOOLS) makeutil ## Run the Python su
 # prerequisite of both routes, so the selector's agreement with the module
 # population is settled before the loop that depends on it.
 test-selection: uv $(VENV_TOOLS) build makeutil ## Check the selector against the module population
-	@$(PYTEST_COLOUR_ENV); $(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
+	@$(PYTEST_COLOUR_COMMAND); $(PYTEST) tests/test_ci_test_selection_contract.py || exit $$?
 
 # The scenario half of the harness: it runs the real `changes` job under `act`
 # against a throwaway repository, one scenario at a time. It is opt-in because
