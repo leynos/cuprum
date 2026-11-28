@@ -21,7 +21,7 @@ import pytest
 
 import cuprum.unittests._process_group_ownership_support as _ownership_support
 from cuprum import _group_teardown, _process_group
-from cuprum._process_group import _POST_KILL_SETTLEMENT_S, _GroupProbe
+from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
@@ -374,28 +374,60 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
 
 
 @pytest.mark.parametrize(
-    ("probe", "expected"),
+    ("observed", "is_leader_running", "expected"),
     [
-        pytest.param(_GroupProbe.MEMBERS, True, id="members"),
-        pytest.param(_GroupProbe.EMPTY, False, id="empty"),
-        pytest.param(_GroupProbe.UNSIGNALABLE, False, id="unsignalable"),
+        pytest.param(
+            ExitObservation.RUNNING,
+            True,
+            ((4242, True),),
+            id="running-group",
+        ),
+        pytest.param(
+            ExitObservation.EXITED,
+            True,
+            ((4242, False), (4243, False)),
+            id="exited-leader-live",
+        ),
+        pytest.param(
+            ExitObservation.EXITED,
+            False,
+            ((4243, False),),
+            id="exited-leader-reaped",
+        ),
+        pytest.param(
+            ExitObservation.UNOBSERVABLE,
+            True,
+            ((4242, False), (4243, False)),
+            id="unobservable-leader-live",
+        ),
     ],
 )
-def test_group_cleanup_falls_back_to_the_probe_when_observation_is_unavailable(
+def test_cleanup_never_signals_a_group_it_cannot_anchor(
     monkeypatch: pytest.MonkeyPatch,
-    probe: _GroupProbe,
-    expected: bool,
+    observed: ExitObservation,
+    is_leader_running: bool,
+    expected: tuple[tuple[int, bool], ...],
 ) -> None:
-    """An unobservable descendant is judged by the group probe, not assumed."""
+    """Only a running descendant anchors a group signal.
+
+    A group probe cannot attribute a group identifier to this run: once the
+    descendant has exited, that identifier may already name a stranger's
+    group. So an exited or unobservable descendant is reclaimed through the
+    recorded pids, and the group is left alone.
+    """
     monkeypatch.setattr(
         _ownership_support,
         "observe_exit",
-        lambda _pid: ExitObservation.UNOBSERVABLE,
+        lambda _pid: observed,
     )
-    monkeypatch.setattr(_ownership_support, "_probe_group", lambda _pgid: probe)
-    assert _ownership_support._cleanup_may_signal_group(4242, 4243) is expected, (
-        f"an unobservable descendant with a {probe.name} group must "
-        f"{'authorize' if expected else 'not authorize'} a group signal"
+    selected = _ownership_support._cleanup_targets(
+        4242,
+        4243,
+        is_leader_running=is_leader_running,
+    )
+    assert selected == expected, (
+        f"a {observed.name} descendant with leader running="
+        f"{is_leader_running} must select {expected}, got {selected}"
     )
 
 

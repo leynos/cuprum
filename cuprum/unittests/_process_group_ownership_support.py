@@ -24,11 +24,7 @@ import typing as typ
 
 import pytest
 
-from cuprum._process_group import (
-    _POST_KILL_SETTLEMENT_S,
-    _GroupProbe,
-    _probe_group,
-)
+from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from tests.helpers.process_exit import ExitObservation, observe_exit
@@ -152,26 +148,40 @@ def _descendant_has_exited(pid: int) -> bool:
     return _observed_exit(pid) is ExitObservation.EXITED
 
 
-def _cleanup_may_signal_group(pgid: int, descendant_pid: int) -> bool:
-    """Report whether cleanup may signal *pgid* without risking a stranger.
+def _cleanup_targets(
+    pgid: int | None,
+    descendant_pid: int,
+    *,
+    is_leader_running: bool,
+) -> tuple[tuple[int, bool], ...]:
+    """Return the ``(pid, is_group)`` signals that reclaim one owned run.
 
-    A running descendant keeps the group identifier alive, so the observation
-    is the anchor. Where the host cannot report the descendant, fall back to
-    the same group probe production teardown uses: only a group that still
-    reports a signalable member is signalled. An empty or unsignalable group is
-    left alone, because its identifier may already have been reused.
+    A group signal is issued only when the recorded descendant is observed
+    running. That observation is the only anchor this process has: it names
+    the descendant the run started, and a running descendant keeps its group
+    identifier alive, so the group being signalled is the group it belongs to.
+
+    Where the host cannot report the descendant — or reports it exited — the
+    group identifier may already have been reused, and the production probe
+    cannot attribute it to this run (see :mod:`cuprum._process_group`). The
+    group is then not signalled at all, and both recorded pids are killed
+    directly instead: the leader, while this process still holds it unreaped,
+    and the descendant. That reclaims the tree without aiming at a group this
+    run cannot prove is still its own.
 
     Returns
     -------
-    bool
-        Whether the group still holds a member this run can safely reach.
+    tuple of (int, bool)
+        The signals to deliver, in order.
     """
-    observed = observe_exit(descendant_pid)
-    if observed is ExitObservation.RUNNING:
-        return True
-    if observed is ExitObservation.UNOBSERVABLE:
-        return _probe_group(pgid) is _GroupProbe.MEMBERS
-    return False
+    is_anchored = observe_exit(descendant_pid) is ExitObservation.RUNNING
+    if pgid is not None and is_anchored:
+        return ((pgid, True),)
+    targets: list[tuple[int, bool]] = []
+    if pgid is not None and is_leader_running:
+        targets.append((pgid, False))
+    targets.append((descendant_pid, False))
+    return tuple(targets)
 
 
 async def _cleanup_owned_run(
@@ -189,9 +199,13 @@ async def _cleanup_owned_run(
     if task is not None and not task.done():
         task.cancel()
         await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
-    pgid = run.process.pid
-    if pgid is not None and _cleanup_may_signal_group(pgid, run.grandchild_pid):
-        await _kill_and_wait(pgid, run.grandchild_pid, group=True)
+    targets = _cleanup_targets(
+        run.process.pid,
+        run.grandchild_pid,
+        is_leader_running=run.process.returncode is None,
+    )
+    for pid, is_group in targets:
+        await _kill_and_wait(pid, pid, group=is_group)
     await _kill_and_wait(run.unrelated_pid, run.unrelated_pid, group=False)
 
 
