@@ -189,9 +189,16 @@ writers remaining quiet, caller cancellation still raising `CancelledError`,
 prompt termination without `timeout=`, exactly one started child, and reaping
 before the error reaches the caller. Add a public-API test module.
 
-Acceptance: every new test fails for the intended reason before EP-M2's
-production change and passes after it; all real-process cases are bounded by
-the existing watchdogs and cleanup helpers.
+Acceptance: The 21 supervisor-behaviour cases identified in the pre-EP-M2 probe
+fail for their intended behavioural reasons on the pre-EP-M2 production tree
+and pass on the final implementation. Unchanged-behaviour controls pass on both
+the applicable baseline and the final implementation. The EP-M1 public-API and
+drain-marker tests pass after EP-M1 and on the final implementation. For the
+later post-exit repair, the seven classification regressions fail when
+`_classify_unrecorded_settled` is disabled and pass when restored. The
+already-settled ordering test verifies the documented stdout-before-stderr
+tie-break. All real-process cases remain bounded by the existing watchdogs and
+cleanup helpers.
 
 ### EP-M4 — Documentation and gates
 
@@ -249,6 +256,11 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   passes, because it does not depend on that pass); restoring the pass returns
   all eight to green. The probe was not committed. The final candidate head's
   six-gate run is recorded in the delivery ledger and the PR conversation.
+- [x] Pre-EP-M2 probe: the reconstructed `80658f8e6` tree with the final EP-M3
+  tests gives 21 failures (the supervisor-behaviour cases, failing on the
+  historical race) and 36 unchanged-behaviour controls. The plan assessment
+  proposed the revised EP-M3 acceptance now recorded here; the final gate run
+  covers the resulting documentation-only head.
 - [x] First confirmation: both assessments reported the defects resolved on
   `512b20a12`, and the plan assessment asked for the ordering test to settle
   stderr first and for this plan's gate record to name the repaired head. Both
@@ -277,6 +289,18 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   cancellation and could be swallowed by `except CancelledError` or misread by
   `asyncio.timeout`. `ConsumerCancelledError` is an ordinary `Exception` with a
   `stream` attribute.
+- **EP-M3's red/green acceptance was revised to match the milestones.** The
+  original wording required every new test to fail before EP-M2's production
+  change. That is infeasible for the EP-M1 public-API and drain-marker tests
+  (introduced before EP-M2, so they pass on that baseline), for
+  unchanged-behaviour controls, and for the ordering pin, which verifies a
+  documented tie-break rather than a defect. The plan assessment proposed the
+  replacement wording now in EP-M3. Evidence: the reconstructed `80658f8e6`
+  tree with the final EP-M3 tests gives 21 failures (the supervisor-behaviour
+  cases, failing on the historical race) and 36 unchanged-behaviour controls;
+  disabling `_classify_unrecorded_settled` fails seven of the eight post-exit
+  classification cases, and restoring it returns all eight to green. Logs:
+  `/tmp/pre-epm2-red-733.out` and `/tmp/red-733-regressions.out`.
 - **The same route for callback-raised and externally requested cancellation.**
   The task state cannot distinguish them, and both leave the pipe undrained.
   The supervisor's own cancellation is kept separate because it is observed by
