@@ -70,6 +70,17 @@ class RunRecord:
         The step's exit status.
     failed : bool
         Whether the run failed, was cancelled, or was retried.
+    outcomes : tuple of tuple of str
+        ``(node_id, outcome)`` pairs, sorted. Empty when unrecorded.
+    skip_reasons : tuple of tuple of str
+        ``(node_id, reason)`` pairs for skipped nodes, sorted.
+    xfail_reasons : tuple of tuple of str
+        ``(node_id, reason)`` pairs for expected failures, sorted.
+    runner_label : str or None
+        The runner the run executed on, when recorded. Two runs on different
+        runner shapes are not comparable.
+    toolchain : str or None
+        A fingerprint of the toolchain and lockfile, when recorded.
     """
 
     run_id: str
@@ -81,6 +92,11 @@ class RunRecord:
     node_ids: tuple[str, ...]
     exit_status: int
     failed: bool
+    outcomes: tuple[tuple[str, str], ...] = ()
+    skip_reasons: tuple[tuple[str, str], ...] = ()
+    xfail_reasons: tuple[tuple[str, str], ...] = ()
+    runner_label: str | None = None
+    toolchain: str | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

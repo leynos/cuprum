@@ -21,7 +21,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from scripts.pytest_layout_records import AdoptionThresholds, Pair
+    from scripts.pytest_layout_records import AdoptionThresholds, Pair, RunRecord
 
 __all__ = ("MINIMUM_PAIRS", "Verdict", "decide")
 
@@ -94,6 +94,9 @@ def decide(
             seconds,
             fraction,
         )
+    gap = _evidence_gap(usable, minimum_pairs)
+    if gap is not None:
+        return Verdict("inconclusive", gap, seconds, fraction)
     rejected = _regression_reason(usable, rule) or _minimum_reason(
         seconds, fraction, rule
     )
@@ -135,6 +138,96 @@ def _usable(pairs: cabc.Sequence[Pair]) -> tuple[Pair, ...]:
         and not pair.candidate.failed
         and pair.saving_seconds is not None
     )
+
+
+def _evidence_gap(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
+    """Return what the sample still lacks, or ``None`` when it is complete.
+
+    A median is only evidence if the sample is the one the plan predeclared:
+    five warm pairs *per interpreter*, on comparable runners and toolchains,
+    over runs that collected the same suite, at no extra whole-job cost. A
+    check applies only when both sides recorded the fact it needs, so a
+    partially-populated artefact is reported through the fields it does carry
+    rather than silently excused.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        The pairs already admitted as usable.
+    minimum_pairs : int
+        Pairs required per interpreter and in total.
+
+    Returns
+    -------
+    str or None
+        The reason the sample is incomplete, or ``None`` when it is complete.
+    """
+    counts: dict[str, int] = {}
+    for pair in pairs:
+        leg = pair.control.python_version
+        counts[leg] = counts.get(leg, 0) + 1
+    thin = {leg: count for leg, count in counts.items() if count < minimum_pairs}
+    if thin:
+        return (
+            f"these interpreter legs have fewer than {minimum_pairs} warm "
+            f"pairs: {thin}; a median per leg is what the plan requires"
+        )
+    mismatched = [
+        pair.control.run_id
+        for pair in pairs
+        if _fingerprints_differ(pair.control, pair.candidate)
+    ]
+    if mismatched:
+        return f"these pairs compare different runners or toolchains: {mismatched}"
+    divergent = [
+        pair.control.run_id
+        for pair in pairs
+        if _collections_differ(pair.control, pair.candidate)
+    ]
+    if divergent:
+        return f"these pairs collected different suites: {divergent}"
+    if not _cost_is_non_positive(pairs):
+        return "the candidate's whole-job seconds exceed the control's"
+    return None
+
+
+def _fingerprints_differ(control: RunRecord, candidate: RunRecord) -> bool:
+    """Return whether two runs disagree on a recorded comparability key."""
+    for field_name in ("runner_label", "toolchain"):
+        left = getattr(control, field_name)
+        right = getattr(candidate, field_name)
+        if left != right:
+            return True
+    return False
+
+
+def _collections_differ(control: RunRecord, candidate: RunRecord) -> bool:
+    """Return whether two runs collected different node multisets."""
+    return sorted(control.node_ids) != sorted(candidate.node_ids)
+
+
+def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
+    """Return whether the candidate's whole-job seconds do not exceed the control's.
+
+    A pair without both job times cannot supply the comparison, so it is
+    skipped rather than counted as free.
+
+    Returns
+    -------
+    bool
+        Whether the candidate's total whole-job seconds are not greater.
+    """
+    usable = [
+        pair
+        for pair in pairs
+        if pair.control.job_seconds is not None
+        and pair.candidate.job_seconds is not None
+    ]
+    if not usable:
+        return True
+    control_total = sum(pair.control.job_seconds or 0.0 for pair in usable)
+    candidate_total = sum(pair.candidate.job_seconds or 0.0 for pair in usable)
+    return candidate_total <= control_total
 
 
 def _medians(pairs: cabc.Sequence[Pair]) -> tuple[float | None, float | None]:
