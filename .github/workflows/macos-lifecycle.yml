@@ -130,6 +130,9 @@ jobs:
           LIFECYCLE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # The backticks are Markdown code spans in the summary, not command
+          # substitutions.
+          # shellcheck disable=SC2016
           {
             printf '### macOS process lifecycle\n\n'
             printf '| item | value |\n| --- | --- |\n'

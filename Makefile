@@ -616,16 +616,15 @@ skylos-allow: export SKYLOS_REASON = $(value REASON)
 skylos-allow: ## Document one named Skylos exception (SYMBOL=name REASON=text)
 	$(SKYLOS) allow --repository . --symbol="$${SKYLOS_SYMBOL}" --reason="$${SKYLOS_REASON}"
 
-# `-shellcheck=` disables actionlint's shellcheck integration so the gate needs
-# no shellcheck binary and matches the lint job, which installs none. It is not
-# a style preference: actionlint v1.7.12 writes each `run:` body to the
-# shellcheck child's stdin before starting it, so a body larger than the pipe
-# buffer (about 64 KiB; `ci.yml`'s benchmark step is over 9 KiB) races a
-# deadlock once the pipe fills. A clean checkout of main can hang here too.
-# Upstream tracks it as rhysd/actionlint#702, #704, and #712.
-github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Validate GitHub Actions workflows and composite actions
-	$(YAMLLINT) --strict --config-file .yamllint.yml .github/workflows .github/actions
-	$(ACTIONLINT) -config-file .github/actionlint.yaml -shellcheck=
+# yamllint reads `.yamllint.yml`, which extends `.yamllint-estate.yml`, and
+# resolves that path against the current directory, so run it from the root.
+# actionlint reads `.github/actionlint.yaml` and runs ShellCheck over each
+# `run:` script when it is on PATH.
+github-actions-lint: SHELL := bash
+github-actions-lint: .SHELLFLAGS := -eo pipefail -c
+github-actions-lint: $(YAMLLINT) $(ACTIONLINT) ## Lint every tracked YAML file strictly and the GitHub Actions workflows
+	git ls-files -z '*.yml' '*.yaml' | xargs -0 -r $(YAMLLINT) --strict --
+	$(ACTIONLINT)
 
 lint-windows: ## Lint the Rust extension's Windows cfg branches (cross-target)
 	@if ! rustup target list --installed | grep -qx '$(WINDOWS_TARGET)'; then \

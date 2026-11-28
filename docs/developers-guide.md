@@ -281,11 +281,14 @@ all call workflows whose own jobs are bounded by the rule above.
 
 ### The actionlint registry
 
-`.github/actionlint.yaml` registers exactly the labels in use that are neither
-GitHub-hosted nor already registered, asserted as an equality in both
-directions. "In use" is derived from every job in the estate, reading both arms
-of a conditional and every matrix runner entry, minus the named frozen set of
-GitHub-hosted labels in `tests/helpers/ci_placement.py`.
+`.github/actionlint.yaml` registers the labels in use that are neither
+GitHub-hosted nor already registered, asserted in both directions: every such
+label must be covered by an entry, and every entry must cover at least one
+label in use. An entry is an exact label or ends in `*`, as the estate's
+`ubicloud-*` does; a wildcard stays in use while any label matches it. "In use"
+is derived from every job in the estate, reading both arms of a conditional and
+every matrix runner entry, minus the named frozen set of GitHub-hosted labels in
+`tests/helpers/ci_placement.py`.
 
 The frozen set is named rather than derived from a vendor prefix on purpose. A
 `ubicloud-` prefix filter agrees with the named set over today's workflows and
@@ -7955,60 +7958,21 @@ both Markdown structure and en-GB-oxendict spelling.
 
 ### GitHub Actions workflow linting
 
-`make lint` finishes by running `yamllint --strict --config-file .yamllint.yml`
-over `.github/workflows` and `.github/actions`, followed by
-`actionlint -config-file .github/actionlint.yaml -shellcheck=`. Yamllint
-enforces the YAML policy; actionlint enforces GitHub Actions semantics:
-expression syntax and context, including `${{ }}` interpolations inside `run:`
-steps, plus the workflow schema and `uses:` references. It does not check the
-shell syntax of `run:` bodies, because `-shellcheck=` disables that integration
-(see below). The yamllint invocation covers the composite actions under
-`.github/actions` as well as the workflows, because a shared step obeys the
-same YAML policy and a style or structural error there would otherwise pass the
-gate silently.
+`make lint` finishes by running `make github-actions-lint`: `yamllint --strict`
+over every tracked `.yml` and `.yaml` file, then `actionlint`. Yamllint
+enforces the YAML policy; actionlint enforces GitHub Actions semantics
+(expression syntax and context, the workflow schema and `uses:` references) and
+runs ShellCheck over the `run:` scripts. The configuration is described under
+"YAML lint" at the end of this guide.
 
-The actionlint command reads `.github/actionlint.yaml` from the repository
-root. It stays pointed at `.github/workflows` alone: actionlint parses every
-path it receives as a workflow, so a composite action, which has no `on:` or
-`jobs:` section, would fail its workflow schema. `.yamllint.yml` requires each
-linted file to start with `---`, permits GitHub's unquoted `on` trigger key,
-and restricts unquoted booleans to `true` and `false`. Quoting a boolean is
-still accepted; it changes the value's YAML type from a boolean to a string.
-
-`-shellcheck=` disables actionlint's shellcheck integration, so no shellcheck
-binary is needed and the gate matches `lint-test`, which installs none. This is
-load-bearing rather than cosmetic. actionlint 1.7.12 writes each `run:` body to
-its shellcheck child's standard input *before* starting that child, so the
-write completes only if the body fits the pipe buffer at that moment. 64 KiB is
-the usual Linux capacity, not a fixed one: once a user's combined pipe
-allocation crosses `fs.pipe-user-pages-soft` (16384 pages by default, shared
-across all of that user's pipes, which is routine on a busy host), newly
-created pipes are allocated far smaller. The upstream report measured 8192
-bytes and saw an 8419-byte script deadlock against it.
-
-This gate is not immune. Its largest `run:` body is `ci.yml`'s benchmark step
-at 9287 bytes: far below 64 KiB, but larger than the 8192-byte capacity the
-upstream report measured, so a shrunk pipe cannot hold it. A clean checkout of
-`main` can hang the same way, and the hung process has been reported to ignore
-`SIGTERM`, so a stuck gate may need `SIGKILL`. Upstream tracks the defect as
-[rhysd/actionlint#702](https://github.com/rhysd/actionlint/issues/702),
-together with [#704](https://github.com/rhysd/actionlint/issues/704) and
-[#712](https://github.com/rhysd/actionlint/issues/712). Drop the flag only
-alongside an actionlint release that fixes the write-before-start ordering, and
-re-check that the lint gate still terminates.
-
-Install yamllint locally with `uv tool install "yamllint==1.38.0"`, then
-install actionlint using its
-[upstream installation instructions](https://github.com/rhysd/actionlint/blob/main/README.md#installation).
-Both commands must be available on `PATH` before running `make lint`.
-
-CI caches the `uv` cache, tool environment, and executable directory before
-installing yamllint. It separately caches actionlint 1.7.12; on a cache miss,
-it downloads the archive through actionlint's installer pinned to commit
-`914e7df21a07ef503a81201c76d2b11c789d3fca` and verifies SHA-256
-`8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` before
-extraction. The lint job invokes trusted `/usr/bin/make` and passes actionlint
-by absolute `ACTIONLINT` path, so checkout contents cannot shadow `make`.
+The lint job invokes trusted `/usr/bin/make`, so checkout contents cannot shadow
+`make`. Before it, the `install-yaml-lint` action of `leynos/shared-actions`
+installs the pinned, checksum-verified tools. actionlint 1.7.12 writes each
+`run:` body to its ShellCheck child's standard input before starting that
+child, so a body larger than the pipe buffer can deadlock once a host's pipe
+allocation shrinks (rhysd/actionlint issues 702, 704, and 712). The hung
+process has been reported to ignore `SIGTERM`, so a stuck gate may need
+`SIGKILL`.
 
 ### Skylos dead-code policy
 
@@ -10798,3 +10762,25 @@ coverage job invokes pytest with no path targets and collects the repository
 root. The full reasoning, including the load evidence against host starvation,
 is in
 `docs/debugging/debugging-plan-2026-09-21-native-pipeline-handoff-stabilize.md`.
+
+## YAML lint
+
+`make lint` runs `make github-actions-lint` as a prerequisite. It runs
+`yamllint --strict` over every tracked `.yml` and `.yaml` file, reading
+`.yamllint.yml`, which extends the estate base `.yamllint-estate.yml` (a
+verbatim copy of the estate canon; do not edit it). The base ignores Helm chart
+templates (`**/charts/**/templates/`), so a tracked file there is passed to
+yamllint but not checked, and a local `ignore` in `.yamllint.yml` replaces that
+entry rather than adding to it. Run it from the repository root, because
+yamllint resolves `extends` against the current directory. It then runs
+`actionlint`, which checks the GitHub Actions workflows, accepting the runner
+labels in `.github/actionlint.yaml`, and runs ShellCheck over their Bash and
+`sh` `run:` scripts when it is on `PATH` (it skips PowerShell steps).
+
+Install the tools locally at the versions CI uses:
+`uv tool install yamllint==1.38.0`, and the `actionlint` 1.7.12 and
+`shellcheck` 0.11.0 release binaries (a package manager's builds can differ and
+change what the lint reports). CI installs the same pinned versions with the
+`install-yaml-lint` action of `leynos/shared-actions` before it runs
+`make lint`. The `YAMLLINT` and `ACTIONLINT` variables name the commands when
+they are not on `PATH`.

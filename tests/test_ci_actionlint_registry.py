@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 import yaml
 
 from tests.helpers.ci_placement import FROZEN_HOSTED_LABELS, declares_steps, placement
@@ -63,6 +64,59 @@ def _labels_in_use() -> frozenset[str]:
     return frozenset(labels)
 
 
+def _covers(entry: str, label: str) -> bool:
+    """Say whether a registry entry names a label, exactly or by a ``*`` suffix."""
+    prefix, star, rest = entry.partition("*")
+    if not star:
+        return entry == label
+    return not rest and label.startswith(prefix)
+
+
+def _is_registered(label: str, registered: frozenset[str] | set[str]) -> bool:
+    """Say whether any registry entry covers the label."""
+    return any(_covers(entry, label) for entry in registered)
+
+
+def _registry_mismatches(
+    registered: set[str], in_use: set[str]
+) -> tuple[list[str], list[str]]:
+    """Return the unregistered labels, then the entries that cover no label."""
+    unregistered = sorted(
+        label for label in in_use if not _is_registered(label, registered)
+    )
+    unused = sorted(
+        entry
+        for entry in registered
+        if not any(_covers(entry, used) for used in in_use)
+    )
+    return unregistered, unused
+
+
+@pytest.mark.parametrize(
+    ("registered", "in_use", "unregistered", "unused"),
+    [
+        pytest.param({"a-1"}, {"a-1"}, [], [], id="exact-match"),
+        pytest.param({"a-*"}, {"a-1", "a-2"}, [], [], id="glob-covers-several"),
+        pytest.param(set(), {"a-1"}, ["a-1"], [], id="empty-registry"),
+        pytest.param({"a"}, {"a-1"}, ["a-1"], ["a"], id="exact-is-not-a-prefix"),
+        pytest.param({"b-*"}, {"a-1"}, ["a-1"], ["b-*"], id="glob-for-another-family"),
+        pytest.param({"a-1", "a-2"}, {"a-1"}, [], ["a-2"], id="stale-exact-entry"),
+        pytest.param({"a-*"}, set(), [], ["a-*"], id="glob-with-no-use"),
+    ],
+)
+def test_the_registry_comparison_reports_both_mismatch_lists(
+    registered: set[str],
+    in_use: set[str],
+    unregistered: list[str],
+    unused: list[str],
+) -> None:
+    """Hold the comparison itself, with no file read, to both of its lists."""
+    assert _registry_mismatches(registered, in_use) == (unregistered, unused), (
+        f"registry {sorted(registered)} against labels {sorted(in_use)} must "
+        f"report unregistered {unregistered} and unused {unused}"
+    )
+
+
 def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
     """Register intentional labels so a typo fails lint instead of queueing.
 
@@ -78,10 +132,15 @@ def test_actionlint_registers_exactly_the_self_hosted_labels_in_use() -> None:
     declared = config["self-hosted-runner"]["labels"]
     used = _labels_in_use()
     unknown = used - frozenset(FROZEN_HOSTED_LABELS)
-    assert sorted(declared) == sorted(unknown), (
+    unregistered, unused = _registry_mismatches(set(declared), set(unknown))
+    assert not unregistered, (
         "actionlint must register every label in use that is neither a "
         f"GitHub-hosted label nor already registered; declared {sorted(declared)}, "
-        f"derived {sorted(unknown)}"
+        f"derived {sorted(unknown)}: unregistered {unregistered}"
+    )
+    assert not unused, (
+        "every actionlint registry entry must cover a label in use; declared "
+        f"{sorted(declared)}, derived {sorted(unknown)}: unused {unused}"
     )
     # Carried forward from main, which replaced a hardcoded
     # `["CODESCENE_CLI_SHA256"]` with a derivation after that variable's last
@@ -120,13 +179,19 @@ def test_every_hosted_label_in_use_is_named_in_the_frozen_set() -> None:
     )
     config = yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8"))
     registered = frozenset(config["self-hosted-runner"]["labels"])
-    assert not (hosted & registered), (
+    claimed = {label for label in hosted if _is_registered(label, registered)}
+    assert not claimed, (
         "a GitHub-hosted label must not also be registered as self-hosted; "
-        f"both claim {sorted(hosted & registered)}"
+        f"both claim {sorted(claimed)}"
     )
-    assert hosted == _labels_in_use() - registered, (
+    unaccounted = {
+        label
+        for label in _labels_in_use() - hosted
+        if not _is_registered(label, registered)
+    }
+    assert not unaccounted, (
         "every label in use must be either registered or named in the frozen "
-        f"hosted set; unaccounted: {sorted(_labels_in_use() - registered - hosted)}"
+        f"hosted set; unaccounted: {sorted(unaccounted)}"
     )
 
 

@@ -462,7 +462,7 @@ def test_portable_lint_orchestration_preserves_leaf_order() -> None:
     clippy = output.index(_CLIPPY_LEAF)
     whitaker = output.index("whitaker --all --")
     spelling = output.index("typos-config-builder gate --repository . --scope all")
-    workflow_lint = output.index("yamllint --strict --config-file")
+    workflow_lint = output.index("yamllint --strict")
 
     assert python_lint < clippy < whitaker < spelling < workflow_lint, (
         "lint must serialize Python, Rust leaves, and GitHub Actions validation"
@@ -483,7 +483,7 @@ def test_leaf_order_is_identical_on_both_cargo_routes() -> None:
         clippy = output.index(_CLIPPY_LEAF)
         whitaker = output.index("whitaker --all --")
         spelling = output.index("typos-config-builder gate --repository . --scope all")
-        workflow_lint = output.index("yamllint --strict --config-file")
+        workflow_lint = output.index("yamllint --strict")
 
         assert python_lint < clippy < whitaker < spelling < workflow_lint, (
             f"lint must serialize its leaves identically with "
