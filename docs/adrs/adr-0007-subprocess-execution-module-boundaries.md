@@ -1788,6 +1788,13 @@ the stream whose consumer stopped. It is an ordinary exception, deliberately
 not a subclass of `asyncio.CancelledError` or `TimeoutError`, and it is
 re-exported from both `cuprum` and `cuprum.sh`.
 
+The classification lives in `cuprum/_subprocess_task_outcomes.py`, which owns
+the writer's pre-unwind publication, the writer and consumer outcome queries,
+and the completion-ordered post-exit wait; the helpers moved out of
+`_subprocess_rendezvous.py` when the race plus the classification outgrew the
+module ceiling. `cuprum/_stream_consumer_errors.py` is the leaf that owns
+`ConsumerCancelledError` and its stream vocabulary.
+
 One shared query, `_consumer_outcome`, now classifies a settled consumer. An
 ordinary exception is returned unchanged, so a callback's own `TimeoutError`
 keeps the identity the provenance rule depends on. A cancelled task yields

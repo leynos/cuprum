@@ -2533,6 +2533,17 @@ sequenceDiagram
   coordinator, and the timeout test modules keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-09-27.
+- `cuprum/_stream_consumer_errors.py` is the leaf that owns
+  `ConsumerCancelledError` and the `ConsumerStreamName` literal. The error is
+  the public spelling of a consumer that ended cancelled before end of stream;
+  both `cuprum` and `cuprum.sh` re-export it, and the stream vocabulary is
+  cross-checked against `cuprum.lines.LineStreamName` in the public-surface
+  tests.
+- `cuprum/_subprocess_task_outcomes.py` owns the classification of a settled
+  monitored task: the writer's pre-unwind `_StdinWriterLog` publication, the
+  writer and consumer outcome queries, and the completion-ordered post-exit wait
+  `_await_consumer_outcomes`. The rendezvous imports `_consumer_failure` and
+  `_stdin_writer_failure` from it. See the ADR-007 addendum of 2026-11-27.
 - `cuprum/_subprocess_rendezvous.py` owns the race that ends a run on a stream
   task's failure rather than on the child's exit.
   `_await_exit_or_writer_failure` waits on the exit wait, the stdin writer, and
@@ -2569,7 +2580,7 @@ sequenceDiagram
   single-command run, the line-stream coordinator, and the timeout test modules
   keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
-  2026-09-27 and 2026-11-15.
+  2026-09-27, 2026-11-15, and 2026-11-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:
   cancelling the stdin writer and settling the run's stream consumers as one
   shielded cleanup unit. It keeps `_drain_context` beside

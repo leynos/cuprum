@@ -9287,11 +9287,17 @@ The subprocess execution implementation is split by lifecycle concern across
 `cuprum/_stdio_binding_guards.py`, `cuprum/_stdio_diagnostics.py`,
 `cuprum/stdio_events.py`, `cuprum/_subprocess_timeout.py`,
 `cuprum/_subprocess_deadline.py`, `cuprum/_subprocess_rendezvous.py`,
+`cuprum/_subprocess_task_outcomes.py`, `cuprum/_stream_consumer_errors.py`,
 `cuprum/_subprocess_wait.py`, `cuprum/_stream_drain.py`,
 `cuprum/_subprocess_direct_run.py`, `cuprum/_command_finalization.py`, and
-`cuprum/_pipeline_settlement.py`. Pipeline startup has its own boundary in
-`cuprum/_pipeline_spawn.py`, which starts the stages and tears down a partial
-spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
+`cuprum/_pipeline_settlement.py`. `cuprum/_subprocess_task_outcomes.py` owns
+the classification of a settled stdin writer or stream consumer — the
+`_StdinWriterLog` publication, the writer and consumer outcome queries, and the
+completion-ordered post-exit wait `_await_consumer_outcomes` — while
+`cuprum/_stream_consumer_errors.py` is the leaf that owns
+`ConsumerCancelledError` and `ConsumerStreamName`. Pipeline startup has its own
+boundary in `cuprum/_pipeline_spawn.py`, which starts the stages and tears down
+a partial spawn; `cuprum/_process_lifecycle.py` keeps termination and the shared
 `_shielded_cleanup` primitive, while `cuprum/_process_signal.py` owns the two
 decisions teardown makes about a single process — what a signal is delivered
 to, and what a completed teardown waits for. The two idle-heartbeat modules,
@@ -9545,33 +9551,37 @@ because `asyncio.wait` reports a settled *set* with no completion order. A
 settled exit wins outright; then the stdin writer; then the consumers in
 stdout-then-stderr order, selected by `_first_early_failure` over the writer
 query `_stdin_writer_failure` and the consumer query `_consumer_outcome`
-(through `_consumer_failure`). A consumer that ended cancelled is reported as
-`ConsumerCancelledError` naming its stream, with the task's own cancellation
-chained as its cause when one is retrievable; a cancelled writer remains quiet.
-That order decides once that the run must stop; the writer alone is then asked
-again after the exit wait's cancellation has terminated the child, because a
-stdin writer unwinding its own cleanup settles on its failure only during that
-termination. The consumers are deliberately not re-read: terminating the child
-makes its pipes reach EOF, so a reader still draining can fail on what that
-leaves behind — a truncated sequence flushed by a strict decoder, say — and
-that artefact would replace the callback failure already selected whenever it
-landed on stdout while the callback failed on stderr. Neither writer read is
-enough alone, because the window has two ends. A writer that has already raised
-is still *running* while it unwinds — its producer's finalizer is the caller's
-code, run inside a window of its own — so a read taken during that unwinding
-sees a task that has not failed. The writer therefore publishes its failure to
-the `_StdinWriterLog` the run creates for it, before the raise and so before
-that unwinding, and both writer reads consult the publication ahead of the
-task. That ordering covers the payload writer as well, whose unwinding
-suspends: its pipe close waits, within a bound, for the child-side reader to
-reach EOF, so a publication made after the close would be invisible to a race
-asking during it. Without the hand-off, a bad `encoding` would report the
-output decoder's `LookupError` in place of the `StdinSourceError` the input
-contract promises, because an unknown encoding fails the writer and both
-decoders, and the decoders settle first. Consumer tasks are never cancelled or
-gathered here: they belong to the caller, whose reconciliation on every failure
-route settles them, and doing it here as well would settle them twice and race
-that teardown. What the rendezvous does owe every caller is provenance.
+(through `_consumer_failure`). `_subprocess_rendezvous.py` imports
+`_consumer_failure` and `_stdin_writer_failure` from
+`cuprum/_subprocess_task_outcomes.py`, which owns both queries and the shared
+post-exit wait `_await_consumer_outcomes` described below. A consumer that
+ended cancelled is reported as `ConsumerCancelledError` naming its stream, with
+the task's own cancellation chained as its cause when one is retrievable; a
+cancelled writer remains quiet. That order decides once that the run must stop;
+the writer alone is then asked again after the exit wait's cancellation has
+terminated the child, because a stdin writer unwinding its own cleanup settles
+on its failure only during that termination. The consumers are deliberately not
+re-read: terminating the child makes its pipes reach EOF, so a reader still
+draining can fail on what that leaves behind — a truncated sequence flushed by
+a strict decoder, say — and that artefact would replace the callback failure
+already selected whenever it landed on stdout while the callback failed on
+stderr. Neither writer read is enough alone, because the window has two ends. A
+writer that has already raised is still *running* while it unwinds — its
+producer's finalizer is the caller's code, run inside a window of its own — so
+a read taken during that unwinding sees a task that has not failed. The writer
+therefore publishes its failure to the `_StdinWriterLog` the run creates for
+it, before the raise and so before that unwinding, and both writer reads
+consult the publication ahead of the task. That ordering covers the payload
+writer as well, whose unwinding suspends: its pipe close waits, within a bound,
+for the child-side reader to reach EOF, so a publication made after the close
+would be invisible to a race asking during it. Without the hand-off, a bad
+`encoding` would report the output decoder's `LookupError` in place of the
+`StdinSourceError` the input contract promises, because an unknown encoding
+fails the writer and both decoders, and the decoders settle first. Consumer
+tasks are never cancelled or gathered here: they belong to the caller, whose
+reconciliation on every failure route settles them, and doing it here as well
+would settle them twice and race that teardown. What the rendezvous does owe
+every caller is provenance.
 `_is_early_failure(error, stdin_task, consumers, *, stdin_log=None)` answers,
 by identity, whether a caught error is a monitored task's own failure — or the
 failure its writer published — and that is what lets each caller tell a

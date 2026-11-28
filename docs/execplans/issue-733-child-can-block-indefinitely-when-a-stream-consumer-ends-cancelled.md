@@ -124,10 +124,10 @@ Documentation lives in:
 
 - Issue [#733](https://github.com/leynos/cuprum/issues/733), including the
   CodeRabbit finding `cr-comment:v1:c0277a0317b3db330668fe72` on #717.
-- [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+- [ADR-007](../adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-11-15 (#551), which established the early-failure route and the fixed
   precedence.
-- [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
+- [ADR-007](../adrs/adr-0007-subprocess-execution-module-boundaries.md) addendum
   of 2026-11-19, which established the teardown reporting channels.
 - `docs/developers-guide.md`, "Subprocess execution module boundaries".
 - ExecPlan trace: `#733` → EP-M1 (public error and EOF marker) → EP-M2
