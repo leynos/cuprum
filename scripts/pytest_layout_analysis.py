@@ -121,8 +121,85 @@ def _fidelity_report(
         "candidate_duplicates": sorted(
             node for node, count in candidate_nodes.items() if count > 1
         ),
-        "identical": control_nodes == candidate_nodes,
+        "control_outcomes": _outcomes(control),
+        "candidate_outcomes": _outcomes(candidate),
+        "control_skips": _node_map(control, "skip_reasons"),
+        "candidate_skips": _node_map(candidate, "skip_reasons"),
+        "control_xfails": _node_map(control, "xfail_reasons"),
+        "candidate_xfails": _node_map(candidate, "xfail_reasons"),
+        "identical": _same_suite(control, candidate, control_nodes, candidate_nodes),
     }
+
+
+def _outcomes(runs: cabc.Sequence[RunRecord]) -> dict[str, str]:
+    """Return one side's node outcomes, across its runs.
+
+    Parameters
+    ----------
+    runs : Sequence of RunRecord
+        That side's runs.
+
+    Returns
+    -------
+    dict of str to str
+        Node ID mapped to the outcome pytest reported for it.
+    """
+    return {node: value for run in runs for node, value in run.outcomes}
+
+
+def _node_map(runs: cabc.Sequence[RunRecord], field: str) -> dict[str, str]:
+    """Return one recorded node-to-reason mapping across a side's runs.
+
+    Parameters
+    ----------
+    runs : Sequence of RunRecord
+        That side's runs.
+    field : str
+        ``skip_reasons`` or ``xfail_reasons``.
+
+    Returns
+    -------
+    dict of str to str
+        Node ID mapped to its recorded reason.
+    """
+    return {node: value for run in runs for node, value in getattr(run, field)}
+
+
+def _same_suite(
+    control: cabc.Sequence[RunRecord],
+    candidate: cabc.Sequence[RunRecord],
+    control_nodes: Counter[str],
+    candidate_nodes: Counter[str],
+) -> bool:
+    """Return whether two sides ran the same suite *and* reached the same results.
+
+    Collected names alone are not fidelity. Two lanes can collect the same
+    nodes and still disagree about what executed: a skip that became a pass, or
+    an xfail that became a failure, is a change in the suite even when every
+    name matches.
+
+    Parameters
+    ----------
+    control : Sequence of RunRecord
+        The control side's runs.
+    candidate : Sequence of RunRecord
+        The candidate side's runs.
+    control_nodes : collections.Counter of str
+        The control's collected node multiset.
+    candidate_nodes : collections.Counter of str
+        The candidate's collected node multiset.
+
+    Returns
+    -------
+    bool
+        Whether the multisets, outcomes, skips and xfails all agree.
+    """
+    return (
+        control_nodes == candidate_nodes
+        and _outcomes(control) == _outcomes(candidate)
+        and _node_map(control, "skip_reasons") == _node_map(candidate, "skip_reasons")
+        and _node_map(control, "xfail_reasons") == _node_map(candidate, "xfail_reasons")
+    )
 
 
 def write_reports(destination: pth.Path, report: cabc.Mapping[str, object]) -> None:

@@ -287,19 +287,55 @@ def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
     bool
         Whether the candidate's total whole-job seconds are not greater.
     """
-    if not pairs:
-        return True
-    timed = [
-        pair
-        for pair in pairs
-        if pair.control.job_seconds is not None
-        and pair.candidate.job_seconds is not None
-    ]
-    if len(timed) != len(pairs):
+    totals = _job_totals(pairs)
+    if totals is None:
         return False
-    control_total = sum(pair.control.job_seconds or 0.0 for pair in timed)
-    candidate_total = sum(pair.candidate.job_seconds or 0.0 for pair in timed)
-    return candidate_total <= control_total
+    return totals[1] <= totals[0]
+
+
+def _job_totals(
+    pairs: cabc.Sequence[Pair],
+) -> tuple[float, float] | None:
+    """Return the control and candidate whole-job seconds, or ``None``.
+
+    ``None`` means at least one pair did not record both job times, which makes
+    the cost comparison unavailable rather than free.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        The pairs to total.
+
+    Returns
+    -------
+    tuple of float or None
+        ``(control_total, candidate_total)``, or ``None`` when incomplete.
+    """
+    if not _all_timed(pairs):
+        return None
+    return (
+        sum(pair.control.job_seconds or 0.0 for pair in pairs),
+        sum(pair.candidate.job_seconds or 0.0 for pair in pairs),
+    )
+
+
+def _all_timed(pairs: cabc.Sequence[Pair]) -> bool:
+    """Return whether every pair recorded both whole-job times.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        The pairs to test.
+
+    Returns
+    -------
+    bool
+        Whether each pair carries both job times.
+    """
+    return all(
+        pair.control.job_seconds is not None and pair.candidate.job_seconds is not None
+        for pair in pairs
+    )
 
 
 def _medians(pairs: cabc.Sequence[Pair]) -> tuple[float | None, float | None]:
