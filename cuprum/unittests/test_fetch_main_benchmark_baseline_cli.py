@@ -19,6 +19,7 @@ from cuprum.unittests._fetch_baseline_cli_support import ARTEFACT_NAME, main_cli
 
 if typ.TYPE_CHECKING:
     import pathlib as pth
+    from collections import abc as cabc
 
 # The help text is asserted semantically rather than by snapshot: argparse
 # rewrapped ``--artifact-name ARTEFACT_NAME`` between Python 3.12 and 3.13, so a
@@ -46,6 +47,26 @@ EXPECTED_CLI_OPTIONS = (
 )
 REQUIRED_CLI_OPTIONS = ("--repository", "--workflow", "--artifact-name", "--output-dir")
 ARGUMENT_ERROR_EXIT_CODE = 2
+#: The colour controls CPython and pytest read. Every case starts with all of
+#: them removed, so its name describes the environment it exercises even though
+#: `make test` exports the gate's policy into this process.
+_COLOUR_VARIABLES = ("FORCE_COLOR", "PYTHON_COLORS", "PY_COLORS", "NO_COLOR")
+#: Ambient colour settings the help case must be immune to. CPython 3.14 and
+#: later colour ``argparse`` help whenever the environment asks for it, and the
+#: coloured renderer consumes the backticks around ``main`` as markup, so the
+#: plain-text expectations below can only be asserted against a pinned renderer.
+_AMBIENT_COLOUR_ENVIRONMENTS = (
+    pytest.param({"FORCE_COLOR": "1"}, id="force-colour"),
+    pytest.param(
+        {"PYTHON_COLORS": "1", "FORCE_COLOR": "1"},
+        id="python-colour-over-force-colour",
+    ),
+    pytest.param(
+        {"PY_COLORS": "1", "FORCE_COLOR": "1", "NO_COLOR": ""},
+        id="py-colour-with-empty-no-colour",
+    ),
+    pytest.param({}, id="colour-variables-absent"),
+)
 
 
 def _unwrapped(text: str) -> str:
@@ -53,13 +74,34 @@ def _unwrapped(text: str) -> str:
     return " ".join(text.split()).replace("--run- status", "--run-status")
 
 
+def _pin_plain_help(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin ``argparse`` help to plain text whatever the caller exported."""
+    monkeypatch.setenv("PYTHON_COLORS", "0")
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+
+@pytest.mark.parametrize("ambient_colour", _AMBIENT_COLOUR_ENVIRONMENTS)
 def test_cli_help_documents_every_option(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    ambient_colour: cabc.Mapping[str, str],
 ) -> None:
     """``--help`` should exit cleanly and describe each supported option."""
+    for variable in _COLOUR_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    for variable, value in ambient_colour.items():
+        monkeypatch.setenv(variable, value)
+    _pin_plain_help(monkeypatch)
+
     with pytest.raises(SystemExit) as help_exit:
         main(["--help"])
-    help_text = _unwrapped(capsys.readouterr().out)
+    captured = capsys.readouterr().out
+    assert "\x1b" not in captured, (
+        "--help must render plain text once the colour environment is pinned, "
+        f"got: {captured!r}"
+    )
+    help_text = _unwrapped(captured)
 
     assert help_exit.value.code == 0, (
         f"--help must exit successfully, got {help_exit.value.code}"
