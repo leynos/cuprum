@@ -8578,14 +8578,20 @@ function's own code object and the renamed copies mutmut's trampoline builds
 (`x_<name>__mutmut_orig` and `x_<name>__mutmut_<n>`), instead of comparing
 identity.
 
-`tests/test_ci_exemption_contract.py` and
-`tests/test_ci_recipe_flow_contract.py` are omitted for a fourth reason: they
-parse the Makefile with `makeutil`, a Rust binary that only the Makefile's own
-`makeutil` target installs. The mutation workflow invokes pytest directly and
-never runs that target, so the parser is absent on a run and the contracts
-correctly refuse rather than reading the selector as empty. The pinned failure
-diagnostics from canary runs on a runner recorded exactly that error, first in
-one contract and then in the other.
+The Makefile-reading contracts are omitted or narrowed for a fourth reason:
+they parse the Makefile with `makeutil`, a Rust binary that only the Makefile's
+own `makeutil` target installs. The mutation workflow invokes pytest directly
+and never runs that target, so the parser is absent on a run and the contracts
+correctly refuse rather than reading the selector as empty.
+`tests/test_ci_exemption_contract.py`, `tests/test_ci_recipe_flow_contract.py`
+and `tests/test_ci_test_selection_contract.py` are about the selector itself
+and are omitted whole. In `tests/test_ci_rust_boundaries.py`,
+`tests/test_ci_selection_guard_controls.py` and
+`tests/test_distribution_artefacts.py` only the parser-dependent tests are
+deselected through `pytest_add_cli_args_test_selection`, so the rest of each
+module still runs and can kill mutants. The pinned failure diagnostics from
+canary runs on a runner recorded exactly that error, first in one contract and
+then in another.
 
 The omitted modules keep running in every `make test`, pull-request gate, and
 direct `uv run pytest` invocation; only the mutation harness omits them.

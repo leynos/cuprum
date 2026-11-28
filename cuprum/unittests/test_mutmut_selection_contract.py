@@ -2,9 +2,10 @@
 
 The mutation run collects both suite roots and omits the test modules that
 cannot run against a mutated ``cuprum``: two build an environment of their own,
-two read the scheduled coroutine through mutmut's async trampoline, two parse
-the Makefile with a binary only the Makefile installs, and three are the
-``act`` scenarios that ``make test`` runs only from ``test-act``. The exclusion
+two read the scheduled coroutine through mutmut's async trampoline, three
+are about the Makefile selector that a binary only the Makefile installs,
+and three are the ``act`` scenarios that ``make test`` runs only from
+``test-act``. The exclusion
 is pinned here so it cannot widen silently, and each excluded module is checked
 to still exist inside the selected suite, so the exclusion cannot hide a
 deletion.
@@ -74,9 +75,31 @@ _SANDBOX_EXCLUDED_MODULES: tuple[str, ...] = (
     "cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "tests/test_ci_exemption_contract.py",
     "tests/test_ci_recipe_flow_contract.py",
+    "tests/test_ci_test_selection_contract.py",
     "tests/integration/test_workflow_integration.py",
     "tests/integration/test_experimental_leg_integration.py",
     "tests/integration/test_extension_typecheck_integration.py",
+)
+
+#: Individual tests in mixed modules that call the real Makefile parser.
+#:
+#: ``makeutil`` is installed only by the Makefile's own ``makeutil`` target,
+#: and a mutation run invokes pytest directly. In these modules the rest of the
+#: file exercises ``cuprum`` behaviour, so only the parser-dependent tests are
+#: deselected rather than the whole module.
+_SANDBOX_DESELECTED_TESTS: tuple[str, ...] = (
+    "tests/test_ci_rust_boundaries.py::"
+    "test_the_download_integration_target_supplies_its_opt_in",
+    "tests/test_ci_selection_guard_controls.py::"
+    "test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard",
+    "tests/test_ci_selection_guard_controls.py::"
+    "test_a_module_the_selector_drops_is_reported_as_uncovered",
+    "tests/test_ci_selection_guard_controls.py::"
+    "test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected",
+    "tests/test_ci_selection_guard_controls.py::"
+    "test_the_exception_mechanism_reports_an_uncovered_module",
+    "tests/test_distribution_artefacts.py::"
+    "test_makefile_groups_both_distribution_consumers",
 )
 
 #: Hypothesis profile every mutmut pytest invocation loads.
@@ -101,6 +124,15 @@ def _ignored_paths(selection: list[str]) -> set[str]:
     }
 
 
+def _deselected_tests(selection: list[str]) -> set[str]:
+    """Return the node IDs named by ``--deselect=`` entries in ``selection``."""
+    return {
+        entry.removeprefix("--deselect=")
+        for entry in selection
+        if entry.startswith("--deselect=")
+    }
+
+
 def test_test_selection_still_collects_both_suite_roots() -> None:
     """Every suite root is collected, so an exclusion cannot shrink the run."""
     selection = _test_selection()
@@ -120,6 +152,21 @@ def test_mutation_run_ignores_exactly_the_pinned_modules() -> None:
     assert not missing, (
         "every module that cannot run against a mutated cuprum must stay "
         f"excluded; missing: {missing}"
+    )
+
+
+def test_mutation_run_deselects_exactly_the_parser_dependent_tests() -> None:
+    """The deselected tests are the parser-dependent ones and nothing else."""
+    deselected = _deselected_tests(_test_selection())
+    unexpected = sorted(deselected - set(_SANDBOX_DESELECTED_TESTS))
+    missing = sorted(set(_SANDBOX_DESELECTED_TESTS) - deselected)
+    assert not unexpected, (
+        "the mutation run must not deselect tests beyond the ones that need "
+        f"the Makefile parser; unexpected: {unexpected}"
+    )
+    assert not missing, (
+        "every test that needs the Makefile parser must stay deselected; "
+        f"missing: {missing}"
     )
 
 

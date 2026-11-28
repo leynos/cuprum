@@ -426,6 +426,9 @@ source_paths = ["cuprum/"]
 # so the parser is absent and the contracts refuse rather than reading the
 # selector as empty. The shared failure capture confirmed this on a runner,
 # first in test_ci_exemption_contract and then in test_ci_recipe_flow_contract.
+# Three modules are about the selector itself and are omitted whole; in the
+# mixed modules only the tests that call the real parser are deselected, so
+# the rest still run and can kill mutants.
 pytest_add_cli_args_test_selection = [
     "tests/",
     "cuprum/unittests/",
@@ -435,6 +438,13 @@ pytest_add_cli_args_test_selection = [
     "--ignore=cuprum/unittests/test_observe_hook_dispatch_seeded_faults.py",
     "--ignore=tests/test_ci_exemption_contract.py",
     "--ignore=tests/test_ci_recipe_flow_contract.py",
+    "--ignore=tests/test_ci_test_selection_contract.py",
+    "--deselect=tests/test_ci_rust_boundaries.py::test_the_download_integration_target_supplies_its_opt_in",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_a_bad_exception_entry_is_rejected_rather_than_silencing_the_guard",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_a_module_the_selector_drops_is_reported_as_uncovered",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_an_exemption_naming_a_target_that_ignores_its_selector_is_rejected",
+    "--deselect=tests/test_ci_selection_guard_controls.py::test_the_exception_mechanism_reports_an_uncovered_module",
+    "--deselect=tests/test_distribution_artefacts.py::test_makefile_groups_both_distribution_consumers",
     "--ignore=tests/integration/test_workflow_integration.py",
     "--ignore=tests/integration/test_experimental_leg_integration.py",
     "--ignore=tests/integration/test_extension_typecheck_integration.py",
