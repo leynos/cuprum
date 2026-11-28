@@ -110,7 +110,9 @@ exposes `wait_eof()`, an `at_eof` predicate, a `closure` property, and
 - `FAILED`: the drain or the supervisor failed; iteration and `wait_eof()` raise
   a chained `LiveStreamError`. A failure outranks any terminal state already
   published, including a clean `EOF`, and is published by the drain task's own
-  completion so a reader is never left waiting for settlement to notice it.
+  completion so a reader is never left waiting for settlement to notice it. A
+  live failure also requests an immediate serialized stop, so a held handle
+  does not leave its child blocked on a pipe nobody drains.
 
 Normal terminal statuses drain queued items before iteration ends. `FAILED`
 takes precedence over pending items: a consumer must see the failure rather
@@ -130,11 +132,13 @@ called only when the drain observes the empty read and before its own
 finalization. It is not called for cancellation, failure, or a preserving
 line-stream finalization.
 
-At settlement the byte owner releases both queues: blocked `put`s wake and stop
-waiting, a chunk that still fits is enqueued, and only the remainder is
-discarded rather than blocking teardown, while capture continues. A reader
-whose clean EOF arrives during the reconciliation window publishes `EOF` only
-if nothing was discarded; a reader that never reaches EOF publishes
+At settlement the byte owner releases both queues *before* it waits for the
+child: blocked `put`s wake and stop waiting, a chunk that still fits is
+enqueued, and only the remainder is discarded rather than blocking teardown,
+while capture continues. Releasing first is what keeps a stalled consumer from
+holding the child open and making the wait itself deadlock. A reader whose
+clean EOF arrives during the reconciliation window publishes `EOF` only if
+nothing was discarded; a reader that never reaches EOF publishes
 `TRUNCATED_BY_SETTLEMENT`. This keeps a normal child exit honest while ensuring
 a stalled consumer can never hold settlement open.
 

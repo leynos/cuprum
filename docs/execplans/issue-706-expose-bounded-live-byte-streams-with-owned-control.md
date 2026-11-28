@@ -185,6 +185,35 @@ repository, so the budgets are conservative rather than historical.
   implementation agent.
 - D5. Decision: the new ADR is ADR-0030. Rationale: ADR-0029 is taken; the
   plan's number is stale. Date/Author: 2026-11-27, implementation agent.
+- D6. Decision: the live tap is a field on `_StreamConfig`, not extra parameters
+  on the consume entry points. Rationale: a stream's tap is per-stream state
+  exactly as its capture policy is; keeping it on the config preserves every
+  existing argument count and the existing test seams. Date/Author: 2026-11-27,
+  implementation agent.
+- D7. Decision: the shared handle lifecycle moved to
+  `cuprum/_process_handle/base.py`, with `__aenter__` returning `typing.Self`.
+  Rationale: the two public handles must not duplicate control and teardown, and
+  `Self` keeps each subclass's own reader surface visible to the type checker.
+  Date/Author: 2026-11-27, implementation agent.
+- D8. Decision: a live drain publishes its own task's failure directly through
+  the tap, and that failure requests an immediate serialized stop. Rationale: a
+  reader iterating a live stream has not asked for an outcome, so waiting for
+  settlement would suspend it indefinitely, and a held handle would leave the
+  child blocked on a pipe nobody drains. The stop is bound after the spawn and
+  honours a request made before binding. Date/Author: 2026-11-27,
+  implementation agent.
+- D9. Decision: `kill()` deliberately does not take the stop lock. Rationale:
+  taking it would make an immediate forced stop wait out another caller's
+  `SIGTERM` grace period, which contradicts the operation's contract; the lock
+  serializes escalations, and `kill` is the deliberate non-escalating stop. The
+  unverified review note is therefore declined. Date/Author: 2026-11-28,
+  implementation agent.
+- D10. Decision: settlement releases both live queues before the exit wait, not
+  at reconciliation. Rationale: a full queue blocks its drain, a full pipe
+  blocks the child, and an unbounded `wait()` would then never settle. Live
+  delivery after the wait starts may truncate, which the users' guide already
+  documents as the cost of waiting before consuming to EOF. Date/Author:
+  2026-11-28, implementation agent.
 
 ## Outcomes & retrospective
 
