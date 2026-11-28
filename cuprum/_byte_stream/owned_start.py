@@ -84,7 +84,8 @@ def _bytes_execution_state(
     Returns
     -------
     _ExecutionState
-        The resolved inputs, with capture forced on and byte mode set.
+        The resolved inputs, with the caller's capture policy preserved, both
+        streams bound to a pipe, and byte mode set.
     """
     options = _bytes_output(output)
     _validate_bytes_output(options)

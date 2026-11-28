@@ -138,6 +138,12 @@ repository, so the budgets are conservative rather than historical.
   cancellation boundary and the ADR/design closure contract were corrected, and
   the tolerance measurements were re-derived from the committed diff.
   Reassessment is pending.
+- [x] (2026-11-28) The third assessment round returned "not yet complete":
+  the blocked-I/O cases now observe the queue-full and un-resumed-writer
+  preconditions instead of sleeping; a supervised repeated-cancellation
+  scenario re-cancels the owning context inside its grace window; D11 was
+  re-derived at the head; and the stale capture docstring and the held-handle
+  producer-failure assertions were corrected. Reassessment is pending.
 - [ ] Reassessment, readiness, formal review, merge.
 
 ## Surprises & discoveries
@@ -174,6 +180,12 @@ repository, so the budgets are conservative rather than historical.
   annotations that must resolve at runtime. Evidence: `get_type_hints` on the
   new public methods. Impact: the four affected imports carry a narrow
   `ruff: ignore` naming the runtime-resolution reason.
+- Observation: the supervised scenarios' descriptor assertion is a POSIX
+  extra. The helper counts `/proc/self/fd` on Linux and `/dev/fd` on the BSDs
+  and macOS; a platform with neither has no portable descriptor table, so that
+  assertion is skipped there while the pending-task assertion, the settled
+  handle, and child reaping still run. The Linux CI job is where the descriptor
+  count is exercised.
 
 ## Decision log
 
@@ -234,15 +246,15 @@ repository, so the budgets are conservative rather than historical.
   implementation agent.
 - D11. Decision: the plan's file and code tolerances are exceeded and the
   overage is accepted under the owner's standing instruction to implement issue
-  #706 in full and merge it. Measured with `git diff --numstat` from the merge
-  base with `origin/main` (`5d2e4a91`) to the branch head, excluding
-  `docs/execplans/**` — this file is outside the measured set, so a later
-  revision of this plan cannot change the totals — the diff is 62 files, 6,864
-  added and 791 deleted lines, for 6,073 net lines. By category:
+  #706 in full and merge it. Re-derived with `git diff --numstat` from the
+  merge base with `origin/main` (`5d2e4a91`) to the branch head, excluding
+  `docs/execplans/**` (this file is outside the measured set, so revising it
+  does not change the totals): 64 files, 7,166 added and 791 deleted lines, for
+  6,375 net lines. By category:
 
-  - Python: 5,393 net lines over 51 files (2,442 net production over 35 files
-    and 2,951 net tests over 16 files).
-  - Documentation: 640 net lines over eight files, including `CHANGELOG.md`.
+  - Python: 5,650 net lines over 52 files (2,443 net production over 35 files
+    and 3,207 net tests over 17 files).
+  - Documentation: 685 net lines over nine files, including `CHANGELOG.md`.
   - Test fixtures: 39 net lines over two files
     (`tests/features/live_byte_streams.feature` and the Maturin wheel
     snapshot).
@@ -253,10 +265,11 @@ repository, so the budgets are conservative rather than historical.
   overage is driven by the acceptance criteria themselves: barrier-driven
   real-child coverage, both reaping routes, cancellation and cleanup
   assertions, public typing contracts, and the ADR/design/guide text. No
-  dependency or public interface beyond the issue scope was added. Date/Author:
+  dependency or public interface beyond the issue scope was added. The exact
+  totals change with every source commit, so any later revision must re-derive
+  them with the command above rather than trust the figures. Date/Author:
   2026-11-28, implementation agent acting on the owner's merge directive;
-  totals re-derived from the committed diff after the first figures were found
-  to disagree with the hosted comparison.
+  supersedes the two earlier, stale derivations.
 
 - D10. Decision: settlement releases both live queues before the exit wait, not
   at reconciliation. Rationale: a full queue blocks its drain, a full pipe

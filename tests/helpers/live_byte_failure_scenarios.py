@@ -135,11 +135,20 @@ async def stdin_failure_stops_held_child() -> None:
         )
         try:
             await handle.wait()
-        except StdinSourceError:
-            pass
+        except StdinSourceError as error:
+            _require(
+                isinstance(error.__cause__, RuntimeError),
+                f"the producer failure must be chained, got {error.__cause__!r}",
+            )
         else:
             message = "settlement should report the producer failure"
             raise RuntimeError(message)
+        for reader in (handle.stdout, handle.stderr):
+            _require(
+                reader.closure
+                in {StreamClosure.EOF, StreamClosure.TRUNCATED_BY_SETTLEMENT},
+                f"a producer failure must not fail a reader, got {reader.closure!r}",
+            )
     finally:
         if _is_alive(pid):
             _kill_and_reap(pid)

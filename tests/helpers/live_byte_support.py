@@ -20,9 +20,13 @@ import os
 import signal
 import sys
 import time
+import typing as typ
 from pathlib import Path
 
 from cuprum import ByteStreamReader, Program, ProgramCatalogue, sh
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = [
     "DESCENDANT_WAIT_S",
@@ -40,6 +44,7 @@ __all__ = [
     "require_clean_teardown",
     "require_posix_probe",
     "wait_dead",
+    "wait_until",
 ]
 
 #: The payload used by the large-output and stalled-consumer stories.
@@ -138,12 +143,42 @@ async def read_until(reader: ByteStreamReader, marker: bytes) -> tuple[bytes, by
     raise RuntimeError(message)
 
 
+_FD_DIRECTORIES = (Path("/proc/self/fd"), Path("/dev/fd"))
+
+
 def open_fd_count() -> int | None:
-    """Count this process's descriptors, or return ``None`` without procfs."""
-    try:
-        return sum(1 for _ in Path("/proc/self/fd").iterdir())
-    except OSError:
-        return None
+    """Count this process's descriptors, or return ``None`` where no table exists.
+
+    Linux exposes the table at ``/proc/self/fd`` and the BSDs, including macOS,
+    at ``/dev/fd``. A platform with neither path has no portable count, so the
+    caller's descriptor assertion is skipped there while the pending-task
+    assertion still runs.
+
+    Returns
+    -------
+    int | None
+        The open descriptor count, or ``None`` when the platform has no table.
+    """
+    for directory in _FD_DIRECTORIES:
+        if directory.is_dir():
+            return sum(1 for _ in directory.iterdir())
+    return None
+
+
+async def wait_until(
+    predicate: cabc.Callable[[], bool],
+    *,
+    timeout: float,  # ruff: ignore[async-function-with-timeout]  # This timeout bounds the poll, not the whole operation.
+    description: str,
+) -> None:
+    """Wait until *predicate* holds, failing with *description* on a timeout."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() >= deadline:
+            message = f"timed out after {timeout}s waiting for {description}"
+            raise RuntimeError(message)
+        await asyncio.sleep(0.01)
 
 
 def require_clean_teardown(before: int | None) -> None:

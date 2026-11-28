@@ -28,6 +28,7 @@ from cuprum import (
 from tests.helpers.live_byte_blocking_scenarios import (
     cancel_context_while_output_blocked,
     cancel_waiter_while_stdin_blocked,
+    repeated_cancellation_during_teardown,
     stalled_then_resumed,
 )
 from tests.helpers.live_byte_descendant_scenarios import (
@@ -273,6 +274,7 @@ _SCENARIOS = {
     "close_one_stream": close_one_stream,
     "cancel_context_while_output_blocked": cancel_context_while_output_blocked,
     "cancel_waiter_while_stdin_blocked": cancel_waiter_while_stdin_blocked,
+    "repeated_cancellation_during_teardown": repeated_cancellation_during_teardown,
     "stalled_then_resumed": stalled_then_resumed,
     "live_failure_stops_held_child": live_failure_stops_held_child,
     "stdin_failure_stops_held_child": stdin_failure_stops_held_child,

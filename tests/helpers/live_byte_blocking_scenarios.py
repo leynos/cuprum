@@ -32,6 +32,9 @@ from tests.helpers.live_byte_support import (
 from tests.helpers.live_byte_support import (
     require_clean_teardown as _require_clean_teardown,
 )
+from tests.helpers.live_byte_support import (
+    wait_until as _wait_until,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -39,9 +42,12 @@ if typ.TYPE_CHECKING:
 __all__ = [
     "cancel_context_while_output_blocked",
     "cancel_waiter_while_stdin_blocked",
+    "repeated_cancellation_during_teardown",
     "stalled_then_resumed",
 ]
 
+_QUEUE_BOUND = 1024
+_STALL_BOUND = 8
 _STALL_PREFIX = b"0123456789abcdef"
 
 
@@ -54,7 +60,7 @@ async def cancel_context_while_output_blocked() -> None:
         "time.sleep(30)\n"
     )
     before = _open_fd_count()
-    handle = await _PYTHON("-c", code).start_bytes(max_buffered_bytes=1024)
+    handle = await _PYTHON("-c", code).start_bytes(max_buffered_bytes=_QUEUE_BOUND)
 
     async def hold() -> None:
         """Own the handle until cancellation tears the block down."""
@@ -62,7 +68,14 @@ async def cancel_context_while_output_blocked() -> None:
             await asyncio.sleep(30)
 
     holder = asyncio.create_task(hold())
-    await asyncio.sleep(0.5)
+    # Establish the precondition rather than assume it: a full queue means the
+    # drain is parked in put and the child is parked in write, so the only way
+    # out is teardown releasing the queue.
+    await _wait_until(
+        lambda: handle.stdout.buffered_bytes == _QUEUE_BOUND,
+        timeout=10.0,
+        description="the live queue to fill to its bound",
+    )
     holder.cancel()
     try:
         await holder
@@ -83,12 +96,16 @@ async def cancel_context_while_output_blocked() -> None:
 async def cancel_waiter_while_stdin_blocked() -> None:
     """Cancel a waiter while the stdin writer is blocked on a full pipe."""
     finalized = asyncio.Event()
+    pulled = asyncio.Event()
+    resumed = asyncio.Event()
 
     async def produce() -> cabc.AsyncIterator[bytes]:
         """Offer more than the pipe can take, so the writer blocks in drain."""
         await asyncio.sleep(0)
+        pulled.set()
         try:
             yield b"x" * (4 * 1024 * 1024)
+            resumed.set()
             yield b"y"
         finally:
             finalized.set()
@@ -99,7 +116,20 @@ async def cancel_waiter_while_stdin_blocked() -> None:
         context=ExecutionContext(cancel_grace=0.2),
     )
     waiter = asyncio.create_task(handle.wait())
+    # The first 4 MiB chunk cannot fit any pipe buffer, and the child never
+    # reads it, so once the writer has pulled that chunk it cannot complete it:
+    # the producer is not resumed for its second yield. Observing that absence
+    # for a bounded window establishes the writer is parked in drain().
+    await _wait_until(
+        pulled.is_set,
+        timeout=10.0,
+        description="the writer to pull the oversized chunk",
+    )
     await asyncio.sleep(0.5)
+    _require(
+        not resumed.is_set(),
+        "the writer must still be blocked in the oversized chunk's write",
+    )
     waiter.cancel()
     try:
         await waiter
@@ -111,6 +141,44 @@ async def cancel_waiter_while_stdin_blocked() -> None:
     result = await handle.terminate(grace=0.2)
     await asyncio.wait_for(finalized.wait(), timeout=5.0)
     _require(result.exit_code in {-15, -9}, f"the child ended as {result.exit_code}")
+    _require_clean_teardown(before)
+
+
+async def repeated_cancellation_during_teardown() -> None:
+    """Cancel the owning context again while its teardown is already running."""
+    code = (
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(30)\n"
+    )
+    before = _open_fd_count()
+    handle = await _PYTHON("-c", code).start_bytes(
+        context=ExecutionContext(cancel_grace=0.5),
+    )
+
+    async def hold() -> None:
+        """Own the handle until cancellation tears the block down."""
+        async with handle:
+            await asyncio.sleep(30)
+
+    holder = asyncio.create_task(hold())
+    await asyncio.sleep(0.2)
+    holder.cancel()
+    # The child ignores SIGTERM, so teardown stays inside the grace window;
+    # the later cancels therefore land while teardown is already running.
+    await asyncio.sleep(0.05)
+    _require(not holder.done(), "teardown must still be running")
+    holder.cancel()
+    await asyncio.sleep(0)
+    holder.cancel()
+    try:
+        await asyncio.wait_for(holder, timeout=10.0)
+    except asyncio.CancelledError:
+        pass
+    else:
+        message = "the holder should have been cancelled"
+        raise RuntimeError(message)
+    _require(handle.result is not None, "teardown must settle the handle")
     _require_clean_teardown(before)
 
 
@@ -134,11 +202,15 @@ async def stalled_then_resumed() -> None:
     before = _open_fd_count()
     handle = await _PYTHON("-c", code).start_bytes(
         stdin=StdinStream(produce()),
-        max_buffered_bytes=8,
+        max_buffered_bytes=_STALL_BOUND,
     )
-    # Widen the stall window: the 16-byte prefix cannot fit the 8-byte queue,
-    # so the drain is blocked in put until this reader consumes the head.
-    await asyncio.sleep(0.5)
+    # The 16-byte prefix cannot fit the 8-byte queue, so a full queue proves
+    # the drain is parked in put until this reader consumes the head.
+    await _wait_until(
+        lambda: handle.stdout.buffered_bytes == _STALL_BOUND,
+        timeout=10.0,
+        description="the live queue to fill to its bound",
+    )
     head = bytearray()
     async for chunk in handle.stdout:
         head.extend(chunk.data)

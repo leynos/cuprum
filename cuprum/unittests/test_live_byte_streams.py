@@ -62,6 +62,7 @@ _PORTABLE_SCENARIOS = (
     "close_one_stream",
     "cancel_context_while_output_blocked",
     "cancel_waiter_while_stdin_blocked",
+    "repeated_cancellation_during_teardown",
     "stalled_then_resumed",
 )
 
@@ -290,8 +291,15 @@ def test_repeated_cancellation_during_teardown_still_settles() -> None:
     """Cancelling a waiter and the owning context still settles exactly once."""
 
     async def scenario() -> None:
-        """Cancel a holder and a waiter together during teardown."""
-        handle = await _PYTHON("-c", "import time; time.sleep(30)").start_bytes()
+        """Cancel the owning context again while its teardown is running."""
+        code = (
+            "import signal, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "time.sleep(30)\n"
+        )
+        handle = await _PYTHON("-c", code).start_bytes(
+            context=ExecutionContext(cancel_grace=0.5),
+        )
 
         async def hold() -> None:
             """Own the handle until cancellation tears the block down."""
@@ -299,13 +307,17 @@ def test_repeated_cancellation_during_teardown_still_settles() -> None:
                 await asyncio.sleep(30)
 
         holder = asyncio.create_task(hold())
-        waiter = asyncio.create_task(handle.wait())
         await asyncio.sleep(0.1)
         holder.cancel()
-        waiter.cancel()
-        for task in (holder, waiter):
-            with pytest.raises(asyncio.CancelledError):
-                await task
+        # The child ignores SIGTERM, so teardown is still inside its grace
+        # window; these repeats land while teardown is already running.
+        await asyncio.sleep(0.05)
+        assert not holder.done(), "teardown must still be running"
+        holder.cancel()
+        await asyncio.sleep(0)
+        holder.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(holder, timeout=10.0)
         assert handle.result is not None, "the settlement must still be recorded"
         pending = [
             task
@@ -324,12 +336,16 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
     async def scenario() -> None:
         """Block a producer, cancel the waiter, then stop the child."""
         finalized = asyncio.Event()
+        pulled = asyncio.Event()
+        resumed = asyncio.Event()
 
         async def produce() -> cabc.AsyncIterator[bytes]:
             """Offer more than the pipe can take, so the writer blocks in drain."""
+            await asyncio.sleep(0)
+            pulled.set()
             try:
-                await asyncio.sleep(0)
                 yield b"x" * (4 * 1024 * 1024)
+                resumed.set()
                 yield b"y"
             finally:
                 finalized.set()
@@ -339,7 +355,11 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
             context=ExecutionContext(cancel_grace=0.2),
         )
         waiter = asyncio.create_task(handle.wait())
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(pulled.wait(), timeout=10.0)
+        await asyncio.sleep(0.2)
+        assert not resumed.is_set(), (
+            "the writer must still be blocked in the oversized chunk's write"
+        )
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
@@ -416,7 +436,12 @@ def test_cancellation_with_blocked_output_reaps_the_child() -> None:
                 await asyncio.sleep(30)
 
         holder = asyncio.create_task(hold())
-        await asyncio.sleep(0.3)
+        deadline = asyncio.get_running_loop().time() + 10.0
+        while handle.stdout.buffered_bytes < 1024:
+            assert asyncio.get_running_loop().time() < deadline, (
+                "the live queue must fill to its bound"
+            )
+            await asyncio.sleep(0.01)
         assert handle.result is None, "nothing must settle before the cancellation"
         assert not handle.stdout.at_eof, "the reader must still be live"
         holder.cancel()
