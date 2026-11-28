@@ -3698,14 +3698,14 @@ Each fall-back is recorded at `DEBUG` on the `cuprum._pipeline_streams` logger
 with a `cuprum_action` of `rust_pump_declined` and one of these `cuprum_reason`
 values:
 
-| `cuprum_reason`             | Meaning                                                                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over                                          |
-| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, so it was left unpaused                                       |
-| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor                                              |
-| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                                                         |
-| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be opened or duplicated — it had closed, or the process ran out of descriptors |
-| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use                                            |
+| `cuprum_reason`             | Meaning                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `raw_fd_unavailable`        | at least one asyncio transport exposed no raw descriptor, so there was nothing to hand over                                                       |
+| `reader_unresumable`        | the reader transport exposes `pause_reading` but not `resume_reading`, so it was left unpaused                                                    |
+| `reader_pause_failed`       | the reader transport could not be paused, so asyncio might still consume the descriptor                                                           |
+| `blocking_mode_unavailable` | the descriptors could not be switched to the blocking mode the pump requires                                                                      |
+| `duplicate_fds_unavailable` | the worker's copy of a transport descriptor could not be opened or duplicated — for example, it had closed, or the process ran out of descriptors |
+| `platform_unsupported`      | Windows Proactor pipes use overlapped handles that synchronous Rust I/O cannot safely use                                                         |
 
 _Table 9: Reasons an inter-stage hop declines the Rust pump._
 
