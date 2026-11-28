@@ -30,6 +30,8 @@ import math
 import typing as typ
 
 from scripts import compiler_cache_cost as cost_reader
+from scripts import compiler_cache_families as families_reader
+from scripts import compiler_cache_observations as observations_reader
 from scripts import compiler_cache_pairs as pairs_reader
 from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_validation as validation
@@ -230,32 +232,72 @@ def _decision(
         replaces, the console's incremental cost and break-even consumers, and
         the verdict.
     """
-    measured = _measurements(family)
-    facts = _console_facts(console)
-    enough = int(typ.cast("int", family["pairs"])) >= PAIRS_REQUIRED
-    worth_it = _worth_it(measured.saving, measured.floor, measured.transfer)
-    break_even = (
-        _break_even(
-            cost_reader.console_number(console, "initial_population_seconds"),
-            measured.transfer,
-            measured.saving,
-        )
-        if facts.verified
-        else None
+    context = DecisionContext(
+        family=family,
+        measured=_measurements(family),
+        facts=_console_facts(console),
+        protected=protected,
     )
-    adoption = _adoption(facts, protected=protected)
+    return _decision_row(context, _decision_terms(context, console))
+
+
+class DecisionContext(typ.NamedTuple):
+    """The family, its measurements, console facts, and protection state."""
+
+    family: cabc.Mapping[str, object]
+    measured: Measurements
+    facts: ConsoleFacts
+    protected: bool
+
+
+class DecisionTerms(typ.NamedTuple):
+    """The policy terms one family's verdict is decided from."""
+
+    enough: bool
+    worth_it: bool | None
+    break_even: int | None
+    adoption: Adoption
+
+
+def _decision_terms(
+    context: DecisionContext, console: cabc.Mapping[str, object] | None
+) -> DecisionTerms:
+    """Decide the gate's policy terms for one family."""
+    measured = context.measured
+    terms = DecisionTerms(
+        enough=int(typ.cast("int", context.family["pairs"])) >= PAIRS_REQUIRED,
+        worth_it=_worth_it(measured.saving, measured.floor, measured.transfer),
+        break_even=None,
+        adoption=_adoption(context.facts, protected=context.protected),
+    )
+    if context.facts.verified:
+        terms = terms._replace(
+            break_even=_break_even(
+                cost_reader.console_number(console, "initial_population_seconds"),
+                measured.transfer,
+                measured.saving,
+            )
+        )
+    return terms
+
+
+def _decision_row(context: DecisionContext, terms: DecisionTerms) -> dict[str, object]:
+    """Render one family's decision row from its policy terms."""
+    measured = context.measured
     return {
-        "family": family["family"],
-        "pairs": family["pairs"],
+        "family": context.family["family"],
+        "pairs": context.family["pairs"],
         "median_saving_seconds": measured.saving,
         "control_occupancy_seconds": measured.occupancy,
         "five_percent_floor_seconds": measured.floor,
         "save_restore_seconds": measured.transfer,
         "minimum_worthwhile_seconds": measured.minimum,
-        "incremental_cost_seconds": facts.incremental,
-        "break_even_consumers": break_even,
-        "branch_protection": "enabled" if protected else "unknown",
-        "verdict": _verdict(enough=enough, worth_it=worth_it, adoption=adoption),
+        "incremental_cost_seconds": context.facts.incremental,
+        "break_even_consumers": terms.break_even,
+        "branch_protection": "enabled" if context.protected else "unknown",
+        "verdict": _verdict(
+            enough=terms.enough, worth_it=terms.worth_it, adoption=terms.adoption
+        ),
     }
 
 
@@ -279,11 +321,11 @@ def build_summary(
 ) -> dict[str, object]:
     """Compute the experiment summary, leaving unsupported fields ``unknown``."""
     grouped = pairs_reader.pairs_for(records)
-    every = pairs_reader.records_by_family(records)
+    every = observations_reader.records_by_family(records)
     _check_console_scope(every, console)
     context = pairs_reader.JoinContext(jobs, names)
     families = [
-        pairs_reader.family_summary(
+        families_reader.family_summary(
             family,
             grouped.get(family, {"control": [], "candidate": []}),
             context,
@@ -303,7 +345,7 @@ def build_summary(
                 1 for record in records if record["state"] != "ok"
             ),
         },
-        "observations": pairs_reader.classify_observations(records, jobs, names),
+        "observations": observations_reader.classify_observations(records, jobs, names),
         "families": families,
         "cost": cost_reader.cost(records, jobs, names, console),
         "gate": _gate(families, console),

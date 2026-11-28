@@ -69,7 +69,9 @@ def _bundle() -> ObservationBundle:
             "not_cached": {},
         },
         save_seconds=3.0,
+        save_seconds_detail="measured",
         save_bytes=4,
+        save_bytes_detail="measured",
         expects_rustc=True,
         target_present=False,
     )
@@ -161,6 +163,21 @@ def _fail_scan(path: Path) -> list[os.DirEntry[str]]:
     return probe.directory_scan(path)
 
 
+def _snapshots(
+    environ: dict[str, str],
+    bracket: str,
+    *,
+    scan: probe.Scan = probe.directory_scan,
+) -> None:
+    """Write one bracket's pre and post snapshots through ``scan``."""
+    for phase in ("pre", "post"):
+        writer.snapshot(
+            {**environ, "EVIDENCE_BRACKET": bracket, "EVIDENCE_PHASE": phase},
+            runner=FakeSccache([stats_document()]),
+            scan=scan,
+        )
+
+
 def _round(
     environ: dict[str, str],
     bracket: str,
@@ -168,12 +185,7 @@ def _round(
     scan: probe.Scan = probe.directory_scan,
 ) -> None:
     """Snapshot and record one bracket through ``scan``."""
-    for phase in ("pre", "post"):
-        writer.snapshot(
-            {**environ, "EVIDENCE_BRACKET": bracket, "EVIDENCE_PHASE": phase},
-            runner=FakeSccache([stats_document()]),
-            scan=scan,
-        )
+    _snapshots(environ, bracket, scan=scan)
     observed = writer.record(
         {**environ, "EVIDENCE_BRACKET": bracket},
         runner=FakeSccache([stats_document()]),
@@ -276,3 +288,45 @@ def test_an_invalid_record_is_an_omitted_result(
     monkeypatch.setattr(writer, "build_record", lambda _bundle: {"bracket": "x"})
     observed = writer.record(environment(tmp_path))
     assert observed.outcome == "omitted", observed
+
+
+@pytest.mark.parametrize("mode", ["snapshot", "record", "mark"])
+def test_a_missing_evidence_directory_is_an_omitted_result(
+    tmp_path: Path, mode: str
+) -> None:
+    """Every command reports a missing evidence directory by type."""
+    environ = environment(tmp_path)
+    del environ["EVIDENCE_DIR"]
+    match mode:
+        case "snapshot":
+            observed = writer.snapshot(environ)
+        case "record":
+            observed = writer.record(environ)
+        case _:
+            environ["EVIDENCE_MARKER"] = "restore"
+            observed = writer.mark(environ)
+    assert observed.outcome == "omitted", observed
+    assert "evidence directory" in observed.warning.lower(), observed
+
+
+def test_the_probe_detail_reaches_the_bundle_and_snapshot(tmp_path: Path) -> None:
+    """An unreadable size stays distinguishable from an absent one."""
+    cache = tmp_path / ".cache" / "sccache"
+    cache.mkdir(parents=True)
+    (cache / "object").write_bytes(b"x")
+    environ = environment(tmp_path)
+    _snapshots(environ, "typecheck", scan=_fail_scan)
+    snapshot = json.loads(
+        (tmp_path / "evidence" / "snapshots" / "typecheck-pre.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert snapshot["restore_bytes_detail"] == "unreadable", snapshot
+    unreadable = writer.gather_observation(environ, scan=_fail_scan)
+    assert unreadable.save_bytes_detail == "unreadable", unreadable
+    absent_root = tmp_path / "absent"
+    absent_root.mkdir()
+    absent_environ = environment(absent_root)
+    _snapshots(absent_environ, "typecheck")
+    absent = writer.gather_observation(absent_environ)
+    assert absent.save_bytes_detail == "absent", absent

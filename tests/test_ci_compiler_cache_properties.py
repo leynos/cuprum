@@ -14,7 +14,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from scripts import compiler_cache_cost as cost_reader
-from scripts import compiler_cache_pairs as pairs_reader
+from scripts import compiler_cache_observations as observations_reader
 from scripts import compiler_cache_schema as schema
 from scripts.compiler_cache_summary import _minimum_worthwhile, _worth_it
 from tests.helpers.ci_compiler_evidence import record_fixture
@@ -75,7 +75,7 @@ def test_classification_is_independent_of_input_order(
     shuffled = [records[index] for index in order]
     labels = {
         str(entry["bracket"]): entry["observation_class"]
-        for entry in pairs_reader.classify_observations(shuffled, [], {})
+        for entry in observations_reader.classify_observations(shuffled, [], {})
     }
     expected = {
         str(record["bracket"]): (

@@ -74,6 +74,9 @@ class CommandResult(typ.NamedTuple):
     warning: str = ""
 
 
+_MISSING_DIR = f"{_WARNING}The evidence directory is not configured."
+
+
 def capture(
     environ: cabc.Mapping[str, str],
     *,
@@ -113,16 +116,18 @@ def capture(
     observed = probe.read_stats(environ, runner=runner)
     stats = observed.stats
     available = observed.ok
+    restore_span = probe.elapsed_between(environ, "restore", "restore-end")
+    restore_size = probe.directory_bytes(environ, scan=scan)
     return {
         "schema_version": schema.SCHEMA_VERSION,
         "bracket": bracket,
         "phase": phase,
         "captured_at": clock(),
         "available": available,
-        "restore_seconds": probe.elapsed_between(
-            environ, "restore", "restore-end"
-        ).seconds,
-        "restore_bytes": probe.directory_bytes(environ, scan=scan).size,
+        "restore_seconds": restore_span.seconds,
+        "restore_seconds_detail": restore_span.detail,
+        "restore_bytes": restore_size.size,
+        "restore_bytes_detail": restore_size.detail,
         "sccache_version": observed.version or None,
         "cache_backend": observed.backend if available else "none",
         "cache_service_v2": "ACTIONS_CACHE_SERVICE_V2" in environ,
@@ -173,7 +178,11 @@ def mark(
             "omitted",
             f"{_WARNING}Invalid timing marker; the marker was omitted.",
         )
-    if not write_mark(environ, marker, clock=clock):
+    try:
+        written = write_mark(environ, marker, clock=clock)
+    except KeyError:
+        return CommandResult("omitted", _MISSING_DIR)
+    if not written:
         return CommandResult(
             "unwritable", f"{_WARNING}Could not persist the timing marker."
         )
@@ -196,16 +205,17 @@ def snapshot(
     """
     try:
         state = capture(environ, clock=clock, runner=runner, scan=scan)
+        path = _snapshot_path(environ, str(state["bracket"]), str(state["phase"]))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(state, separators=(",", ":")) + "\n", encoding="utf-8"
+        )
+    except KeyError:
+        return CommandResult("omitted", _MISSING_DIR)
     except ValueError:
         return CommandResult(
             "omitted",
             f"{_WARNING}Invalid snapshot fields; the snapshot was omitted.",
-        )
-    path = _snapshot_path(environ, str(state["bracket"]), str(state["phase"]))
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(state, separators=(",", ":")) + "\n", encoding="utf-8"
         )
     except OSError:
         return CommandResult(
@@ -273,12 +283,16 @@ def gather_observation(
         "commit": compiler.commit,
         "host": compiler.host,
     }
+    save_span = probe.elapsed_between(environ, "save", "save-end")
+    save_size = probe.directory_bytes(environ, scan=scan)
     return ObservationBundle(
         fields=fields,
         pre=pre,
         post=post,
-        save_seconds=probe.elapsed_between(environ, "save", "save-end").seconds,
-        save_bytes=probe.directory_bytes(environ, scan=scan).size,
+        save_seconds=save_span.seconds,
+        save_seconds_detail=save_span.detail,
+        save_bytes=save_size.size,
+        save_bytes_detail=save_size.detail,
         expects_rustc=schema.boolean(environ.get("EVIDENCE_EXPECTS_RUSTC")),
         target_present=schema.boolean(environ.get("EVIDENCE_TARGET_PRESENT")),
     )
@@ -310,7 +324,9 @@ def record(
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as records:
             records.write(encoded + "\n")
-    except (ValueError, KeyError):
+    except KeyError:
+        return CommandResult("omitted", _MISSING_DIR)
+    except ValueError:
         return CommandResult(
             "omitted",
             f"{_WARNING}Invalid or unwritable evidence fields; record omitted.",

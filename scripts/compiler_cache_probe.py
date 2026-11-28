@@ -51,12 +51,19 @@ class DirEntry(typ.Protocol):
 
 
 type Scan = cabc.Callable[[Path], cabc.Iterable[object]]
+type PathStat = cabc.Callable[[Path], os.stat_result]
+type ReadText = cabc.Callable[[Path], str]
 
 
 def directory_scan(path: Path) -> list[os.DirEntry[str]]:
     """List one directory, letting a scandir error propagate."""
     with os.scandir(path) as entries:
         return list(entries)
+
+
+def read_text(path: Path) -> str:
+    """Return one file's text, letting the error propagate."""
+    return path.read_text(encoding="utf-8")
 
 
 class StatsProbe(typ.NamedTuple):
@@ -201,7 +208,10 @@ def not_cached(stats: cabc.Mapping[str, object]) -> dict[str, int]:
 
 
 def directory_bytes(
-    environ: cabc.Mapping[str, str], *, scan: Scan = directory_scan
+    environ: cabc.Mapping[str, str],
+    *,
+    scan: Scan = directory_scan,
+    stat_path: PathStat = Path.stat,
 ) -> SizeProbe:
     """Return the local compiler directory's size and how it was obtained.
 
@@ -217,7 +227,7 @@ def directory_bytes(
     """
     root = Path(environ.get("HOME", "")) / ".cache" / "sccache"
     try:
-        info = root.stat()
+        info = stat_path(root)
     except FileNotFoundError:
         return SizeProbe(None, "absent")
     except OSError:
@@ -313,7 +323,9 @@ def marker_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
     return Path(environ["EVIDENCE_DIR"]) / "marks" / name
 
 
-def elapsed_between(environ: cabc.Mapping[str, str], start: str, end: str) -> SpanProbe:
+def elapsed_between(
+    environ: cabc.Mapping[str, str], start: str, end: str, *, read: ReadText = read_text
+) -> SpanProbe:
     """Return the interval between two markers and how it was obtained.
 
     Returns
@@ -325,8 +337,8 @@ def elapsed_between(environ: cabc.Mapping[str, str], start: str, end: str) -> Sp
     begin_path = marker_path(environ, start)
     finish_path = marker_path(environ, end)
     try:
-        begin = float(begin_path.read_text(encoding="utf-8").strip())
-        finish = float(finish_path.read_text(encoding="utf-8").strip())
+        begin = float(read(begin_path).strip())
+        finish = float(read(finish_path).strip())
     except FileNotFoundError:
         return SpanProbe(None, "absent")
     except (OSError, ValueError):

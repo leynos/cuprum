@@ -624,8 +624,10 @@ reads return typed results and take an injected process runner),
 `compiler_cache_record.py` assembles one record from an already-read
 observation bundle, `compiler_cache_evidence.py` is the command edge that
 gathers the snapshots and markers and writes one redacted JSONL line per
-bracket, `compiler_cache_records.py` owns the filesystem and JSON boundaries,
-`compiler_cache_pairs.py` pairs control and candidate observations,
+bracket, `compiler_cache_observations.py` classifies and groups observations,
+`compiler_cache_pairs.py` pairs control and candidate observations and decides
+provenance comparability, `compiler_cache_families.py` computes each family's
+statistics, `compiler_cache_records.py` owns the filesystem and JSON boundaries,
 `compiler_cache_cost.py` turns whole-job seconds into the family-scoped cost
 view, `compiler_cache_summary.py` evaluates the predeclared gate, and
 `compiler_cache_report.py` owns the command line and Markdown view.

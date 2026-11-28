@@ -123,7 +123,9 @@ class ObservationBundle(typ.NamedTuple):
     pre: cabc.Mapping[str, object]
     post: cabc.Mapping[str, object]
     save_seconds: float | None
+    save_seconds_detail: str
     save_bytes: int | None
+    save_bytes_detail: str
     expects_rustc: bool | None
     target_present: bool | None
 

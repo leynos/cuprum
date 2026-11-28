@@ -298,22 +298,29 @@ def test_a_partial_walk_is_unreadable(
     assert observed == probe.SizeProbe(None, "unreadable"), observed
 
 
-def test_a_root_status_failure_is_unreadable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_root_status_failure_is_unreadable(tmp_path: Path) -> None:
     """A cache root that cannot be inspected is unknown, not absent."""
-    real_stat = Path.stat
 
-    def fail_on_root(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+    def fail_on_root(_path: Path) -> os.stat_result:
         """Fail when the root's own status is read."""
-        if self.name == "sccache":
-            message = "permission denied"
-            raise OSError(message)
-        return real_stat(self, follow_symlinks=follow_symlinks)
+        message = "permission denied"
+        raise OSError(message)
 
-    monkeypatch.setattr(Path, "stat", fail_on_root)
-    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    observed = probe.directory_bytes({"HOME": str(tmp_path)}, stat_path=fail_on_root)
     assert observed == probe.SizeProbe(None, "unreadable"), observed
+
+
+def test_a_marker_read_failure_is_unreadable(tmp_path: Path) -> None:
+    """A marker that cannot be parsed is distinct from an absent one."""
+
+    def bad_read(_path: Path) -> str:
+        """Return text that is not a timestamp."""
+        return "not-a-number"
+
+    observed = probe.elapsed_between(
+        {"EVIDENCE_DIR": str(tmp_path)}, "restore", "restore-end", read=bad_read
+    )
+    assert observed == probe.SpanProbe(None, "unreadable"), observed
 
 
 class _VanishedEntry:
