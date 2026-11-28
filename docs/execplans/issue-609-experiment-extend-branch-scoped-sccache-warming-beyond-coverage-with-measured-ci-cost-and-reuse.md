@@ -6,13 +6,13 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `7e228aa91`; this header tracks the latest gate run,
+recorded six-gate run is `285fded37`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
 the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
-`07ff587`, `68697ea`, `87bb414` and `7e228aa`. The experiment baseline remains
-`87de64c2c`, recorded on 22 November 2026. No candidate family is adopted by
-this change; the deliverable is the measured-qualification apparatus plus a
-reviewable adopt/reject record.
+`07ff587`, `68697ea`, `87bb414`, `7e228aa` and `285fded`. The experiment
+baseline remains `87de64c2c`, recorded on 22 November 2026. No candidate family
+is adopted by this change; the deliverable is the measured-qualification
+apparatus plus a reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -255,6 +255,16 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `7e228aa91` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-7e228aa91.log`.
+- [x] 28 November 2026: the writer commands now return a typed
+      `CommandResult` (`persisted`, `omitted`, `unwritable`) and `main` maps it
+      to exit status 0 and the warning. Marker writing moved out of the probe
+      module to the writer edge, the directory scan is injected, and the
+      record-level test asserts null sizes for an unreadable cache and integers
+      for a readable one. `family_summary` delegates its medians and extremes
+      to `_saving_aggregate`.
+- [x] 28 November 2026: M5 re-gates at `285fded37` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-285fded37.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
