@@ -22,41 +22,44 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    import pytest
-
 
 def _completed(stdout: str, returncode: int = 0) -> subprocess.CompletedProcess:
     """Return a completed process carrying ``stdout``."""
     return subprocess.CompletedProcess([], returncode, stdout, "")
 
 
-def test_the_top_level_cache_location_is_classified_not_returned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_the_top_level_cache_location_is_classified_not_returned() -> None:
     """The store is reported beside ``stats``, not inside it."""
     document = (
         '{"stats": {"compile_requests": 1},'
         ' "cache_location": "GitHub Actions Cache", "version": "0.12.0"}'
     )
-    monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(document))
-    stats, version, backend = probe.read_stats({})
-    assert stats["compile_requests"] == 1, f"the statistics must be parsed, got {stats}"
-    assert version == "0.12.0", f"the version must be preserved, got {version}"
-    assert backend == "gha", f"the top-level store must classify as gha, got {backend}"
-    assert "cache_location" not in stats, "the raw location must not reach the caller"
+    observed = probe.read_stats({}, runner=lambda *_, **__: _completed(document))
+    assert observed.ok, "a successful read must say so"
+    assert observed.stats["compile_requests"] == 1, (
+        f"the statistics must be parsed, got {observed.stats}"
+    )
+    assert observed.version == "0.12.0", (
+        f"the version must be preserved, got {observed.version}"
+    )
+    assert observed.backend == "gha", (
+        f"the top-level store must classify as gha, got {observed.backend}"
+    )
+    assert "cache_location" not in observed.stats, (
+        "the raw location must not reach the caller"
+    )
 
 
-def test_a_local_store_classifies_as_local(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_local_store_classifies_as_local() -> None:
     """A runner path is reduced to a label."""
     document = (
         '{"stats": {},'
         ' "cache_location": "Local disk: \\"/home/runner/.cache/sccache\\"",'
         ' "version": "0.12.0"}'
     )
-    monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(document))
-    _, _, backend = probe.read_stats({})
-    assert backend == "local", (
-        f"a local directory must classify as local, got {backend}"
+    observed = probe.read_stats({}, runner=lambda *_, **__: _completed(document))
+    assert observed.backend == "local", (
+        f"a local directory must classify as local, got {observed.backend}"
     )
 
 
@@ -73,27 +76,26 @@ def test_a_newer_sccache_map_shape_is_none() -> None:
     )
 
 
-def test_the_compiler_commit_field_is_mapped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_compiler_commit_field_is_mapped() -> None:
     """``rustc -vV`` names the field ``commit-hash``."""
     version = "release: 1.87.0\ncommit-hash: abc123\nhost: x86_64-linux\n"
-    monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(version))
-    values = probe.rustc({})
-    assert values == {
-        "release": "1.87.0",
-        "commit": "abc123",
-        "host": "x86_64-linux",
-    }, f"the commit hash must reach the commit field, got {values}"
+    values = probe.rustc({}, runner=lambda *_, **__: _completed(version))
+    assert values.ok, "a successful identity read must say so"
+    assert values.release == "1.87.0", f"the release must be read, got {values}"
+    assert values.commit == "abc123", (
+        f"the commit hash must reach the commit field, got {values}"
+    )
+    assert values.host == "x86_64-linux", f"the host must be read, got {values}"
 
 
-def test_compiler_identity_text_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compiler_identity_text_is_bounded() -> None:
     """A hostile compiler banner must not reach the artefact raw."""
     version = "release: 1.87.0 extra words\ncommit-hash: abc123\nhost: unknown\n"
-    monkeypatch.setattr(probe.subprocess, "run", lambda *_, **__: _completed(version))
-    values = probe.rustc({})
-    assert values["release"] == "unknown", (
+    values = probe.rustc({}, runner=lambda *_, **__: _completed(version))
+    assert values.release == "unknown", (
         f"unbounded compiler text must be dropped, got {values}"
     )
-    assert values["commit"] == "abc123", "a bounded value must be preserved"
+    assert values.commit == "abc123", "a bounded value must be preserved"
 
 
 def test_an_unset_value_is_bounded_to_unknown() -> None:
@@ -171,23 +173,23 @@ def _sccache_files(home: Path, sizes: tuple[int, ...]) -> None:
 def test_the_directory_size_is_the_exact_sum(tmp_path: Path) -> None:
     """The archive size is the sum of the files, not an estimate."""
     _sccache_files(tmp_path, (3, 5, 7))
-    assert probe.directory_bytes({"HOME": str(tmp_path)}) == 15, (
-        "the summed sizes must be reported exactly"
-    )
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed.size == 15, "the summed sizes must be reported exactly"
+    assert observed.detail == "measured", f"the measurement must say so, {observed}"
 
 
 def test_an_absent_cache_directory_has_no_size(tmp_path: Path) -> None:
     """A directory that does not exist is unknown, never zero."""
-    assert probe.directory_bytes({"HOME": str(tmp_path)}) is None, (
-        "an absent directory must be unknown"
-    )
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed.size is None, "an absent directory must be unknown"
+    assert observed.detail == "absent", f"the absence must be explicit, {observed}"
 
 
 def test_the_directory_size_reaches_the_record(tmp_path: Path) -> None:
     """The probe value must be persisted as the snapshot's byte count."""
     _sccache_files(tmp_path, (11, 13))
     environ = environment(tmp_path)
-    state = writer.capture(environ)
+    state = writer.capture(environ, runner=lambda *_, **__: _completed("{}"))
     assert state["restore_bytes"] == 24, (
         f"the snapshot must carry the measured size, got {state['restore_bytes']}"
     )

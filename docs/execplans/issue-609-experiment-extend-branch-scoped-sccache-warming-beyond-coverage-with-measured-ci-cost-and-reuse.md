@@ -219,6 +219,15 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `60bf7f227` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-60bf7f227.log`.
+- [x] 28 November 2026: the fourth review round's writer refactor landed.
+      `build_record` is now pure in `scripts/compiler_cache_record.py` and takes
+      an observation bundle; `gather_observation` is the writer's only read
+      path. `compiler_cache_probe` returns typed results (statistics, compiler
+      identity, size, span) with an explicit failure detail and takes an
+      injected process runner, so tests pass fakes instead of patching
+      `subprocess.run`. Classification moved to `compiler_cache_schema`, and
+      the pairing provenance rule now treats an all-unknown `rustc` mapping as
+      unidentified.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries

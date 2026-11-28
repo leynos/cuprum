@@ -19,7 +19,6 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from scripts import compiler_cache_evidence as writer
-from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
 from tests.helpers.ci_compiler_evidence import (
     BEARER_URL,
@@ -43,14 +42,20 @@ def evidence_environment_fixture(tmp_path: Path) -> dict[str, str]:
 
 def _two_snapshots(
     evidence_environment: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
     documents: tuple[dict[str, object], dict[str, object]],
 ) -> None:
     """Write a bracket's pre and post snapshots from two documents."""
     for phase, document in zip(("pre", "post"), documents, strict=True):
-        monkeypatch.setattr(probe.subprocess, "run", FakeSccache([document]))
-        observed = writer.snapshot({**evidence_environment, "EVIDENCE_PHASE": phase})
+        observed = writer.snapshot(
+            {**evidence_environment, "EVIDENCE_PHASE": phase},
+            runner=FakeSccache([document]),
+        )
         assert observed == 0, f"the {phase} snapshot must succeed"
+
+
+def _assembled(environ: dict[str, str]) -> dict[str, object]:
+    """Gather the probes and assemble one record."""
+    return writer.build_record(writer.gather_observation(environ))
 
 
 def test_a_record_subtracts_the_bracket_and_classifies_the_state(
@@ -59,13 +64,12 @@ def test_a_record_subtracts_the_bracket_and_classifies_the_state(
     """A bracket records the work between its two snapshots."""
     _two_snapshots(
         evidence_environment,
-        monkeypatch,
         (
             stats_document(),
             stats_document(compile_requests=18, cache_hits={"counts": {"Rust": 11}}),
         ),
     )
-    record = writer.build_record(evidence_environment)
+    record = _assembled(evidence_environment)
     counters = typ.cast("dict[str, object]", record["counters"])
     assert counters["compile_requests"] == 8, (
         f"the record must subtract the pre bracket, got {counters['compile_requests']}"
@@ -104,13 +108,12 @@ def test_zero_request_classification(
 
 def _record_after(
     environ: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
     before: dict[str, object],
     after: dict[str, object],
 ) -> dict[str, object]:
     """Build one record after two scripted sccache snapshots."""
-    _two_snapshots(environ, monkeypatch, (before, after))
-    return writer.build_record(environ)
+    _two_snapshots(environ, (before, after))
+    return writer.build_record(writer.gather_observation(environ))
 
 
 class _ReasonCase(typ.NamedTuple):
@@ -146,7 +149,6 @@ def test_a_reason_delta_is_zero_based_and_reset_aware(
     """An absent reason is zero; a reason that fell is omitted, never negative."""
     record = _record_after(
         evidence_environment,
-        monkeypatch,
         stats_document(not_cached=case.before),
         stats_document(not_cached=case.after),
     )
@@ -160,7 +162,7 @@ def test_an_out_of_vocabulary_selected_backend_is_normalized(
 ) -> None:
     """A store the writer cannot name is unknown, and the record is not healthy."""
     environ = {**evidence_environment, "EVIDENCE_SELECTED_BACKEND": "s3"}
-    record = _record_after(environ, monkeypatch, stats_document(), stats_document())
+    record = _record_after(environ, stats_document(), stats_document())
     assert record["selected_backend"] == "unknown", (
         f"an undeclared store must be unknown, got {record['selected_backend']!r}"
     )
@@ -187,11 +189,11 @@ def test_build_record_stamps_with_the_injected_clock(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The record timestamp is a caller-supplied edge value."""
-    _two_snapshots(
-        evidence_environment, monkeypatch, (stats_document(), stats_document())
-    )
+    _two_snapshots(evidence_environment, (stats_document(), stats_document()))
     record = writer.build_record(
-        evidence_environment, clock=lambda: "2026-01-01T00:00:00Z"
+        writer.gather_observation(
+            evidence_environment, clock=lambda: "2026-01-01T00:00:00Z"
+        )
     )
     assert record["recorded_at"] == "2026-01-01T00:00:00Z", (
         f"the injected clock must stamp the record, got {record['recorded_at']!r}"
@@ -202,9 +204,7 @@ def test_the_record_carries_the_runner_class(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A pair must never compare two runner classes as one backend change."""
-    record = _record_after(
-        evidence_environment, monkeypatch, stats_document(), stats_document()
-    )
+    record = _record_after(evidence_environment, stats_document(), stats_document())
     assert record["runner_class"] == "self-hosted", (
         f"the runner class must reach the record, got {record}"
     )
@@ -225,9 +225,7 @@ def test_each_span_ends_at_its_end_marker(
     """A transfer stops at its end marker, not at the later snapshot."""
     _write_span(evidence_environment, "save", 8.0, 3.0)
     _write_span(evidence_environment, "restore", 10.0, 4.0)
-    record = _record_after(
-        evidence_environment, monkeypatch, stats_document(), stats_document()
-    )
+    record = _record_after(evidence_environment, stats_document(), stats_document())
     assert record["save_seconds"] == pytest.approx(5.0, abs=1.0), (
         f"the save span must be the interval between the markers, got {record}"
     )
@@ -245,8 +243,8 @@ def test_an_unidentified_backend_is_degraded(
         "cache_location": "something else",
         "version": "0.12.0",
     }
-    _two_snapshots(evidence_environment, monkeypatch, (document, document))
-    record = writer.build_record(evidence_environment)
+    _two_snapshots(evidence_environment, (document, document))
+    record = _assembled(evidence_environment)
     assert record["backend"] == "unknown", record["backend"]
     assert record["state"] == "degraded", (
         f"an unidentified backend must be degraded, got {record['state']}"
@@ -257,10 +255,8 @@ def test_a_fallback_record_is_degraded_not_ok(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A compiler-only fallback must never count as remote-cache success."""
-    _two_snapshots(
-        evidence_environment, monkeypatch, (stats_document(), stats_document())
-    )
-    record = writer.build_record({
+    _two_snapshots(evidence_environment, (stats_document(), stats_document()))
+    record = _assembled({
         **evidence_environment,
         "EVIDENCE_SETUP_STATUS": "fallback",
     })
@@ -279,8 +275,8 @@ def test_a_gha_backend_on_the_v2_service_is_noncompliant(
         "ACTIONS_CACHE_URL": BEARER_URL,
     }
     document = stats_document(cache_location="GitHub Actions Cache")
-    _two_snapshots(environ, monkeypatch, (document, document))
-    record = writer.build_record({**environ, "EVIDENCE_SELECTED_BACKEND": "gha"})
+    _two_snapshots(environ, (document, document))
+    record = _assembled({**environ, "EVIDENCE_SELECTED_BACKEND": "gha"})
     assert record["backend"] == "gha", "the reported backend must be recorded"
     assert record["state"] == "noncompliant", (
         f"a v2 service with the gha backend must be noncompliant, got {record['state']}"
@@ -338,8 +334,8 @@ def test_a_selected_backend_that_differs_from_the_server_is_noncompliant(
 ) -> None:
     """A record must not claim a store the action did not bind."""
     document = stats_document(cache_location="GitHub Actions Cache")
-    _two_snapshots(evidence_environment, monkeypatch, (document, document))
-    record = writer.build_record({
+    _two_snapshots(evidence_environment, (document, document))
+    record = _assembled({
         **evidence_environment,
         "EVIDENCE_SELECTED_BACKEND": "local",
     })

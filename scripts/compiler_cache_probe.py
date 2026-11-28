@@ -3,13 +3,17 @@
 The evidence writer needs four things the runner can observe directly: the
 sccache statistics document, the compiler's identity, the size of the local
 cache directory a migration would remove, and the wall time since a restore or
-save marker. Each probe fails open and returns ``None`` or an ``unknown``
-marker, so a job that compiled correctly is never failed by a missing probe.
+save marker. Each probe fails open and reports an explicit ``detail`` alongside
+its value, so a caller can tell an absent source from an unreadable one, and a
+job that compiled correctly is never failed by a missing probe.
 
 The statistics document is reduced to the allowlisted counters and durations
 before it leaves this module. The raw document also carries the cache location,
 which can name a runner path or a service address; that value is classified by
 ``scripts.compiler_cache_schema`` and never returned.
+
+Process execution is a narrow injected runner, not a process-wide seam: every
+test passes its own fake, and the action's default is ``subprocess.run``.
 
 Examples
 --------
@@ -32,26 +36,69 @@ from scripts import compiler_cache_schema as schema
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+type Runner = cabc.Callable[..., subprocess.CompletedProcess[str]]
+
 _EMPTY: dict[str, object] = {}
 
 
-def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str, str]:
-    """Run sccache and return its statistics, version, and classified store.
+class StatsProbe(typ.NamedTuple):
+    """One sccache statistics read and whether it succeeded."""
+
+    stats: dict[str, object]
+    version: str
+    backend: str
+    ok: bool
+
+
+class RustcIdentity(typ.NamedTuple):
+    """The compiler's identity and whether it could be read."""
+
+    release: str
+    commit: str
+    host: str
+    ok: bool
+
+
+class SizeProbe(typ.NamedTuple):
+    """A directory size and why it is missing when it is."""
+
+    size: int | None
+    detail: str
+
+
+class SpanProbe(typ.NamedTuple):
+    """A marker interval and why it is missing when it is."""
+
+    seconds: float | None
+    detail: str
+
+
+def read_stats(
+    environ: cabc.Mapping[str, str], *, runner: Runner = subprocess.run
+) -> StatsProbe:
+    """Run sccache through ``runner`` and return its statistics and store.
 
     The statistics document's top-level ``cache_location`` can name a runner
     path or a service address, so it is classified here and the raw value is
     discarded before the caller sees it.
 
+    Parameters
+    ----------
+    environ : collections.abc.Mapping[str, str]
+        The step environment; ``SCCACHE_BINARY`` overrides the binary.
+    runner : Runner
+        The process runner, defaulting to ``subprocess.run``.
+
     Returns
     -------
-    tuple[dict[str, object], str, str]
-        The parsed ``stats`` object, the reported version, and the backend
-        label. All are empty or ``none`` when sccache is absent or cannot be
-        run, which the caller records as unavailable rather than as zeroes.
+    StatsProbe
+        The parsed ``stats`` object, the reported version, the backend label,
+        and whether the read succeeded. A failed read carries ``ok=False``,
+        which the caller records as unavailable rather than as zeroes.
     """
     binary = environ.get("SCCACHE_BINARY", "sccache")
     try:
-        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+        completed = runner(
             [binary, "--show-stats", "--stats-format", "json"],
             capture_output=True,
             text=True,
@@ -59,16 +106,21 @@ def read_stats(environ: cabc.Mapping[str, str]) -> tuple[dict[str, object], str,
             check=False,
         )
         if completed.returncode != 0:
-            return {}, "", "none"
+            return StatsProbe(stats={}, version="", backend="none", ok=False)
         document = json.loads(completed.stdout)
         stats = document.get("stats", _EMPTY)
         version = str(document.get("version", ""))
         backend = schema.backend_of(document.get("cache_location"))
         if not isinstance(stats, dict):
-            return {}, version, backend
-        return typ.cast("dict[str, object]", stats), version, backend
+            return StatsProbe(stats={}, version=version, backend=backend, ok=False)
+        return StatsProbe(
+            stats=typ.cast("dict[str, object]", stats),
+            version=version,
+            backend=backend,
+            ok=True,
+        )
     except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
-        return {}, "", "none"
+        return StatsProbe(stats={}, version="", backend="none", ok=False)
 
 
 def count(mapping: object) -> int | None:
@@ -130,38 +182,53 @@ def not_cached(stats: cabc.Mapping[str, object]) -> dict[str, int]:
     return result
 
 
-def directory_bytes(environ: cabc.Mapping[str, str]) -> int | None:
-    """Return the local compiler directory's size in bytes, or ``None``.
+def directory_bytes(environ: cabc.Mapping[str, str]) -> SizeProbe:
+    """Return the local compiler directory's size and how it was obtained.
 
     The directory is the archive the direct backend would replace, so its size
-    is the transfer the migration removes. An absent directory, as on a
-    ``gha`` backend or a fork run, has no size to report.
+    is the transfer the migration removes. ``detail`` is ``measured``,
+    ``absent``, or ``unreadable``; the last two differ only in the diagnostic,
+    and both leave the size unknown.
 
     Returns
     -------
-    int | None
-        The summed file sizes, or ``None`` when the directory is absent or
-        unreadable.
+    SizeProbe
+        The summed file sizes, or ``None`` with the reason it is missing.
     """
     root = Path(environ.get("HOME", "")) / ".cache" / "sccache"
     if not root.is_dir():
-        return None
+        return SizeProbe(None, "absent")
     total = 0
     try:
         for path in root.rglob("*"):
             if path.is_file():
                 total += path.stat().st_size
     except OSError:
-        return None
-    return total
+        return SizeProbe(None, "unreadable")
+    return SizeProbe(total, "measured")
 
 
-def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
-    """Return the compiler's release, commit, and host, or ``unknown``."""
+def rustc(
+    environ: cabc.Mapping[str, str], *, runner: Runner = subprocess.run
+) -> RustcIdentity:
+    """Return the compiler's identity through ``runner``, or ``unknown`` fields.
+
+    Parameters
+    ----------
+    environ : collections.abc.Mapping[str, str]
+        The step environment; ``RUSTC_BINARY`` overrides the binary.
+    runner : Runner
+        The process runner, defaulting to ``subprocess.run``.
+
+    Returns
+    -------
+    RustcIdentity
+        The bounded release, commit, and host, and whether they were read.
+    """
     binary = environ.get("RUSTC_BINARY", "rustc")
     values = {"release": "unknown", "commit": "unknown", "host": "unknown"}
     try:
-        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+        completed = runner(
             [binary, "-vV"],
             capture_output=True,
             text=True,
@@ -169,9 +236,13 @@ def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return values
+        return RustcIdentity(
+            release="unknown", commit="unknown", host="unknown", ok=False
+        )
     if completed.returncode != 0:
-        return values
+        return RustcIdentity(
+            release="unknown", commit="unknown", host="unknown", ok=False
+        )
     for line in completed.stdout.splitlines():
         name, _, value = line.partition(": ")
         if name == "commit-hash":
@@ -180,7 +251,12 @@ def rustc(environ: cabc.Mapping[str, str]) -> dict[str, str]:
             # The compiler's own output is still untrusted text; bound it like
             # every other free-form record field rather than persisting it raw.
             values[name] = schema.bounded(value)
-    return values
+    return RustcIdentity(
+        release=values["release"],
+        commit=values["commit"],
+        host=values["host"],
+        ok=True,
+    )
 
 
 def mark_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
@@ -193,26 +269,28 @@ def _marker_file(environ: cabc.Mapping[str, str], name: str) -> Path:
     return Path(environ["EVIDENCE_DIR"]) / "marks" / name
 
 
-def elapsed_between(
-    environ: cabc.Mapping[str, str], start: str, end: str
-) -> float | None:
-    """Return seconds between two markers, or ``None`` when either is absent.
+def elapsed_between(environ: cabc.Mapping[str, str], start: str, end: str) -> SpanProbe:
+    """Return the interval between two markers and how it was obtained.
 
     Returns
     -------
-    float | None
-        The non-negative interval, or ``None`` when a marker is missing or
-        unreadable.
+    SpanProbe
+        The non-negative interval, or ``None`` with ``absent`` when a marker
+        is missing and ``unreadable`` when it exists but cannot be used.
     """
     begin_path = mark_path(environ, start)
     finish_path = _marker_file(environ, end)
     try:
         begin = float(begin_path.read_text(encoding="utf-8").strip())
         finish = float(finish_path.read_text(encoding="utf-8").strip())
+    except FileNotFoundError:
+        return SpanProbe(None, "absent")
     except (OSError, ValueError):
-        return None
+        return SpanProbe(None, "unreadable")
     elapsed = finish - begin
-    return round(elapsed, 3) if elapsed >= 0 else None
+    if elapsed < 0:
+        return SpanProbe(None, "unreadable")
+    return SpanProbe(round(elapsed, 3), "measured")
 
 
 def write_mark(

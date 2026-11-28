@@ -46,6 +46,8 @@ class Observation:
     compiler_shape: str = "debug"
     python_version: str = "3.13"
     rustc_release: str = "1.87.0"
+    rustc_commit: str = "unknown"
+    rustc_host: str = "unknown"
 
     def as_record(self) -> dict[str, object]:
         """Return the observation as a record the validator accepts."""
@@ -73,8 +75,8 @@ class Observation:
             python_version=self.python_version,
             rustc={
                 "release": self.rustc_release,
-                "commit": "unknown",
-                "host": "unknown",
+                "commit": self.rustc_commit,
+                "host": self.rustc_host,
             },
         )
 

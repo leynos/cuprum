@@ -33,19 +33,16 @@ def evidence_environment_fixture(tmp_path: Path) -> dict[str, str]:
     return environment(tmp_path)
 
 
-def _capture(
-    environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
-) -> dict[str, object]:
-    """Capture one snapshot with sccache answering the standard document."""
-    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([stats_document()]))
-    return writer.capture(environ)
+def _capture(environ: dict[str, str], runner: FakeSccache) -> dict[str, object]:
+    """Capture one snapshot with sccache answering through ``runner``."""
+    return writer.capture(environ, runner=runner)
 
 
 def test_a_snapshot_copies_only_allowlisted_counters(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Drop everything sccache reports that is not on the list."""
-    state = _capture(evidence_environment, monkeypatch)
+    state = _capture(evidence_environment, FakeSccache([stats_document()]))
     counters = typ.cast("dict[str, object]", state["counters"])
     assert set(counters) == set(schema.COUNTERS), (
         f"only the allowlisted counters may be copied, got {sorted(counters)}"
@@ -67,7 +64,7 @@ def test_a_snapshot_never_records_the_cache_address(
         "ACTIONS_CACHE_URL": BEARER_URL,
         "ACTIONS_RUNTIME_TOKEN": SENTINEL_VALUE,
     }
-    state = _capture(environ, monkeypatch)
+    state = _capture(environ, FakeSccache([stats_document()]))
     encoded = json.dumps(state)
     assert "example.invalid" not in encoded, "the cache URL must not be recorded"
     assert SENTINEL_VALUE not in encoded, "the runtime credential must not be recorded"
@@ -80,7 +77,7 @@ def test_the_cache_location_is_classified_not_recorded(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Reduce a runner path to a backend label."""
-    state = _capture(evidence_environment, monkeypatch)
+    state = _capture(evidence_environment, FakeSccache([stats_document()]))
     assert "/home/runner" not in json.dumps(state), "the cache path must not leak"
     assert state["cache_backend"] == "local", (
         f"a local directory must classify as local, got {state['cache_backend']}"
@@ -111,8 +108,7 @@ def test_an_absent_server_is_unknown_rather_than_zero(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job that fell back must not report a clean zero-request cache."""
-    monkeypatch.setattr(probe.subprocess, "run", FakeSccache([], returncode=127))
-    state = writer.capture(evidence_environment)
+    state = writer.capture(evidence_environment, runner=FakeSccache([], returncode=127))
     assert state["available"] is False, "a failed probe must report unavailable"
     counters = typ.cast("dict[str, object]", state["counters"])
     assert set(counters.values()) == {None}, (

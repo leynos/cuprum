@@ -227,20 +227,39 @@ def test_an_incomparable_pair_is_excluded(
     )
 
 
-def test_a_pair_with_an_unknown_provenance_value_is_excluded() -> None:
-    """Two records that both failed to identify a field are not comparable."""
-    records = [
-        Observation(run_id="100", backend="local", hits=4, runner_class="unknown"),
-        Observation(
-            run_id="200",
-            backend="gha",
-            hits=6,
-            restore=None,
-            save=None,
-            runner_class="unknown",
+@pytest.mark.parametrize(
+    ("control", "candidate"),
+    [
+        (
+            Observation(run_id="100", backend="local", hits=4, runner_class="unknown"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                runner_class="unknown",
+            ),
         ),
-    ]
-    built = summary(records, jobs([100, 200], 240))
+        (
+            Observation(run_id="100", backend="local", hits=4, rustc_release="unknown"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                rustc_release="unknown",
+            ),
+        ),
+    ],
+    ids=["scalar", "compiler-identity"],
+)
+def test_unknown_provenance_never_pairs(
+    control: Observation, candidate: Observation
+) -> None:
+    """A scalar or an all-unknown compiler identity excludes the pair."""
+    built = summary([control, candidate], jobs([100, 200], 240))
     observed = family(built)
     assert observed["pairs"] == 0, (
         f"an unknown provenance value must not pair, got {observed}"

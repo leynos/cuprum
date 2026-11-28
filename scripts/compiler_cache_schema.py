@@ -281,6 +281,44 @@ def delta_map(
     return {name: delta_value(value, pre.get(name)) for name, value in post.items()}
 
 
+def _store_state(record: cabc.Mapping[str, object]) -> str | None:
+    """Return the verdict the record's store warrants, or ``None`` when sound."""
+    if record["backend"] not in {"local", "gha"}:
+        return "degraded"
+    if record["selected_backend"] != record["backend"]:
+        return "noncompliant"
+    wrong_store = record["cache_service_v2"] or record["cache_host_class"] in {
+        "github-results",
+        "github-legacy",
+    }
+    if record["backend"] == "gha" and wrong_store:
+        return "noncompliant"
+    return None
+
+
+def record_state(record: cabc.Mapping[str, object]) -> str:
+    """Classify one record as ``ok``, ``degraded``, or ``noncompliant``.
+
+    A fallback or an absent wrapper means the job compiled without the cache,
+    which is degraded but not a wiring fault. A ``gha`` backend reached while
+    the v2 service flag is set, or through a GitHub-hosted cache address, is
+    the wrong store and is noncompliant.
+
+    Returns
+    -------
+    str
+        One of ``ok``, ``degraded``, or ``noncompliant``.
+    """
+    store = _store_state(record)
+    if store is not None:
+        return store
+    if record["setup_status"] != "started" or not record["wrapper_present"]:
+        return "degraded"
+    if record["zero_requests"] == "unexplained":
+        return "degraded"
+    return "ok"
+
+
 def now() -> str:
     """Return the current UTC time in whole-second ISO 8601 with ``Z``."""
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")

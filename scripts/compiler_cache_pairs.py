@@ -265,13 +265,32 @@ def _comparable(
         "python_version",
     )
     for field in fields:
-        value = control.get(field)
-        # An unknown provenance value matches nothing: two records that both
-        # failed to identify their compiler are not evidence of one compiler.
-        known = value is not None and value != "unknown"
-        if not known or value != candidate.get(field):
+        if not _known_equal(control.get(field), candidate.get(field)):
             return False
     return True
+
+
+def _known_equal(left: object, right: object) -> bool:
+    """Report whether two provenance values are identified and equal."""
+    if isinstance(left, dict) or isinstance(right, dict):
+        return _mapping_equal(left, right)
+    return _known(left) and left == right
+
+
+def _mapping_equal(left: object, right: object) -> bool:
+    """Compare two provenance mappings, ignoring an all-unknown side."""
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    if not left or set(left) != set(right):
+        return False
+    known_left = {key: value for key, value in left.items() if _known(value)}
+    known_right = {key: value for key, value in right.items() if _known(value)}
+    return bool(known_left) and known_left == known_right
+
+
+def _known(value: object) -> bool:
+    """Report whether a provenance scalar identifies something."""
+    return value is not None and value != "unknown"
 
 
 def _paired_savings(

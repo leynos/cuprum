@@ -617,11 +617,15 @@ land in Ubicloud's store rather than GitHub's.
 
 The backend experiment records what each bracketed compile step measured rather
 than trusting a green job. The tooling lives in small responsibility-split
-modules: `scripts/compiler_cache_schema.py` owns the closed vocabularies and
-pure classifiers, `compiler_cache_probe.py` is the only code that runs
-`sccache` and `rustc`, `compiler_cache_evidence.py` writes one redacted JSONL
-line per bracket, `compiler_cache_records.py` owns the filesystem and JSON
-boundaries, `compiler_cache_pairs.py` pairs control and candidate observations,
+modules: `scripts/compiler_cache_schema.py` owns the closed vocabularies, the
+pure classifiers, and the ok/degraded/noncompliant record state,
+`compiler_cache_probe.py` is the only code that runs `sccache` and `rustc` (its
+reads return typed results and take an injected process runner),
+`compiler_cache_record.py` assembles one record from an already-read
+observation bundle, `compiler_cache_evidence.py` is the command edge that
+gathers the snapshots and markers and writes one redacted JSONL line per
+bracket, `compiler_cache_records.py` owns the filesystem and JSON boundaries,
+`compiler_cache_pairs.py` pairs control and candidate observations,
 `compiler_cache_cost.py` turns whole-job seconds into the family-scoped cost
 view, `compiler_cache_summary.py` evaluates the predeclared gate, and
 `compiler_cache_report.py` owns the command line and Markdown view.
