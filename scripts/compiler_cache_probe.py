@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
 import time
 import typing as typ
@@ -195,7 +196,13 @@ def directory_bytes(environ: cabc.Mapping[str, str]) -> SizeProbe:
         The summed file sizes, or ``None`` with the reason it is missing.
     """
     root = Path(environ.get("HOME", "")) / ".cache" / "sccache"
-    if not root.is_dir():
+    try:
+        info = root.stat()
+    except FileNotFoundError:
+        return SizeProbe(None, "absent")
+    except OSError:
+        return SizeProbe(None, "unreadable")
+    if not stat.S_ISDIR(info.st_mode):
         return SizeProbe(None, "absent")
     try:
         total = _tree_bytes(root)
@@ -219,10 +226,13 @@ def _tree_bytes(root: Path) -> int:
     total = 0
     with os.scandir(root) as entries:
         for entry in entries:
-            if entry.is_dir(follow_symlinks=False):
+            # One stat classifies and measures the entry; a vanished or
+            # unreadable entry raises and the whole measurement is unknown.
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
                 total += _tree_bytes(Path(entry.path))
-            elif entry.is_file(follow_symlinks=False):
-                total += entry.stat(follow_symlinks=False).st_size
+            elif stat.S_ISREG(info.st_mode):
+                total += info.st_size
     return total
 
 

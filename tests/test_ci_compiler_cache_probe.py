@@ -240,6 +240,7 @@ def test_a_failed_marker_write_is_reported(
     """A write failure must be false, never a silent success."""
 
     def refuse(*_args: object, **_kwargs: object) -> int:
+        """Fail the marker write as a full disk would."""
         message = "disk full"
         raise OSError(message)
 
@@ -256,6 +257,7 @@ def test_an_unreadable_cache_directory_is_unknown(
     real_scandir = os.scandir
 
     def fail_on_cache(path: object) -> object:
+        """Fail when the walk reaches the cache root."""
         if Path(typ.cast("str", path)).name == "sccache":
             message = "permission denied"
             raise OSError(message)
@@ -289,11 +291,62 @@ def test_a_partial_walk_is_unreadable(
     real_scandir = os.scandir
 
     def fail_nested(path: object) -> object:
+        """Fail when the walk reaches the nested subtree."""
         if Path(typ.cast("str", path)).name == "sub":
             message = "permission denied"
             raise OSError(message)
         return real_scandir(typ.cast("str", path))
 
     monkeypatch.setattr(os, "scandir", fail_nested)
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed == probe.SizeProbe(None, "unreadable"), observed
+
+
+def test_a_root_status_failure_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cache root that cannot be inspected is unknown, not absent."""
+    real_stat = Path.stat
+
+    def fail_on_root(self: Path, *, follow_symlinks: bool = True) -> object:
+        """Fail when the root's own status is read."""
+        if self.name == "sccache":
+            message = "permission denied"
+            raise OSError(message)
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", fail_on_root)
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed == probe.SizeProbe(None, "unreadable"), observed
+
+
+class _VanishedEntry:
+    """A directory entry whose status read fails as if it had vanished."""
+
+    name = "gone"
+    path = "/nonexistent/gone"
+
+    def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+        """Fail the way a removed entry does."""
+        raise FileNotFoundError(self.name)
+
+
+class _VanishedScan:
+    """A scandir result holding one vanished entry."""
+
+    def __enter__(self) -> list[_VanishedEntry]:
+        """Return the scripted entries."""
+        return [_VanishedEntry()]
+
+    def __exit__(self, *_exc: object) -> None:
+        """Close the scan."""
+
+
+def test_a_vanished_entry_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry that disappears mid-walk cannot shrink the measured total."""
+    (tmp_path / ".cache" / "sccache").mkdir(parents=True)
+    monkeypatch.setattr(os, "scandir", lambda _path: _VanishedScan())
     observed = probe.directory_bytes({"HOME": str(tmp_path)})
     assert observed == probe.SizeProbe(None, "unreadable"), observed
