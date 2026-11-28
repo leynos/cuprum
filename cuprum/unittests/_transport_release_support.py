@@ -32,7 +32,10 @@ import pytest
 
 from cuprum import _wait4_spawn
 from cuprum._pipeline_stream_fds import _extract_stream_fd
-from cuprum.unittests._post_exit_teardown_support import recorded_descendant_or_fail
+from cuprum.unittests._post_exit_teardown_support import (
+    recorded_descendant,
+    recorded_descendant_or_fail,
+)
 from tests.helpers.process_exit import ExitObservation, observe_exit
 from tests.helpers.process_state import process_state
 
@@ -263,7 +266,7 @@ def await_recorded_pid(
     *,
     timeout_s: float = 10.0,
 ) -> bool:
-    """Block until the child has recorded its descendant, or the wait expires.
+    """Block until the child has published a readable descendant pid, or time out.
 
     The blocking read exists for the one caller that must make the fork happen
     *before* it acts: a synchronous ``start`` hook runs inline on the event
@@ -271,13 +274,18 @@ def await_recorded_pid(
     progress without the loop. Sleeping the loop there would instead let the
     run's own teardown start first, which is the race this avoids.
 
+    The condition is a *parsed* pid, not the file's existence. A writer creates
+    and truncates the path before it writes, so an existence check can return
+    while the file is still empty and hand the caller a run that has not
+    reached the fork it depends on.
+
     Returns
     -------
     bool
-        ``True`` once the file exists, ``False`` when the wait expired.
+        ``True`` once the file holds a pid, ``False`` when the wait expired.
     """
     deadline = time.monotonic() + timeout_s
-    while not pid_file.exists():
+    while recorded_descendant(pid_file) is None:
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.01)
