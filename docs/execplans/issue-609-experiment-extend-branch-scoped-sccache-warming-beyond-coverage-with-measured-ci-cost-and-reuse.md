@@ -6,11 +6,11 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `07ff5872f`; this header tracks the latest gate run,
+recorded six-gate run is `68697eac9`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
-the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2` and
-`07ff587`. The experiment baseline remains `87de64c2c`, recorded on
-22 November 2026. No candidate family is adopted by this change; the
+the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
+`07ff587` and `68697ea`. The experiment baseline remains `87de64c2c`, recorded
+on 22 November 2026. No candidate family is adopted by this change; the
 deliverable is the measured-qualification apparatus plus a reviewable
 adopt/reject record.
 
@@ -231,6 +231,15 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `07ff5872f` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-07ff5872f.log`.
+- [x] 28 November 2026: the fifth review round added the probe and command
+      error-branch tests (absent, negative, and non-numeric spans; a refused
+      marker write; an unreadable cache directory; a shared-state regression),
+      the unknown-mode and degraded-label assertions, the signed console rule,
+      and a pinned report clock. `read_stats` no longer returns a shared empty
+      mapping, and the summary depends on the validator's error type.
+- [x] 28 November 2026: M5 re-gates at `68697eac9` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-68697eac9.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
