@@ -14,21 +14,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import time
 import typing as typ
 
 import pytest
 
-import cuprum.unittests._process_group_ownership_support as _ownership_support
 from cuprum import _group_teardown, _process_group
 from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
-    _cleanup_owned_run,
     _descendant_has_exited,
     _descendant_is_running,
-    _kill_and_wait,
     _kill_ignoring_missing,
     _posix_only,
     _spawn_immune_child,
@@ -36,8 +35,8 @@ from cuprum.unittests._process_group_ownership_support import (
     _terminate_owned_run,
     _wait_for_descendant_exit,
 )
-from tests.helpers.process_exit import ExitObservation
 from tests.helpers.timeouts import (
+    process_is_running,
     python_interpreter,
     wait_for_pid_file,
     wait_for_process_death,
@@ -116,7 +115,12 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
                 "a process outside the owned group must survive its teardown"
             )
         finally:
-            await _cleanup_owned_run(run)
+            os.kill(run.unrelated_pid, signal.SIGKILL)
+            await asyncio.to_thread(
+                wait_for_process_death,
+                run.unrelated_pid,
+                context="unrelated process cleanup",
+            )
 
     asyncio.run(run_case())
 
@@ -142,7 +146,23 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
                 "an unowned teardown must not reach the grandchild"
             )
         finally:
-            await _cleanup_owned_run(run)
+            # Guarded because the leader is already reaped: if the assertion
+            # above failed because the grandchild had gone, the group is empty
+            # and an unguarded ``killpg`` would raise ``ProcessLookupError`` and
+            # replace the assertion failure with its own report.
+            if process_is_running(run.grandchild_pid):
+                _kill_ignoring_missing(run.process.pid, group=True)
+                await asyncio.to_thread(
+                    wait_for_process_death,
+                    run.grandchild_pid,
+                    context="grandchild cleanup",
+                )
+            os.kill(run.unrelated_pid, signal.SIGKILL)
+            await asyncio.to_thread(
+                wait_for_process_death,
+                run.unrelated_pid,
+                context="unrelated process cleanup",
+            )
 
     asyncio.run(run_case())
 
@@ -294,7 +314,27 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             # The assertions above can fail while the teardown is still in
             # flight, so bound it here rather than leak the task and the
             # descendant it was working on into the rest of the session.
-            await _cleanup_owned_run(run, task=task)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
+            # A group outlives its leader only while a member remains, and the
+            # kernel keeps the pgid reserved until then — so while the
+            # grandchild is up, this is still a group the run owns. Once it is
+            # gone the group has ended and its number may have been recycled
+            # onto a stranger, which is why the probe comes first.
+            if process_is_running(run.grandchild_pid):
+                os.killpg(run.process.pid, signal.SIGKILL)
+                await asyncio.to_thread(
+                    wait_for_process_death,
+                    run.grandchild_pid,
+                    context="grandchild cleanup",
+                )
+            os.kill(run.unrelated_pid, signal.SIGKILL)
+            await asyncio.to_thread(
+                wait_for_process_death,
+                run.unrelated_pid,
+                context="unrelated process cleanup",
+            )
 
     asyncio.run(run_case())
 
@@ -371,76 +411,3 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
         "members left outstanding must be reported rather than passed over "
         f"silently, got {caplog.messages}"
     )
-
-
-@pytest.mark.parametrize(
-    ("is_leader_unreaped", "expected"),
-    [
-        pytest.param(True, ((4242, True),), id="anchored-leader"),
-        pytest.param(False, (), id="reaped-leader-reuse-window"),
-    ],
-)
-def test_cleanup_signals_only_an_anchored_group(
-    is_leader_unreaped: bool,
-    expected: tuple[tuple[int, bool], ...],
-) -> None:
-    """A reaped leader leaves no anchor, so its identifier is never signalled.
-
-    An unreaped leader holds its pid, and therefore its process group
-    identifier, so the group is provably the one this run created. Once the
-    leader has been reaped, that identifier may name a stranger's group, and
-    a recorded descendant cannot anchor it either. The decision is exercised
-    here without signalling any real process.
-    """
-    selected = _ownership_support._cleanup_targets(
-        4242,
-        is_leader_unreaped=is_leader_unreaped,
-    )
-    assert selected == expected, (
-        f"a leader unreaped={is_leader_unreaped} must select {expected}, got {selected}"
-    )
-
-
-def test_cleanup_still_kills_its_target_when_observation_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Cleanup kills the child even when the host cannot report its state."""
-
-    async def run_case() -> None:
-        """Kill a child whose state is unobservable, then reap it."""
-        process = await _spawn_immune_child(tmp_path / "immune.ready")
-        monkeypatch.setattr(
-            _ownership_support,
-            "observe_exit",
-            lambda _pid: ExitObservation.UNOBSERVABLE,
-        )
-        await _kill_and_wait(process.pid, process.pid, group=False)
-        await process.wait()
-        assert process.returncode is not None, "cleanup must reap the child"
-
-    asyncio.run(run_case())
-
-
-def test_the_cleanup_path_reclaims_a_provably_owned_group(
-    tmp_path: Path,
-) -> None:
-    """The real cleanup path signals the group while the leader anchors it."""
-
-    async def run_case() -> None:
-        """Clean up an owned run whose leader this process has not reaped."""
-        run = await _spawn_owned_run(tmp_path)
-        await _cleanup_owned_run(run)
-        await run.process.wait()
-        await asyncio.to_thread(
-            _wait_for_descendant_exit,
-            run.grandchild_pid,
-            context="owned group cleanup",
-        )
-        await asyncio.to_thread(
-            _wait_for_descendant_exit,
-            run.unrelated_pid,
-            context="unrelated cleanup",
-        )
-
-    asyncio.run(run_case())

@@ -24,7 +24,6 @@ import typing as typ
 
 import pytest
 
-from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from tests.helpers.process_exit import ExitObservation, observe_exit
@@ -148,65 +147,6 @@ def _descendant_has_exited(pid: int) -> bool:
     return _observed_exit(pid) is ExitObservation.EXITED
 
 
-def _cleanup_targets(
-    pgid: int | None,
-    *,
-    is_leader_unreaped: bool,
-) -> tuple[tuple[int, bool], ...]:
-    """Return the ``(pid, is_group)`` signals this cleanup may deliver.
-
-    The only stable anchor this process has is a child it has not reaped.
-    While the leader is unreaped — running or a zombie — the kernel holds its
-    pid, so its process group identifier cannot have been reused, and the
-    group it names is the group this run created. Signalling that group is
-    then safe and reaches any descendant still in it.
-
-    Once the leader has been reaped, its pid and group identifier may already
-    name a stranger. A recorded descendant is not this process's child, so it
-    cannot be waited for and provides no anchor of its own, and the host
-    offers no portable way to signal a group by identity rather than by
-    identifier. Cleanup therefore delivers nothing in that case rather than
-    risk an unrelated process.
-
-    Returns
-    -------
-    tuple of (int, bool)
-        The signals to deliver, in order.
-    """
-    if pgid is not None and is_leader_unreaped:
-        return ((pgid, True),)
-    return ()
-
-
-async def _cleanup_owned_run(
-    run: _OwnedRun,
-    *,
-    task: asyncio.Task[None] | None = None,
-) -> None:
-    """Best-effort cleanup for an owned run, safe inside a ``finally`` block.
-
-    The optional *task* is a teardown still in flight; it is cancelled and
-    given the post-kill settlement window to stop. Neither that wait nor the
-    kills can raise a test failure, so cleanup never replaces the failure that
-    entered the block.
-
-    A descendant left behind after its group's leader has been reaped is left
-    to the host. It is not this process's child, so it cannot be waited for,
-    and the host offers no portable way to signal it by identity rather than
-    by a pid or group identifier that may already have been reused.
-    """
-    if task is not None and not task.done():
-        task.cancel()
-        await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
-    targets = _cleanup_targets(
-        run.process.pid,
-        is_leader_unreaped=run.process.returncode is None,
-    )
-    for pid, is_group in targets:
-        await _kill_and_wait(pid, pid, group=is_group)
-    await _kill_and_wait(run.unrelated_pid, run.unrelated_pid, group=False)
-
-
 def _await_descendant_exit(pid: int, *, seconds: float) -> bool:
     """Wait up to *seconds* for *pid* to exit, zombies counting as exited.
 
@@ -246,22 +186,6 @@ def _wait_for_descendant_exit(
     """
     if not _await_descendant_exit(pid, seconds=seconds):
         pytest.fail(f"Process {pid} did not exit within {seconds}s ({context})")
-
-
-async def _kill_and_wait(
-    kill_pid: int,
-    wait_pid: int,
-    *,
-    group: bool,
-) -> None:
-    """Best-effort cleanup: kill *kill_pid*, then wait for *wait_pid*.
-
-    Neither half fails. The wait is bounded and returns a verdict rather than a
-    test failure, so an unobservable host or a process that outlives the bound
-    cannot replace the failure that entered the ``finally`` block.
-    """
-    _kill_ignoring_missing(kill_pid, group=group)
-    await asyncio.to_thread(_await_descendant_exit, wait_pid, seconds=5.0)
 
 
 async def _terminate_owned_run(run: _OwnedRun) -> None:
