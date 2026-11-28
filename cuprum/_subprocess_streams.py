@@ -42,6 +42,10 @@ from cuprum._line_callbacks import (
     _compose_observation_line_callback,
     _StageStreamCallbacks,
 )
+from cuprum._live_task_outcomes import (
+    _publish_consumer_outcome,
+    _publish_writer_failure,
+)
 from cuprum._stream_config import (
     # Re-exported under this module's names as well as imported for use: all
     # three once lived here, and callers still reach the sink resolver and the
@@ -70,7 +74,6 @@ from cuprum._subprocess_wait_types import _RunTaskOwnership
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._stream_live import _LiveStreamSink
     from cuprum._subprocess_execution import _SubprocessExecution
     from cuprum._subprocess_rendezvous import _StdinWriterLog
     from cuprum._subprocess_wait_types import _ConsumerPair, _StreamConsumerTask
@@ -131,6 +134,13 @@ def _build_run_task_ownership(
     """
     stdin_task, stdin_log = _spawn_run_stdin_writer(process, execution)
     _record_started(recorded, stdin_task)
+    if stdin_task is not None and spawn.live is not None:
+        # A producer failure has no reader to publish to, but a held handle
+        # still needs its child stopped. The writer publishes the error to its
+        # log for settlement; this only requests the stop.
+        stdin_task.add_done_callback(
+            functools.partial(_publish_writer_failure, spawn.live.stop),
+        )
     consumers = _spawn_stream_consumers(
         process,
         execution,
@@ -291,24 +301,8 @@ def _spawn_consumer(wiring: _ConsumerWiring) -> _StreamConsumerTask | None:
         # A drain can fail while the child is still running. Publishing the
         # task's own failure here is what lets a live reader observe FAILED
         # without waiting for a caller to start settlement.
-        task.add_done_callback(functools.partial(_publish_consumer_failure, tap))
+        task.add_done_callback(functools.partial(_publish_consumer_outcome, tap))
     return task
-
-
-def _publish_consumer_failure(
-    tap: _LiveStreamSink,
-    task: asyncio.Task[typ.Any],
-) -> None:
-    """Publish a consumer task's own failure to its live queue.
-
-    Cancellation is the teardown's ordinary stop and publishes nothing: only a
-    task that ended with an exception reports a failed stream.
-    """
-    if task.cancelled():
-        return
-    error = task.exception()
-    if error is not None and tap.on_failure is not None:
-        tap.on_failure(error)
 
 
 def _prepare_stream_spawn(
@@ -377,7 +371,8 @@ __all__ = [
     "_build_task_ownership",
     "_create_stream_callback",
     "_prepare_stream_spawn",
-    "_publish_consumer_failure",
+    "_publish_consumer_outcome",
+    "_publish_writer_failure",
     "_resolve_stream_configs",
     "_resolve_stream_sink",
     "_spawn_stream_consumers",

@@ -15,6 +15,7 @@ would be a failure a caller could not act on.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import functools
 import typing as typ
 
@@ -27,7 +28,6 @@ from cuprum._pipeline_internals import _enforce_allowlist
 from cuprum._process_handle.owned_start import (
     _reject_redirected_handle_streams,
     _spawn_owned_run,
-    _with_capture,
 )
 from cuprum._subprocess_context import _resolve_timeout
 from cuprum.sh.execution import ExecutionContext, StdinSource, _resolve_stdin_source
@@ -37,6 +37,7 @@ from cuprum.sh.execution import ExecutionContext, StdinSource, _resolve_stdin_so
 from cuprum.sh.output import (
     RunOutputOptions,  # ruff: ignore[typing-only-first-party-import] - public annotation resolves at runtime
 )
+from cuprum.sh.stdio import StdioTarget
 
 if typ.TYPE_CHECKING:
     from cuprum.sh import SafeCmd
@@ -47,6 +48,25 @@ __all__ = ["_OwnedBytesStart"]
 # read and small enough that a stalled consumer cannot retain an unbounded
 # amount. It is documented on ``start_bytes``.
 _DEFAULT_MAX_BUFFERED_BYTES = 64 * 1024
+
+
+def _live_pipe_output(options: RunOutputOptions) -> RunOutputOptions:
+    """Bind both streams to library-owned pipes for a live byte run.
+
+    A text handle forces capture on, which is what gives it pipes. A byte
+    handle may honour ``capture=False``, so the pipes are requested explicitly
+    instead: the live readers need them regardless of capture or echo.
+
+    Returns
+    -------
+    RunOutputOptions
+        The caller's settings with both stream targets set to a pipe.
+    """
+    return dc.replace(
+        options,
+        stdout=StdioTarget.pipe(),
+        stderr=StdioTarget.pipe(),
+    )
 
 
 def _bytes_execution_state(
@@ -74,14 +94,17 @@ def _bytes_execution_state(
     )
     return _ExecutionState(
         context=ctx,
-        # Capture is forced on for the same reason a text handle forces it: a
-        # handle exists so its caller can inspect the child after the fact. The
-        # mode is set here, once, and travels on the execution bundle to the
-        # drain and the event's capture mode.
-        output=_with_capture(options),
+        # Capture defaults on through RunOutputOptions, but a byte handle
+        # honours an explicit ``capture=False`` or per-stream opt-out: the live
+        # readers are the primary channel, and a protocol client may want to
+        # avoid retaining a full capture. Both streams are still bound to
+        # library-owned pipes, because the live readers must be fed whether or
+        # not capture is on; a non-pipe target was rejected above.
+        output=_live_pipe_output(options),
         stdin_data=_resolve_stdin_source(stdin, ctx),
         timeout=timeout,
         capture_bytes=True,
+        live_streams=True,
     )
 
 
@@ -116,8 +139,10 @@ class _OwnedBytesStart:
         Each reader is lossless while it is live; settlement may truncate a
         reader whose queue cannot fit the remainder, so consume to end-of-stream
         before awaiting the result. See the users' guide for the full contract.
-        Capture is always on and byte-exact; a caller-supplied ``on_line`` and
-        non-pipe output targets are refused before a child exists. Unlike
+        Capture defaults on and is byte-exact; an explicit ``capture=False``
+        or per-stream opt-out is honoured; both streams still use library-owned
+        pipes. A caller-supplied ``on_line`` and non-pipe output targets are
+        refused before a child exists. Unlike
         ``run()``, a *timeout* is the default deadline for every ``wait()`` on
         the handle rather than a limit on the child's life.
 

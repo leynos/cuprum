@@ -35,7 +35,8 @@ def test_iteration_reports_stream_name_and_sequence() -> None:
         reader, queue = _reader()
         await queue.put(b"one")
         await queue.put(b"two")
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         chunks = [chunk async for chunk in reader]
         assert [chunk.data for chunk in chunks] == [b"one", b"two"], (
             f"iteration changed the payloads: {chunks!r}"
@@ -57,7 +58,8 @@ def test_eof_is_observable_before_queued_items_are_consumed() -> None:
         """Publish a chunk and EOF, then observe EOF before iterating."""
         reader, queue = _reader()
         await queue.put(b"queued")
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         ending = await reader.wait_eof()
         assert ending is StreamClosure.EOF, f"expected EOF, got {ending!r}"
         assert reader.at_eof, "at_eof must follow the published EOF"
@@ -169,7 +171,8 @@ def test_close_after_eof_keeps_the_clean_terminal_state() -> None:
     async def scenario() -> None:
         """Reach EOF, then close."""
         reader, queue = _reader()
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         await reader.wait_eof()
         await reader.aclose()
         assert reader.closure is StreamClosure.EOF, (
@@ -193,6 +196,25 @@ def test_failed_iteration_keeps_raising_on_a_later_attempt() -> None:
             await anext(reader)
         assert raised.value.__cause__ is cause, (
             "the repeated attempt must still carry the original cause"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_wait_eof_waits_for_the_drain_task_to_complete() -> None:
+    """A reader observes EOF only once the drain has finalized."""
+
+    async def scenario() -> None:
+        """Note EOF, check the waiter, then complete the drain."""
+        reader, queue = _reader()
+        waiter = asyncio.create_task(reader.wait_eof())
+        await asyncio.sleep(0)
+        queue.note_eof()
+        await asyncio.sleep(0)
+        assert not waiter.done(), "a noted end must not release the waiter"
+        queue.complete()
+        assert await asyncio.wait_for(waiter, 1.0) is StreamClosure.EOF, (
+            "completion must publish the noted EOF"
         )
 
     asyncio.run(scenario())

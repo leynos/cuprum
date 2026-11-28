@@ -106,6 +106,10 @@ class _ExecutionState:
     # Whether captures are reported as bytes rather than decoded text, carried
     # to both the drain and the event's ``capture_mode``.
     capture_bytes: bool = False
+    # Whether a live byte handle consumes both streams. A live reader needs a
+    # parent-side pipe even when the caller opted out of capture and echo, so
+    # the spawn must not fold the pipe down to DEVNULL.
+    live_streams: bool = False
 
 
 def _prepare_execution_observation(

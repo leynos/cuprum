@@ -182,6 +182,33 @@ def _finish_live_readers(
     return late_failure
 
 
+async def _raise_recorded_stop(
+    run: _HandleRun,
+    streams: _ByteStreams,
+    hooks: _ReconcileHooks,
+) -> None:
+    """Raise the failure that requested the eager stop, if one did.
+
+    The eager stop can make the child exit before the rendezvous reports the
+    writer or reader failure that caused it. Raising the recorded cause keeps
+    that failure visible instead of reporting the exit it produced.
+    """
+    recorded = streams.stop.failure
+    if recorded is None:
+        return
+    failure = await _settle_after_live_failure(run, streams, hooks, recorded)
+    raise failure
+
+
+def _raise_late_failure(
+    late_failure: tuple[int, BaseException] | None,
+) -> None:
+    """Raise the reader failure reconciliation published, if there was one."""
+    if late_failure is not None:
+        index, cause = late_failure
+        raise LiveStreamError(_STREAM_NAMES[index], cause=cause)
+
+
 async def _settle_bytes_handle_run(
     run: _HandleRun,
     streams: _ByteStreams,
@@ -232,11 +259,9 @@ async def _settle_bytes_handle_run(
             raise
         raise failure from error
 
+    await _raise_recorded_stop(run, streams, hooks)
     drained = await _reconcile_preserving(run, streams, hooks)
-    late_failure = _finish_live_readers(run.ownership, streams)
-    if late_failure is not None:
-        index, cause = late_failure
-        raise LiveStreamError(_STREAM_NAMES[index], cause=cause)
+    _raise_late_failure(_finish_live_readers(run.ownership, streams))
 
     await _close_handle_delivery(execution)
     return _assemble_handle_result(

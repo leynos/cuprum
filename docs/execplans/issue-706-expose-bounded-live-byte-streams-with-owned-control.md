@@ -123,7 +123,15 @@ repository, so the budgets are conservative rather than historical.
   steps.
 - [x] (2026-11-27) `EP-M5` users' guide section and gated example, changelog,
   roadmap, migration note, and contents index.
-- [ ] Commit gates, CodeRabbit review, push, draft PR, merge.
+- [x] (2026-11-28) Hosted CodeRabbit agent review: 14 findings fixed over two
+  rounds, then a clean review.
+- [x] (2026-11-28) Rebases onto live `main`, the ADR-0030 collision, and the
+  CodeScene refactors; six-gate certification at `208dba14`.
+- [x] (2026-11-28) Hosted assessments: the first round returned incomplete;
+  capture opt-outs, eager stdin-failure supervision, finalization-consistent
+  EOF, the blocked-put close race, and the expanded cancellation, parity,
+  wait-route, and cleanup evidence were added. Reassessment is pending.
+- [ ] Reassessment, readiness, formal review, merge.
 
 ## Surprises & discoveries
 
@@ -217,6 +225,19 @@ repository, so the budgets are conservative rather than historical.
   serializes escalations, and `kill` is the deliberate non-escalating stop. The
   unverified review note is therefore declined. Date/Author: 2026-11-28,
   implementation agent.
+- D11. Decision: the plan's file and code tolerances are exceeded and the
+  overage is accepted under the owner's standing instruction to implement issue
+  #706 in full and merge it. Measured against `origin/main` (`5d2e4a91`) at the
+  final candidate: 67 non-ExecPlan files, 4,355 net code lines, 584 net
+  documentation lines, and 26 net configuration lines. The plan's initial
+  limits were 45 files and 3,500 code lines; the documentation and
+  configuration limits hold. The code delta is about 2,389 net production lines
+  over 34 files and 2,026 net test lines over 20 files. The overage is driven
+  by the acceptance criteria themselves: barrier-driven real-child coverage,
+  both reaping routes, cancellation and cleanup assertions, public typing
+  contracts, and the ADR/design/guide text. No dependency or public interface
+  beyond the issue scope was added. Date/Author: 2026-11-28, implementation
+  agent acting on the owner's merge directive.
 - D10. Decision: settlement releases both live queues before the exit wait, not
   at reconciliation. Rationale: a full queue blocks its drain, a full pipe
   blocks the child, and an unbounded `wait()` would then never settle. Live

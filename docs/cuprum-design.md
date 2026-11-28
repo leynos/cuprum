@@ -5734,8 +5734,10 @@ spawn and announcement in `_start_handle_run`, the partial-attachment reclaim,
 the stop lock, the control operations, and the single-settlement rule. It
 differs in exactly four resolved inputs:
 
-- capture is forced on and the run is marked `capture_bytes=True`, so the
-  settled result is a `BytesCommandResult` carrying the child's bytes;
+- capture defaults on and the run is marked `capture_bytes=True`, so the
+  settled result is a `BytesCommandResult` carrying the child's bytes; an
+  explicit `capture=False` or per-stream opt-out is honoured, and both streams
+  still use library-owned pipes so the live readers are always fed;
 - the caller-supplied `on_line` observer is rejected before the spawn, because
   a live byte consumer and a line observer would give one stream two
   contradictory presentation contracts;
@@ -5841,7 +5843,10 @@ EOF is a separate, synchronous `on_eof` hook on the drain. It is called only
 when the read loop observes the empty read, and before `_finish_drain`
 finalizes the capture. It is deliberately not called when a read is cancelled,
 when a chunk's delivery fails, or when a preserving line-stream finalization
-runs, so a cancelled drain never claims EOF.
+runs, so a cancelled drain never claims EOF. The hook only *notes* the end: the
+reader's terminal state is published when the drain task completes
+successfully, so a finalization failure publishes `FAILED` instead of leaving a
+reader with an EOF it observed before the failure.
 
 #### 13.11.5 Supervisor and settlement
 

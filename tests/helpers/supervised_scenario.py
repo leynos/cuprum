@@ -62,7 +62,12 @@ class ScenarioResult:
         return not self.timed_out and self.returncode == 0
 
 
-def run_scenario(name: str, *, timeout: float = 20.0) -> ScenarioResult:
+def run_scenario(
+    name: str,
+    *,
+    timeout: float = 20.0,
+    env: dict[str, str] | None = None,
+) -> ScenarioResult:
     """Run scenario *name* in its own session under a hard deadline.
 
     Parameters
@@ -71,6 +76,8 @@ def run_scenario(name: str, *, timeout: float = 20.0) -> ScenarioResult:
         The scenario name the child module dispatches.
     timeout : float, default=20.0
         Seconds the scenario may run before its session is killed.
+    env : dict[str, str] | None, default=None
+        Extra environment entries for the scenario process.
 
     Returns
     -------
@@ -80,15 +87,17 @@ def run_scenario(name: str, *, timeout: float = 20.0) -> ScenarioResult:
     command = [sys.executable, "-m", _SCENARIO_MODULE, name]
     session = {"start_new_session": True} if os.name == "posix" else {}
     with tempfile.TemporaryDirectory(prefix="cuprum-live-supervisor-") as marker_dir:
-        env = dict(os.environ)
-        env[_SCENARIO_DIR_ENV] = marker_dir
+        child_env = dict(os.environ)
+        child_env[_SCENARIO_DIR_ENV] = marker_dir
+        if env is not None:
+            child_env.update(env)
         with subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
             command,
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=child_env,
             **session,
         ) as process:
             try:

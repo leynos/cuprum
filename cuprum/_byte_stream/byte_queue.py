@@ -87,6 +87,7 @@ class _ByteQueue:
         "_data_ready",
         "_discarded_bytes",
         "_ending",
+        "_eof_observed",
         "_failure",
         "_items",
         "_settling",
@@ -100,6 +101,7 @@ class _ByteQueue:
         self._items: collections.deque[bytes] = collections.deque()
         self._buffered_bytes = 0
         self._discarded_bytes = 0
+        self._eof_observed = False
         self._ending: StreamClosure | None = None
         self._failure: BaseException | None = None
         self._settling = False
@@ -207,6 +209,8 @@ class _ByteQueue:
             remainder.
         """
         while True:
+            if self._ending is not None:
+                return 0
             available = self._capacity - self._buffered_bytes
             if available > 0:
                 return available
@@ -269,18 +273,30 @@ class _ByteQueue:
             await self._terminal_ready.wait()
         return self._ending
 
-    def producer_eof(self) -> None:
-        """Publish the drain's genuine end-of-stream.
+    def note_eof(self) -> None:
+        """Record that the drain observed the child's genuine end-of-stream.
 
-        A clean ``EOF`` requires that nothing was discarded. Settlement may
-        have begun before the drain observed the end — that is the ordinary
-        case, because the exit wait can return before the final read — but if
-        every chunk still fitted the queue, the reader did receive the whole
-        stream and ``EOF`` is the honest state. Any discarded byte makes the
-        terminal state ``TRUNCATED_BY_SETTLEMENT`` instead. A published
-        reader close or failure is left alone, so a later EOF cannot overwrite
-        it.
+        This publishes no terminal state. The drain has not finalized its
+        capture yet, and a finalization failure must be able to publish
+        ``FAILED`` before any reader observes a clean end. :meth:`complete`
+        publishes the end once the drain task succeeds.
         """
+        self._eof_observed = True
+
+    def complete(self) -> None:
+        """Publish the end a successful drain task observed, if it saw one.
+
+        A clean ``EOF`` requires both an observed end and no discarded byte.
+        Settlement may have begun before the drain observed the end — that is
+        the ordinary case, because the exit wait can return before the final
+        read — but if every chunk still fitted the queue, the reader did
+        receive the whole stream and ``EOF`` is the honest state. Any
+        discarded byte makes the terminal state ``TRUNCATED_BY_SETTLEMENT``
+        instead. A drain that never observed an end is left to settlement's
+        own finalization. An already published state is never overwritten.
+        """
+        if self._ending is not None or not self._eof_observed:
+            return
         if self._discarded_bytes:
             self._publish(StreamClosure.TRUNCATED_BY_SETTLEMENT)
         else:

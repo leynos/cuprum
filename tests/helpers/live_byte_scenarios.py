@@ -15,16 +15,13 @@ raised ``RuntimeError`` carries the failing observation.
 from __future__ import annotations
 
 import asyncio
-import io
+import os
 import sys
 import typing as typ
 
 from cuprum import (
     ByteStreamReader,
-    EchoStream,
     ExecutionContext,
-    LiveStreamError,
-    RunOutputOptions,
     StdinStream,
     StreamClosure,
     TimeoutExpired,
@@ -33,13 +30,14 @@ from tests.helpers.live_byte_descendant_scenarios import (
     descendant_inherit,
     descendant_own_group,
 )
+from tests.helpers.live_byte_failure_scenarios import (
+    live_failure_stops_held_child,
+    stdin_failure_stops_held_child,
+)
 from tests.helpers.live_byte_support import HANDLE_DEADLINE_S as _HANDLE_DEADLINE_S
 from tests.helpers.live_byte_support import PAYLOAD_SIZE as _PAYLOAD_SIZE
 from tests.helpers.live_byte_support import PYTHON as _PYTHON
-from tests.helpers.live_byte_support import is_alive as _is_alive
-from tests.helpers.live_byte_support import kill_and_reap as _kill_and_reap
 from tests.helpers.live_byte_support import require as _require
-from tests.helpers.live_byte_support import wait_dead as _wait_dead
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -158,25 +156,48 @@ async def malformed_split_utf8() -> None:
 
 
 async def large_simultaneous() -> None:
-    """Reconstruct large output from both pipes under a small byte bound."""
+    """Reconstruct both pipes written concurrently under a small byte bound."""
     code = (
-        "import sys\n"
-        f"payload = b'x' * {_PAYLOAD_SIZE}\n"
-        "sys.stdout.buffer.write(payload)\n"
-        "sys.stdout.buffer.flush()\n"
-        "sys.stderr.buffer.write(payload)\n"
-        "sys.stderr.buffer.flush()\n"
+        "import sys, threading\n"
+        f"out = bytes(range(256)) * {_PAYLOAD_SIZE // 256}\n"
+        f"err = bytes(reversed(range(256))) * {_PAYLOAD_SIZE // 256}\n"
+        "def write(stream, data):\n"
+        "    stream.write(data)\n"
+        "    stream.flush()\n"
+        "writer = threading.Thread\n"
+        "writer(target=write, args=(sys.stdout.buffer, out)).start()\n"
+        "writer(target=write, args=(sys.stderr.buffer, err)).start()\n"
     )
+    expected_out = bytes(range(256)) * (_PAYLOAD_SIZE // 256)
+    expected_err = bytes(reversed(range(256))) * (_PAYLOAD_SIZE // 256)
     async with await _PYTHON("-c", code).start_bytes(max_buffered_bytes=1024) as handle:
         out, err = await asyncio.gather(
             _read_all(handle.stdout),
             _read_all(handle.stderr),
         )
         result = await handle.wait()
-    _require(len(out) == _PAYLOAD_SIZE, f"stdout length was {len(out)}")
-    _require(len(err) == _PAYLOAD_SIZE, f"stderr length was {len(err)}")
-    _require(result.stdout == out, "capture must equal the live stdout bytes")
-    _require(result.stderr == err, "capture must equal the live stderr bytes")
+    _require(
+        out == expected_out,
+        f"live stdout differed at {_first_difference(out, expected_out)}",
+    )
+    _require(
+        err == expected_err,
+        f"live stderr differed at {_first_difference(err, expected_err)}",
+    )
+    _require(
+        result.stdout == expected_out, "capture must equal the expected stdout bytes"
+    )
+    _require(
+        result.stderr == expected_err, "capture must equal the expected stderr bytes"
+    )
+
+
+def _first_difference(actual: bytes, expected: bytes) -> str:
+    """Describe the first differing offset, without dumping either payload."""
+    for index, (left, right) in enumerate(zip(actual, expected, strict=False)):
+        if left != right:
+            return f"offset {index}: {left:#04x} != {right:#04x}"
+    return f"lengths {len(actual)} != {len(expected)}"
 
 
 async def stalled_then_wait() -> None:
@@ -256,67 +277,6 @@ async def close_one_stream() -> None:
     _require(result.ok, f"the child exited {result.exit_code}")
 
 
-class _FailingSink(io.StringIO):
-    """A text sink whose write always fails, failing the drain that echoes."""
-
-    def write(self, _text: str) -> int:  # ruff: ignore[no-self-use] - overrides IO.write; the failure is the whole behaviour.
-        """Fail the echo write."""
-        message = "sink failed"
-        raise ValueError(message)
-
-
-async def live_failure_stops_held_child() -> None:
-    """Stop and reap a held child when its live drain fails."""
-    code = (
-        "import sys, time\n"
-        "sys.stdout.buffer.write(b'out\\n')\n"
-        "sys.stdout.buffer.flush()\n"
-        "time.sleep(30)\n"
-    )
-    handle = await _PYTHON("-c", code).start_bytes(
-        output=RunOutputOptions(echo=True),
-        context=ExecutionContext(
-            stdout_sink=_FailingSink(),
-            cancel_grace=0.2,
-        ),
-    )
-    pid = handle.pid
-    if pid is None:
-        message = "the child must have a PID"
-        raise RuntimeError(message)
-    try:
-        try:
-            await asyncio.wait_for(handle.stdout.wait_eof(), timeout=10)
-        except LiveStreamError as error:
-            _require(
-                error.stream is EchoStream.STDOUT, "stdout must be the failed stream"
-            )
-        else:
-            message = "the reader should have reported the drain failure"
-            raise RuntimeError(message)
-        reaped = await asyncio.to_thread(_wait_dead, pid, 10.0)
-        _require(
-            reaped,
-            "a held handle must stop and reap the child when its drain fails",
-        )
-        try:
-            await handle.wait()
-        except LiveStreamError:
-            pass
-        else:
-            message = "settlement should report the drain failure"
-            raise RuntimeError(message)
-        _require(
-            handle.stderr.closure
-            in {StreamClosure.EOF, StreamClosure.TRUNCATED_BY_SETTLEMENT},
-            "the other stream must settle normally, not fail, got "
-            f"{handle.stderr.closure!r}",
-        )
-    finally:
-        if _is_alive(pid):
-            _kill_and_reap(pid)
-
-
 _SCENARIOS = {
     "prefix_before_input": prefix_before_input,
     "independent_eof": independent_eof,
@@ -326,9 +286,15 @@ _SCENARIOS = {
     "cancel_while_blocked": cancel_while_blocked,
     "close_one_stream": close_one_stream,
     "live_failure_stops_held_child": live_failure_stops_held_child,
+    "stdin_failure_stops_held_child": stdin_failure_stops_held_child,
     "descendant_own_group": descendant_own_group,
     "descendant_inherit": descendant_inherit,
 }
+
+
+def _wait4_unavailable() -> bool:
+    """Report the asyncio fallback route for this scenario run."""
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -337,6 +303,13 @@ def main(argv: list[str]) -> int:
         print(f"usage: {argv[0]} <{'|'.join(sorted(_SCENARIOS))}>", file=sys.stderr)
         return 2
     name = argv[1]
+    if os.environ.get("CUPRUM_LIVE_SCENARIO_WAIT_ROUTE") == "fallback":
+        from cuprum import _wait4_spawn
+
+        # Assigned through the module mapping: a plain attribute assignment
+        # is rejected by the type checker, and `setattr` is rewritten back to
+        # one by the formatter.
+        vars(_wait4_spawn)["wait4_resource_measurement_available"] = _wait4_unavailable
     asyncio.run(_SCENARIOS[name]())
     print(f"SCENARIO-OK:{name}")
     return 0

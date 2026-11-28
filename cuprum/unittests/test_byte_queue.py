@@ -57,7 +57,8 @@ def test_oversized_chunk_is_split_and_delivered_in_order() -> None:
         assert queue.buffered_bytes <= 4, (
             f"the queue must never exceed its bound, got {queue.buffered_bytes}"
         )
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         received = await consumer
         assert received == payload, f"split delivery changed the bytes: {received!r}"
 
@@ -102,7 +103,8 @@ def test_eof_after_release_without_discard_is_clean() -> None:
         queue = _ByteQueue(4)
         await queue.put(b"abcd")
         queue.begin_settlement()
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         assert queue.ending is StreamClosure.EOF, (
             "nothing was discarded, so the reader received the whole stream"
         )
@@ -152,7 +154,8 @@ def test_wait_terminal_observes_a_state_published_later() -> None:
         waiter = asyncio.create_task(queue.wait_terminal())
         await asyncio.sleep(0)
         assert not waiter.done(), "the waiter must suspend until the state exists"
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         assert await asyncio.wait_for(waiter, 1.0) is StreamClosure.EOF, (
             "the waiter must observe the published EOF"
         )
@@ -188,7 +191,8 @@ def test_consumed_bytes_equal_posted_bytes(
         consumer = asyncio.create_task(consume())
         for chunk in chunks:
             await queue.put(chunk)
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         received = await asyncio.wait_for(consumer, timeout=5.0)
         assert received == b"".join(chunks), (
             f"lossless delivery failed for capacity {capacity}"
@@ -233,7 +237,8 @@ def test_a_tail_that_fits_after_settlement_is_still_delivered() -> None:
         queue = _ByteQueue(8)
         queue.begin_settlement()
         await queue.put(b"tail")
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         assert queue.discarded_bytes == 0, "a fitting tail must not be discarded"
         assert queue.ending is StreamClosure.EOF, (
             "a clean end with nothing discarded must report EOF"
@@ -249,7 +254,8 @@ def test_failure_overrides_an_already_published_eof() -> None:
     async def scenario() -> None:
         """Publish EOF, then fail the stream."""
         queue = _ByteQueue(8)
-        queue.producer_eof()
+        queue.note_eof()
+        queue.complete()
         cause = RuntimeError("late drain failure")
         queue.fail(cause)
         assert queue.ending is StreamClosure.FAILED, (
@@ -259,3 +265,46 @@ def test_failure_overrides_an_already_published_eof() -> None:
         assert queue.failure is cause, "the original cause must be retained"
 
     asyncio.run(scenario())
+
+
+def test_close_wakes_a_blocked_put_and_discards_its_bytes() -> None:
+    """A put blocked on capacity must not enqueue after the reader closes."""
+
+    async def scenario() -> None:
+        """Fill the queue, block a put, then close the reader."""
+        queue = _ByteQueue(4)
+        await queue.put(b"abcd")
+        producer = asyncio.create_task(queue.put(b"efgh"))
+        await asyncio.sleep(0)
+        assert not producer.done(), "the put must be waiting for capacity"
+        queue.close_reader()
+        await asyncio.wait_for(producer, timeout=1.0)
+        assert queue.buffered_bytes == 0, (
+            f"a closed reader must retain nothing, got {queue.buffered_bytes}"
+        )
+        assert await queue.get() is None, "a closed reader must stop its consumer"
+        assert queue.ending is StreamClosure.READER_CLOSED, (
+            "the close must remain the terminal state"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_note_eof_alone_publishes_nothing() -> None:
+    """A noted end is not observable until the drain task completes."""
+    queue = _ByteQueue(4)
+    queue.note_eof()
+    assert queue.ending is None, "a noted end must not be published early"
+
+
+def test_failure_before_completion_wins_over_a_noted_eof() -> None:
+    """A finalization failure publishes FAILED before any reader sees EOF."""
+    queue = _ByteQueue(4)
+    queue.note_eof()
+    cause = RuntimeError("finalize failed")
+    queue.fail(cause)
+    queue.complete()
+    assert queue.ending is StreamClosure.FAILED, (
+        "a later completion must not overwrite FAILED"
+    )
+    assert queue.failure is cause, "the cause must be retained"

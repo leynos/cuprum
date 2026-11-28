@@ -2008,15 +2008,28 @@ being written, transport buffers, and the operating system's pipe buffer.
 Once settlement begins, a queue that has not reached a clean end stops waiting
 for capacity: a chunk that still fits is enqueued, the remainder is discarded
 and counted, and a blocked producer is woken. The reader reports `EOF` only
-when the drain observed the stream's end and no byte was discarded. A reader
-that never reaches an end before reconciliation finishes, or one whose
-discarded remainder was non-empty, reports `TRUNCATED_BY_SETTLEMENT`. Queue
-release does not change capture, so the settled `BytesCommandResult` reports
-whatever the active capture policy retained: `FullCapture` keeps every byte,
-while a bounded or file-backed policy may discard or spill and records that on
-its capture record. Consume to end-of-stream before awaiting the result when
-the live stream and the capture must agree; a `wait()` that starts first is
-already a settlement.
+when the drain observed the stream's end, finalized its capture successfully,
+and discarded no byte. A reader that never reaches an end before reconciliation
+finishes, one whose drain fails finalization, or one whose discarded remainder
+was non-empty, reports `FAILED` or `TRUNCATED_BY_SETTLEMENT` as appropriate.
+Queue release does not change capture, so the settled `BytesCommandResult`
+reports whatever the active capture policy retained: `FullCapture` keeps every
+byte, while a bounded or file-backed policy may discard or spill and records
+that on its capture record. Consume to end-of-stream before awaiting the result
+when the live stream and the capture must agree; a `wait()` that starts first
+is already a settlement.
+
+A cancellation request on one `wait()` caller cancels only that caller's await.
+The shielded settlement keeps running because the handle still owns the child;
+a later `wait()`, a control operation, or the `async with` teardown settles it.
+Cancelling the owning task or leaving the context is what stops and settles the
+handle, and repeated cancellation is absorbed the same way.
+
+A `StdinStream` producer that fails while the handle is merely held also
+requests an immediate stop, so the child cannot stay blocked on input nobody
+will send. Settlement then raises `StdinSourceError`, and the failure keeps its
+precedence over a consumer failure. A child that closes its stdin early remains
+a non-fatal observation.
 
 `start_bytes()` accepts the same `StdinSource` as `run()`: a complete
 `StdinInput` payload or a `StdinStream` producer. A streaming producer is
@@ -2030,12 +2043,15 @@ deadline for every `wait()` on that handle. Expiry stops the child, reaps it,
 records the outcome, and raises `TimeoutExpired` with the bytes captured before
 the deadline.
 
-Capture is always on and byte-exact, and the handle reads both streams through
-parent-side pipes. A caller-supplied `on_line` observer is refused with
-`ValueError`, because decoded text and byte-exact capture would give one stream
-two contradictory contracts; registered observe hooks still receive decoded
-lines. A redirected stdout or stderr target is refused for the same reason
-`start()` refuses one. `terminate()`, `kill()`, `signal()`, `result`, and the
+Capture defaults on and is byte-exact, but a byte handle honours an explicit
+`capture=False` or per-stream opt-out: the live readers are its primary
+channel, and a protocol client may want to avoid retaining a full capture. Both
+streams are still read through library-owned pipes, and a non-pipe target is
+refused. A caller-supplied `on_line` observer is refused with `ValueError`,
+because decoded text and byte-exact capture would give one stream two
+contradictory contracts; registered observe hooks still receive decoded lines.
+A redirected stdout or stderr target is refused for the same reason `start()`
+refuses one. `terminate()`, `kill()`, `signal()`, `result`, and the
 `async with` teardown are the same as on `RunningCommand`.
 
 Containment has the documented limits. `ProcessGroupPolicy.OWN_GROUP` reaches a

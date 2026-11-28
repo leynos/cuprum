@@ -92,10 +92,11 @@ owns.
 `SafeCmd.start_bytes()` mirrors `SafeCmd.start()`: it enforces the allowlist,
 defaults the execution context, resolves the default wait deadline, accepts a
 `StdinSource`, rejects `on_line` and non-pipe output targets before a child
-exists, and forces capture on in byte-exact mode. It returns a
-`RunningBytesCommand`, which owns the same process record, settlement task,
-stop lock, control operations, and `async with` teardown as `RunningCommand`.
-Its `wait()` and `result` are typed to `BytesCommandResult`.
+exists, defaults capture on, honours an explicit opt-out, and marks the run
+byte-exact. It returns a `RunningBytesCommand`, which owns the same process
+record, settlement task, stop lock, control operations, and `async with`
+teardown as `RunningCommand`. Its `wait()` and `result` are typed to
+`BytesCommandResult`.
 
 The live surface is two `ByteStreamReader` objects, `handle.stdout` and
 `handle.stderr`. A reader is an async iterator of `ByteChunk`, which carries
@@ -103,8 +104,9 @@ the stream name, the bytes, and a per-stream sequence number. A reader also
 exposes `wait_eof()`, an `at_eof` predicate, a `closure` property, and
 `aclose()`. `StreamClosure` has four members:
 
-- `EOF`: the drain observed the stream's end and every byte reached the queue
-  or was queued before the reader was released.
+- `EOF`: the drain observed the stream's end, finalized its capture
+  successfully, and every byte reached the queue or was queued before the
+  reader was released.
 - `READER_CLOSED`: the consumer closed the reader; queued items are discarded
   and later live bytes are dropped from the reader while capture continues.
 - `TRUNCATED_BY_SETTLEMENT`: settlement began before the reader reached a
@@ -132,7 +134,10 @@ queue's reservation without splitting.
 EOF is signalled out of band by a new synchronous `on_eof` hook on the drain,
 called only when the drain observes the empty read and before its own
 finalization. It is not called for cancellation, failure, or a preserving
-line-stream finalization.
+line-stream finalization. The hook only notes the end: the reader's terminal
+state is published when the drain task completes successfully, so a
+finalization failure publishes `FAILED` rather than leaving a reader with an
+EOF it observed before the failure.
 
 At settlement the byte owner releases both queues *before* it waits for the
 child: blocked `put`s wake and stop waiting, a chunk that still fits is
@@ -149,10 +154,15 @@ stdin writer and both stream consumers using the existing rendezvous precedence
 (a settled exit, then the writer, then stdout, then stderr). An early consumer
 failure stops the child through the existing exit-wait cancellation, is
 published as `LiveStreamError` on that reader, and is propagated through
-settlement. A producer failure remains a `StdinSourceError`. A child-side stdin
-close remains a non-fatal observation. Output transports are released after
-byte reconciliation, inside the same shield, so a cancelled teardown cannot
-leak a descriptor.
+settlement. A producer failure remains a `StdinSourceError`. While the handle
+is merely held, a failing drain or producer also requests an immediate
+serialized stop; settlement raises the recorded cause even when that stop makes
+the child exit before the rendezvous can report it. A child-side stdin close
+remains a non-fatal observation. A cancelled `wait()` caller cancels only its
+own await: the shielded settlement keeps running, and a later wait, control
+operation, or context exit settles the handle. Output transports are released
+after byte reconciliation, inside the same shield, so a cancelled teardown
+cannot leak a descriptor.
 
 `BoundedDelivery`, the Rust consume path, pipelines, and a public queue type
 are out of scope. The queue is an implementation detail, and echo keeps its

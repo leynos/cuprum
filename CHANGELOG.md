@@ -19,8 +19,11 @@
   child's exit against the stdin writer and both consumers through the existing
   rendezvous precedence, so an early consumer failure stops the child and
   surfaces as a chained `LiveStreamError` while a producer failure remains a
-  `StdinSourceError`. A caller-supplied `on_line` observer and non-pipe output
-  targets are refused before a child exists. The text `RunningCommand`,
+  `StdinSourceError`; a held handle also stops its child when either the stdin
+  producer or a drain fails. Capture defaults on, but an explicit
+  `capture=False` or per-stream opt-out is honoured because the live readers
+  remain the primary channel. A caller-supplied `on_line` observer and non-pipe
+  output targets are refused before a child exists. The text `RunningCommand`,
   `lines()`, and `run_bytes()` contracts are unchanged. The feature is
   unreleased and absent from `0.2.0-beta2`
   ([#706](https://github.com/leynos/cuprum/issues/706)).
