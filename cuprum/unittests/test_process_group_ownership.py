@@ -19,14 +19,15 @@ import typing as typ
 
 import pytest
 
+import cuprum.unittests._process_group_ownership_support as _ownership_support
 from cuprum import _group_teardown, _process_group
 from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
     _descendant_has_exited,
+    _descendant_is_observed_running,
     _descendant_is_running,
-    _descendant_may_be_running,
     _kill_and_wait,
     _kill_ignoring_missing,
     _posix_only,
@@ -35,6 +36,7 @@ from cuprum.unittests._process_group_ownership_support import (
     _terminate_owned_run,
     _wait_for_descendant_exit,
 )
+from tests.helpers.process_exit import ExitObservation
 from tests.helpers.timeouts import (
     python_interpreter,
     wait_for_pid_file,
@@ -118,7 +120,6 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
                 run.unrelated_pid,
                 run.unrelated_pid,
                 group=False,
-                context="unrelated process cleanup",
             )
 
     asyncio.run(run_case())
@@ -152,18 +153,16 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
             # grandchild has gone, the group is empty and an unguarded
             # ``killpg`` would raise and replace the assertion with its own
             # report.
-            if _descendant_may_be_running(run.grandchild_pid):
+            if _descendant_is_observed_running(run.grandchild_pid):
                 await _kill_and_wait(
                     run.process.pid,
                     run.grandchild_pid,
                     group=True,
-                    context="grandchild cleanup",
                 )
             await _kill_and_wait(
                 run.unrelated_pid,
                 run.unrelated_pid,
                 group=False,
-                context="unrelated process cleanup",
             )
 
     asyncio.run(run_case())
@@ -324,18 +323,16 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             # grandchild may be up, this is still a group the run owns. Once it
             # has exited the group has ended and its number may have been
             # recycled onto a stranger, which is why the probe comes first.
-            if _descendant_may_be_running(run.grandchild_pid):
+            if _descendant_is_observed_running(run.grandchild_pid):
                 await _kill_and_wait(
                     run.process.pid,
                     run.grandchild_pid,
                     group=True,
-                    context="grandchild cleanup",
                 )
             await _kill_and_wait(
                 run.unrelated_pid,
                 run.unrelated_pid,
                 group=False,
-                context="unrelated process cleanup",
             )
 
     asyncio.run(run_case())
@@ -413,3 +410,43 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
         "members left outstanding must be reported rather than passed over "
         f"silently, got {caplog.messages}"
     )
+
+
+def test_an_unobservable_descendant_does_not_authorize_a_group_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A group whose member cannot be observed is not safe to signal.
+
+    The group identifier may have been reused once the descendant exited, so
+    the cleanup decision must read an unobservable process as "not known
+    running" rather than as a licence to signal the old group.
+    """
+    monkeypatch.setattr(
+        _ownership_support,
+        "observe_exit",
+        lambda _pid: ExitObservation.UNOBSERVABLE,
+    )
+    assert not _ownership_support._descendant_is_observed_running(4242), (
+        "an unobservable descendant must not authorize a group signal"
+    )
+
+
+def test_cleanup_still_kills_its_target_when_observation_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Cleanup kills the child even when the host cannot report its state."""
+
+    async def run_case() -> None:
+        """Kill a child whose state is unobservable, then reap it."""
+        process = await _spawn_immune_child(tmp_path / "immune.ready")
+        monkeypatch.setattr(
+            _ownership_support,
+            "observe_exit",
+            lambda _pid: ExitObservation.UNOBSERVABLE,
+        )
+        await _kill_and_wait(process.pid, process.pid, group=False)
+        await process.wait()
+        assert process.returncode is not None, "cleanup must reap the child"
+
+    asyncio.run(run_case())

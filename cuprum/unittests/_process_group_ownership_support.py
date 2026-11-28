@@ -15,7 +15,6 @@ signal aimed at anything the test runner belongs to would take pytest with it.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import os
 import signal
@@ -148,19 +147,42 @@ def _descendant_has_exited(pid: int) -> bool:
     return _observed_exit(pid) is ExitObservation.EXITED
 
 
-def _descendant_may_be_running(pid: int) -> bool:
-    """Report whether *pid* may run, for a best-effort cleanup decision.
+def _descendant_is_observed_running(pid: int) -> bool:
+    """Report whether *pid* is observed running, for a cleanup decision.
 
-    An unobservable process counts as possibly running: cleanup must attempt
-    the kill rather than skip it because the host cannot answer.
+    An unobservable process is not evidence that the group still exists. Once
+    the descendant has exited, the group identifier may have been reused, so
+    cleanup must not signal a group it cannot tie to this run.
 
     Returns
     -------
     bool
-        Whether the process may still be running, including when the host
-        cannot report its state.
+        Whether the host observed the process in a running state.
     """
-    return observe_exit(pid) is not ExitObservation.EXITED
+    return observe_exit(pid) is ExitObservation.RUNNING
+
+
+def _await_descendant_exit(pid: int, *, seconds: float) -> bool:
+    """Wait up to *seconds* for *pid* to exit, zombies counting as exited.
+
+    This never fails. Cleanup paths use it, where an unobservable host or a
+    process that outlives the bound must not replace the failure that entered
+    the cleanup.
+
+    Returns
+    -------
+    bool
+        Whether the exit was observed.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        observed = observe_exit(pid)
+        if observed is ExitObservation.EXITED:
+            return True
+        if observed is ExitObservation.UNOBSERVABLE:
+            return False
+        time.sleep(0.05)
+    return False
 
 
 def _wait_for_descendant_exit(
@@ -177,12 +199,8 @@ def _wait_for_descendant_exit(
     ``observe_exit`` reads the scheduler state instead, which is the answer the
     teardown promised.
     """
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if _observed_exit(pid) is ExitObservation.EXITED:
-            return
-        time.sleep(0.05)
-    pytest.fail(f"Process {pid} still alive after {context}")
+    if not _await_descendant_exit(pid, seconds=seconds):
+        pytest.fail(f"Process {pid} did not exit within {seconds}s ({context})")
 
 
 async def _kill_and_wait(
@@ -190,21 +208,15 @@ async def _kill_and_wait(
     wait_pid: int,
     *,
     group: bool,
-    context: str,
 ) -> None:
     """Best-effort cleanup: kill *kill_pid*, then wait for *wait_pid*.
 
-    The wait is bounded and its failure suppressed. This runs in a cleanup
-    path, where an observation the host cannot make, or a process that outlives
-    the bound, must not replace the failure that entered the ``finally`` block.
+    Neither half fails. The wait is bounded and returns a verdict rather than a
+    test failure, so an unobservable host or a process that outlives the bound
+    cannot replace the failure that entered the ``finally`` block.
     """
     _kill_ignoring_missing(kill_pid, group=group)
-    with contextlib.suppress(AssertionError):
-        await asyncio.to_thread(
-            _wait_for_descendant_exit,
-            wait_pid,
-            context=context,
-        )
+    await asyncio.to_thread(_await_descendant_exit, wait_pid, seconds=5.0)
 
 
 async def _terminate_owned_run(run: _OwnedRun) -> None:
