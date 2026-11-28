@@ -49,6 +49,42 @@ __all__ = ["_OwnedBytesStart"]
 _DEFAULT_MAX_BUFFERED_BYTES = 64 * 1024
 
 
+def _bytes_execution_state(
+    ctx: ExecutionContext,
+    output: RunOutputOptions | None,
+    stdin: StdinSource | None,
+    timeout: float | None,
+) -> _ExecutionState:
+    """Resolve the run inputs a byte handle spawns from.
+
+    The option rejections happen here, before a child exists. A line observer
+    cannot coexist with byte-exact capture, and a redirected stream has no
+    parent-side pipe for a handle to read.
+
+    Returns
+    -------
+    _ExecutionState
+        The resolved inputs, with capture forced on and byte mode set.
+    """
+    options = _bytes_output(output)
+    _validate_bytes_output(options)
+    _reject_redirected_handle_streams(
+        options,
+        entry_point="SafeCmd.start_bytes()",
+    )
+    return _ExecutionState(
+        context=ctx,
+        # Capture is forced on for the same reason a text handle forces it: a
+        # handle exists so its caller can inspect the child after the fact. The
+        # mode is set here, once, and travels on the execution bundle to the
+        # drain and the event's capture mode.
+        output=_with_capture(options),
+        stdin_data=_resolve_stdin_source(stdin, ctx),
+        timeout=timeout,
+        capture_bytes=True,
+    )
+
+
 class _OwnedBytesStart:
     """Mixin contributing ``SafeCmd.start_bytes``.
 
@@ -59,6 +95,9 @@ class _OwnedBytesStart:
 
     __slots__ = ()
 
+    # @codescene(disable:"Excess Number of Function Arguments") The five
+    # keyword-only inputs are the published contract, mirroring start() plus one
+    # queue bound; grouping them would change every call site. Reassess 2027-05.
     async def start_bytes(  # ruff: ignore[too-many-arguments] - the five keyword-only inputs mirror start() plus one queue bound; bundling them would change the documented signature.
         self,
         *,
@@ -71,29 +110,16 @@ class _OwnedBytesStart:
         """Start the command and return an owned handle with live byte streams.
 
         The child is spawned and its PID announced before this returns. Await
-        :meth:`RunningBytesCommand.wait` for the byte-exact outcome, iterate
-        ``handle.stdout`` and ``handle.stderr`` for live output, or stop the
-        child with the handle's control operations.
+        :meth:`RunningBytesCommand.wait` for the byte-exact outcome, or iterate
+        ``handle.stdout`` and ``handle.stderr`` for live output.
 
-        Each reader is lossless while it is live: a consumer that stops reading
-        applies backpressure to the child rather than losing bytes. Once
-        settlement begins, bytes that do not fit a queue are discarded from the
-        reader while capture keeps them, and the reader reports
-        ``TRUNCATED_BY_SETTLEMENT``. Consume to end-of-stream before awaiting
-        the result when the two must agree.
-
-        Capture is always on and always byte-exact. A per-stream ``False``
-        value inherits the forced-on shorthand, while an explicit capture
-        policy still controls how that stream is retained. Line observation and
-        non-pipe output targets are refused before a child exists: the former
-        would give one stream two contradictory contracts, and the latter gives
-        a handle no parent-side pipe to read.
-
-        Unlike ``run()``, no deadline is enforced while the handle is merely
-        held: the clock a timeout is measured against starts at the ``wait``
-        that asks for one. An explicit *timeout* here is therefore the default
-        deadline for every ``wait()`` on this handle rather than a limit on how
-        long the child may live.
+        Each reader is lossless while it is live; settlement may truncate a
+        reader whose queue cannot fit the remainder, so consume to end-of-stream
+        before awaiting the result. See the users' guide for the full contract.
+        Capture is always on and byte-exact; a caller-supplied ``on_line`` and
+        non-pipe output targets are refused before a child exists. Unlike
+        ``run()``, a *timeout* is the default deadline for every ``wait()`` on
+        the handle rather than a limit on the child's life.
 
         Parameters
         ----------
@@ -134,25 +160,14 @@ class _OwnedBytesStart:
         cmd = typ.cast("SafeCmd", self)
         _enforce_allowlist(cmd)
         ctx = context or ExecutionContext()
-        options = _bytes_output(output)
-        _validate_bytes_output(options)
-        _reject_redirected_handle_streams(
-            options,
-            entry_point="SafeCmd.start_bytes()",
-        )
         # Built before the spawn so the queues exist by the time the first
         # chunk is read, and so a bad bound fails before a child exists.
         streams = build_byte_streams(max_buffered_bytes)
-        state = _ExecutionState(
-            context=ctx,
-            # Capture is forced on for the same reason a text handle forces it:
-            # a handle exists so its caller can inspect the child after the
-            # fact. The mode is set here, once, and travels on the execution
-            # bundle to the drain and the event's capture mode.
-            output=_with_capture(options),
-            stdin_data=_resolve_stdin_source(stdin, ctx),
-            timeout=_resolve_timeout(timeout=timeout, context=context),
-            capture_bytes=True,
+        state = _bytes_execution_state(
+            ctx,
+            output,
+            stdin,
+            _resolve_timeout(timeout=timeout, context=context),
         )
         run = await _spawn_owned_run(cmd, state, live=streams.sinks)
         # Bound after the spawn because the stop needs the run; a failure that

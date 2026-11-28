@@ -53,10 +53,13 @@ if typ.TYPE_CHECKING:
 
 __all__ = [
     "_HandleRun",
+    "_attach_handle_tasks",
     "_attach_run_tasks",
     "_build_handle_execution",
     "_detach_run_tasks",
     "_launch_idle_monitor",
+    "_reclaim_failed_start",
+    "_sample_handle_start",
     "_start_handle_run",
 ]
 
@@ -122,6 +125,78 @@ def _build_handle_execution(execution: _SubprocessExecution) -> _SubprocessExecu
     return dc.replace(execution, timeout=None)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _HandleStart:
+    """The pre-spawn readings one handle start takes, and the stamped bundle."""
+
+    started_at: float
+    wall_clock_started_at: float
+    execution: _SubprocessExecution
+
+
+def _sample_handle_start(execution: _SubprocessExecution) -> _HandleStart:
+    """Take the pre-spawn clocks and stamp the bundle with their reference.
+
+    Both readings come from the observation rather than this module's clock:
+    the bundle's line callbacks subtract that same callable when stamping each
+    ``LineEvent``, so a reference from a different clock would turn every stamp
+    into a difference between two clocks under injection. The monotonic reading
+    travels on the bundle because the line callbacks read it to timestamp each
+    line; left at its zero default, every ``LineEvent.at`` would report the
+    machine's monotonic uptime instead of seconds since the command started.
+
+    Returns
+    -------
+    _HandleStart
+        The two clocks and the bundle stamped with the monotonic reference.
+    """
+    started_at = execution.observation.monotonic_clock()
+    wall_clock_started_at = execution.observation.wall_clock()
+    return _HandleStart(
+        started_at=started_at,
+        wall_clock_started_at=wall_clock_started_at,
+        execution=dc.replace(execution, started_at=started_at),
+    )
+
+
+async def _attach_handle_tasks(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+    live: _LiveStreamSinks | None,
+) -> _RunTaskOwnership:
+    """Attach the run's tasks, preserving the text path's call shape.
+
+    Returns
+    -------
+    _RunTaskOwnership
+        The writer and consumers, with their reconciliation record.
+    """
+    if live is None:
+        return await _attach_run_tasks(process, execution)
+    return await _attach_run_tasks(process, execution, live=live)
+
+
+async def _reclaim_failed_start(
+    process: asyncio.subprocess.Process,
+    execution: _SubprocessExecution,
+) -> None:
+    """Terminate and reap a child whose announcement or attachment failed.
+
+    The import is local so this module and the control module do not import
+    each other at module scope. Termination is transactional with attachment:
+    whatever it managed to start before failing has already reclaimed itself,
+    so the child is the only thing left to own here.
+    """
+    from cuprum._process_handle.control import _terminate_shielded
+
+    await _terminate_shielded(
+        process,
+        execution.ctx.cancel_grace,
+        owns_group=execution.owns_process_group,
+        observation=execution.observation,
+    )
+
+
 async def _start_handle_run(
     execution: _SubprocessExecution,
     tracking: _ExecutionTracking,
@@ -175,50 +250,25 @@ async def _start_handle_run(
         Whatever the ``start`` emission or the task attachment raised, once the
         child has been terminated and reaped.
     """  # ruff: ignore[docstring-extraneous-exception] - the guard re-raises whatever the emission or the attachment raised
-    # Read from the observation rather than this module's clock: the bundle's
-    # line callbacks subtract this reference from that same callable when
-    # stamping each ``LineEvent``, so a reference from a different clock would
-    # turn every stamp into a difference between two clocks under injection.
-    started_at = execution.observation.monotonic_clock()
-    wall_clock_started_at = execution.observation.wall_clock()
-    # Set on the bundle before the spawn, because the record this returns is
-    # what the spawn was driven with and the line callbacks built from the
-    # bundle read ``started_at`` to timestamp each line: left at its zero
-    # default, every ``LineEvent.at`` would report the machine's monotonic
-    # uptime instead of seconds since the command started.
-    execution = dc.replace(execution, started_at=started_at)
-    process = await _spawn_subprocess(execution)
+    start = _sample_handle_start(execution)
+    process = await _spawn_subprocess(start.execution)
     try:
-        execution.observation.emit("start", _EventDetails(pid=process.pid))
-        if live is None:
-            # The text path keeps the exact call shape it had, so a test seam
-            # replacing this helper needs no byte-run parameter it never uses.
-            ownership = await _attach_run_tasks(process, execution)
-        else:
-            ownership = await _attach_run_tasks(process, execution, live=live)
+        start.execution.observation.emit(
+            "start",
+            _EventDetails(pid=process.pid),
+        )
+        ownership = await _attach_handle_tasks(process, start.execution, live)
     except BaseException:
-        # Imported here so this module and the control module do not import
-        # each other at module scope.
-        from cuprum._process_handle.control import _terminate_shielded
-
         # Attaching is inside the guard for the same reason the emission is:
         # a child nobody is driving — no writer started, or consumers nobody
-        # has been told about — is still a child nobody would reap. Attaching
-        # is transactional, so a partial set of tasks is never what reaches
-        # here; whatever it managed to start before failing it has already
-        # reclaimed.
-        await _terminate_shielded(
-            process,
-            execution.ctx.cancel_grace,
-            owns_group=execution.owns_process_group,
-            observation=execution.observation,
-        )
+        # has been told about — is still a child nobody would reap.
+        await _reclaim_failed_start(process, start.execution)
         raise
     return _HandleRun(
         process=process,
-        execution=execution,
-        started_at=started_at,
-        wall_clock_started_at=wall_clock_started_at,
+        execution=start.execution,
+        started_at=start.started_at,
+        wall_clock_started_at=start.wall_clock_started_at,
         tracking=tracking,
         ownership=ownership,
         default_timeout=default_timeout,

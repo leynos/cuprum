@@ -184,24 +184,41 @@ class _ByteQueue:
             if self._ending is not None:
                 self._discard(len(data) - offset)
                 return
-            available = self._capacity - self._buffered_bytes
-            if available <= 0:
-                if self._settling:
-                    self._discard(len(data) - offset)
-                    return
-                self._space_ready.clear()
-                # Re-check after clearing: a consumer that freed space before
-                # the clear already set the event, and no other task can run
-                # between these statements on this loop.
-                if self._capacity - self._buffered_bytes > 0:
-                    continue
-                await self._space_ready.wait()
-                continue
+            available = await self._reserve()
+            if available == 0:
+                self._discard(len(data) - offset)
+                return
             take = min(available, len(data) - offset)
             self._items.append(data[offset : offset + take])
             self._buffered_bytes += take
             offset += take
             self._data_ready.set()
+
+    async def _reserve(self) -> int:
+        """Return the capacity a put may use, or ``0`` when it must discard.
+
+        A live queue waits for its consumer; a released queue never waits, so
+        the caller can discard the remainder and let teardown finish.
+
+        Returns
+        -------
+        int
+            The bytes the put may enqueue, or ``0`` when it must discard the
+            remainder.
+        """
+        while True:
+            available = self._capacity - self._buffered_bytes
+            if available > 0:
+                return available
+            if self._settling:
+                return 0
+            self._space_ready.clear()
+            # Re-check after clearing: a consumer that freed space before the
+            # clear already set the event, and no other task can run between
+            # these statements on this loop.
+            if self._capacity - self._buffered_bytes > 0:
+                continue
+            await self._space_ready.wait()
 
     async def get(self) -> bytes | None:
         """Return the next queued chunk, or ``None`` once it has no more.

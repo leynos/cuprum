@@ -42,7 +42,8 @@ from cuprum.echo_events import EchoStream
 
 if typ.TYPE_CHECKING:
     from cuprum._byte_stream.wiring import _ByteStreams
-    from cuprum._subprocess_wait_types import _RunTaskOwnership
+    from cuprum._subprocess_spawn import _SubprocessExecution
+    from cuprum._subprocess_wait_types import _DrainPair, _RunTaskOwnership
     from cuprum.sh import BytesCommandResult
 
 __all__ = ["_stop_failed_child", "bytes_settlement_plan"]
@@ -88,6 +89,99 @@ async def _stop_failed_child(run: _HandleRun) -> None:
         )
 
 
+def _reconcile_hooks(
+    run: _HandleRun,
+    execution: _SubprocessExecution,
+) -> _ReconcileHooks:
+    """Build the post-reconciliation hook every byte settlement path uses.
+
+    Releasing the child's output transports is owed on both the successful and
+    the failing path, so the hook is constructed once rather than restated.
+
+    Returns
+    -------
+    _ReconcileHooks
+        The hook that releases the output transports after reconciliation.
+    """
+    return _ReconcileHooks(
+        after=functools.partial(
+            _release_output_transports,
+            run.process,
+            execution,
+        ),
+    )
+
+
+async def _settle_after_live_failure(
+    run: _HandleRun,
+    streams: _ByteStreams,
+    hooks: _ReconcileHooks,
+    error: BaseException,
+) -> BaseException:
+    """Publish a live failure, stop the child, and reconcile without output.
+
+    Returns
+    -------
+    BaseException
+        The error the settlement should raise: ``LiveStreamError`` when a
+        consumer failed, otherwise the original error.
+    """
+    failure = _publish_early_failure(run.ownership, streams, error)
+    await _shielded_cleanup(streams.stop.await_stop())
+    try:
+        await _finalize_settled_run(
+            run,
+            run.execution,
+            preserve=False,
+            hooks=hooks,
+        )
+    finally:
+        streams.finalize_settlement()
+    return failure
+
+
+async def _reconcile_preserving(
+    run: _HandleRun,
+    streams: _ByteStreams,
+    hooks: _ReconcileHooks,
+) -> _DrainPair:
+    """Wait for a scheduled stop, then reconcile the run keeping its output.
+
+    Returns
+    -------
+    _DrainPair
+        The drained stdout and stderr, each with its capture record.
+    """
+    await _shielded_cleanup(streams.stop.await_stop())
+    try:
+        return await _finalize_settled_run(
+            run,
+            run.execution,
+            preserve=True,
+            hooks=hooks,
+        )
+    except BaseException:
+        streams.finalize_settlement()
+        raise
+
+
+def _finish_live_readers(
+    ownership: _RunTaskOwnership,
+    streams: _ByteStreams,
+) -> tuple[int, BaseException] | None:
+    """Publish every failed reader and finalize the queues.
+
+    Returns
+    -------
+    tuple[int, BaseException] | None
+        The first failed stream and its cause, or ``None`` when every reader
+        settled normally.
+    """
+    late_failure = _publish_consumer_failures(ownership, streams)
+    streams.finalize_settlement()
+    return late_failure
+
+
 async def _settle_bytes_handle_run(
     run: _HandleRun,
     streams: _ByteStreams,
@@ -124,16 +218,7 @@ async def _settle_bytes_handle_run(
     # delivered; the remainder is discarded and reported as truncation, which
     # is the documented cost of waiting before consuming to EOF.
     streams.begin_settlement()
-    # Every exit path releases the output transports after reconciliation;
-    # only the success path also closes the delivery worker, and only after
-    # the result's figures are settled.
-    hooks = _ReconcileHooks(
-        after=functools.partial(
-            _release_output_transports,
-            run.process,
-            execution,
-        ),
-    )
+    hooks = _reconcile_hooks(run, execution)
     try:
         exit_code, exited_at = await _await_exit_or_writer_failure(
             _wait_for_exit_code_within_timeout(run.process, execution),
@@ -142,35 +227,13 @@ async def _settle_bytes_handle_run(
             stdin_log=run.ownership.stdin_log,
         )
     except BaseException as error:
-        failure = _publish_early_failure(run.ownership, streams, error)
-        await _shielded_cleanup(streams.stop.await_stop())
-        try:
-            await _finalize_settled_run(
-                run,
-                execution,
-                preserve=False,
-                hooks=hooks,
-            )
-        finally:
-            streams.finalize_settlement()
+        failure = await _settle_after_live_failure(run, streams, hooks, error)
         if failure is error:
             raise
         raise failure from error
 
-    await _shielded_cleanup(streams.stop.await_stop())
-    try:
-        drained = await _finalize_settled_run(
-            run,
-            execution,
-            preserve=True,
-            hooks=hooks,
-        )
-    except BaseException:
-        streams.finalize_settlement()
-        raise
-
-    late_failure = _publish_consumer_failures(run.ownership, streams)
-    streams.finalize_settlement()
+    drained = await _reconcile_preserving(run, streams, hooks)
+    late_failure = _finish_live_readers(run.ownership, streams)
     if late_failure is not None:
         index, cause = late_failure
         raise LiveStreamError(_STREAM_NAMES[index], cause=cause)

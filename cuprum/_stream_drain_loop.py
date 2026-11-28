@@ -135,11 +135,17 @@ async def _drain_chunks(
             # drain still owns a coherent accumulate. Cancellation and a failed
             # delivery return ``False`` without reaching here, so neither
             # claims an end the child never produced.
-            if state.on_eof is not None:
-                state.on_eof()
+            _observe_end_of_stream(state)
             return True
         if not await _deliver_chunk(state, chunk):
             return False
+
+
+def _observe_end_of_stream(state: _DrainState) -> None:
+    """Publish a genuine end-of-stream to the live tap, when one is attached."""
+    eof = state.on_eof
+    if eof is not None:
+        eof()
 
 
 async def _deliver_chunk(state: _DrainState, chunk: bytes) -> bool:
@@ -240,4 +246,5 @@ __all__ = [
     "_drain_chunks",
     "_fan_out_chunk",
     "_note_stream_activity",
+    "_observe_end_of_stream",
 ]
