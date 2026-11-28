@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
       id-token: write  # OIDC workflow-source resolution
-    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@774cc5a01e457714aede66e14a97b3e257812fc2
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@cbc5d33fe54bbde50f5eee818d5a8113866a8730
     with:
       # Flat layout: the mutable source is the cuprum/ package at the
       # repository root, so change detection watches it directly.
