@@ -274,23 +274,35 @@ def test_a_failing_driver_reaches_make_with_a_nonzero_status() -> None:
     candidate depends on.
     """
     stub = _stub_runner()
-    rendered = _rendered_opt_in_recipe(stub)
-    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - the recipe body.
-        ["/bin/bash", "-c", rendered],
+    makefile = _opt_in_makefile(stub)
+    completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
+        [  # ruff: ignore[start-process-with-partial-path] - make is on PATH.
+            "make",
+            "--no-print-directory",
+            "-f",
+            str(makefile),
+            OPT_IN_TARGET,
+        ],
         capture_output=True,
         text=True,
         check=False,
         cwd=str(pth.Path.cwd()),
     )
 
-    assert completed.returncode == 7, (
-        "a failing driver must reach the caller as its own status, got "
-        f"{completed.returncode}: {completed.stderr}"
+    assert completed.returncode != 0, (
+        "a failing driver must fail the Make run, got a zero status"
+    )
+    assert "Error 7" in completed.stderr, (
+        "Make must report the driver's own status, got: "
+        f"{completed.stderr.strip()[-200:]}"
     )
 
 
-def _rendered_opt_in_recipe(stub: str) -> str:
-    """Return the opt-in target's recipe as one runnable shell command.
+def _opt_in_makefile(stub: str) -> pth.Path:
+    """Write a Makefile whose opt-in target runs the real recipe.
+
+    The recipe text is the one make renders for the real target, so this
+    executes the shipping command under Make rather than a copy of it.
 
     Parameters
     ----------
@@ -299,8 +311,8 @@ def _rendered_opt_in_recipe(stub: str) -> str:
 
     Returns
     -------
-    str
-        The recipe body with its continuations joined, ready for `bash -c`.
+    pathlib.Path
+        A temporary Makefile defining only the opt-in target.
     """
     completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv.
         [  # ruff: ignore[start-process-with-partial-path] - make is on PATH.
@@ -314,10 +326,20 @@ def _rendered_opt_in_recipe(stub: str) -> str:
         text=True,
         check=False,
     )
-    body = completed.stdout.replace("\\\n", " ")
-    lines = [line for line in body.splitlines() if "stub_runner.py" in line]
-    assert lines, f"the rendered recipe must invoke the stub, got: {body}"
-    return "\n".join(lines)
+    lines = [
+        line
+        for line in completed.stdout.replace("\\\n", " ").splitlines()
+        if line.strip()
+    ]
+    assert lines, f"the rendered recipe must not be empty, got: {completed.stdout}"
+    directory = pth.Path(_stub_directory())
+    makefile = directory / "Makefile"
+    recipe = "".join(f"\t{line}\n" for line in lines)
+    makefile.write_text(f"{OPT_IN_TARGET}:\n{recipe}", encoding="utf-8")
+    assert "stub_runner.py" in makefile.read_text(encoding="utf-8"), (
+        "the generated Makefile must invoke the stub runner"
+    )
+    return makefile
 
 
 def _stub_runner() -> str:

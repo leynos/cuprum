@@ -120,3 +120,91 @@ def test_a_session_record_becomes_a_run_record() -> None:
     assert record.runner_label == "runner-a", (
         f"the runner fingerprint must be carried, got {record.runner_label!r}"
     )
+
+
+def _session_document(outcome: str) -> dict[str, object]:
+    """Return one produced session document whose first node has ``outcome``."""
+    return {
+        "collected": ["a", "b"],
+        "outcomes": {"a": outcome, "b": "passed"},
+        "skip_reasons": {},
+        "xfail_reasons": {},
+        "exit_status": 0,
+    }
+
+
+def _run_artefact(tmp_path: pth.Path, name: str, layout: str, outcome: str) -> pth.Path:
+    """Write one run-record artefact adapted from a produced session document."""
+    from scripts.pytest_layout_session_adapter import (
+        SessionIdentity,
+        run_record_from_session,
+    )
+
+    record = run_record_from_session(
+        _session_document(outcome),
+        SessionIdentity(
+            run_id=name,
+            layout=layout,
+            python_version="3.12",
+            cache_state="warm",
+            step_seconds=100.0,
+            job_seconds=400.0,
+            runner_label="runner-a",
+            toolchain="toolchain-a",
+        ),
+    )
+    path = tmp_path / f"{name}.json"
+    path.write_text(
+        json.dumps({
+            "runs": [
+                {
+                    "run_id": record.run_id,
+                    "layout": record.layout,
+                    "python_version": record.python_version,
+                    "cache_state": record.cache_state,
+                    "step_seconds": record.step_seconds,
+                    "job_seconds": record.job_seconds,
+                    "node_ids": list(record.node_ids),
+                    "exit_status": record.exit_status,
+                    "failed": record.failed,
+                    "outcomes": dict(record.outcomes),
+                    "skip_reasons": dict(record.skip_reasons),
+                    "xfail_reasons": dict(record.xfail_reasons),
+                    "runner_label": record.runner_label,
+                    "toolchain": record.toolchain,
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_produced_session_record_reaches_the_cli(tmp_path: pth.Path) -> None:
+    """Carry a produced session document through the adapter into the CLI.
+
+    The node names match on both sides, so only the differing outcomes can make
+    the report non-identical, which is exactly the defect the review named.
+    """
+    control = _run_artefact(tmp_path, "control", "baseline", "passed")
+    candidate = _run_artefact(tmp_path, "candidate", "consolidated", "failed")
+    output = tmp_path / "out"
+
+    status = main([
+        "fidelity",
+        "--control",
+        str(control),
+        "--candidate",
+        str(candidate),
+        "--output",
+        str(output),
+    ])
+
+    assert status == 0, f"the command must succeed, got {status}"
+    report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert report["identical"] is False, (
+        f"matching node names with different outcomes must not be identical: {report}"
+    )
+    assert report["control_total"] == 2, (
+        f"both nodes must survive the adapter, got {report['control_total']}"
+    )
