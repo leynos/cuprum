@@ -3107,10 +3107,10 @@ Table 1: metrics emitted by `PumpMetricsHook`
 | `cuprum_rust_pump_held_pairs`                | none      |
 
 `RustPumpDeclineReason` bounds the decline label to its declared values — the
-six in Table 1 above. The `outcome` label is also closed: it is exactly
-`submitted`, `blocking_setup_failed`, `drain_failed`, `drain_cancelled`,
-`hold_observer_shutdown`, `submission_abandoned`,
-`executor_submission_rejected`, `native_load_failed`,
+six `cuprum_reason` values in the decline-reason table above. The `outcome`
+label is also closed: it is exactly `submitted`, `blocking_setup_failed`,
+`drain_failed`, `drain_cancelled`, `hold_observer_shutdown`,
+`submission_abandoned`, `executor_submission_rejected`, `native_load_failed`,
 `buffer_validation_failed`, `platform_writer_transfer_failed`,
 `native_io_failed`, `duplicate_writer_failed`, `reader_preparation_failed`, or
 `windows_raw_handle_rejected`. The last value records the deliberate Windows
@@ -6549,8 +6549,8 @@ was transferred, no state outlived the attempt, and the hop is perfectly
 serviceable on the Python pump. Re-raising it left the writer transport open,
 so the downstream stage never saw EOF and the pipeline hung until its deadline
 — an intermittent wedge that only the native fast path could produce. The
-decline records its own `duplicate_fds_unavailable` reason in Table 1 above,
-alongside `blocking_mode_unavailable`.
+decline records its own `duplicate_fds_unavailable` reason in the
+decline-reason table above, alongside `blocking_mode_unavailable`.
 
 The acquisition is deliberately separate from blocking activation. The pair is
 acquired before the drain, but it is only switched to blocking mode and handed
