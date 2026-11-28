@@ -40,6 +40,7 @@ EXPECTED_SHARED_ACTIONS_TARGETS = {
         ".github/actions/install-mdtablefix",
         ".github/actions/install-nixie",
         ".github/actions/install-whitaker",
+        ".github/actions/install-yaml-lint",
         ".github/actions/setup-rust",
     },
     "coverage-main.yml": {
