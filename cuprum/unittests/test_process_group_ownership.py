@@ -21,12 +21,12 @@ import pytest
 
 import cuprum.unittests._process_group_ownership_support as _ownership_support
 from cuprum import _group_teardown, _process_group
-from cuprum._process_group import _POST_KILL_SETTLEMENT_S
+from cuprum._process_group import _POST_KILL_SETTLEMENT_S, _GroupProbe
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
+    _cleanup_owned_run,
     _descendant_has_exited,
-    _descendant_is_observed_running,
     _descendant_is_running,
     _kill_and_wait,
     _kill_ignoring_missing,
@@ -116,11 +116,7 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
                 "a process outside the owned group must survive its teardown"
             )
         finally:
-            await _kill_and_wait(
-                run.unrelated_pid,
-                run.unrelated_pid,
-                group=False,
-            )
+            await _cleanup_owned_run(run)
 
     asyncio.run(run_case())
 
@@ -146,24 +142,7 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
                 "an unowned teardown must not reach the grandchild"
             )
         finally:
-            # Cleanup must not depend on a successful observation: a host that
-            # cannot answer still gets the kill attempt, and an observation
-            # failure here must not replace the assertion that entered this
-            # block. Guarded because the leader is already reaped: if the
-            # grandchild has gone, the group is empty and an unguarded
-            # ``killpg`` would raise and replace the assertion with its own
-            # report.
-            if _descendant_is_observed_running(run.grandchild_pid):
-                await _kill_and_wait(
-                    run.process.pid,
-                    run.grandchild_pid,
-                    group=True,
-                )
-            await _kill_and_wait(
-                run.unrelated_pid,
-                run.unrelated_pid,
-                group=False,
-            )
+            await _cleanup_owned_run(run)
 
     asyncio.run(run_case())
 
@@ -315,25 +294,7 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             # The assertions above can fail while the teardown is still in
             # flight, so bound it here rather than leak the task and the
             # descendant it was working on into the rest of the session.
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
-            # A group outlives its leader only while a member remains, and the
-            # kernel keeps the pgid reserved until then — so while the
-            # grandchild may be up, this is still a group the run owns. Once it
-            # has exited the group has ended and its number may have been
-            # recycled onto a stranger, which is why the probe comes first.
-            if _descendant_is_observed_running(run.grandchild_pid):
-                await _kill_and_wait(
-                    run.process.pid,
-                    run.grandchild_pid,
-                    group=True,
-                )
-            await _kill_and_wait(
-                run.unrelated_pid,
-                run.unrelated_pid,
-                group=False,
-            )
+            await _cleanup_owned_run(run, task=task)
 
     asyncio.run(run_case())
 
@@ -412,22 +373,29 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
     )
 
 
-def test_an_unobservable_descendant_does_not_authorize_a_group_signal(
+@pytest.mark.parametrize(
+    ("probe", "expected"),
+    [
+        pytest.param(_GroupProbe.MEMBERS, True, id="members"),
+        pytest.param(_GroupProbe.EMPTY, False, id="empty"),
+        pytest.param(_GroupProbe.UNSIGNALABLE, False, id="unsignalable"),
+    ],
+)
+def test_group_cleanup_falls_back_to_the_probe_when_observation_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
+    probe: _GroupProbe,
+    expected: bool,
 ) -> None:
-    """A group whose member cannot be observed is not safe to signal.
-
-    The group identifier may have been reused once the descendant exited, so
-    the cleanup decision must read an unobservable process as "not known
-    running" rather than as a licence to signal the old group.
-    """
+    """An unobservable descendant is judged by the group probe, not assumed."""
     monkeypatch.setattr(
         _ownership_support,
         "observe_exit",
         lambda _pid: ExitObservation.UNOBSERVABLE,
     )
-    assert not _ownership_support._descendant_is_observed_running(4242), (
-        "an unobservable descendant must not authorize a group signal"
+    monkeypatch.setattr(_ownership_support, "_probe_group", lambda _pgid: probe)
+    assert _ownership_support._cleanup_may_signal_group(4242, 4243) is expected, (
+        f"an unobservable descendant with a {probe.name} group must "
+        f"{'authorize' if expected else 'not authorize'} a group signal"
     )
 
 
@@ -448,5 +416,36 @@ def test_cleanup_still_kills_its_target_when_observation_is_unavailable(
         await _kill_and_wait(process.pid, process.pid, group=False)
         await process.wait()
         assert process.returncode is not None, "cleanup must reap the child"
+
+    asyncio.run(run_case())
+
+
+def test_the_cleanup_path_reclaims_an_unobservable_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The real cleanup path reclaims both children when observation is lost."""
+
+    async def run_case() -> None:
+        """Clean up an owned run while the host cannot observe the descendant."""
+        run = await _spawn_owned_run(tmp_path)
+        with monkeypatch.context() as scoped_patch:
+            scoped_patch.setattr(
+                _ownership_support,
+                "observe_exit",
+                lambda _pid: ExitObservation.UNOBSERVABLE,
+            )
+            await _cleanup_owned_run(run)
+        await run.process.wait()
+        await asyncio.to_thread(
+            _wait_for_descendant_exit,
+            run.grandchild_pid,
+            context="group cleanup with observation unavailable",
+        )
+        await asyncio.to_thread(
+            _wait_for_descendant_exit,
+            run.unrelated_pid,
+            context="unrelated cleanup with observation unavailable",
+        )
 
     asyncio.run(run_case())

@@ -24,6 +24,11 @@ import typing as typ
 
 import pytest
 
+from cuprum._process_group import (
+    _POST_KILL_SETTLEMENT_S,
+    _GroupProbe,
+    _probe_group,
+)
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from tests.helpers.process_exit import ExitObservation, observe_exit
@@ -147,19 +152,47 @@ def _descendant_has_exited(pid: int) -> bool:
     return _observed_exit(pid) is ExitObservation.EXITED
 
 
-def _descendant_is_observed_running(pid: int) -> bool:
-    """Report whether *pid* is observed running, for a cleanup decision.
+def _cleanup_may_signal_group(pgid: int, descendant_pid: int) -> bool:
+    """Report whether cleanup may signal *pgid* without risking a stranger.
 
-    An unobservable process is not evidence that the group still exists. Once
-    the descendant has exited, the group identifier may have been reused, so
-    cleanup must not signal a group it cannot tie to this run.
+    A running descendant keeps the group identifier alive, so the observation
+    is the anchor. Where the host cannot report the descendant, fall back to
+    the same group probe production teardown uses: only a group that still
+    reports a signalable member is signalled. An empty or unsignalable group is
+    left alone, because its identifier may already have been reused.
 
     Returns
     -------
     bool
-        Whether the host observed the process in a running state.
+        Whether the group still holds a member this run can safely reach.
     """
-    return observe_exit(pid) is ExitObservation.RUNNING
+    observed = observe_exit(descendant_pid)
+    if observed is ExitObservation.RUNNING:
+        return True
+    if observed is ExitObservation.UNOBSERVABLE:
+        return _probe_group(pgid) is _GroupProbe.MEMBERS
+    return False
+
+
+async def _cleanup_owned_run(
+    run: _OwnedRun,
+    *,
+    task: asyncio.Task[None] | None = None,
+) -> None:
+    """Best-effort cleanup for an owned run, safe inside a ``finally`` block.
+
+    The optional *task* is a teardown still in flight; it is cancelled and
+    given the post-kill settlement window to stop. Neither that wait nor the
+    kills can raise a test failure, so cleanup never replaces the failure that
+    entered the block.
+    """
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
+    pgid = run.process.pid
+    if pgid is not None and _cleanup_may_signal_group(pgid, run.grandchild_pid):
+        await _kill_and_wait(pgid, run.grandchild_pid, group=True)
+    await _kill_and_wait(run.unrelated_pid, run.unrelated_pid, group=False)
 
 
 def _await_descendant_exit(pid: int, *, seconds: float) -> bool:
