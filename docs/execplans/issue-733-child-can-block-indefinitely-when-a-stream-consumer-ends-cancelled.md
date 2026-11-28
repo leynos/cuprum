@@ -238,7 +238,17 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   records stream order as the tie-break for already-settled consumers, and is
   covered by deterministic unit and entry-point regressions in
   `cuprum/unittests/test_post_exit_consumer_classification.py`.
-- [ ] Assessment confirmation on the repaired head and the formal review.
+- [x] Gate record on the repaired head `512b20a12`: all six gates pass
+  (check-fmt, lint, typecheck, test, markdownlint, nixie). The first test run
+  hit three load-induced timeouts in unrelated real-process tests; each passed
+  in isolation and the test gate rerun exited 0. Hosted CI run 46083744425 is
+  green and CodeScene passes. The later test-strengthening and plan-record
+  commit is covered by the final gate run recorded in the delivery ledger.
+- [x] First confirmation: both assessments reported the defects resolved on
+  `512b20a12`, and the plan assessment asked for the ordering test to settle
+  stderr first and for this plan's gate record to name the repaired head. Both
+  follow-ups are applied; the final confirmation covers the resulting head.
+- [ ] Final assessment confirmation and the formal review.
 - [ ] Draft PR opened with `Closes #733` and the Lody session reference.
 
 ## Surprises & discoveries

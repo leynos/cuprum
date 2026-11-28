@@ -153,14 +153,24 @@ def test_a_clean_consumer_does_not_hide_a_later_unrecorded_cancellation(
 
 
 def test_already_settled_consumers_are_attributed_in_stream_order() -> None:
-    """Two consumers settled before the wait are attributed stdout-first."""
+    """Stream order, not settlement order, names the already-settled failure."""
 
     async def scenario() -> BaseException | None:
-        """Both consumers fail before the wait registers its callbacks."""
+        """Settle stderr first and stdout second, before the wait registers.
+
+        Settling in reverse stream order keeps the assertion honest: the test
+        fails if the wait reports whichever consumer settled first rather than
+        the documented stdout-before-stderr tie-break.
+
+        Returns
+        -------
+        BaseException | None
+            The failure the wait selects.
+        """
         stdout = _future()
         stderr = _future()
-        stdout.set_exception(CallbackError("stdout failed"))
         stderr.set_exception(CallbackError("stderr failed"))
+        stdout.set_exception(CallbackError("stdout failed"))
         try:
             return await _await_consumer_outcomes(
                 _consumers(stdout, stderr),
