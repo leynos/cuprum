@@ -79,6 +79,117 @@ def _flag(arguments: cabc.Sequence[str], name: str) -> str:
     return arguments[index + 1]
 
 
+def _session_directory(
+    arguments: cabc.Sequence[str], directory: pth.Path, layout: str
+) -> tuple[RunRecord, ...]:
+    """Translate every session document in a directory into run records.
+
+    The plugin writes one document per pytest session while a run starts many
+    sessions, so a complete lane is a directory of documents, not one file.
+    Combining them here is what makes a produced run analysable.
+
+    Parameters
+    ----------
+    arguments : Sequence of str
+        The subcommand's arguments, for the interpreter and cache-state flags.
+    directory : pathlib.Path
+        Directory holding session documents.
+    layout : str
+        The layout to attribute these sessions to.
+
+    Returns
+    -------
+    tuple of RunRecord
+        One record per document, in sorted path order.
+
+    Raises
+    ------
+    EvidenceError
+        If the directory holds no JSON document. An empty lane is not a clean
+        lane, and silently returning nothing would make it look like one.
+    """
+    paths = sorted(directory.glob("*.json"))
+    if not paths:
+        raise EvidenceError(_empty_lane(directory))
+    records: list[RunRecord] = []
+    for path in paths:
+        records.extend(_records_for(arguments, path, layout))
+    return tuple(records)
+
+
+def _records_for(
+    arguments: cabc.Sequence[str], path: pth.Path, layout: str
+) -> tuple[RunRecord, ...]:
+    """Translate one session document, or load it as run records."""
+    document = _decode(path)
+    if not (isinstance(document, dict) and "collected" in document):
+        return load_records(path)
+    return (
+        run_record_from_session(
+            document,
+            SessionIdentity(
+                run_id=str(document.get("invocation_id", path.stem)),
+                layout=layout,
+                python_version=_optional(arguments, "--python-version", "unknown"),
+                cache_state=_optional(arguments, "--cache-state", "warm"),
+            ),
+        ),
+    )
+
+
+def _decode(path: pth.Path) -> object:
+    """Return one artefact's decoded JSON, as an evidence refusal on failure.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The file to read.
+
+    Returns
+    -------
+    object
+        The decoded document.
+
+    Raises
+    ------
+    EvidenceError
+        If the file is missing, unreadable or not JSON.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise EvidenceError(_missing_file(path)) from error
+    except OSError as error:
+        raise EvidenceError(_unreadable_file(path, error)) from error
+    except json.JSONDecodeError as error:
+        raise EvidenceError(_invalid_json(path, error)) from error
+
+
+def _optional(arguments: cabc.Sequence[str], name: str, default: str) -> str:
+    """Return a flag's value, or ``default`` when it is absent."""
+    return _flag(arguments, name) if name in arguments else default
+
+
+def _empty_lane(directory: pth.Path) -> str:
+    """Return the refusal text for a directory holding no session documents."""
+    return f"{directory} holds no session documents"
+
+
+def _missing_file(path: pth.Path) -> str:
+    """Return the refusal text for an absent input file."""
+    return f"{path} does not exist"
+
+
+def _unreadable_file(path: pth.Path, error: OSError) -> str:
+    """Return the refusal text for an unreadable input file."""
+    return f"{path} could not be read: {error}"
+
+
+def _invalid_json(path: pth.Path, error: json.JSONDecodeError) -> str:
+    """Return the refusal text for an input that is not JSON."""
+    return f"{path} is not valid JSON: {error}"
+
+
 def _missing_flag_message(name: str) -> str:
     """Return the refusal text for an absent flag."""
     return f"{name} is required"
@@ -130,26 +241,17 @@ def _records(
     -------
     tuple of RunRecord
         The records the file describes.
-    """
+
+    Raises
+    ------
+    EvidenceError
+        If the file is missing, unreadable or not JSON. Reporting it here keeps
+        `main` able to answer with its evidence status rather than a traceback.
+    """  # ruff: ignore[docstring-extraneous-exception] - EvidenceError propagates from _records_for.
     path = pth.Path(_flag(arguments, flag))
-    document = json.loads(path.read_text(encoding="utf-8"))
-    if not (isinstance(document, dict) and "collected" in document):
-        return load_records(path)
-    return (
-        run_record_from_session(
-            document,
-            SessionIdentity(
-                run_id=str(document.get("invocation_id", path.stem)),
-                layout=layout,
-                python_version=_flag(arguments, "--python-version")
-                if "--python-version" in arguments
-                else "unknown",
-                cache_state=_flag(arguments, "--cache-state")
-                if "--cache-state" in arguments
-                else "warm",
-            ),
-        ),
-    )
+    if path.is_dir():
+        return _session_directory(arguments, path, layout)
+    return _records_for(arguments, path, layout)
 
 
 def _compare(arguments: cabc.Sequence[str]) -> dict[str, object]:

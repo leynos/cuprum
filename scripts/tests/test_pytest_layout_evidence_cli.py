@@ -29,6 +29,7 @@ def _write(tmp_path: pth.Path, name: str, nodes: tuple[str, ...]) -> pth.Path:
                     "python_version": "3.12",
                     "cache_state": "warm",
                     "node_ids": list(nodes),
+                    "outcomes": dict.fromkeys(nodes, "passed"),
                 }
             ]
         }),
@@ -250,3 +251,61 @@ def test_the_cli_reads_a_plugin_session_document(tmp_path: pth.Path) -> None:
         "outcomes must still decide identity when the input is a session "
         f"artefact: {report}"
     )
+
+
+def test_the_cli_combines_a_directory_of_session_documents(
+    tmp_path: pth.Path,
+) -> None:
+    """Aggregate every session document in a lane directory.
+
+    A run starts many pytest sessions, so a complete lane is a directory. The
+    report's totals must reflect all documents, not one.
+    """
+    lane = tmp_path / "control"
+    lane.mkdir()
+    for index, node in enumerate(("a", "b")):
+        (lane / f"s{index}.json").write_text(
+            json.dumps({
+                "invocation_id": f"s{index}",
+                "collected": [node],
+                "outcomes": {node: "passed"},
+                "skip_reasons": {},
+                "xfail_reasons": {},
+                "exit_status": 0,
+            }),
+            encoding="utf-8",
+        )
+
+    output = tmp_path / "out"
+    status = main([
+        "fidelity",
+        "--control",
+        str(lane),
+        "--candidate",
+        str(lane),
+        "--output",
+        str(output),
+    ])
+
+    assert status == 0, f"a directory lane must be accepted, got {status}"
+    report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert report["control_total"] == 2, (
+        f"both session documents must be counted, got {report['control_total']}"
+    )
+
+
+def test_the_cli_reports_a_missing_fidelity_input_as_evidence(
+    tmp_path: pth.Path,
+) -> None:
+    """Route a missing input through the evidence status, not a traceback."""
+    status = main([
+        "fidelity",
+        "--control",
+        str(tmp_path / "absent.json"),
+        "--candidate",
+        str(tmp_path / "absent.json"),
+        "--output",
+        str(tmp_path / "out"),
+    ])
+
+    assert status == 1, f"a missing input must exit 1, got {status}"

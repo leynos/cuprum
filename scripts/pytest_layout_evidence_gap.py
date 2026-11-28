@@ -167,17 +167,35 @@ def _outcome_evidence_reason(pairs: cabc.Sequence[Pair]) -> str | None:
     str or None
         The reason, or ``None`` when every pair recorded outcomes.
     """
-    missing = [
-        pair.control.run_id
-        for pair in pairs
-        if pair.control.node_ids
-        and not pair.control.outcomes
-        and not pair.candidate.outcomes
-    ]
+    missing = [pair.control.run_id for pair in pairs if _lacks_outcomes(pair)]
     return _report(
         missing,
-        "these pairs collected nodes but recorded no executed outcomes: {offenders}",
+        "these pairs did not record an outcome for every collected node: {offenders}",
     )
+
+
+def _lacks_outcomes(pair: Pair) -> bool:
+    """Return whether either side is missing an outcome for a collected node.
+
+    A partial mapping is not evidence either. If a node was collected and no
+    side says what happened to it, two runs can agree on the names and on the
+    nodes they happened to record while disagreeing about the rest.
+
+    Parameters
+    ----------
+    pair : Pair
+        The pair to check.
+
+    Returns
+    -------
+    bool
+        Whether either side lacks an outcome for some collected node.
+    """
+    for run in (pair.control, pair.candidate):
+        recorded = {node for node, _ in run.outcomes}
+        if set(run.node_ids) - recorded:
+            return True
+    return False
 
 
 def _cost_reason(

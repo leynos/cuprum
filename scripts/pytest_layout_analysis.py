@@ -194,9 +194,13 @@ def _same_suite(
     bool
         Whether the multisets, outcomes, skips and xfails all agree.
     """
+    control_outcomes = _outcomes(control)
+    candidate_outcomes = _outcomes(candidate)
+    if not control_outcomes or not candidate_outcomes:
+        return False
     return (
         control_nodes == candidate_nodes
-        and _outcomes(control) == _outcomes(candidate)
+        and control_outcomes == candidate_outcomes
         and _node_map(control, "skip_reasons") == _node_map(candidate, "skip_reasons")
         and _node_map(control, "xfail_reasons") == _node_map(candidate, "xfail_reasons")
     )

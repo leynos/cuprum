@@ -125,6 +125,6 @@ def test_pairs_without_recorded_outcomes_are_inconclusive() -> None:
     comparison = compare(records)
 
     assert comparison.state == "inconclusive", comparison.reason
-    assert "no executed outcomes" in comparison.reason, (
+    assert "an outcome for every collected node" in comparison.reason, (
         f"the missing evidence must be named, got {comparison.reason}"
     )
