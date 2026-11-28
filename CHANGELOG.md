@@ -132,15 +132,16 @@
   `shutil.copytree` and no ignore filter, so a `__pycache__` or `.pytest_cache`
   in the host worktree reached the baseline run inside `mutants/`. The
   statistics phase, which runs once before any mutant is tested, now purges
-  generated directories from the sandbox. The root `conftest.py` runs the purge
-  at import time, before the project modules it imports are loaded, so a copied
-  `__pycache__` cannot supply their bytecode, and repeats it from
-  `pytest_configure` for anything created since. The purge is gated to the
-  statistics phase, to a directory named `mutants`, and to a git worktree,
-  because every sandbox subprocess inherits `MUTANT_UNDER_TEST`. A regression
-  test populates one directory of every generated name and proves the cache is
-  already gone when the conftest finishes importing
-  ([#592](https://github.com/leynos/cuprum/issues/592)).
+  generated directories from the sandbox. The root `conftest.py` first runs an
+  inlined, stdlib-only bootstrap that deletes every `__pycache__` before any
+  project package is imported — importing the purger itself would execute
+  `tests/helpers/__init__`, which imports helpers eagerly — then runs the full
+  purge and repeats it from `pytest_configure` for anything created since. The
+  purge is gated to the statistics phase, to a directory named `mutants`, and
+  to a git worktree, because every sandbox subprocess inherits
+  `MUTANT_UNDER_TEST`. A regression test populates one directory of every
+  generated name and proves the cache is already gone when the conftest
+  finishes importing ([#592](https://github.com/leynos/cuprum/issues/592)).
 - **The mutation selection skips the container-backed scenarios:** `make test`
   runs the three `act` scenarios only from `test-act`, because they need a
   container runtime. mutmut collected all of `tests/integration/`, so on a host

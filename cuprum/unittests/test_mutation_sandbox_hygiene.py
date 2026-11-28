@@ -156,6 +156,10 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     cache.mkdir(parents=True)
     (cache / "release.cpython-313.pyc").write_bytes(b"")
     (sandbox / "scripts" / "release.py").write_text("", encoding="utf-8")
+    # The bootstrap removes __pycache__ itself; this directory survives it, so
+    # the later pytest_configure purge still has something to report.
+    (sandbox / ".pytest_cache").mkdir()
+    (sandbox / ".pytest_cache" / "CACHEDIR.TAG").write_text("", encoding="utf-8")
 
     probe = (
         "import importlib.util\n"
@@ -177,6 +181,8 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
         "module = importlib.util.module_from_spec(spec)\n"
         "spec.loader.exec_module(module)\n"
         "print('gone_after_import', not os.path.exists(cache))\n"
+        "present = module._PROJECT_IMPORTS_PRESENT_AT_BOOTSTRAP\n"
+        "print('project_imports_present', present)\n"
         "module.pytest_configure(None)\n"
     )
     environment = {
@@ -197,6 +203,11 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     assert result.returncode == 0, (
         f"the root conftest must run pytest_configure, got exit "
         f"{result.returncode}: {result.stderr}"
+    )
+    assert "project_imports_present False" in result.stdout, (
+        "the tests.helpers package must not be imported before the bootstrap "
+        "runs: its __init__ imports helpers eagerly, so a later purge would "
+        "leave modules already loaded from copied bytecode"
     )
     assert "gone_after_import True" in result.stdout, (
         "the copied cache must already be gone when the root conftest finishes "

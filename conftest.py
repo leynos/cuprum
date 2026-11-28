@@ -23,19 +23,44 @@ def test_pumps_bytes(rust_streams):
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 import typing as typ
 from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, settings
 
-from tests.helpers.sandbox_hygiene import purge_sandbox_generated_directories
 
-# Run the purge at import, before the project modules imported after this line
-# are loaded: a copied ``__pycache__`` is otherwise eligible to supply their
-# bytecode. ``sandbox_hygiene`` imports only the standard library, so the one
-# module this import can load from a cache is the purger itself; everything
-# below it is cleaned first.
+def _purge_imported_bytecode() -> None:
+    """Remove copied interpreter caches before any project package is imported.
+
+    The bootstrap is inlined rather than imported: ``tests/helpers/__init__``
+    imports the helpers eagerly, so importing the purger would already have
+    loaded those modules, possibly from a cache copied into the sandbox. Only
+    ``__pycache__`` matters here — nothing else is consultable by the import
+    system — and the full purge below removes every generated directory.
+    """
+    if os.environ.get("MUTANT_UNDER_TEST") != "stats":
+        return
+    root = Path.cwd()
+    if root.name != "mutants" or not (root.parent / ".git").exists():
+        return
+    for cache in root.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
+
+
+_purge_imported_bytecode()
+# Recorded for the regression probe: a project package already imported at this
+# point would have been able to read copied bytecode before the purge ran.
+_PROJECT_IMPORTS_PRESENT_AT_BOOTSTRAP: bool = "tests.helpers" in sys.modules
+
+from tests.helpers.sandbox_hygiene import (  # ruff: ignore[module-import-not-at-top-of-file] - the bytecode bootstrap above must run first
+    purge_sandbox_generated_directories,
+)
+
+# The full purge runs immediately after the bootstrap so a generated directory
+# other than ``__pycache__`` is removed before the suite starts.
 _MUTATION_SANDBOX_PURGE = purge_sandbox_generated_directories(Path.cwd(), os.environ)
 
 from tests.helpers.extension_requirement import (  # ruff: ignore[module-import-not-at-top-of-file] - the sandbox purge above must run before this import
