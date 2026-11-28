@@ -249,7 +249,8 @@ Acceptance: `make check-fmt`, `make lint`, `make typecheck`, `make test`,
   stderr first and for this plan's gate record to name the repaired head. Both
   follow-ups are applied; the final confirmation covers the resulting head.
 - [ ] Final assessment confirmation and the formal review.
-- [ ] Draft PR opened with `Closes #733` and the Lody session reference.
+- [x] Draft PR opened with `Closes #733` and the Lody session reference
+  ([#753](https://github.com/leynos/cuprum/pull/753)).
 
 ## Surprises & discoveries
 
@@ -333,7 +334,18 @@ task cancelled while the run is live, now ends `run()` and `lines()` promptly
 with a stream-labelled `ConsumerCancelledError`, and a caller's own
 cancellation still arrives as `CancelledError`. The public error, the
 `reached_eof` marker, the two supervisor paths, and the documentation are in
-place, and the full gate suite and hosted CI pass on `65d64c0b4`.
+place. The pre-repair head `65d64c0b4` passed the full gate suite and hosted
+CI; the repaired head `512b20a12` passed all six gates again (the first test
+run hit three load-induced timeouts in unrelated real-process tests, each
+passed in isolation, and the test gate rerun exited 0), and the follow-up
+test-strengthening head `ceada96df` passed all six gates with a clean tree.
+Hosted CI run
+[46091228692](https://github.com/leynos/cuprum/actions/runs/46091228692)
+reports 23 passing checks and the two expected skips on `ceada96df`, and the
+hosted and local CodeScene analyses are clear. Both CodeRabbit assessments
+reported the implementation defects resolved on `512b20a12`; their remaining
+requested follow-ups (the reversed-order regression and this gate record) are
+applied here.
 
 The assessment round exposed a second-order defect worth recording: a done
 callback is not a barrier across event-loop turns. A consumer can be settled
