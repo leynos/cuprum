@@ -23,6 +23,7 @@ import asyncio
 import gc
 import os
 import pathlib
+import re
 import signal
 import sys
 import typing as typ
@@ -305,7 +306,8 @@ def test_dropping_the_process_object_leaves_the_worker_running() -> None:
         worker_warnings = [
             warning
             for warning in caught
-            if warning.category is ResourceWarning and str(pid) in str(warning.message)
+            if warning.category is ResourceWarning
+            and re.search(rf"\b{pid}\b", str(warning.message))
         ]
         assert not worker_warnings, (
             f"dropping the detached process object for pid {pid} must not "
