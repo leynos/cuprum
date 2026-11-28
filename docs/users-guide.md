@@ -2022,8 +2022,15 @@ is already a settlement.
 A cancellation request on one `wait()` caller cancels only that caller's await.
 The shielded settlement keeps running because the handle still owns the child;
 a later `wait()`, a control operation, or the `async with` teardown settles it.
-Cancelling the owning task or leaving the context is what stops and settles the
-handle, and repeated cancellation is absorbed the same way.
+Cancelling the task that holds the handle _inside_ `async with` is what stops
+and settles it, and repeated cancellation is absorbed the same way.
+
+The boundary is the context, not the cancellation. A handle held outside
+`async with` is settled only by an explicit `wait()`, control operation, or
+teardown call on that handle; cancelling some other task, or cancelling the
+task that merely stored the handle, does not settle it. Keep the handle owned
+by an `async with` block, or call one of those methods, so every exit path
+still stops and reaps the child.
 
 A `StdinStream` producer that fails while the handle is merely held also
 requests an immediate stop, so the child cannot stay blocked on input nobody

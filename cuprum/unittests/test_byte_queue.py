@@ -248,25 +248,6 @@ def test_a_tail_that_fits_after_settlement_is_still_delivered() -> None:
     asyncio.run(scenario())
 
 
-def test_failure_overrides_an_already_published_eof() -> None:
-    """A failure recorded after EOF is the terminal state readers observe."""
-
-    async def scenario() -> None:
-        """Publish EOF, then fail the stream."""
-        queue = _ByteQueue(8)
-        queue.note_eof()
-        queue.complete()
-        cause = RuntimeError("late drain failure")
-        queue.fail(cause)
-        assert queue.ending is StreamClosure.FAILED, (
-            "a recorded failure must override a clean EOF"
-        )
-        assert await queue.get() is None, "a failed stream yields no items"
-        assert queue.failure is cause, "the original cause must be retained"
-
-    asyncio.run(scenario())
-
-
 def test_close_wakes_a_blocked_put_and_discards_its_bytes() -> None:
     """A put blocked on capacity must not enqueue after the reader closes."""
 
@@ -308,3 +289,40 @@ def test_failure_before_completion_wins_over_a_noted_eof() -> None:
         "a later completion must not overwrite FAILED"
     )
     assert queue.failure is cause, "the cause must be retained"
+
+
+def _publish_reader_closed(queue: _ByteQueue) -> None:
+    """Make READER_CLOSED the queue's first terminal state."""
+    queue.close_reader()
+
+
+def _publish_eof(queue: _ByteQueue) -> None:
+    """Make EOF the queue's first terminal state."""
+    queue.note_eof()
+    queue.complete()
+
+
+@pytest.mark.parametrize(
+    ("publish", "expected"),
+    [
+        pytest.param(
+            _publish_reader_closed,
+            StreamClosure.READER_CLOSED,
+            id="reader-closed",
+        ),
+        pytest.param(_publish_eof, StreamClosure.EOF, id="eof"),
+    ],
+)
+def test_a_failure_after_a_terminal_state_keeps_the_first_state(
+    publish: cabc.Callable[[_ByteQueue], None],
+    expected: StreamClosure,
+) -> None:
+    """The first terminal state is final, but the cause still reaches settlement."""
+    queue = _ByteQueue(8)
+    publish(queue)
+    cause = RuntimeError("late drain failure")
+    queue.fail(cause)
+    assert queue.ending is expected, (
+        f"the first terminal state must remain final, got {queue.ending!r}"
+    )
+    assert queue.failure is cause, "the failure must still reach settlement"

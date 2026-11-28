@@ -227,20 +227,22 @@ class _ByteQueue:
     async def get(self) -> bytes | None:
         """Return the next queued chunk, or ``None`` once it has no more.
 
-        A stored failure makes this answer ``None`` immediately, even when
-        items remain: it outranks pending items by contract. The caller
-        distinguishes the two by reading :attr:`failure`, which is why the
-        queue does not raise a caller-facing error of its own.
+        A ``FAILED`` terminal state makes this answer ``None`` immediately,
+        even when items remain: a failure outranks pending items by contract.
+        The caller distinguishes the two by reading :attr:`failure`, which is
+        why the queue does not raise a caller-facing error of its own. Any
+        other terminal state drains its queued items first, because a reader
+        that reached a clean end is still owed the bytes it had not consumed.
 
         Returns
         -------
         bytes | None
-            The next chunk, or ``None`` when the task should stop — because a
-            failure was recorded, or because the terminal state was reached
-            and every queued chunk has been consumed.
+            The next chunk, or ``None`` when the task should stop — because
+            the published state is ``FAILED``, or because a terminal state was
+            reached and every queued chunk has been consumed.
         """
         while True:
-            if self._failure is not None:
+            if self._ending is StreamClosure.FAILED:
                 return None
             if self._items:
                 item = self._items.popleft()
@@ -250,7 +252,7 @@ class _ByteQueue:
             if self._ending is not None:
                 return None
             self._data_ready.clear()
-            if self._failure is not None:
+            if self._ending is StreamClosure.FAILED:
                 continue
             if self._items or self._ending is not None:
                 continue
@@ -326,10 +328,12 @@ class _ByteQueue:
     def fail(self, cause: BaseException) -> None:
         """Publish ``FAILED`` with *cause* stored out of band.
 
-        A failure outranks every other terminal state, including one already
-        published: the drain has failed, so a reader must never be told the
-        stream ended cleanly. Queued items are released because a failed
-        stream cannot deliver them; the capture still holds the bytes.
+        The first terminal state is final. A failure that arrives before any
+        other state becomes ``FAILED`` and releases the queued items, because
+        a failed stream cannot deliver them. A failure recorded after a state
+        was already published is retained for the run's settlement without
+        rewriting the reader's closure or discarding the bytes it is still
+        owed. The capture holds the stream either way.
 
         Parameters
         ----------
@@ -339,10 +343,11 @@ class _ByteQueue:
         if self._failure is None:
             self._failure = cause
         self._settling = True
-        self._ending = StreamClosure.FAILED
+        if self._ending is not None:
+            return
         self._items.clear()
         self._buffered_bytes = 0
-        self._release_waiters()
+        self._publish(StreamClosure.FAILED)
 
     def close_reader(self) -> None:
         """Publish ``READER_CLOSED`` and discard queued items.

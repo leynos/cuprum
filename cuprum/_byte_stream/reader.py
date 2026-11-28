@@ -12,6 +12,8 @@ never does. That split is what lets a caller close one stream while the other
 and the child remain live.
 """
 
+import typing as typ
+
 from cuprum._byte_stream.byte_queue import _ByteQueue
 from cuprum._process_handle_errors import LiveStreamError
 from cuprum.byte_streams import ByteChunk, StreamClosure
@@ -120,21 +122,27 @@ class ByteStreamReader:
         LiveStreamError
             When the terminal state is ``FAILED``. The original failure is
             chained as ``__cause__``.
-        """
+        """  # ruff: ignore[docstring-extraneous-exception] - the terminal helper raises it for this method
         if self._closed:
             raise StopAsyncIteration
         data = await self._queue.get()
         if data is None:
-            failure = self._queue.failure
-            if failure is not None:
-                # A failed reader must keep raising: closing it silently would
-                # report ordinary exhaustion for a stream that never ended.
-                raise LiveStreamError(self._stream, cause=failure) from failure
-            self._closed = True
-            raise StopAsyncIteration
+            self._end_iteration()
         chunk = ByteChunk(self._stream, data, self._sequence)
         self._sequence += 1
         return chunk
+
+    def _end_iteration(self) -> typ.Never:
+        """Stop iteration, or raise the failure the reader published."""
+        if self._queue.ending is not StreamClosure.FAILED:
+            self._closed = True
+            raise StopAsyncIteration
+        # A failed reader must keep raising: closing it silently would report
+        # ordinary exhaustion for a stream that never ended.
+        failure = self._queue.failure
+        if failure is not None:
+            raise LiveStreamError(self._stream, cause=failure) from failure
+        raise LiveStreamError(self._stream)
 
     async def wait_eof(self) -> StreamClosure:
         """Wait for this stream's terminal state and report it.

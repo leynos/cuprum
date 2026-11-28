@@ -201,6 +201,43 @@ def test_failed_iteration_keeps_raising_on_a_later_attempt() -> None:
     asyncio.run(scenario())
 
 
+def test_a_drain_failure_after_a_close_does_not_change_the_reader() -> None:
+    """A closed reader ends normally even if its drain later fails."""
+
+    async def scenario() -> None:
+        """Close the reader, then fail the queue behind it."""
+        reader, queue = _reader()
+        await reader.aclose()
+        queue.fail(RuntimeError("late drain failure"))
+        assert reader.closure is StreamClosure.READER_CLOSED, (
+            f"the close must remain final, got {reader.closure!r}"
+        )
+        assert [chunk async for chunk in reader] == [], (
+            "a closed reader must not turn a later drain failure into output"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_drain_failure_after_eof_still_delivers_the_queued_tail() -> None:
+    """A reader told a clean end keeps that end and the bytes it is owed."""
+
+    async def scenario() -> None:
+        """Reach EOF with a queued item, then fail the queue."""
+        reader, queue = _reader()
+        await queue.put(b"tail")
+        queue.note_eof()
+        queue.complete()
+        queue.fail(RuntimeError("late finalization failure"))
+        assert reader.at_eof, "the published EOF must remain final"
+        chunks = [chunk async for chunk in reader]
+        assert [chunk.data for chunk in chunks] == [b"tail"], (
+            "a late failure must not discard the queued tail"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_wait_eof_waits_for_the_drain_task_to_complete() -> None:
     """A reader observes EOF only once the drain has finalized."""
 

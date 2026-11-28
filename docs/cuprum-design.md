@@ -5789,7 +5789,9 @@ chained to the original cause.
 
 Normal terminal statuses drain queued items before iteration stops. `FAILED`
 takes precedence over pending items: a protocol consumer must see the failure
-rather than a silently shortened stream.
+rather than a silently shortened stream. The first terminal state is final, so
+`FAILED` is published only when it is the first state reached; a later failure
+is retained for settlement and never rewrites a reader's closure.
 
 #### 13.11.3 Lossless observation queue
 
@@ -5808,9 +5810,12 @@ run's contract, so its queue applies backpressure instead.
   remain, and iteration then drains those items before stopping.
 - `release()` wakes a blocked `put` and makes a later chunk that does not fit
   discard rather than block. It is used for `READER_CLOSED` and for settlement.
-- A failure is stored out of band, outranks pending items, and overrides any
-terminal state already published, so a reader can never be told a failed stream
-ended cleanly.
+- A failure is stored out of band and outranks pending items. The *first*
+  terminal state is final, so a failure that arrives after `EOF`,
+  `READER_CLOSED`, or `TRUNCATED_BY_SETTLEMENT` was published is recorded for
+  the run's settlement without rewriting what the reader observed. A reader
+  told a clean end is not then told it failed, and a closed reader is not owed
+  bytes its consumer refused.
 
 The read size of a byte run is capped at
 `min(configured_read_size, max_buffered_bytes)` through `_StreamConfig`, so a

@@ -112,15 +112,18 @@ exposes `wait_eof()`, an `at_eof` predicate, a `closure` property, and
 - `TRUNCATED_BY_SETTLEMENT`: settlement began before the reader reached a
   clean end, so later live bytes may exist only in the capture.
 - `FAILED`: the drain or the supervisor failed; iteration and `wait_eof()` raise
-  a chained `LiveStreamError`. A failure outranks any terminal state already
-  published, including a clean `EOF`, and is published by the drain task's own
-  completion so a reader is never left waiting for settlement to notice it. A
-  live failure also requests an immediate serialized stop, so a held handle
-  does not leave its child blocked on a pipe nobody drains.
+  a chained `LiveStreamError`. A failure outranks pending items and is
+  published by the drain task's own completion so a reader is never left
+  waiting for settlement to notice it. A live failure also requests an
+  immediate serialized stop, so a held handle does not leave its child blocked
+  on a pipe nobody drains.
 
 Normal terminal statuses drain queued items before iteration ends. `FAILED`
 takes precedence over pending items: a consumer must see the failure rather
-than a silently shortened stream.
+than a silently shortened stream. The first terminal state published is final:
+a failure that arrives after another state was published is retained for the
+run's settlement without rewriting the reader's closure or releasing bytes it
+is still owed.
 
 Delivery is a per-stream queue with a byte bound. The queue accounts for actual
 byte lengths, splits an oversized chunk into ordered pieces, and blocks a `put`

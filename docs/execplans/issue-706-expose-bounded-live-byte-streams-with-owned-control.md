@@ -118,9 +118,9 @@ repository, so the budgets are conservative rather than historical.
 - [x] (2026-11-27) `EP-M3` reader, `start_bytes()`, `RunningBytesCommand`, the
   bytes settlement and eager supervisor, exports, and typing/API tests.
 - [x] (2026-11-27) `EP-M4` the scripted child, the external session watchdog,
-  seven portable scenarios, three POSIX scenarios (two descendant stories and
-  one held-handle failure), a supervisor reclaim test, and the BDD feature and
-  steps.
+  ten portable scenarios, four POSIX scenarios (two descendant stories and two
+  held-handle failure stories), a supervisor reclaim test, and the BDD feature
+  and steps.
 - [x] (2026-11-27) `EP-M5` users' guide section and gated example, changelog,
   roadmap, migration note, and contents index.
 - [x] (2026-11-28) Hosted CodeRabbit agent review: 14 findings fixed over two
@@ -130,7 +130,14 @@ repository, so the budgets are conservative rather than historical.
 - [x] (2026-11-28) Hosted assessments: the first round returned incomplete;
   capture opt-outs, eager stdin-failure supervision, finalization-consistent
   EOF, the blocked-put close race, and the expanded cancellation, parity,
-  wait-route, and cleanup evidence were added. Reassessment is pending.
+  wait-route, and cleanup evidence were added.
+- [x] (2026-11-28) The second assessment round returned "not yet complete":
+  the first-terminal-state rule replaced failure-overwrites-closure, the
+  cancellation tests now park a live put and cancel an owning context, the
+  bounded, file-backed, and echo coexistence tests were added, the guide's
+  cancellation boundary and the ADR/design closure contract were corrected, and
+  the tolerance measurements were re-derived from the committed diff.
+  Reassessment is pending.
 - [ ] Reassessment, readiness, formal review, merge.
 
 ## Surprises & discoveries
@@ -227,36 +234,67 @@ repository, so the budgets are conservative rather than historical.
   implementation agent.
 - D11. Decision: the plan's file and code tolerances are exceeded and the
   overage is accepted under the owner's standing instruction to implement issue
-  #706 in full and merge it. Measured against `origin/main` (`5d2e4a91`) at the
-  final candidate: 67 non-ExecPlan files, 4,355 net code lines, 584 net
-  documentation lines, and 26 net configuration lines. The plan's initial
-  limits were 45 files and 3,500 code lines; the documentation and
-  configuration limits hold. The code delta is about 2,389 net production lines
-  over 34 files and 2,026 net test lines over 20 files. The overage is driven
-  by the acceptance criteria themselves: barrier-driven real-child coverage,
-  both reaping routes, cancellation and cleanup assertions, public typing
-  contracts, and the ADR/design/guide text. No dependency or public interface
-  beyond the issue scope was added. Date/Author: 2026-11-28, implementation
-  agent acting on the owner's merge directive.
+  #706 in full and merge it. Measured with `git diff --numstat` from the merge
+  base with `origin/main` (`5d2e4a91`) to the branch head, excluding
+  `docs/execplans/**` — this file is outside the measured set, so a later
+  revision of this plan cannot change the totals — the diff is 62 files, 6,864
+  added and 791 deleted lines, for 6,073 net lines. By category:
+
+  - Python: 5,393 net lines over 51 files (2,442 net production over 35 files
+    and 2,951 net tests over 16 files).
+  - Documentation: 640 net lines over eight files, including `CHANGELOG.md`.
+  - Test fixtures: 39 net lines over two files
+    (`tests/features/live_byte_streams.feature` and the Maturin wheel
+    snapshot).
+  - Configuration: one net line in `pyproject.toml`.
+
+  The plan's initial limits were 45 non-ExecPlan files and 3,500 net code
+  lines; the documentation (700) and configuration (50) limits hold. The
+  overage is driven by the acceptance criteria themselves: barrier-driven
+  real-child coverage, both reaping routes, cancellation and cleanup
+  assertions, public typing contracts, and the ADR/design/guide text. No
+  dependency or public interface beyond the issue scope was added. Date/Author:
+  2026-11-28, implementation agent acting on the owner's merge directive;
+  totals re-derived from the committed diff after the first figures were found
+  to disagree with the hosted comparison.
+
 - D10. Decision: settlement releases both live queues before the exit wait, not
   at reconciliation. Rationale: a full queue blocks its drain, a full pipe
   blocks the child, and an unbounded `wait()` would then never settle. Live
   delivery after the wait starts may truncate, which the users' guide already
   documents as the cost of waiting before consuming to EOF. Date/Author:
   2026-11-28, implementation agent.
+- D12. Decision: the implemented reader surface departs from two names in the
+  incorporated coding plan, and the departure is deliberate. The plan proposed
+  `ByteChunk(stream, at: float, data: bytes)`; the implementation is
+  `ByteChunk(stream, data, sequence: int)`. The plan proposed an
+  `eof_observed: bool` flag; the implementation publishes `at_eof` as a
+  property and `wait_eof()` as the blocking observation. Rationale: a wall-clock
+  `at` invites a cross-stream ordering the contract explicitly does not
+  promise, costs a clock read per chunk on a hot path, and makes snapshots
+  nondeterministic; a per-stream ordinal is the ordering the issue actually
+  asks for. `at_eof` matches the familiar `StreamReader` predicate while
+  reading the queue's published state without waiting, and `wait_eof()` is the
+  explicit "observe the end before iteration" operation the plan's Task 3
+  describes, named after `wait_closed()`. The plan's semantics — an end
+  observable before the queue is drained, independent of iteration — are
+  preserved. Date/Author: 2026-11-28, implementation agent.
 
 ## Outcomes & retrospective
 
-The feature is implemented and covered by deterministic unit tests, a ten-case
-supervised real-child suite (seven portable and three POSIX), a supervisor
-reclaim test, and three BDD scenarios. The text handle, `lines()`,
-`run_bytes()`, and every existing result shape are unchanged. The core drain
-and stream-spawn modules were split along seams the live tap exposed, and the
-handle lifecycle moved to a shared base so the two public handles cannot drift.
-The remaining work is the commit gates, CodeRabbit review, push, and merge.
-Lesson: the tap must be invoked by exactly one layer; composing it into both
-the drain and the line feeder duplicates every chunk, and the split-UTF-8 test
-is the cheapest detector.
+The feature is implemented and covered by deterministic unit tests, a
+fourteen-case supervised real-child suite (ten portable and four POSIX, with
+the POSIX cases run under both wait routes), a supervisor reclaim test, and
+three BDD scenarios. The text handle, `lines()`, `run_bytes()`, and every
+existing result shape are unchanged. The core drain and stream-spawn modules
+were split along seams the live tap exposed, and the handle lifecycle moved to
+a shared base so the two public handles cannot drift. The remaining work is the
+commit gates, CodeRabbit review, push, and merge. Lesson: the tap must be
+invoked by exactly one layer; composing it into both the drain and the line
+feeder duplicates every chunk, and the split-UTF-8 test is the cheapest
+detector. Lesson: "terminal state wins" needs one rule for the published
+closure, the retained bytes, and iteration; the queue, the reader, and the docs
+must state the same first-terminal-state contract.
 
 ## Context and orientation
 
@@ -314,8 +352,11 @@ Invariants:
    chunks equals the bytes the child wrote to that stream, in order, and no
    chunk is dropped by the queue.
 2. A queue never holds more than its byte bound.
-3. Each reader publishes exactly one terminal status; `FAILED` outranks pending
-   items and normal terminal statuses drain queued items first.
+3. Each reader publishes exactly one terminal status, and the first one
+   published is final; `FAILED` outranks pending items when it is that first
+   status, normal terminal statuses drain queued items first, and a failure
+   recorded after another status is retained for settlement without rewriting
+   the reader's closure.
 4. Settlement stops, reaps, and reconciles the child and every owned task
    exactly once, including repeated cancellation.
 5. Registration of one consumer per stream is unchanged: the byte tap composes

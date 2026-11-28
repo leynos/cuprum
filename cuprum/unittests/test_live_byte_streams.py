@@ -14,6 +14,7 @@ on timing beyond the supervisor's deadline.
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - starts a real session leader for the reclaim test.
@@ -38,6 +39,7 @@ from cuprum import (
     scoped,
     sh,
 )
+from cuprum.capture_policy import BoundedCapture, FileBackedCapture
 from tests.helpers.supervised_scenario import (
     ScenarioResult,
     _reclaim_owned_group,
@@ -57,6 +59,9 @@ _PORTABLE_SCENARIOS = (
     "stalled_then_wait",
     "cancel_while_blocked",
     "close_one_stream",
+    "cancel_context_while_output_blocked",
+    "cancel_waiter_while_stdin_blocked",
+    "stalled_then_resumed",
 )
 
 _POSIX_SCENARIOS = (
@@ -280,22 +285,33 @@ def test_a_cancelled_waiter_leaves_the_settlement_running() -> None:
 
 
 @pytest.mark.timeout(20)
-def test_repeated_cancellation_still_settles_the_handle() -> None:
-    """Two cancelled waiters share one settlement that still completes."""
+def test_repeated_cancellation_during_teardown_still_settles() -> None:
+    """Cancelling a waiter and the owning context still settles exactly once."""
 
     async def scenario() -> None:
-        """Cancel two waiters, then stop and settle the child."""
+        """Cancel a holder and a waiter together during teardown."""
         handle = await _PYTHON("-c", "import time; time.sleep(30)").start_bytes()
-        waiters = [asyncio.create_task(handle.wait()) for _ in range(2)]
-        await asyncio.sleep(0.05)
-        for waiter in waiters:
-            waiter.cancel()
-        for waiter in waiters:
+
+        async def hold() -> None:
+            """Own the handle until cancellation tears the block down."""
+            async with handle:
+                await asyncio.sleep(30)
+
+        holder = asyncio.create_task(hold())
+        waiter = asyncio.create_task(handle.wait())
+        await asyncio.sleep(0.1)
+        holder.cancel()
+        waiter.cancel()
+        for task in (holder, waiter):
             with pytest.raises(asyncio.CancelledError):
-                await waiter
-        result = await handle.kill()
-        assert result.exit_code == -9, f"the child ended as {result.exit_code}"
+                await task
         assert handle.result is not None, "the settlement must still be recorded"
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+        assert pending == [], f"owned tasks were left pending: {pending!r}"
 
     asyncio.run(scenario())
 
@@ -309,10 +325,11 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
         finalized = asyncio.Event()
 
         async def produce() -> cabc.AsyncIterator[bytes]:
-            """Block until teardown finalizes this generator."""
+            """Offer more than the pipe can take, so the writer blocks in drain."""
             try:
-                await asyncio.sleep(30)
-                yield b"never"
+                await asyncio.sleep(0)
+                yield b"x" * (4 * 1024 * 1024)
+                yield b"y"
             finally:
                 finalized.set()
 
@@ -332,30 +349,159 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.skipif(
+    not _FD_DIRECTORY.is_dir(),
+    reason="counting open descriptors requires procfs",
+)
 @pytest.mark.timeout(20)
 def test_cancellation_with_blocked_output_reaps_the_child() -> None:
-    """Cancelling a wait while output is blocked still stops and reaps."""
+    """Cancelling the owning context while a live put is blocked still settles.
+
+    Nothing reads the queue and no wait starts a settlement, so the drain is
+    genuinely parked on a full queue when the cancellation arrives. Teardown
+    itself has to release it.
+    """
 
     async def scenario() -> None:
-        """Fill a small queue, cancel the waiter, then stop the child."""
+        """Fill a small queue, cancel the holder, and assert cleanup."""
         code = (
             "import sys, time\n"
             "sys.stdout.buffer.write(b'x' * 131072)\n"
             "sys.stdout.buffer.flush()\n"
             "time.sleep(30)\n"
         )
+        before = _open_fd_count()
         handle = await _PYTHON("-c", code).start_bytes(max_buffered_bytes=1024)
-        waiter = asyncio.create_task(handle.wait())
-        await asyncio.sleep(0.2)
-        waiter.cancel()
+
+        async def hold() -> None:
+            """Own the handle without consuming, until cancellation teardown."""
+            async with handle:
+                await asyncio.sleep(30)
+
+        holder = asyncio.create_task(hold())
+        await asyncio.sleep(0.3)
+        assert handle.result is None, "nothing must settle before the cancellation"
+        assert not handle.stdout.at_eof, "the reader must still be live"
+        holder.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await waiter
-        result = await handle.terminate(grace=0.2)
-        assert result.exit_code in {-15, -9}, f"the child ended as {result.exit_code}"
+            await holder
+        assert handle.result is not None, "teardown must settle the handle"
+        assert handle.result.exit_code in {-15, -9}, (
+            f"the child ended as {handle.result.exit_code}"
+        )
         assert handle.stdout.closure in {
             StreamClosure.EOF,
             StreamClosure.TRUNCATED_BY_SETTLEMENT,
         }, f"the reader ended as {handle.stdout.closure!r}"
+        pending = [
+            task
+            for task in asyncio.all_tasks()
+            if task is not asyncio.current_task() and not task.done()
+        ]
+        assert pending == [], f"owned tasks were left pending: {pending!r}"
+        assert _open_fd_count() == before, "the cancellation leaked a descriptor"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.timeout(20)
+def test_bounded_capture_coexists_with_live_delivery() -> None:
+    """A bounded capture shortens the result without shortening the live bytes."""
+
+    async def scenario() -> None:
+        """Deliver a payload live while its capture keeps only the tail."""
+        code = "import sys; sys.stdout.buffer.write(b'x' * 4096)"
+        options = RunOutputOptions(capture_stdout=BoundedCapture(max_bytes=1024))
+        async with await _PYTHON("-c", code).start_bytes(output=options) as handle:
+            received = await _read_all(handle.stdout)
+            result = await handle.wait()
+        assert received == b"x" * 4096, (
+            f"the live reader must be lossless; got {len(received)} bytes"
+        )
+        captured = result.stdout
+        assert captured is not None, "a bounded stdout capture must report bytes"
+        assert captured == b"x" * 1024, (
+            f"the bounded capture must keep the tail; got {len(captured)} bytes"
+        )
+        record = result.captures[0]
+        assert record.total_bytes == 4096, (
+            f"the record must count every byte; got {record.total_bytes}"
+        )
+        assert record.dropped_bytes == 3072, (
+            f"the record must report the discarded bytes; got {record.dropped_bytes}"
+        )
+        assert record.truncated is True, "a bounded capture must report truncation"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.timeout(20)
+def test_file_backed_capture_coexists_with_live_delivery(tmp_path: Path) -> None:
+    """A spilled capture retains the whole payload beside the live bytes."""
+
+    async def scenario() -> None:
+        """Deliver a payload live while its capture spills to a file."""
+        code = "import sys; sys.stdout.buffer.write(b'y' * 4096)"
+        options = RunOutputOptions(
+            capture_stdout=FileBackedCapture(
+                spill_threshold_bytes=1,
+                directory=tmp_path,
+                keep_file=True,
+            ),
+        )
+        async with await _PYTHON("-c", code).start_bytes(output=options) as handle:
+            received = await _read_all(handle.stdout)
+            result = await handle.wait()
+        assert received == b"y" * 4096, (
+            f"the live reader must be lossless; got {len(received)} bytes"
+        )
+        captured = result.stdout
+        assert captured is not None, "a spilled capture must report bytes"
+        assert captured == b"y" * 4096, (
+            f"a spilled capture must still return the bytes; got {len(captured)}"
+        )
+        record = result.captures[0]
+        assert record.storage == "file", f"the capture storage was {record.storage!r}"
+        assert record.path is not None, "a spilled capture must name its file"
+        spilled = await asyncio.to_thread(record.path.read_bytes)
+        assert spilled == b"y" * 4096, (
+            "the reported file must hold the stream the reader saw"
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.timeout(20)
+def test_echo_coexists_with_live_delivery() -> None:
+    """Echo writes the decoded stream while the reader receives its bytes."""
+
+    async def scenario() -> None:
+        """Deliver both streams live and echo them to the context's sinks."""
+        stdout_sink = io.StringIO()
+        stderr_sink = io.StringIO()
+        code = "import sys; sys.stdout.write('out'); sys.stderr.write('err')"
+        context = ExecutionContext(
+            stdout_sink=stdout_sink,
+            stderr_sink=stderr_sink,
+        )
+        handle = await _PYTHON("-c", code).start_bytes(
+            output=RunOutputOptions(echo=True),
+            context=context,
+        )
+        async with handle:
+            received_out = await _read_all(handle.stdout)
+            received_err = await _read_all(handle.stderr)
+            result = await handle.wait()
+        assert received_out == b"out", f"live stdout was {received_out!r}"
+        assert received_err == b"err", f"live stderr was {received_err!r}"
+        assert result.stdout == b"out", f"captured stdout was {result.stdout!r}"
+        assert result.stderr == b"err", f"captured stderr was {result.stderr!r}"
+        assert stdout_sink.getvalue() == "out", (
+            f"the stdout echo wrote {stdout_sink.getvalue()!r}"
+        )
+        assert stderr_sink.getvalue() == "err", (
+            f"the stderr echo wrote {stderr_sink.getvalue()!r}"
+        )
 
     asyncio.run(scenario())
 
