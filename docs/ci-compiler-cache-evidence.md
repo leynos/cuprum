@@ -68,7 +68,13 @@ and rejects this object as a complete record.
   "matched_key": "sccache-v1-Linux-X64-self-hosted-ubuntu2404-py3.12-debug-123456700",
   "restore_hit": false,
   "restore_seconds": 12.4,
+  "restore_seconds_detail": "measured",
+  "restore_bytes": 52428800,
+  "restore_bytes_detail": "measured",
   "save_seconds": null,
+  "save_seconds_detail": "absent",
+  "save_bytes": null,
+  "save_bytes_detail": "absent",
   "counters": {"compile_requests": 17, "cache_hits": 0, "cache_misses": 14},
   "durations": {"cache_write_duration": 0.31},
   "not_cached": {"crate_type": 3},
@@ -91,6 +97,12 @@ experiment actually relies on; the matched key is the honest signal, and
 `runner_class` is `runner.environment`: `self-hosted` on the Ubicloud lane and
 `github-hosted` on the fork fallback. A pair must share it, so two runner
 classes can never be compared as if the difference were the cache backend.
+
+Every nullable timing and size is paired with a `*_detail` label: `measured`
+when the probe read it, `absent` when the source was missing, `unreadable` when
+it existed but could not be used, and `unknown` for a snapshot written before
+the labels existed. A `null` value therefore always carries its cause, so a
+maintainer does not have to reproduce the run to learn why.
 
 `counters` holds exactly the allowlisted statistics names the writer copies:
 `compile_requests`, `requests_executed`, `requests_unsupported_compiler`,

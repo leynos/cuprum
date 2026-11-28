@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import json
 import typing as typ
-from pathlib import Path
 
 import pytest
 
+from scripts import compiler_cache_commands as commands
 from scripts import compiler_cache_evidence as writer
 from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
@@ -22,6 +22,9 @@ from scripts.compiler_cache_record import ObservationBundle, build_record
 
 if typ.TYPE_CHECKING:
     import os
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 from tests.helpers.ci_compiler_evidence import (
     FakeSccache,
@@ -103,8 +106,10 @@ def test_snapshot_pins_its_clock(tmp_path: Path) -> None:
     environ = environment(tmp_path)
     status = writer.snapshot(
         environ,
-        clock=lambda: "2026-01-01T00:00:00Z",
-        runner=FakeSccache([stats_document()]),
+        edge=writer.WriterEdge(
+            clock=lambda: "2026-01-01T00:00:00Z",
+            runner=FakeSccache([stats_document()]),
+        ),
     )
     assert status.outcome == "persisted", "the snapshot must be persisted"
     stored = json.loads(
@@ -121,12 +126,14 @@ def test_record_pins_its_clock(tmp_path: Path) -> None:
     for phase in ("pre", "post"):
         writer.snapshot(
             {**environ, "EVIDENCE_PHASE": phase},
-            runner=FakeSccache([stats_document()]),
+            edge=writer.WriterEdge(runner=FakeSccache([stats_document()])),
         )
     status = writer.record(
         environ,
-        clock=lambda: "2026-01-01T00:00:00Z",
-        runner=FakeSccache([stats_document()]),
+        edge=writer.WriterEdge(
+            clock=lambda: "2026-01-01T00:00:00Z",
+            runner=FakeSccache([stats_document()]),
+        ),
     )
     assert status.outcome == "persisted", "the record must be persisted"
     line = (tmp_path / "evidence" / "records.jsonl").read_text(encoding="utf-8")
@@ -136,7 +143,7 @@ def test_record_pins_its_clock(tmp_path: Path) -> None:
 def test_mark_pins_its_wall_clock(tmp_path: Path) -> None:
     """The mark command takes the caller's wall clock."""
     environ = {**environment(tmp_path), "EVIDENCE_MARKER": "restore"}
-    observed = writer.mark(environ, clock=lambda: 5.0)
+    observed = writer.mark(environ, edge=writer.WriterEdge(wall_clock=lambda: 5.0))
     assert observed.outcome == "persisted", "the mark must be persisted"
     observed = (tmp_path / "evidence" / "marks" / "restore-start").read_text(
         encoding="utf-8"
@@ -170,11 +177,11 @@ def _snapshots(
     scan: probe.Scan = probe.directory_scan,
 ) -> None:
     """Write one bracket's pre and post snapshots through ``scan``."""
+    edge = writer.WriterEdge(scan=scan, runner=FakeSccache([stats_document()]))
     for phase in ("pre", "post"):
         writer.snapshot(
             {**environ, "EVIDENCE_BRACKET": bracket, "EVIDENCE_PHASE": phase},
-            runner=FakeSccache([stats_document()]),
-            scan=scan,
+            edge=edge,
         )
 
 
@@ -188,8 +195,7 @@ def _round(
     _snapshots(environ, bracket, scan=scan)
     observed = writer.record(
         {**environ, "EVIDENCE_BRACKET": bracket},
-        runner=FakeSccache([stats_document()]),
-        scan=scan,
+        edge=writer.WriterEdge(scan=scan, runner=FakeSccache([stats_document()])),
     )
     assert observed.outcome == "persisted", observed
 
@@ -213,12 +219,16 @@ def test_a_readable_cache_writes_integers_and_an_unreadable_one_nulls(
     measured = next(line for line in lines if line["bracket"] == "typecheck")
     unknown = next(line for line in lines if line["bracket"] == "extension")
     assert measured["restore_bytes"] == 5, measured
+    assert measured["restore_bytes_detail"] == "measured", measured
     assert measured["save_bytes"] == 5, measured
+    assert measured["save_bytes_detail"] == "measured", measured
     assert unknown["restore_bytes"] is None, unknown
+    assert unknown["restore_bytes_detail"] == "unreadable", unknown
     assert unknown["save_bytes"] is None, unknown
+    assert unknown["save_bytes_detail"] == "unreadable", unknown
 
 
-def _refuse_write(*_args: object, **_kwargs: object) -> int:
+def _refuse_write(_path: Path, _text: str) -> None:
     """Fail a write as a read-only directory would."""
     message = "read-only"
     raise OSError(message)
@@ -233,18 +243,19 @@ def _refuse_write(*_args: object, **_kwargs: object) -> int:
     ids=["marker", "snapshot"],
 )
 def test_an_unwritable_write_is_an_unwritable_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    command: str,
-    fields: dict[str, str],
+    tmp_path: Path, command: str, fields: dict[str, str]
 ) -> None:
     """A refused write is visible in the result type for both commands."""
-    monkeypatch.setattr(Path, "write_text", _refuse_write)
     environ = {**environment(tmp_path), **fields}
+    edge = writer.WriterEdge(
+        wall_clock=lambda: 1.0,
+        runner=FakeSccache([stats_document()]),
+        write=_refuse_write,
+    )
     observed = (
-        writer.mark(environ, clock=lambda: 1.0)
+        writer.mark(environ, edge=edge)
         if command == "mark"
-        else writer.snapshot(environ, runner=FakeSccache([stats_document()]))
+        else writer.snapshot(environ, edge=edge)
     )
     assert observed.outcome == "unwritable", observed
 
@@ -254,7 +265,7 @@ def test_an_invalid_marker_is_an_omitted_result(tmp_path: Path) -> None:
     environ = {**environment(tmp_path), "EVIDENCE_MARKER": "bogus"}
     observed = writer.mark(environ)
     assert observed.outcome == "omitted", observed
-    assert "Invalid timing marker" in observed.warning, observed
+    assert "invalid timing marker" in observed.warning.lower(), observed
 
 
 def test_an_invalid_snapshot_is_an_omitted_result(tmp_path: Path) -> None:
@@ -262,22 +273,18 @@ def test_an_invalid_snapshot_is_an_omitted_result(tmp_path: Path) -> None:
     environ = {**environment(tmp_path), "EVIDENCE_BRACKET": "Bad Bracket!"}
     observed = writer.snapshot(environ)
     assert observed.outcome == "omitted", observed
-    assert "Invalid snapshot fields" in observed.warning, observed
+    assert "invalid evidence fields" in observed.warning.lower(), observed
 
 
-def test_an_unwritable_snapshot_is_an_unwritable_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_unwritable_snapshot_is_an_unwritable_result(tmp_path: Path) -> None:
     """A refused snapshot write is reported in the result type."""
-
-    def refuse(*_args: object, **_kwargs: object) -> int:
-        """Fail the write as a read-only directory would."""
-        message = "read-only"
-        raise OSError(message)
-
-    monkeypatch.setattr(Path, "write_text", refuse)
     environ = environment(tmp_path)
-    observed = writer.snapshot(environ, runner=FakeSccache([stats_document()]))
+    observed = writer.snapshot(
+        environ,
+        edge=writer.WriterEdge(
+            runner=FakeSccache([stats_document()]), write=_refuse_write
+        ),
+    )
     assert observed.outcome == "unwritable", observed
 
 
@@ -285,7 +292,7 @@ def test_an_invalid_record_is_an_omitted_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An invalid record is reported in the result type."""
-    monkeypatch.setattr(writer, "build_record", lambda _bundle: {"bracket": "x"})
+    monkeypatch.setattr(commands, "build_record", lambda _bundle: {"bracket": "x"})
     observed = writer.record(environment(tmp_path))
     assert observed.outcome == "omitted", observed
 
@@ -322,7 +329,9 @@ def test_the_probe_detail_reaches_the_bundle_and_snapshot(tmp_path: Path) -> Non
         )
     )
     assert snapshot["restore_bytes_detail"] == "unreadable", snapshot
-    unreadable = writer.gather_observation(environ, scan=_fail_scan)
+    unreadable = writer.gather_observation(
+        environ, edge=writer.WriterEdge(scan=_fail_scan)
+    )
     assert unreadable.save_bytes_detail == "unreadable", unreadable
     absent_root = tmp_path / "absent"
     absent_root.mkdir()
@@ -330,3 +339,18 @@ def test_the_probe_detail_reaches_the_bundle_and_snapshot(tmp_path: Path) -> Non
     _snapshots(absent_environ, "typecheck")
     absent = writer.gather_observation(absent_environ)
     assert absent.save_bytes_detail == "absent", absent
+
+
+def test_a_snapshot_without_counters_is_invalid_evidence(tmp_path: Path) -> None:
+    """A malformed snapshot is invalid evidence, not a missing directory."""
+    environ = environment(tmp_path)
+    snapshots = tmp_path / "evidence" / "snapshots"
+    snapshots.mkdir(parents=True)
+    for phase in ("pre", "post"):
+        (snapshots / f"typecheck-{phase}.json").write_text(
+            json.dumps({"bracket": "typecheck", "phase": phase}), encoding="utf-8"
+        )
+    observed = writer.record(environ)
+    assert observed.outcome == "omitted", observed
+    assert "evidence directory" not in observed.warning.lower(), observed
+    assert "invalid evidence" in observed.warning.lower(), observed

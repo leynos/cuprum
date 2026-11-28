@@ -18,6 +18,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from scripts import compiler_cache_commands as commands
 from scripts import compiler_cache_evidence as writer
 from scripts import compiler_cache_schema as schema
 from tests.helpers.ci_compiler_evidence import (
@@ -48,7 +49,7 @@ def _two_snapshots(
     for phase, document in zip(("pre", "post"), documents, strict=True):
         observed = writer.snapshot(
             {**evidence_environment, "EVIDENCE_PHASE": phase},
-            runner=FakeSccache([document]),
+            edge=writer.WriterEdge(runner=FakeSccache([document])),
         )
         assert observed.outcome == "persisted", (
             f"the {phase} snapshot must be persisted"
@@ -179,10 +180,10 @@ def test_an_invalid_record_is_reported_not_appended(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """One malformed line would make the reader reject the whole artefact."""
-    monkeypatch.setattr(writer, "build_record", lambda _: {"bracket": "x"})
+    monkeypatch.setattr(commands, "build_record", lambda _: {"bracket": "x"})
     status = writer.main(["compiler_cache_evidence.py", "record"], evidence_environment)
     assert status == 0, "the writer must fail open"
-    assert "record omitted" in capsys.readouterr().out, "the omission must warn"
+    assert "record omitted" in capsys.readouterr().out.lower(), "the omission must warn"
     path = Path(evidence_environment["EVIDENCE_DIR"]) / "records.jsonl"
     assert not path.exists(), "an invalid record must never be appended"
 
@@ -194,7 +195,8 @@ def test_build_record_stamps_with_the_injected_clock(
     _two_snapshots(evidence_environment, (stats_document(), stats_document()))
     record = writer.build_record(
         writer.gather_observation(
-            evidence_environment, clock=lambda: "2026-01-01T00:00:00Z"
+            evidence_environment,
+            edge=writer.WriterEdge(clock=lambda: "2026-01-01T00:00:00Z"),
         )
     )
     assert record["recorded_at"] == "2026-01-01T00:00:00Z", (
@@ -295,7 +297,7 @@ def test_an_invalid_bracket_omits_the_record_without_failing(
     )
     assert status == 0, "an invalid bracket must not fail the step"
     captured = capsys.readouterr()
-    assert "record omitted" in captured.out, captured.out
+    assert "record omitted" in captured.out.lower(), captured.out
     assert "Bad Bracket!" not in captured.out, "a rejected value must not be echoed"
 
 

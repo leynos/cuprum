@@ -69,6 +69,7 @@ CACHE_HOSTS = frozenset({"github-results", "github-legacy", "non-github", "absen
 ZERO_KINDS = frozenset({"nonzero", "no-rustc-route", "fresh-target", "unexplained"})
 EVENT_CLASSES = frozenset({"pull_request", "push", "schedule", "dispatch", "other"})
 STATES = frozenset({"ok", "degraded", "noncompliant"})
+DETAILS = frozenset({"measured", "absent", "unreadable", "unknown"})
 HEX40 = re.compile(r"[0-9a-f]{40}")
 DECIMAL = re.compile(r"[0-9]+")
 BOUNDED = re.compile(r"[A-Za-z0-9._:/+-]{0,200}")

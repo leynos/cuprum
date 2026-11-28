@@ -192,7 +192,9 @@ def test_the_directory_size_reaches_the_record(tmp_path: Path) -> None:
     """The probe value must be persisted as the snapshot's byte count."""
     _sccache_files(tmp_path, (11, 13))
     environ = environment(tmp_path)
-    state = writer.capture(environ, runner=lambda *_, **__: _completed("{}"))
+    state = writer.capture(
+        environ, edge=writer.SnapshotEdge(runner=lambda *_, **__: _completed("{}"))
+    )
     assert state["restore_bytes"] == 24, (
         f"the snapshot must carry the measured size, got {state['restore_bytes']}"
     )

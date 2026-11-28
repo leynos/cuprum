@@ -47,6 +47,7 @@ def test_a_valid_record_passes_validation() -> None:
         ({"counters": {"cache_hits": 1}}, "counters"),
         ({"run_id": "one"}, "run_id"),
         ({"runner_class": "a b"}, "runner_class"),
+        ({"restore_seconds_detail": "made-up"}, "restore_seconds_detail"),
         ({"job": "line one\nline two"}, "job"),
         ({"save_seconds": -1}, "save_seconds"),
         ({"restore_seconds": -0.5}, "restore_seconds"),

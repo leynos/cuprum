@@ -55,9 +55,13 @@ RECORD_KEYS = frozenset({
     "matched_key",
     "restore_hit",
     "restore_seconds",
+    "restore_seconds_detail",
     "restore_bytes",
+    "restore_bytes_detail",
     "save_seconds",
+    "save_seconds_detail",
     "save_bytes",
+    "save_bytes_detail",
     "counters",
     "durations",
     "not_cached",
@@ -144,6 +148,10 @@ IDENTITY_STRINGS = (
     "matched_key",
     "zero_requests",
     "state",
+    "restore_seconds_detail",
+    "restore_bytes_detail",
+    "save_seconds_detail",
+    "save_bytes_detail",
 )
 #: Fields that may carry the writer's `unknown` sentinel instead of a value.
 _UNKNOWN_OK = frozenset({
@@ -229,6 +237,10 @@ def _labels(record: dict[str, object]) -> None:
         ("compiler_shape", schema.COMPILER_SHAPES),
         ("zero_requests", schema.ZERO_KINDS),
         ("state", schema.STATES),
+        ("restore_seconds_detail", schema.DETAILS),
+        ("restore_bytes_detail", schema.DETAILS),
+        ("save_seconds_detail", schema.DETAILS),
+        ("save_bytes_detail", schema.DETAILS),
     )
     for name, vocabulary in vocabularies:
         require(

@@ -34,7 +34,7 @@ def evidence_environment_fixture(tmp_path: Path) -> dict[str, str]:
 
 def _capture(environ: dict[str, str], runner: FakeSccache) -> dict[str, object]:
     """Capture one snapshot with sccache answering through ``runner``."""
-    return writer.capture(environ, runner=runner)
+    return writer.capture(environ, edge=writer.SnapshotEdge(runner=runner))
 
 
 def test_a_snapshot_copies_only_allowlisted_counters(
@@ -85,7 +85,10 @@ def test_the_cache_location_is_classified_not_recorded(
 
 def test_capture_uses_the_injected_clock(evidence_environment: dict[str, str]) -> None:
     """The snapshot timestamp is supplied by the caller, not read inside."""
-    state = writer.capture(evidence_environment, clock=lambda: "2026-01-01T00:00:00Z")
+    state = writer.capture(
+        evidence_environment,
+        edge=writer.SnapshotEdge(clock=lambda: "2026-01-01T00:00:00Z"),
+    )
     assert state["captured_at"] == "2026-01-01T00:00:00Z", (
         f"the injected clock must stamp the snapshot, got {state['captured_at']!r}"
     )
@@ -104,10 +107,13 @@ def test_write_mark_uses_the_injected_clock(tmp_path: Path) -> None:
 
 
 def test_an_absent_server_is_unknown_rather_than_zero(
-    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    evidence_environment: dict[str, str],
 ) -> None:
     """A job that fell back must not report a clean zero-request cache."""
-    state = writer.capture(evidence_environment, runner=FakeSccache([], returncode=127))
+    state = writer.capture(
+        evidence_environment,
+        edge=writer.SnapshotEdge(runner=FakeSccache([], returncode=127)),
+    )
     assert state["available"] is False, "a failed probe must report unavailable"
     counters = typ.cast("dict[str, object]", state["counters"])
     assert set(counters.values()) == {None}, (

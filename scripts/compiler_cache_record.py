@@ -99,9 +99,13 @@ def observed_fields(bundle: ObservationBundle) -> dict[str, object]:
     requests = counters.get("compile_requests")
     return {
         "restore_seconds": bundle.pre.get("restore_seconds"),
+        "restore_seconds_detail": bundle.pre.get("restore_seconds_detail", "unknown"),
         "restore_bytes": bundle.pre.get("restore_bytes"),
+        "restore_bytes_detail": bundle.pre.get("restore_bytes_detail", "unknown"),
         "save_seconds": bundle.save_seconds,
+        "save_seconds_detail": bundle.save_seconds_detail,
         "save_bytes": bundle.save_bytes,
+        "save_bytes_detail": bundle.save_bytes_detail,
         "counters": counters,
         "durations": schema.delta_map(
             typ.cast("dict[str, object]", bundle.post["durations"]),
