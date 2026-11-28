@@ -120,7 +120,7 @@ class SessionEvidence:
         self.started = time.time()
         self._monotonic_started = time.monotonic()
         self._collection_seconds: float | None = None
-        self._collected: set[str] = set()
+        self._collected: list[str] = []
         self._outcomes: dict[str, str] = {}
         self._phase_seconds: dict[str, float] = {"setup": 0.0, "call": 0.0}
         self._skip_reasons: dict[str, str] = {}
@@ -148,7 +148,7 @@ class SessionEvidence:
             statement of what this process will run. Under xdist the controller
             collects nothing, so the worker hook supplies the same fact.
         """
-        self._collected.update(item.nodeid for item in session.items)
+        self._collected.extend(item.nodeid for item in session.items)
         self._mark_collected()
 
     def pytest_xdist_node_collection_finished(
@@ -164,7 +164,7 @@ class SessionEvidence:
             The node IDs that worker collected.
         """
         del node
-        self._collected.update(ids)
+        self._collected.extend(ids)
         self._mark_collected()
 
     def pytest_testnodedown(self, node: object, error: object | None) -> None:

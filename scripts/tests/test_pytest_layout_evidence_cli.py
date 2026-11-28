@@ -72,3 +72,48 @@ def test_the_cli_refuses_an_unusable_artefact(tmp_path: pth.Path) -> None:
     ])
 
     assert status == 1, f"unusable evidence must exit 1, got {status}"
+
+
+def test_a_session_record_becomes_a_run_record() -> None:
+    """Translate a produced session document into a run record.
+
+    The plugin and the loader were written against different shapes. This is
+    the adapter contract: a node collected twice survives as two entries, and
+    the outcome, skip and xfail mappings reach the record.
+    """
+    from scripts.pytest_layout_loader import SessionIdentity, run_record_from_session
+
+    session = {
+        "collected": ["a", "a", "b"],
+        "outcomes": {"a": "passed", "b": "skipped"},
+        "skip_reasons": {"b": "deliberate"},
+        "xfail_reasons": {},
+        "exit_status": 0,
+    }
+
+    record = run_record_from_session(
+        session,
+        SessionIdentity(
+            run_id="r1",
+            layout="baseline",
+            python_version="3.12",
+            cache_state="warm",
+            step_seconds=100.0,
+            job_seconds=400.0,
+            runner_label="runner-a",
+            toolchain="toolchain-a",
+        ),
+    )
+
+    assert record.node_ids == ("a", "a", "b"), (
+        f"multiplicity must survive the adapter, got {record.node_ids}"
+    )
+    assert record.outcomes == (("a", "passed"), ("b", "skipped")), (
+        f"outcomes must be carried, got {record.outcomes}"
+    )
+    assert record.skip_reasons == (("b", "deliberate"),), (
+        f"skip reasons must be carried, got {record.skip_reasons}"
+    )
+    assert record.runner_label == "runner-a", (
+        f"the runner fingerprint must be carried, got {record.runner_label!r}"
+    )

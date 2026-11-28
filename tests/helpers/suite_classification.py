@@ -45,7 +45,9 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "COMPILER_INVOKING_MODULES",
     "FRESH_PROCESS_MODULES",
+    "MERGE_CANDIDATES",
     "require_classification_is_well_formed",
+    "require_merge_candidates_are_declared",
     "require_modules_exist",
 )
 
@@ -104,6 +106,16 @@ FRESH_PROCESS_MODULES: typ.Final[dict[str, str]] = {
     ),
 }
 
+#: Modules explicitly cleared to share a process with another module.
+#:
+#: Absence from `COMPILER_INVOKING_MODULES` is *not* permission: a module nobody
+#: has audited has an unknown boundary, and the plan requires unknown modules to
+#: stay conservative. This allow-list is therefore empty by default, and a merged
+#: group may contain only modules named here. Adding a module is a reviewable
+#: claim that its fixtures, environment and process state tolerate a neighbour.
+MERGE_CANDIDATES: typ.Final[frozenset[str]] = frozenset()
+
+
 #: The directory classifications are relative to. Kept as a `Path` because the
 #: existence check resolves against the repository root, while a reported path
 #: is the string a reader can paste into a command.
@@ -139,6 +151,34 @@ def require_modules_exist(modules: cabc.Iterable[str]) -> None:
                 "module's new path, or delete the entry."
             ),
         )
+
+
+def require_merge_candidates_are_declared(modules: cabc.Iterable[str]) -> None:
+    """Require every module proposed for a merged group to be declared.
+
+    An absent classification is an unknown boundary, not a safe one. Merging on
+    absence would let a newly added module join a shared process before anyone
+    audited it, which is the failure the plan forbids.
+
+    Parameters
+    ----------
+    modules : Iterable of str
+        The modules a merged group would run together.
+
+    Raises
+    ------
+    AssertionError
+        Naming every module that has not been cleared for merging.
+    """  # ruff: ignore[docstring-extraneous-exception] - AssertionError propagates from require()
+    undeclared = sorted(set(modules) - MERGE_CANDIDATES)
+    require(
+        condition=not undeclared,
+        message=(
+            "these modules would share a process without an audited boundary: "
+            f"{undeclared}. Add each to MERGE_CANDIDATES only after reviewing "
+            "its fixtures, environment and process state."
+        ),
+    )
 
 
 def require_classification_is_well_formed(

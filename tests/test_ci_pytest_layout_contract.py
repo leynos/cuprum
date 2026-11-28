@@ -19,11 +19,14 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - run the real r
 import sys
 import typing as typ
 
+import pytest
+
 from scripts.pytest_layout import Layout, Selection, expand_group, parse_groups
 from tests.helpers.makefile import variable_expansion
 from tests.helpers.suite_classification import (
     COMPILER_INVOKING_MODULES,
     FRESH_PROCESS_MODULES,
+    require_merge_candidates_are_declared,
 )
 from tests.helpers.suite_selection import (
     SCENARIO_SELECTOR,
@@ -221,6 +224,23 @@ def _consolidated_selections() -> tuple[Selection, ...]:
     if not rendered.strip():
         return ()
     return tuple(expand_group(group) for group in parse_groups(rendered))
+
+
+def test_every_merged_group_is_explicitly_cleared() -> None:
+    """Require each merged file to be declared, not merely unclassified.
+
+    Absence from the compiler classification is an unknown boundary, so a
+    merged group may contain only modules a reviewer has cleared.
+    """
+    for selection in _consolidated_selections():
+        if len(selection.files) > 1:
+            require_merge_candidates_are_declared(selection.files)
+
+
+def test_the_merge_candidate_rule_rejects_an_undeclared_module() -> None:
+    """Prove the rule rejects, so an empty allow-list is a real barrier."""
+    with pytest.raises(AssertionError, match="audited boundary"):
+        require_merge_candidates_are_declared([min(FRESH_PROCESS_MODULES)])
 
 
 def test_the_merge_guard_rejects_a_glob_that_hides_a_compiler_module() -> None:
