@@ -35,19 +35,19 @@ dev = [
     # fixture-registration API; 9.1 deprecates the nodeid/baseid path that
     # pytest-bdd 8.1.0 uses, raising PytestRemovedIn10Warning.
     # Track: https://github.com/pytest-dev/pytest-bdd/issues/823
-    "pytest<9.1",
+    "pytest<9.3",
     "pytest-benchmark",
     "pytest-bdd",
     # This group is the single authoritative declaration of the ruff, ty and
     # maturin versions. `make sync-tool-pins` derives the Makefile defaults,
     # the ci.yml env pins and the wheel workflow/action literals from it, and
     # `make check-tool-pins` fails when one has drifted.
-    "ruff==0.16.4",
+    "ruff==0.17.5",
     "pyright",
     "pytest-timeout",
     "pytest-xdist",
     "syrupy",
-    "ty==0.0.74",
+    "ty==0.0.107",
     # Kept in step with .github/workflows/build-wheels.yml and
     # .github/actions/build-wheels/action.yml by `make sync-tool-pins`.
     "maturin==1.15.0",
