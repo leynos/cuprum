@@ -63,6 +63,7 @@
       'cuprum/_line_stream/spawn.py',
       'cuprum/_line_stream/telemetry.py',
       'cuprum/_line_stream_finalization.py',
+      'cuprum/_live_task_outcomes.py',
       'cuprum/_observability.py',
       'cuprum/_observe_task_retention.py',
       'cuprum/_pipeline_collect.py',
