@@ -1,10 +1,9 @@
 """Pair compiler-cache observations into the experiment's families.
 
-A pair is one control observation and one candidate observation of the same
-family and matrix leg. The pairing is positional within each family, ordered
-by the record's own timestamp, and only observations that are usable and warm
-take part: a degraded, non-compiling, or un-reused record is cost evidence,
-not saving evidence.
+A pair is one control and one candidate of the same family and matrix leg.
+Pairing is positional within each family, ordered by the record's timestamp;
+only usable, warm observations take part: a degraded, non-compiling, or
+un-reused record is cost evidence, not saving evidence.
 
 Examples
 --------
@@ -12,8 +11,6 @@ Examples
 'py3.13-debug/none'
 >>> median([1.0, 3.0, 2.0])
 2.0
->>> median([]) is None
-True
 """
 
 from __future__ import annotations
@@ -144,17 +141,14 @@ def classify_observations(
 ) -> list[dict[str, object]]:
     """Label each record with the experiment case it witnesses.
 
-    The cases are the ones the issue requires, and each is decided from the
-    record rather than from a run's position in a list: a degraded record is a
-    fallback or misconfiguration, an unwarmed control is a cold or new family,
-    the first record of a pull request is that PR's first consumer, and a later
-    one is a subsequent push.
+    Each case is decided from the record, not a run's position in a list: a
+    degraded record is a fallback, an unwarmed control is cold, the first
+    record of a pull request is its first consumer, and later runs are pushes.
 
     Returns
     -------
     list[dict[str, object]]
-        One entry per record, with its identity, ``observation_class``, and
-        the API job's result where the jobs document allows a join.
+        One entry per record with its identity, class, and job result.
     """
     first_for_pr: dict[str, str] = {}
     classified: list[dict[str, object]] = []
@@ -255,7 +249,7 @@ def _comparable(
     Returns
     -------
     bool
-        Whether every provenance field matches.
+        Whether every provenance field is identified and equal.
     """
     fields = (
         "runner_class",
@@ -365,12 +359,11 @@ def family_summary(
     Returns
     -------
     dict[str, object]
-        The family's observation counts, pair count, median and extreme
-        savings, failures, and median restore-plus-save time.
+        The family's counts, medians, extremes, failures, and transfer time.
     """
     evidence = _pair_evidence(arms, context.jobs, context.names)
     savings = typ.cast("list[float]", evidence["savings"])
-    return {
+    summary = {
         "family": family,
         "control_observations": len(arms["control"]),
         "candidate_observations": len(arms["candidate"]),
@@ -378,13 +371,29 @@ def family_summary(
         "independent_job_pairs": evidence["job_pairs"],
         "incomparable_pairs": evidence["incomparable"],
         "failures": failure_count(all_records, context.jobs, context.names),
-        "median_control_seconds": median(typ.cast("list[float]", evidence["controls"])),
-        "median_candidate_seconds": median(
-            typ.cast("list[float]", evidence["candidates"])
-        ),
+    }
+    summary.update(
+        _saving_aggregate(
+            savings,
+            typ.cast("list[float]", evidence["controls"]),
+            typ.cast("list[float]", evidence["candidates"]),
+        )
+    )
+    summary["median_transfer_seconds"] = evidence["transfer"]
+    return summary
+
+
+def _saving_aggregate(
+    savings: cabc.Sequence[float],
+    controls: cabc.Sequence[float],
+    candidates: cabc.Sequence[float],
+) -> dict[str, object]:
+    """Return the medians, extremes, and the raw saving sample."""
+    return {
+        "median_control_seconds": median(controls),
+        "median_candidate_seconds": median(candidates),
         "median_saving_seconds": median(savings),
         "slowest_saving_seconds": min(savings) if savings else None,
         "fastest_saving_seconds": max(savings) if savings else None,
         "savings_seconds": savings,
-        "median_transfer_seconds": evidence["transfer"],
     }

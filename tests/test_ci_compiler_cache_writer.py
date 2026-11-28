@@ -13,7 +13,6 @@ import typing as typ
 import pytest
 
 from scripts import compiler_cache_evidence as writer
-from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
 from tests.helpers.ci_compiler_evidence import (
     BEARER_URL,
@@ -95,7 +94,7 @@ def test_capture_uses_the_injected_clock(evidence_environment: dict[str, str]) -
 def test_write_mark_uses_the_injected_clock(tmp_path: Path) -> None:
     """The marker is timed by the supplied clock, so a test can pin it."""
     environ = {"EVIDENCE_DIR": str(tmp_path)}
-    assert probe.write_mark(environ, "restore", clock=lambda: 1000.0), (
+    assert writer.write_mark(environ, "restore", clock=lambda: 1000.0), (
         "the marker must be written"
     )
     observed = (tmp_path / "marks" / "restore-start").read_text(encoding="utf-8")

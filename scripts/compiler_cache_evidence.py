@@ -67,11 +67,19 @@ type Clock = cabc.Callable[[], str]
 type WallClock = cabc.Callable[[], float]
 
 
+class CommandResult(typ.NamedTuple):
+    """What one writer command did with its output."""
+
+    outcome: str
+    warning: str = ""
+
+
 def capture(
     environ: cabc.Mapping[str, str],
     *,
     clock: Clock = schema.now,
     runner: probe.Runner = subprocess.run,
+    scan: probe.Scan = probe.directory_scan,
 ) -> dict[str, object]:
     """Build one snapshot from sccache and the bracket's declared identity.
 
@@ -114,7 +122,7 @@ def capture(
         "restore_seconds": probe.elapsed_between(
             environ, "restore", "restore-end"
         ).seconds,
-        "restore_bytes": probe.directory_bytes(environ).size,
+        "restore_bytes": probe.directory_bytes(environ, scan=scan).size,
         "sccache_version": observed.version or None,
         "cache_backend": observed.backend if available else "none",
         "cache_service_v2": "ACTIONS_CACHE_SERVICE_V2" in environ,
@@ -136,21 +144,40 @@ def _snapshot_path(environ: cabc.Mapping[str, str], bracket: str, phase: str) ->
     return Path(environ["EVIDENCE_DIR"]) / "snapshots" / f"{bracket}-{phase}.json"
 
 
-def mark(environ: cabc.Mapping[str, str], *, clock: WallClock = time.time) -> int:
+def write_mark(
+    environ: cabc.Mapping[str, str], marker: str, *, clock: WallClock = time.time
+) -> bool:
+    """Persist one timing marker, timed by ``clock``."""
+    path = probe.marker_path(environ, marker)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{clock():.6f}\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def mark(
+    environ: cabc.Mapping[str, str], *, clock: WallClock = time.time
+) -> CommandResult:
     """Write a wall-clock marker before a restore or save; never fail the job.
 
     Returns
     -------
-    int
-        Always zero; a missing marker leaves one timing unknown, never fails.
+    CommandResult
+        ``persisted``, ``omitted`` for an invalid marker, or ``unwritable``.
     """
     marker = environ.get("EVIDENCE_MARKER", "")
     if marker not in {"restore", "restore-end", "save", "save-end"}:
-        print(f"{_WARNING}Invalid timing marker; the marker was omitted.")
-        return 0
-    if not probe.write_mark(environ, marker, clock=clock):
-        print(f"{_WARNING}Could not persist the timing marker.")
-    return 0
+        return CommandResult(
+            "omitted",
+            f"{_WARNING}Invalid timing marker; the marker was omitted.",
+        )
+    if not write_mark(environ, marker, clock=clock):
+        return CommandResult(
+            "unwritable", f"{_WARNING}Could not persist the timing marker."
+        )
+    return CommandResult("persisted")
 
 
 def snapshot(
@@ -158,20 +185,22 @@ def snapshot(
     *,
     clock: Clock = schema.now,
     runner: probe.Runner = subprocess.run,
-) -> int:
+    scan: probe.Scan = probe.directory_scan,
+) -> CommandResult:
     """Write one snapshot; never fail the job for a missing cache server.
 
     Returns
     -------
-    int
-        Zero when persisted. A missing sccache writes ``available: false``; an
-        unusable bracket or an unwritable directory is reported, also zero.
+    CommandResult
+        ``persisted``, ``omitted`` for unusable fields, or ``unwritable``.
     """
     try:
-        state = capture(environ, clock=clock, runner=runner)
+        state = capture(environ, clock=clock, runner=runner, scan=scan)
     except ValueError:
-        print(f"{_WARNING}Invalid snapshot fields; the snapshot was omitted.")
-        return 0
+        return CommandResult(
+            "omitted",
+            f"{_WARNING}Invalid snapshot fields; the snapshot was omitted.",
+        )
     path = _snapshot_path(environ, str(state["bracket"]), str(state["phase"]))
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,8 +208,11 @@ def snapshot(
             json.dumps(state, separators=(",", ":")) + "\n", encoding="utf-8"
         )
     except OSError:
-        print(f"{_WARNING}Could not persist the compiler-cache snapshot.")
-    return 0
+        return CommandResult(
+            "unwritable",
+            f"{_WARNING}Could not persist the compiler-cache snapshot.",
+        )
+    return CommandResult("persisted")
 
 
 def _read_snapshot(path: Path) -> dict[str, object] | None:
@@ -215,6 +247,7 @@ def gather_observation(
     *,
     clock: Clock = schema.now,
     runner: probe.Runner = subprocess.run,
+    scan: probe.Scan = probe.directory_scan,
 ) -> ObservationBundle:
     """Read every snapshot, marker, and probe one record needs.
 
@@ -245,7 +278,7 @@ def gather_observation(
         pre=pre,
         post=post,
         save_seconds=probe.elapsed_between(environ, "save", "save-end").seconds,
-        save_bytes=probe.directory_bytes(environ).size,
+        save_bytes=probe.directory_bytes(environ, scan=scan).size,
         expects_rustc=schema.boolean(environ.get("EVIDENCE_EXPECTS_RUSTC")),
         target_present=schema.boolean(environ.get("EVIDENCE_TARGET_PRESENT")),
     )
@@ -256,35 +289,47 @@ def record(
     *,
     clock: Clock = schema.now,
     runner: probe.Runner = subprocess.run,
-) -> int:
+    scan: probe.Scan = probe.directory_scan,
+) -> CommandResult:
     """Append one record; fail open with a fixed warning on invalid input.
 
     Returns
     -------
-    int
-        Always zero; an invalid record is reported, never persisted.
+    CommandResult
+        ``persisted``, ``omitted`` for invalid fields, or ``unwritable``.
     """
     try:
         # One malformed line makes the reader reject the whole artefact.
         document = validate_record(
-            build_record(gather_observation(environ, clock=clock, runner=runner))
+            build_record(
+                gather_observation(environ, clock=clock, runner=runner, scan=scan)
+            )
         )
         encoded = json.dumps(document, separators=(",", ":"))
         path = Path(environ["EVIDENCE_DIR"]) / "records.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as records:
             records.write(encoded + "\n")
-    except (ValueError, KeyError, OSError):
-        print(f"{_WARNING}Invalid or unwritable evidence fields; record omitted.")
-    return 0
+    except (ValueError, KeyError):
+        return CommandResult(
+            "omitted",
+            f"{_WARNING}Invalid or unwritable evidence fields; record omitted.",
+        )
+    except OSError:
+        return CommandResult(
+            "unwritable",
+            f"{_WARNING}Invalid or unwritable evidence fields; record omitted.",
+        )
+    return CommandResult("persisted")
 
 
 class WriterEdge(typ.NamedTuple):
-    """The clocks and process runner a caller may pin at the command edge."""
+    """The clocks, runner, and directory scan a caller may pin at the edge."""
 
     clock: Clock = schema.now
     wall_clock: WallClock = time.time
     runner: probe.Runner = subprocess.run
+    scan: probe.Scan = probe.directory_scan
 
 
 _DEFAULT_EDGE = WriterEdge()
@@ -298,14 +343,23 @@ def main(
 ) -> int:
     """Dispatch one writer mode and return its exit status."""
     mode = argv[1] if len(argv) > 1 else ""
-    if mode == "snapshot":
-        return snapshot(environ, clock=edge.clock, runner=edge.runner)
-    if mode == "record":
-        return record(environ, clock=edge.clock, runner=edge.runner)
-    if mode == "mark":
-        return mark(environ, clock=edge.wall_clock)
-    print(f"usage: {Path(argv[0]).name} snapshot|record|mark", file=sys.stderr)
-    return 2
+    match mode:
+        case "snapshot":
+            result = snapshot(
+                environ, clock=edge.clock, runner=edge.runner, scan=edge.scan
+            )
+        case "record":
+            result = record(
+                environ, clock=edge.clock, runner=edge.runner, scan=edge.scan
+            )
+        case "mark":
+            result = mark(environ, clock=edge.wall_clock)
+        case _:
+            print(f"usage: {Path(argv[0]).name} snapshot|record|mark", file=sys.stderr)
+            return 2
+    if result.warning:
+        print(result.warning)
+    return 0
 
 
 if __name__ == "__main__":

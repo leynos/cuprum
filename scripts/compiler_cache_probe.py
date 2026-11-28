@@ -2,10 +2,11 @@
 
 The evidence writer needs four things the runner can observe directly: the
 sccache statistics document, the compiler's identity, the size of the local
-cache directory a migration would remove, and the wall time since a restore or
-save marker. Each probe fails open and reports an explicit ``detail`` alongside
-its value, so a caller can tell an absent source from an unreadable one, and a
-job that compiled correctly is never failed by a missing probe.
+cache directory a migration would remove, and the interval between two timing
+markers. Every probe here reads; writing a marker belongs to the writer's
+command edge. Each probe fails open and reports an explicit ``detail``
+alongside its value, so a caller can tell an absent source from an unreadable
+one, and a job that compiled correctly is never failed by a missing probe.
 
 The statistics document is reduced to the allowlisted counters and durations
 before it leaves this module. The raw document also carries the cache location,
@@ -29,7 +30,6 @@ import json
 import os
 import stat
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
-import time
 import typing as typ
 from pathlib import Path
 
@@ -39,6 +39,24 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 type Runner = cabc.Callable[..., subprocess.CompletedProcess[str]]
+
+
+class DirEntry(typ.Protocol):
+    """The ``os.DirEntry`` surface the size walk needs."""
+
+    path: str
+
+    def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+        """Return the entry's status."""
+
+
+type Scan = cabc.Callable[[Path], cabc.Iterable[object]]
+
+
+def directory_scan(path: Path) -> list[os.DirEntry[str]]:
+    """List one directory, letting a scandir error propagate."""
+    with os.scandir(path) as entries:
+        return list(entries)
 
 
 class StatsProbe(typ.NamedTuple):
@@ -182,7 +200,9 @@ def not_cached(stats: cabc.Mapping[str, object]) -> dict[str, int]:
     return result
 
 
-def directory_bytes(environ: cabc.Mapping[str, str]) -> SizeProbe:
+def directory_bytes(
+    environ: cabc.Mapping[str, str], *, scan: Scan = directory_scan
+) -> SizeProbe:
     """Return the local compiler directory's size and how it was obtained.
 
     The directory is the archive the direct backend would replace, so its size
@@ -205,13 +225,13 @@ def directory_bytes(environ: cabc.Mapping[str, str]) -> SizeProbe:
     if not stat.S_ISDIR(info.st_mode):
         return SizeProbe(None, "absent")
     try:
-        total = _tree_bytes(root)
+        total = _tree_bytes(root, scan)
     except OSError:
         return SizeProbe(None, "unreadable")
     return SizeProbe(total, "measured")
 
 
-def _tree_bytes(root: Path) -> int:
+def _tree_bytes(root: Path, scan: Scan) -> int:
     """Return the summed file sizes below ``root``, refusing a partial walk.
 
     ``Path.rglob`` and ``Path.is_file`` swallow ``OSError``, which would report
@@ -224,15 +244,15 @@ def _tree_bytes(root: Path) -> int:
         The summed file sizes; an unusable entry raises ``OSError``.
     """
     total = 0
-    with os.scandir(root) as entries:
-        for entry in entries:
-            # One stat classifies and measures the entry; a vanished or
-            # unreadable entry raises and the whole measurement is unknown.
-            info = entry.stat(follow_symlinks=False)
-            if stat.S_ISDIR(info.st_mode):
-                total += _tree_bytes(Path(entry.path))
-            elif stat.S_ISREG(info.st_mode):
-                total += info.st_size
+    for raw in scan(root):
+        # One stat classifies and measures the entry; a vanished or
+        # unreadable entry raises and the whole measurement is unknown.
+        entry = typ.cast("DirEntry", raw)
+        info = entry.stat(follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            total += _tree_bytes(Path(entry.path), scan)
+        elif stat.S_ISREG(info.st_mode):
+            total += info.st_size
     return total
 
 
@@ -287,13 +307,9 @@ def rustc(
     )
 
 
-def mark_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
-    """Return the path a timing marker is stored at."""
-    return Path(environ["EVIDENCE_DIR"]) / "marks" / f"{marker}-start"
-
-
-def _marker_file(environ: cabc.Mapping[str, str], name: str) -> Path:
-    """Return the stored file for a marker name, without a suffix."""
+def marker_path(environ: cabc.Mapping[str, str], marker: str) -> Path:
+    """Return the stored file for a marker, without a suffix on end markers."""
+    name = marker if marker in {"restore-end", "save-end"} else f"{marker}-start"
     return Path(environ["EVIDENCE_DIR"]) / "marks" / name
 
 
@@ -306,8 +322,8 @@ def elapsed_between(environ: cabc.Mapping[str, str], start: str, end: str) -> Sp
         The non-negative interval, or ``None`` with ``absent`` when a marker
         is missing and ``unreadable`` when it exists but cannot be used.
     """
-    begin_path = mark_path(environ, start)
-    finish_path = _marker_file(environ, end)
+    begin_path = marker_path(environ, start)
+    finish_path = marker_path(environ, end)
     try:
         begin = float(begin_path.read_text(encoding="utf-8").strip())
         finish = float(finish_path.read_text(encoding="utf-8").strip())
@@ -319,30 +335,3 @@ def elapsed_between(environ: cabc.Mapping[str, str], start: str, end: str) -> Sp
     if elapsed < 0:
         return SpanProbe(None, "unreadable")
     return SpanProbe(round(elapsed, 3), "measured")
-
-
-def write_mark(
-    environ: cabc.Mapping[str, str],
-    marker: str,
-    *,
-    clock: cabc.Callable[[], float] = time.time,
-) -> bool:
-    """Write one wall-clock marker, timed by ``clock``.
-
-    Returns
-    -------
-    bool
-        Whether the marker was persisted. A failure leaves one timing field
-        unknown, which never fails the step that measures a paid transfer.
-    """
-    path = (
-        _marker_file(environ, marker)
-        if marker in {"restore-end", "save-end"}
-        else mark_path(environ, marker)
-    )
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{clock():.6f}\n", encoding="utf-8")
-    except OSError:
-        return False
-    return True

@@ -9,7 +9,6 @@ contract accepts.
 
 from __future__ import annotations
 
-import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - CompletedProcess stand-in only.
 import typing as typ
 from pathlib import Path
@@ -22,6 +21,7 @@ from tests.helpers.ci_compiler_evidence import environment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import os
 
     import pytest
 
@@ -142,10 +142,10 @@ def test_a_record_with_no_declared_mapping_is_unknown() -> None:
 def test_the_marker_files_are_read_verbatim(tmp_path: Path) -> None:
     """The end markers carry no ``-start`` suffix."""
     environ: cabc.Mapping[str, str] = {"EVIDENCE_DIR": str(tmp_path)}
-    assert probe.write_mark(environ, "restore"), "the restore start must persist"
-    assert probe.write_mark(environ, "restore-end"), "the restore end must persist"
-    assert probe.write_mark(environ, "save"), "the save start must persist"
-    assert probe.write_mark(environ, "save-end"), "the save end must persist"
+    assert writer.write_mark(environ, "restore"), "the restore start must persist"
+    assert writer.write_mark(environ, "restore-end"), "the restore end must persist"
+    assert writer.write_mark(environ, "save"), "the save start must persist"
+    assert writer.write_mark(environ, "save-end"), "the save end must persist"
     for name in ("restore-start", "restore-end", "save-start", "save-end"):
         assert (tmp_path / "marks" / name).is_file(), f"{name} must be written verbatim"
 
@@ -245,7 +245,7 @@ def test_a_failed_marker_write_is_reported(
         raise OSError(message)
 
     monkeypatch.setattr(Path, "write_text", refuse)
-    observed = probe.write_mark({"EVIDENCE_DIR": str(tmp_path)}, "restore")
+    observed = writer.write_mark({"EVIDENCE_DIR": str(tmp_path)}, "restore")
     assert observed is False, "a failed write must not claim success"
 
 
@@ -254,17 +254,15 @@ def test_an_unreadable_cache_directory_is_unknown(
 ) -> None:
     """A directory that exists but cannot be walked is not a measured zero."""
     _sccache_files(tmp_path, (3,))
-    real_scandir = os.scandir
 
-    def fail_on_cache(path: object) -> object:
+    def fail_on_cache(path: Path) -> list[os.DirEntry[str]]:
         """Fail when the walk reaches the cache root."""
-        if Path(typ.cast("str", path)).name == "sccache":
+        if path.name == "sccache":
             message = "permission denied"
             raise OSError(message)
-        return real_scandir(typ.cast("str", path))
+        return []
 
-    monkeypatch.setattr(os, "scandir", fail_on_cache)
-    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    observed = probe.directory_bytes({"HOME": str(tmp_path)}, scan=fail_on_cache)
     assert observed.size is None, "an unreadable directory must be unknown"
     assert observed.detail == "unreadable", observed
 
@@ -288,17 +286,15 @@ def test_a_partial_walk_is_unreadable(
     (root / "sub").mkdir(parents=True)
     (root / "readable").write_bytes(b"xxx")
     (root / "sub" / "hidden").write_bytes(b"yyyy")
-    real_scandir = os.scandir
 
-    def fail_nested(path: object) -> object:
+    def fail_nested(path: Path) -> list[os.DirEntry[str]]:
         """Fail when the walk reaches the nested subtree."""
-        if Path(typ.cast("str", path)).name == "sub":
+        if path.name == "sub":
             message = "permission denied"
             raise OSError(message)
-        return real_scandir(typ.cast("str", path))
+        return probe.directory_scan(path)
 
-    monkeypatch.setattr(os, "scandir", fail_nested)
-    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    observed = probe.directory_bytes({"HOME": str(tmp_path)}, scan=fail_nested)
     assert observed == probe.SizeProbe(None, "unreadable"), observed
 
 
@@ -308,7 +304,7 @@ def test_a_root_status_failure_is_unreadable(
     """A cache root that cannot be inspected is unknown, not absent."""
     real_stat = Path.stat
 
-    def fail_on_root(self: Path, *, follow_symlinks: bool = True) -> object:
+    def fail_on_root(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
         """Fail when the root's own status is read."""
         if self.name == "sccache":
             message = "permission denied"
@@ -331,22 +327,10 @@ class _VanishedEntry:
         raise FileNotFoundError(self.name)
 
 
-class _VanishedScan:
-    """A scandir result holding one vanished entry."""
-
-    def __enter__(self) -> list[_VanishedEntry]:
-        """Return the scripted entries."""
-        return [_VanishedEntry()]
-
-    def __exit__(self, *_exc: object) -> None:
-        """Close the scan."""
-
-
-def test_a_vanished_entry_is_unreadable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_vanished_entry_is_unreadable(tmp_path: Path) -> None:
     """An entry that disappears mid-walk cannot shrink the measured total."""
     (tmp_path / ".cache" / "sccache").mkdir(parents=True)
-    monkeypatch.setattr(os, "scandir", lambda _path: _VanishedScan())
-    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    observed = probe.directory_bytes(
+        {"HOME": str(tmp_path)}, scan=lambda _path: [_VanishedEntry()]
+    )
     assert observed == probe.SizeProbe(None, "unreadable"), observed
