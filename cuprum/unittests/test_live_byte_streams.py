@@ -33,6 +33,7 @@ from cuprum import (
     RunOutputOptions,
     ScopeConfig,
     StdinInput,
+    StdinSourceError,
     StdinStream,
     StdioTarget,
     StreamClosure,
@@ -345,6 +346,42 @@ def test_cancellation_with_blocked_stdin_finalizes_the_producer() -> None:
         result = await handle.terminate(grace=0.2)
         await asyncio.wait_for(finalized.wait(), timeout=5.0)
         assert result.exit_code in {-15, -9}, f"the child ended as {result.exit_code}"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.timeout(20)
+def test_a_failing_stdin_producer_keeps_its_error_and_truncates_readers() -> None:
+    """A producer failure stays a ``StdinSourceError`` and fails no reader."""
+
+    async def scenario() -> None:
+        """Fail the producer after one chunk and inspect the settlement."""
+
+        async def produce() -> cabc.AsyncIterator[bytes]:
+            """Yield one chunk, then fail the producer contract."""
+            yield b"first"
+            await asyncio.sleep(0)
+            message = "producer failed"
+            raise RuntimeError(message)
+
+        handle = await _PYTHON("-c", "import time; time.sleep(30)").start_bytes(
+            stdin=StdinStream(produce()),
+            context=ExecutionContext(cancel_grace=0.2),
+        )
+        with pytest.raises(StdinSourceError) as raised:
+            await handle.wait()
+        cause = raised.value.__cause__
+        assert isinstance(cause, RuntimeError), (
+            f"the producer's error must be chained, got {cause!r}"
+        )
+        assert str(cause) == "producer failed", (
+            f"the chained cause must be the producer's, got {cause!r}"
+        )
+        for reader in (handle.stdout, handle.stderr):
+            assert reader.closure in {
+                StreamClosure.EOF,
+                StreamClosure.TRUNCATED_BY_SETTLEMENT,
+            }, f"a producer failure must not fail a reader, got {reader.closure!r}"
 
     asyncio.run(scenario())
 

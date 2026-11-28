@@ -128,17 +128,36 @@ def test_eof_hook_is_not_called_when_the_tap_fails() -> None:
 
 
 def test_byte_tap_runs_before_line_decoding_over_split_utf8() -> None:
-    """A split multibyte character reaches the tap raw and the line feeder once."""
+    """Each raw chunk reaches the tap before the line feeder decodes it.
+
+    The order is recorded in one list rather than inferred from what each
+    consumer received: a change that ran the line feeder first would still
+    deliver both observations and would pass a content-only check.
+    """
 
     async def scenario() -> None:
-        """Feed a split euro sign and record both consumers."""
-        tap = _RecordingTap()
-        events: list[str] = []
+        """Feed a split euro sign and record both consumers in one order."""
+
+        class _OrderingTap(_RecordingTap):
+            """A tap that records its observations in the shared order list."""
+
+            def __init__(self, order: list[tuple[str, bytes | str]]) -> None:
+                """Start empty, appending to *order*."""
+                super().__init__()
+                self._order = order
+
+            async def on_chunk(self, chunk: bytes) -> None:
+                """Record the tap observation before recording the chunk."""
+                self._order.append(("tap", chunk))
+                await super().on_chunk(chunk)
+
+        order: list[tuple[str, bytes | str]] = []
+        tap = _OrderingTap(order)
         config = _tapped(_config(io.StringIO()), tap)
 
         def observe(line: str) -> None:
-            """Record each decoded line."""
-            events.append(line)
+            """Record each decoded line in the shared order list."""
+            order.append(("line", line))
 
         await _consume_stream(
             _reader([b"\xe2", b"\x82\xac\n"]), config, on_line=observe
@@ -146,9 +165,11 @@ def test_byte_tap_runs_before_line_decoding_over_split_utf8() -> None:
         assert tap.chunks == [b"\xe2", b"\x82\xac\n"], (
             f"the tap must see the raw split sequence, got {tap.chunks!r}"
         )
-        assert events == ["€"], (
-            f"the line feeder must decode the complete character, got {events!r}"
-        )
+        assert order == [
+            ("tap", b"\xe2"),
+            ("tap", b"\x82\xac\n"),
+            ("line", "€"),
+        ], f"the tap must precede line decoding, got {order!r}"
 
     asyncio.run(scenario())
 
