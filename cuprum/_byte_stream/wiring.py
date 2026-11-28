@@ -13,7 +13,10 @@ was released or finalized.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
+import functools
+import typing as typ
 
 from cuprum._byte_stream.byte_queue import _ByteQueue, _validate_buffered_bytes
 from cuprum._byte_stream.reader import ByteStreamReader
@@ -21,6 +24,49 @@ from cuprum._stream_live import _LiveStreamSink, _LiveStreamSinks
 from cuprum.echo_events import EchoStream
 
 __all__ = ["_ByteStreams", "build_byte_streams"]
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+
+@dc.dataclass(slots=True)
+class _StopRequest:
+    """The stop a live drain failure asks for, and the task that runs it.
+
+    A reader iterating a live stream has not asked for an outcome, so nothing
+    would otherwise stop the child when its drain fails. The first failure
+    records a request; once the handle binds its stop callable, the request
+    becomes one task. Settlement awaits that task before reconciling, so the
+    child is always stopped and reaped exactly once.
+    """
+
+    callback: cabc.Callable[[], cabc.Awaitable[None]] | None = None
+    requested: bool = False
+    task: asyncio.Task[None] | None = None
+
+    def bind(self, callback: cabc.Callable[[], cabc.Awaitable[None]]) -> None:
+        """Bind the stop callable, honouring a request made before binding."""
+        self.callback = callback
+        if self.requested:
+            self._start()
+
+    def request(self) -> None:
+        """Record that a live failure wants the child stopped."""
+        self.requested = True
+        if self.callback is not None:
+            self._start()
+
+    async def await_stop(self) -> None:
+        """Wait for a scheduled stop to finish, if one was scheduled."""
+        task = self.task
+        if task is not None:
+            await asyncio.shield(task)
+
+    def _start(self) -> None:
+        """Start the bound stop exactly once."""
+        callback = self.callback
+        if self.task is None and callback is not None:
+            self.task = asyncio.ensure_future(callback())
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -54,6 +100,7 @@ class _ByteStreams:
     stderr_queue: _ByteQueue
     stdout: ByteStreamReader
     stderr: ByteStreamReader
+    stop: _StopRequest = dc.field(default_factory=_StopRequest)
 
     @property
     def sinks(self) -> _LiveStreamSinks:
@@ -70,12 +117,12 @@ class _ByteStreams:
             stdout=_LiveStreamSink(
                 stdout_tap.on_chunk,
                 self.stdout_queue.producer_eof,
-                self.stdout_queue.fail,
+                functools.partial(self.fail_live, 0),
             ),
             stderr=_LiveStreamSink(
                 stderr_tap.on_chunk,
                 self.stderr_queue.producer_eof,
-                self.stderr_queue.fail,
+                functools.partial(self.fail_live, 1),
             ),
             max_buffered_bytes=self.stdout_queue.capacity,
         )
@@ -116,6 +163,16 @@ class _ByteStreams:
         for other_index, queue in enumerate(queues):
             if other_index != index:
                 queue.begin_settlement()
+
+    def fail_live(self, index: int, cause: BaseException) -> None:
+        """Publish a live drain failure and ask for the child to be stopped.
+
+        A failure discovered at reconciliation uses :meth:`fail` alone: the
+        child has already ended, so scheduling another stop would add a task
+        with nothing to stop.
+        """
+        self.fail(index, cause)
+        self.stop.request()
 
 
 def build_byte_streams(max_buffered_bytes: int) -> _ByteStreams:

@@ -45,6 +45,7 @@ _PORTABLE_SCENARIOS = (
     "stalled_then_wait",
     "cancel_while_blocked",
     "close_one_stream",
+    "live_failure_stops_held_child",
 )
 
 _POSIX_SCENARIOS = (

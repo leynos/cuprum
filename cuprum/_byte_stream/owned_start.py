@@ -15,9 +15,11 @@ would be a failure a caller could not act on.
 
 from __future__ import annotations
 
+import functools
 import typing as typ
 
 from cuprum._byte_stream.handle import RunningBytesCommand
+from cuprum._byte_stream.settlement import _stop_failed_child
 from cuprum._byte_stream.wiring import build_byte_streams
 from cuprum._bytes_run import _bytes_output, _validate_bytes_output
 from cuprum._command_internals import _ExecutionState
@@ -153,4 +155,7 @@ class _OwnedBytesStart:
             capture_bytes=True,
         )
         run = await _spawn_owned_run(cmd, state, live=streams.sinks)
+        # Bound after the spawn because the stop needs the run; a failure that
+        # arrived before this line sets its request and is started by bind().
+        streams.stop.bind(functools.partial(_stop_failed_child, run))
         return RunningBytesCommand(run, streams)

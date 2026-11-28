@@ -5831,9 +5831,11 @@ one order by one task: capture first, then echo, then the byte tap, then line
 decoding and line observation. Composing the tap into the line feeder as well
 would deliver every chunk to the live queue twice, which is why the feeder only
 decodes. Capture and echo failures keep their existing meaning: a capture
-failure stops the drain and the run, while an echo failure follows the
-configured broken-pipe policy. A byte-tap failure is a queue-internal invariant
-failure and is reported as `FAILED`; it cannot silently drop a chunk.
+*storage* failure stops further writes and reports `storage_failed` without
+ending the run, any other exception raised by the capture sink stops the drain
+and the run, and an echo failure follows the configured broken-pipe policy. A
+byte-tap failure is a queue-internal invariant failure and is reported as
+`FAILED`; it cannot silently drop a chunk.
 
 EOF is a separate, synchronous `on_eof` hook on the drain. It is called only
 when the read loop observes the empty read, and before `_finish_drain`
@@ -5856,16 +5858,26 @@ handler terminates the child, and the failure is published as a
 failure remains a `StdinSourceError`. A child that closes its stdin early
 remains a non-fatal observation.
 
-Settlement runs in three steps under one shield:
+Settlement releases both queues *before* it waits for the child. A blocked
+`put` wakes and stops waiting; a chunk that still fits is enqueued, and only
+the remainder is discarded and counted while capture continues. Releasing
+before the exit wait is what stops a stalled consumer from keeping the child
+alive: a full queue blocks the drain, the full pipe blocks the child, and the
+exit the wait is for would never arrive.
 
-1. Release both queues for settlement. A blocked `put` wakes and stops
-   waiting; a chunk that still fits is enqueued, and only the remainder is
-   discarded and counted while capture continues.
-2. Reconcile the run's tasks with the ordinary capture EOF grace. A drain that
+A drain that fails while the child is still running publishes `FAILED` on its
+queue from the task's own done callback and records a stop request. The handle
+binds that request to the run's stop lock, so the child is stopped and reaped
+without waiting for a caller to ask for an outcome; settlement awaits the same
+task before reconciling.
+
+The remaining settlement steps run under one shield:
+
+1. Reconcile the run's tasks with the ordinary capture EOF grace. A drain that
    reaches EOF publishes `EOF` when nothing was discarded, otherwise
    `TRUNCATED_BY_SETTLEMENT`; a drain that does not reach EOF is finalized as
    `TRUNCATED_BY_SETTLEMENT`.
-3. Release the child's output transports and close the delivery worker.
+2. Release the child's output transports and close the delivery worker.
 
 If reconciliation discovers that a consumer task ended with a non-cancellation
 exception, every failed stream's reader is published as `FAILED` and the run

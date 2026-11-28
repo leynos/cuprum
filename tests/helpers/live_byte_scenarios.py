@@ -15,48 +15,37 @@ raised ``RuntimeError`` carries the failing observation.
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import signal
+import io
 import sys
-import tempfile
-import time
 import typing as typ
-from pathlib import Path
 
 from cuprum import (
     ByteStreamReader,
+    EchoStream,
     ExecutionContext,
-    ProcessGroupPolicy,
-    Program,
-    ProgramCatalogue,
+    LiveStreamError,
+    RunOutputOptions,
     StdinStream,
     StreamClosure,
     TimeoutExpired,
-    sh,
 )
+from tests.helpers.live_byte_descendant_scenarios import (
+    descendant_inherit,
+    descendant_own_group,
+)
+from tests.helpers.live_byte_support import HANDLE_DEADLINE_S as _HANDLE_DEADLINE_S
+from tests.helpers.live_byte_support import PAYLOAD_SIZE as _PAYLOAD_SIZE
+from tests.helpers.live_byte_support import PYTHON as _PYTHON
+from tests.helpers.live_byte_support import is_alive as _is_alive
+from tests.helpers.live_byte_support import kill_and_reap as _kill_and_reap
+from tests.helpers.live_byte_support import require as _require
+from tests.helpers.live_byte_support import wait_dead as _wait_dead
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-_CATALOGUE = ProgramCatalogue.from_programs(sys.executable, name="live-scenarios")
-_PYTHON = sh.make(Program(sys.executable), catalogue=_CATALOGUE)
 _PREFIX = b"prefix:"
-_PAYLOAD_SIZE = 128 * 1024
-_SETTLEMENT_DEADLINE_S = 8.0
-_DESCENDANT_WAIT_S = 3.0
-_REAP_TIMEOUT_S = 2.0
-_HANDLE_DEADLINE_S = 10.0
 _ARGV_LENGTH = 2
-
-
-def _require(
-    condition: bool,  # ruff: ignore[boolean-type-hint-positional-argument] - a predicate and its explanation are both required; keyword-only would only lengthen every call.
-    message: str,
-) -> None:
-    """Raise when a scenario observation does not hold."""
-    if not condition:
-        raise RuntimeError(message)
 
 
 async def _read_all(reader: ByteStreamReader) -> bytes:
@@ -221,6 +210,11 @@ async def cancel_while_blocked() -> None:
         "time.sleep(30)\n"
     )
     handle = await _PYTHON("-c", code).start_bytes(max_buffered_bytes=1024)
+    head, _tail = await asyncio.wait_for(
+        _read_until(handle.stdout, b"prefix"),
+        timeout=_HANDLE_DEADLINE_S,
+    )
+    _require(head == b"prefix", f"the prefix was {head!r}")
     try:
         await handle.wait(timeout=0.5)
     except TimeoutExpired as exc:
@@ -262,100 +256,65 @@ async def close_one_stream() -> None:
     _require(result.ok, f"the child exited {result.exit_code}")
 
 
-def _is_alive(pid: int) -> bool:
-    """Return whether *pid* still exists."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+class _FailingSink(io.StringIO):
+    """A text sink whose write always fails, failing the drain that echoes."""
+
+    def write(self, _text: str) -> int:  # ruff: ignore[no-self-use] - overrides IO.write; the failure is the whole behaviour.
+        """Fail the echo write."""
+        message = "sink failed"
+        raise ValueError(message)
 
 
-def _wait_dead(pid: int, timeout: float) -> bool:
-    """Wait up to *timeout* seconds for *pid* to disappear."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not _is_alive(pid):
-            return True
-        time.sleep(0.05)
-    return not _is_alive(pid)
-
-
-def _kill_and_reap(pid: int) -> None:
-    """Kill a surviving descendant and wait for it to disappear."""
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    _wait_dead(pid, _REAP_TIMEOUT_S)
-
-
-def _descendant_child_code(marker: Path) -> str:
-    """Build the leader's code: spawn a pipe-holding descendant, then exit."""
-    descendant = "import time; time.sleep(30)"
-    return (
-        "import subprocess, sys\n"
-        "child = subprocess.Popen(\n"
-        f"    [sys.executable, '-c', {descendant!r}],\n"
-        "    stdout=sys.stdout.fileno(),\n"
-        "    stderr=sys.stderr.fileno(),\n"
-        ")\n"
-        f"with open({str(marker)!r}, 'w') as stream:\n"
-        "    stream.write(str(child.pid))\n"
-        "print('leader-done', flush=True)\n"
+async def live_failure_stops_held_child() -> None:
+    """Stop and reap a held child when its live drain fails."""
+    code = (
+        "import sys, time\n"
+        "sys.stdout.buffer.write(b'out\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+        "time.sleep(30)\n"
     )
-
-
-async def _descendant_scenario(*, own_group: bool) -> None:
-    """Settle a run whose child leaves a descendant holding the output pipe."""
-    directory = Path(tempfile.mkdtemp(prefix="cuprum-live-"))
-    marker = directory / "descendant.pid"
-    code = _descendant_child_code(marker)
-    policy = ProcessGroupPolicy.OWN_GROUP if own_group else ProcessGroupPolicy.INHERIT
-    context = ExecutionContext(process_group=policy, cancel_grace=0.2)
-    handle = await _PYTHON("-c", code).start_bytes(context=context)
-    started = time.monotonic()
-    result = await handle.wait(timeout=_HANDLE_DEADLINE_S)
-    elapsed = time.monotonic() - started
-    _require(elapsed < _SETTLEMENT_DEADLINE_S, f"settlement took {elapsed:.2f}s")
-    _require(result.ok, f"the leader exited {result.exit_code}")
-    _require(marker.is_file(), "the descendant PID marker was not written")
-    descendant = int(marker.read_text(encoding="utf-8"))
+    handle = await _PYTHON("-c", code).start_bytes(
+        output=RunOutputOptions(echo=True),
+        context=ExecutionContext(
+            stdout_sink=_FailingSink(),
+            cancel_grace=0.2,
+        ),
+    )
+    pid = handle.pid
+    if pid is None:
+        message = "the child must have a PID"
+        raise RuntimeError(message)
     try:
-        if own_group:
+        try:
+            await asyncio.wait_for(handle.stdout.wait_eof(), timeout=10)
+        except LiveStreamError as error:
             _require(
-                _wait_dead(descendant, _DESCENDANT_WAIT_S),
-                "an owned group must reap the descendant holding the pipe",
-            )
-            _require(
-                handle.stdout.closure is StreamClosure.EOF,
-                "the group stop should let stdout reach EOF, got "
-                f"{handle.stdout.closure!r}",
+                error.stream is EchoStream.STDOUT, "stdout must be the failed stream"
             )
         else:
-            _require(_is_alive(descendant), "an inherited descendant must survive")
-            _require(
-                handle.stdout.closure is StreamClosure.TRUNCATED_BY_SETTLEMENT,
-                "an inherited descendant must truncate the reader, got "
-                f"{handle.stdout.closure!r}",
-            )
+            message = "the reader should have reported the drain failure"
+            raise RuntimeError(message)
+        reaped = await asyncio.to_thread(_wait_dead, pid, 10.0)
+        _require(
+            reaped,
+            "a held handle must stop and reap the child when its drain fails",
+        )
+        try:
+            await handle.wait()
+        except LiveStreamError:
+            pass
+        else:
+            message = "settlement should report the drain failure"
+            raise RuntimeError(message)
+        _require(
+            handle.stderr.closure
+            in {StreamClosure.EOF, StreamClosure.TRUNCATED_BY_SETTLEMENT},
+            "the other stream must settle normally, not fail, got "
+            f"{handle.stderr.closure!r}",
+        )
     finally:
-        # The survival assertion above must run before this cleanup; a failed
-        # assertion must not leave a 30-second sleeper behind.
-        _kill_and_reap(descendant)
-        shutil.rmtree(directory, ignore_errors=True)
-
-
-async def descendant_own_group() -> None:
-    """Reap a descendant that holds the pipe when the run owns its group."""
-    await _descendant_scenario(own_group=True)
-
-
-async def descendant_inherit() -> None:
-    """Leave a descendant alive when the run inherits the parent's group."""
-    await _descendant_scenario(own_group=False)
+        if _is_alive(pid):
+            _kill_and_reap(pid)
 
 
 _SCENARIOS = {
@@ -366,6 +325,7 @@ _SCENARIOS = {
     "stalled_then_wait": stalled_then_wait,
     "cancel_while_blocked": cancel_while_blocked,
     "close_one_stream": close_one_stream,
+    "live_failure_stops_held_child": live_failure_stops_held_child,
     "descendant_own_group": descendant_own_group,
     "descendant_inherit": descendant_inherit,
 }

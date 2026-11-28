@@ -18,6 +18,7 @@ from __future__ import annotations
 import functools
 import typing as typ
 
+from cuprum._process_handle.control import _terminate_shielded
 from cuprum._process_handle.coordinator import (
     _close_handle_delivery,
     _finalize_settled_run,
@@ -30,6 +31,7 @@ from cuprum._process_handle.results import (
 from cuprum._process_handle.settlement import _expiry_error, _SettlementPlan
 from cuprum._process_handle.tasks import _HandleRun, _launch_idle_monitor
 from cuprum._process_handle_errors import LiveStreamError
+from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._subprocess_rendezvous import _stdin_writer_failure
 from cuprum._subprocess_startup_abandon import _release_output_transports
 from cuprum._subprocess_wait import (
@@ -43,7 +45,7 @@ if typ.TYPE_CHECKING:
     from cuprum._subprocess_wait_types import _RunTaskOwnership
     from cuprum.sh import BytesCommandResult
 
-__all__ = ["bytes_settlement_plan"]
+__all__ = ["_stop_failed_child", "bytes_settlement_plan"]
 
 _STREAM_NAMES = (EchoStream.STDOUT, EchoStream.STDERR)
 
@@ -67,6 +69,23 @@ def bytes_settlement_plan(
         settle=functools.partial(_settle_bytes_handle_run, streams=streams),
         expiry=_expiry_error,
     )
+
+
+async def _stop_failed_child(run: _HandleRun) -> None:
+    """Stop and reap the child after a live consumer publishes a failure.
+
+    A reader iterating a live stream has not asked for an outcome, so nothing
+    else would stop the child when its drain fails. The stop takes the run's
+    lock, so it is serialized with every public control operation and with
+    settlement's own escalation; a child already gone makes it a no-op.
+    """
+    async with run.stop_lock:
+        await _terminate_shielded(
+            run.process,
+            run.execution.ctx.cancel_grace,
+            owns_group=run.execution.owns_process_group,
+            observation=run.execution.observation,
+        )
 
 
 async def _settle_bytes_handle_run(
@@ -98,11 +117,17 @@ async def _settle_bytes_handle_run(
     """  # ruff: ignore[docstring-extraneous-exception] - the monitored failures propagate
     execution = run.execution
     _launch_idle_monitor(execution)
-    # Every exit path releases the live queues before reconciliation and the
-    # output transports after it; only the success path also closes the
-    # delivery worker, and only after the result's figures are settled.
+    # A caller's wait must not depend on a consumer draining a live queue: a
+    # full queue blocks the drain, the full pipe blocks the child, and the
+    # exit this wait is for would never arrive. Settlement therefore stops
+    # waiting for capacity before the exit wait. A tail that still fits is
+    # delivered; the remainder is discarded and reported as truncation, which
+    # is the documented cost of waiting before consuming to EOF.
+    streams.begin_settlement()
+    # Every exit path releases the output transports after reconciliation;
+    # only the success path also closes the delivery worker, and only after
+    # the result's figures are settled.
     hooks = _ReconcileHooks(
-        before=streams.begin_settlement,
         after=functools.partial(
             _release_output_transports,
             run.process,
@@ -118,6 +143,7 @@ async def _settle_bytes_handle_run(
         )
     except BaseException as error:
         failure = _publish_early_failure(run.ownership, streams, error)
+        await _shielded_cleanup(streams.stop.await_stop())
         try:
             await _finalize_settled_run(
                 run,
@@ -131,6 +157,7 @@ async def _settle_bytes_handle_run(
             raise
         raise failure from error
 
+    await _shielded_cleanup(streams.stop.await_stop())
     try:
         drained = await _finalize_settled_run(
             run,
