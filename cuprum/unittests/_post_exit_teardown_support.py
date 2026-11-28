@@ -485,15 +485,17 @@ def recorded_descendant_or_fail(
         The descendant's recorded pid.
     """
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+    descendant_pid: int | None = None
+    while descendant_pid is None and time.monotonic() < deadline:
         descendant_pid = recorded_descendant(pid_file)
-        if descendant_pid is not None:
-            return descendant_pid
-        time.sleep(0.05)
-    pytest.fail(
-        "the child never recorded the descendant it left behind, so this run "
-        "did not reach the state under test"
-    )
+        if descendant_pid is None:
+            time.sleep(0.05)
+    if descendant_pid is None:
+        pytest.fail(
+            "the child never recorded the descendant it left behind, so this "
+            "run did not reach the state under test"
+        )
+    return descendant_pid
 
 
 def start_owned_run(
