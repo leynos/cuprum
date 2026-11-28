@@ -88,6 +88,26 @@ def _truncate(reason: object) -> str:
     return f"{text[: _MAX_REASON_CHARS - 3]}..."
 
 
+def _reports_an_outcome(report: pytest.TestReport) -> bool:
+    """Return whether this phase settles the node's outcome.
+
+    A call phase always reports one, and so does any failure or skip, whatever
+    the phase: a setup skip is the node's result even though no call ran, and
+    omitting it would make a valid run look like it had missing evidence.
+
+    Parameters
+    ----------
+    report : pytest.TestReport
+        The report for one phase of one node.
+
+    Returns
+    -------
+    bool
+        Whether the report should be recorded as the node's outcome.
+    """
+    return report.when == "call" or report.failed or bool(report.skipped)
+
+
 def _skip_reason(report: pytest.TestReport) -> str:
     """Return the bounded skip reason a skip report carries, if any."""
     longrepr = report.longrepr
@@ -198,7 +218,7 @@ class SessionEvidence:
         self._phase_seconds[phase] = (
             self._phase_seconds.get(phase, 0.0) + report.duration
         )
-        if report.when == "call" or report.failed:
+        if _reports_an_outcome(report):
             self._outcomes[report.nodeid] = report.outcome
         if report.skipped:
             reason = _skip_reason(report)

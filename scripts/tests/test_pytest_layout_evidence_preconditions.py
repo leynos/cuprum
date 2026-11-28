@@ -128,3 +128,27 @@ def test_pairs_without_recorded_outcomes_are_inconclusive() -> None:
     assert "an outcome for every collected node" in comparison.reason, (
         f"the missing evidence must be named, got {comparison.reason}"
     )
+
+
+def test_a_partial_outcome_mapping_is_not_identical() -> None:
+    """Reject a fidelity verdict when only some collected nodes have outcomes.
+
+    Both sides collecting ``a`` and ``b`` while recording only ``a`` leaves
+    ``b``'s result unknown, so the reports cannot be called identical.
+    """
+    from scripts.pytest_layout_analysis import fidelity
+
+    control = (
+        _run(
+            "c",
+            "baseline",
+            _Spec(nodes=("a", "b")),
+        ),
+    )
+    partial = dataclasses.replace(control[0], outcomes=(("a", "passed"),))
+
+    report = fidelity(control, (partial,))
+
+    assert report["identical"] is False, (
+        "a partially recorded outcome set must not be identical"
+    )

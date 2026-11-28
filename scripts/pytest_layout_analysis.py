@@ -147,6 +147,31 @@ def _outcomes(runs: cabc.Sequence[RunRecord]) -> dict[str, str]:
     return {node: value for run in runs for node, value in run.outcomes}
 
 
+def _covers_every_node(
+    runs: cabc.Sequence[RunRecord], outcomes: cabc.Mapping[str, str]
+) -> bool:
+    """Return whether every collected node has a recorded outcome.
+
+    A partial mapping is not evidence. If a node was collected and no outcome
+    was recorded for it, two runs can agree on the names and on the nodes they
+    happened to record while disagreeing about the rest.
+
+    Parameters
+    ----------
+    runs : Sequence of RunRecord
+        That side's runs.
+    outcomes : collections.abc.Mapping of str to str
+        The outcomes recorded across those runs.
+
+    Returns
+    -------
+    bool
+        Whether each collected node appears in ``outcomes``.
+    """
+    collected = {node for run in runs for node in run.node_ids}
+    return bool(collected) and collected <= set(outcomes)
+
+
 def _node_map(runs: cabc.Sequence[RunRecord], field: str) -> dict[str, str]:
     """Return one recorded node-to-reason mapping across a side's runs.
 
@@ -196,7 +221,9 @@ def _same_suite(
     """
     control_outcomes = _outcomes(control)
     candidate_outcomes = _outcomes(candidate)
-    if not control_outcomes or not candidate_outcomes:
+    if not _covers_every_node(control, control_outcomes):
+        return False
+    if not _covers_every_node(candidate, candidate_outcomes):
         return False
     return (
         control_nodes == candidate_nodes
