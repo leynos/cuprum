@@ -137,3 +137,14 @@ def test_mark_pins_its_wall_clock(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert observed.strip() == "5.000000", observed
+
+
+def test_an_unknown_mode_prints_usage_and_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unknown mode must not silently run a default command."""
+    status = writer.main(["compiler_cache_evidence.py", "bogus"], {})
+    assert status == 2, f"an unknown mode must fail, got {status}"
+    assert "snapshot|record|mark" in capsys.readouterr().err, (
+        "the usage line must name the modes"
+    )

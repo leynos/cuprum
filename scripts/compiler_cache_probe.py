@@ -38,8 +38,6 @@ if typ.TYPE_CHECKING:
 
 type Runner = cabc.Callable[..., subprocess.CompletedProcess[str]]
 
-_EMPTY: dict[str, object] = {}
-
 
 class StatsProbe(typ.NamedTuple):
     """One sccache statistics read and whether it succeeded."""
@@ -108,9 +106,9 @@ def read_stats(
         if completed.returncode != 0:
             return StatsProbe(stats={}, version="", backend="none", ok=False)
         document = json.loads(completed.stdout)
-        stats = document.get("stats", _EMPTY)
         version = str(document.get("version", ""))
         backend = schema.backend_of(document.get("cache_location"))
+        stats = document.get("stats")
         if not isinstance(stats, dict):
             return StatsProbe(stats={}, version=version, backend=backend, ok=False)
         return StatsProbe(

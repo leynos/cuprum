@@ -31,9 +31,9 @@ import typing as typ
 
 from scripts import compiler_cache_cost as cost_reader
 from scripts import compiler_cache_pairs as pairs_reader
-from scripts import compiler_cache_records as records_reader
 from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_validation as validation
+from scripts.compiler_cache_validation import InvalidEvidenceError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -268,7 +268,7 @@ def _check_console_scope(
         console is not None and console.get("incremental_cost_seconds") is not None
     )
     if len(families) > 1 and has_cost:
-        raise records_reader.InvalidEvidenceError(_SCOPE_MESSAGE)
+        raise InvalidEvidenceError(_SCOPE_MESSAGE)
 
 
 def build_summary(

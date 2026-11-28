@@ -20,6 +20,7 @@ from tests.helpers.ci_compiler_gate import (
     family,
     five_pairs,
     jobs,
+    observations,
     summary,
 )
 
@@ -341,4 +342,16 @@ def test_an_unknown_backend_never_pairs() -> None:
     built = summary(records, jobs([100, 200], 240))
     assert family(built)["pairs"] == 0, (
         f"an unidentified backend must not become a control, got {built['families']}"
+    )
+
+
+def test_a_degraded_record_is_labelled_a_fallback() -> None:
+    """Any non-ok state is the fallback-or-misconfiguration class."""
+    built = summary(
+        [Observation(run_id="100", backend="local", hits=4, state="degraded")],
+        jobs([100], 240),
+    )
+    labelled = observations(built)
+    assert labelled[0]["observation_class"] == "fallback-or-misconfiguration", (
+        f"a degraded record must be a fallback, got {labelled}"
     )

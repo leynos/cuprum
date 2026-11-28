@@ -185,19 +185,23 @@ def test_the_markdown_output_directory_is_created(tmp_path: Path) -> None:
     records.mkdir()
     output = tmp_path / "summary.json"
     markdown = tmp_path / "reports" / "summary.md"
-    status = report.main([
-        "--records",
-        str(records),
-        "--out",
-        str(output),
-        "--markdown",
-        str(markdown),
-    ])
+    status = report.main(
+        [
+            "--records",
+            str(records),
+            "--out",
+            str(output),
+            "--markdown",
+            str(markdown),
+        ],
+        clock=lambda: "2026-01-01T00:00:00Z",
+    )
     assert status == 0, f"the report command must succeed, got {status}"
     assert markdown.is_file(), "the report must be written where it was asked"
     stamped = json.loads(output.read_text(encoding="utf-8"))["generated_at"]
-    assert "T" in stamped, f"the summary needs a timestamp, got {stamped!r}"
-    assert stamped.endswith("Z"), f"the timestamp must be UTC, got {stamped!r}"
+    assert stamped == "2026-01-01T00:00:00Z", (
+        f"the CLI must use the injected clock, got {stamped!r}"
+    )
 
 
 def test_a_malformed_console_number_is_rejected(tmp_path: Path) -> None:

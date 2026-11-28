@@ -50,6 +50,8 @@ from scripts import compiler_cache_summary as summary_reader
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+type Clock = cabc.Callable[[], str]
+
 
 def render_markdown(summary: cabc.Mapping[str, object]) -> str:
     """Render a compact Markdown report beside the JSON summary."""
@@ -95,7 +97,7 @@ def _parse(argv: cabc.Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(list(argv))
 
 
-def main(argv: cabc.Sequence[str]) -> int:
+def main(argv: cabc.Sequence[str], *, clock: Clock = schema.now) -> int:
     """Run the reader; return non-zero on any contract failure."""
     arguments = _parse(argv)
     try:
@@ -108,7 +110,7 @@ def main(argv: cabc.Sequence[str]) -> int:
         )
         # The clock is an edge concern: the summary is otherwise a pure
         # function of the evidence, the joins, and the console observation.
-        summary["generated_at"] = schema.now()
+        summary["generated_at"] = clock()
     except records_reader.InvalidEvidenceError as error:
         print(f"compiler-cache evidence: {error}", file=sys.stderr)
         return 1

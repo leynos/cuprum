@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - CompletedProcess stand-in only.
 import typing as typ
+from pathlib import Path
 
 from scripts import compiler_cache_evidence as writer
 from scripts import compiler_cache_jobs as jobs_reader
@@ -20,7 +21,9 @@ from tests.helpers.ci_compiler_evidence import environment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
+    import os
+
+    import pytest
 
 
 def _completed(stdout: str, returncode: int = 0) -> subprocess.CompletedProcess:
@@ -193,3 +196,85 @@ def test_the_directory_size_reaches_the_record(tmp_path: Path) -> None:
     assert state["restore_bytes"] == 24, (
         f"the snapshot must carry the measured size, got {state['restore_bytes']}"
     )
+
+
+def _markers(tmp_path: Path, start: str, end: str) -> dict[str, str]:
+    """Write the restore markers and return the probe environment."""
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    (marks / "restore-start").write_text(f"{start}\n", encoding="utf-8")
+    (marks / "restore-end").write_text(f"{end}\n", encoding="utf-8")
+    return {"EVIDENCE_DIR": str(tmp_path)}
+
+
+def test_a_missing_marker_is_absent(tmp_path: Path) -> None:
+    """No marker at all is a distinct state from a broken one."""
+    marks = tmp_path / "marks"
+    marks.mkdir()
+    (marks / "restore-start").write_text("1.0\n", encoding="utf-8")
+    observed = probe.elapsed_between(
+        {"EVIDENCE_DIR": str(tmp_path)}, "restore", "restore-end"
+    )
+    assert observed == probe.SpanProbe(None, "absent"), observed
+
+
+def test_a_negative_span_is_unreadable(tmp_path: Path) -> None:
+    """A start after its end describes a broken timer, not a transfer."""
+    observed = probe.elapsed_between(
+        _markers(tmp_path, "20.0", "10.0"), "restore", "restore-end"
+    )
+    assert observed == probe.SpanProbe(None, "unreadable"), observed
+
+
+def test_a_non_numeric_marker_is_unreadable(tmp_path: Path) -> None:
+    """A marker that is not a number cannot time a transfer."""
+    observed = probe.elapsed_between(
+        _markers(tmp_path, "start", "10.0"), "restore", "restore-end"
+    )
+    assert observed == probe.SpanProbe(None, "unreadable"), observed
+
+
+def test_a_failed_marker_write_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write failure must be false, never a silent success."""
+
+    def refuse(*_args: object, **_kwargs: object) -> int:
+        message = "disk full"
+        raise OSError(message)
+
+    monkeypatch.setattr(Path, "write_text", refuse)
+    observed = probe.write_mark({"EVIDENCE_DIR": str(tmp_path)}, "restore")
+    assert observed is False, "a failed write must not claim success"
+
+
+def test_an_unreadable_cache_directory_is_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory that exists but cannot be walked is not a measured zero."""
+    _sccache_files(tmp_path, (3,))
+    real_stat = Path.stat
+
+    def fail_on_cache_file(
+        self: Path, *, follow_symlinks: bool = True
+    ) -> os.stat_result:
+        if self.name.startswith("object-"):
+            message = "permission denied"
+            raise OSError(message)
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", fail_on_cache_file)
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed.size is None, "an unreadable directory must be unknown"
+    assert observed.detail == "unreadable", observed
+
+
+def test_two_failed_reads_do_not_share_a_stats_mapping() -> None:
+    """A caller mutating one result must not change the next read's result."""
+    document = '{"version": "0.12.0", "cache_location": "something"}'
+    first = probe.read_stats({}, runner=lambda *_, **__: _completed(document))
+    second = probe.read_stats({}, runner=lambda *_, **__: _completed(document))
+    assert not first.ok, "a missing stats map must fail the first read"
+    assert not second.ok, "a missing stats map must fail the second read"
+    first.stats["mutated"] = True
+    assert "mutated" not in second.stats, "the results must not share state"

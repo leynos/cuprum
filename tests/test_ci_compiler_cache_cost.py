@@ -12,6 +12,7 @@ import typing as typ
 
 import pytest
 
+from scripts import compiler_cache_cost as cost_reader
 from tests.helpers.ci_compiler_gate import (
     Observation,
     console,
@@ -140,4 +141,15 @@ def test_a_recorded_job_without_a_duration_makes_the_total_unknown() -> None:
     cost = typ.cast("dict[str, object]", built["cost"])
     assert cost["paid_job_seconds_by_workflow"] == {"ci.yml": None}, (
         f"an unpriceable job must make that workflow's total unknown, got {cost}"
+    )
+
+
+def test_console_number_accepts_a_negative_only_when_signed() -> None:
+    """Durations cannot be negative; an incremental saving can."""
+    console = {"incremental_cost_seconds": -5}
+    assert cost_reader.console_number(
+        console, "incremental_cost_seconds", signed=True
+    ) == pytest.approx(-5.0), "a signed saving must be returned unchanged"
+    assert cost_reader.console_number(console, "incremental_cost_seconds") is None, (
+        "an unsigned duration must reject a negative value"
     )
