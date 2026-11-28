@@ -81,7 +81,10 @@ def test_a_session_record_becomes_a_run_record() -> None:
     the adapter contract: a node collected twice survives as two entries, and
     the outcome, skip and xfail mappings reach the record.
     """
-    from scripts.pytest_layout_loader import SessionIdentity, run_record_from_session
+    from scripts.pytest_layout_session_adapter import (
+        SessionIdentity,
+        run_record_from_session,
+    )
 
     session = {
         "collected": ["a", "a", "b"],

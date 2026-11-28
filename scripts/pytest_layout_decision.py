@@ -18,10 +18,12 @@ from __future__ import annotations
 import statistics
 import typing as typ
 
+from scripts.pytest_layout_evidence_gap import evidence_gap
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from scripts.pytest_layout_records import AdoptionThresholds, Pair, RunRecord
+    from scripts.pytest_layout_records import AdoptionThresholds, Pair
 
 __all__ = ("MINIMUM_PAIRS", "Verdict", "decide")
 
@@ -95,7 +97,7 @@ def decide(
             "inconclusive",
             "no pair recorded both step times, so no saving can be computed",
         )
-    gap = _evidence_gap(usable, minimum_pairs)
+    gap = evidence_gap(usable, minimum_pairs, pairs)
     if gap is not None:
         return outcome("inconclusive", gap)
     rejected = _regression_reason(usable, rule) or _minimum_reason(
@@ -138,203 +140,6 @@ def _usable(pairs: cabc.Sequence[Pair]) -> tuple[Pair, ...]:
         and pair.control.exit_status == 0
         and pair.candidate.exit_status == 0
         and pair.saving_seconds is not None
-    )
-
-
-def _evidence_gap(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
-    """Return what the sample still lacks, or ``None`` when it is complete.
-
-    A median is evidence only when the sample is the one the plan predeclared:
-    enough warm pairs per interpreter, on comparable runners and toolchains,
-    over runs that collected the same suite, at no extra whole-job cost. Each
-    condition is asked in turn and the first unmet one is reported, so a
-    reviewer learns the next thing to fix rather than a list.
-
-    Parameters
-    ----------
-    pairs : Sequence of Pair
-        The pairs already admitted as usable.
-    minimum_pairs : int
-        Pairs required per interpreter and in total.
-
-    Returns
-    -------
-    str or None
-        The reason the sample is incomplete, or ``None`` when it is complete.
-    """
-    for reason in (
-        _thin_leg_reason(pairs, minimum_pairs),
-        _fingerprint_reason(pairs),
-        _collection_reason(pairs),
-        _cost_reason(pairs),
-    ):
-        if reason is not None:
-            return reason
-    return None
-
-
-def _report(offenders: object, template: str) -> str | None:
-    """Return the refusal text for a non-empty offender set, or ``None``.
-
-    Parameters
-    ----------
-    offenders : object
-        The offenders to report. Any empty sequence or mapping is falsy.
-    template : str
-        Text with an ``{offenders}`` placeholder.
-
-    Returns
-    -------
-    str or None
-        The rendered reason, or ``None`` when there is nothing to report.
-    """
-    return template.format(offenders=offenders) if offenders else None
-
-
-def _thin_leg_reason(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
-    """Return why an interpreter leg is under-sampled, or ``None``."""
-    counts: dict[str, int] = {}
-    for pair in pairs:
-        leg = pair.control.python_version
-        counts[leg] = counts.get(leg, 0) + 1
-    if len(counts) > 1:
-        return (
-            "the sample spans more than one interpreter leg "
-            f"({sorted(counts)}); the plan requires a median per leg, and a "
-            "pooled median would mix incomparable suites"
-        )
-    thin = {leg: count for leg, count in counts.items() if count < minimum_pairs}
-    return _report(
-        thin,
-        f"these interpreter legs have fewer than {minimum_pairs} warm pairs: "
-        "{offenders}; a median per leg is what the plan requires",
-    )
-
-
-def _offending_runs(
-    pairs: cabc.Sequence[Pair],
-    predicate: cabc.Callable[[RunRecord, RunRecord], bool],
-) -> list[str]:
-    """Return the control run IDs of pairs that fail ``predicate``.
-
-    Parameters
-    ----------
-    pairs : Sequence of Pair
-        The pairs to test.
-    predicate : Callable
-        Called with a control and a candidate run; true means they disagree.
-
-    Returns
-    -------
-    list of str
-        Control run IDs, so a reported pair names the run a reviewer can open.
-    """
-    return [
-        pair.control.run_id for pair in pairs if predicate(pair.control, pair.candidate)
-    ]
-
-
-def _fingerprint_reason(pairs: cabc.Sequence[Pair]) -> str | None:
-    """Return why a pair ran on an incomparable runner, or ``None``."""
-    return _report(
-        _offending_runs(pairs, _fingerprints_differ),
-        "these pairs compare different runners or toolchains: {offenders}",
-    )
-
-
-def _collection_reason(pairs: cabc.Sequence[Pair]) -> str | None:
-    """Return why a pair collected a different suite, or ``None``."""
-    return _report(
-        _offending_runs(pairs, _collections_differ),
-        "these pairs collected different suites: {offenders}",
-    )
-
-
-def _cost_reason(pairs: cabc.Sequence[Pair]) -> str | None:
-    """Return why the arm's whole-job cost rose, or ``None``."""
-    if _cost_is_non_positive(pairs):
-        return None
-    return "the candidate's whole-job seconds exceed the control's"
-
-
-def _fingerprints_differ(control: RunRecord, candidate: RunRecord) -> bool:
-    """Return whether two runs disagree on a recorded comparability key."""
-    for field_name in ("runner_label", "toolchain"):
-        left = getattr(control, field_name)
-        right = getattr(candidate, field_name)
-        if left is None or right is None:
-            return True
-        if left != right:
-            return True
-    return False
-
-
-def _collections_differ(control: RunRecord, candidate: RunRecord) -> bool:
-    """Return whether two runs collected different node multisets."""
-    if not control.node_ids or not candidate.node_ids:
-        return True
-    return sorted(control.node_ids) != sorted(candidate.node_ids)
-
-
-def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
-    """Return whether the candidate's whole-job seconds do not exceed the control's.
-
-    A pair without both job times cannot supply the comparison, so it is
-    skipped rather than counted as free.
-
-    Returns
-    -------
-    bool
-        Whether the candidate's total whole-job seconds are not greater.
-    """
-    totals = _job_totals(pairs)
-    if totals is None:
-        return False
-    return totals[1] <= totals[0]
-
-
-def _job_totals(
-    pairs: cabc.Sequence[Pair],
-) -> tuple[float, float] | None:
-    """Return the control and candidate whole-job seconds, or ``None``.
-
-    ``None`` means at least one pair did not record both job times, which makes
-    the cost comparison unavailable rather than free.
-
-    Parameters
-    ----------
-    pairs : Sequence of Pair
-        The pairs to total.
-
-    Returns
-    -------
-    tuple of float or None
-        ``(control_total, candidate_total)``, or ``None`` when incomplete.
-    """
-    if not _all_timed(pairs):
-        return None
-    return (
-        sum(pair.control.job_seconds or 0.0 for pair in pairs),
-        sum(pair.candidate.job_seconds or 0.0 for pair in pairs),
-    )
-
-
-def _all_timed(pairs: cabc.Sequence[Pair]) -> bool:
-    """Return whether every pair recorded both whole-job times.
-
-    Parameters
-    ----------
-    pairs : Sequence of Pair
-        The pairs to test.
-
-    Returns
-    -------
-    bool
-        Whether each pair carries both job times.
-    """
-    return all(
-        pair.control.job_seconds is not None and pair.candidate.job_seconds is not None
-        for pair in pairs
     )
 
 
