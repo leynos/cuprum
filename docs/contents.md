@@ -28,6 +28,9 @@ open each document.
 - [CI cache ownership](ci-cache-ownership.md) - which job writes each CI cache
   family, why the compiler cache is split by interpreter and build shape, and
   how resource use is sampled on the paid Linux runners.
+- [CI compiler-cache evidence](ci-compiler-cache-evidence.md) - the
+  compiler-cache backend experiment's record schema, privacy boundary, failure
+  policy, retention, and reader.
 - [Modern-stable validation](modern-stable-validation.md) - the independent
   modern Rust validation route, Cargo warning-policy evidence, and retained
   toolchain boundaries.

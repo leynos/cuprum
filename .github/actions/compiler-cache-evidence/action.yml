@@ -1,0 +1,195 @@
+---
+name: Compiler cache evidence
+description: >-
+  Record one bracket of sccache statistics for the compiler-cache backend
+  experiment, and upload the job's records, failing open so evidence never
+  gates a build.
+
+  A green job proves nothing about compiler reuse: sccache reports a plausible
+  hit rate whatever backend it bound, a restored archive can hold nothing the
+  job can use, and a route that never invokes rustc reports zero requests
+  honestly. The writer therefore stores observations, not verdicts. See
+  `docs/ci-compiler-cache-evidence.md`.
+# The writer is `scripts/compiler_cache_evidence.py`, which the calling job has
+# checked out. It uses the runner's preinstalled `python3` and the standard
+# library only, as the release telemetry writer does and for the same reason.
+inputs:
+  mode:
+    description: >-
+      `snapshot` stores one bracket's counters, `record` combines the bracket's
+      two snapshots into one JSON line, `mark` starts a restore or save timer,
+      and `upload` publishes the job's records without writing anything.
+    required: true
+  bracket:
+    description: >-
+      The bracketed step's label, lowercase and hyphenated, such as
+      `typecheck` or `python-tests`.
+    required: false
+    default: ''
+  phase:
+    description: The snapshot's position, `pre` or `post`.
+    required: false
+    default: ''
+  marker:
+    description: The timer to start, `restore` or `save`.
+    required: false
+    default: ''
+  setup-status:
+    description: The setup-sccache output, such as `started` or `fallback`.
+    required: false
+    default: ''
+  selected-backend:
+    description: The backend output of setup-sccache, `local` or `gha`.
+    required: false
+    default: ''
+  family:
+    description: The rendered compiler-cache family this bracket observes.
+    required: false
+    default: ''
+  matrix-leg:
+    description: The matrix leg's identity, such as `3.14` or `none`.
+    required: false
+    default: ''
+  compiler-shape:
+    description: The build shape the family is keyed by.
+    required: false
+    default: ''
+  python-version:
+    description: The interpreter this bracket compiles against.
+    required: false
+    default: ''
+  toolchain:
+    description: The effective Rust toolchain for this bracket's compiles.
+    required: false
+    default: ''
+  dev-fast:
+    description: Whether the dev-fast routed toolchain applies, `true` or `false`.
+    required: false
+    default: ''
+  expects-rustc:
+    description: >-
+      Whether this bracket should invoke rustc. A bracket that declares none
+      can report zero requests honestly; one that declares some cannot.
+    required: false
+    default: 'true'
+  target-present:
+    description: >-
+      Whether a Cargo `target` directory already existed when the bracket
+      opened, which can make Cargo legitimately compile nothing.
+    required: false
+    default: 'false'
+  matched-key:
+    description: The cache key the bracket's restore matched.
+    required: false
+    default: ''
+  restore-hit:
+    description: >-
+      Whether the restore matched a key, by exact hit or through the
+      `restore-keys` prefix. The rolling key changes with `GITHUB_RUN_ID`, so
+      `cache-hit` is false even when a usable archive was restored; the
+      matched key is the honest signal, and `matched-key` still identifies the
+      generation.
+    required: false
+    default: ''
+  pr-number:
+    description: The pull request number, empty on a push.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Record the compiler-cache snapshot
+      id: snapshot
+      if: ${{ inputs.mode == 'snapshot' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        # The writer is run by file path, so Python puts `scripts/` on
+        # `sys.path`, not the repository root. The module imports
+        # `scripts.compiler_cache_*`; without the root on `PYTHONPATH` every
+        # step would fail its import and silently skip the evidence.
+        PYTHONPATH: ${{ github.workspace }}
+        EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
+        EVIDENCE_BRACKET: ${{ inputs.bracket }}
+        EVIDENCE_PHASE: ${{ inputs.phase }}
+        EVIDENCE_FAMILY: ${{ inputs.family }}
+        EVIDENCE_MATRIX_LEG: ${{ inputs.matrix-leg }}
+        EVIDENCE_COMPILER_SHAPE: ${{ inputs.compiler-shape }}
+        EVIDENCE_PYTHON_VERSION: ${{ inputs.python-version }}
+        EVIDENCE_TOOLCHAIN: ${{ inputs.toolchain }}
+        EVIDENCE_DEV_FAST: ${{ inputs.dev-fast }}
+        EVIDENCE_EXPECTS_RUSTC: ${{ inputs.expects-rustc }}
+        EVIDENCE_TARGET_PRESENT: ${{ inputs.target-present }}
+        EVIDENCE_PR_NUMBER: ${{ inputs.pr-number }}
+        EVIDENCE_CHECKOUT_SHA: ${{ github.sha }}
+        EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVIDENCE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: python3 "${GITHUB_WORKSPACE}/scripts/compiler_cache_evidence.py" snapshot
+
+    - name: Start the compiler-cache timer
+      id: mark
+      if: ${{ inputs.mode == 'mark' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
+        EVIDENCE_MARKER: ${{ inputs.marker }}
+      run: python3 "${GITHUB_WORKSPACE}/scripts/compiler_cache_evidence.py" mark
+
+    - name: Write the compiler-cache record
+      id: record
+      if: ${{ inputs.mode == 'record' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        EVIDENCE_DIR: ${{ runner.temp }}/compiler-cache-evidence
+        # `runner.environment` is `self-hosted` on the Ubicloud lane and
+        # `github-hosted` on the fork fallback. The pair identity carries it so
+        # two runner classes can never be compared as one backend change.
+        EVIDENCE_RUNNER_CLASS: ${{ runner.environment }}
+        EVIDENCE_BRACKET: ${{ inputs.bracket }}
+        EVIDENCE_SETUP_STATUS: ${{ inputs.setup-status }}
+        EVIDENCE_SELECTED_BACKEND: ${{ inputs.selected-backend }}
+        EVIDENCE_FAMILY: ${{ inputs.family }}
+        EVIDENCE_MATRIX_LEG: ${{ inputs.matrix-leg }}
+        EVIDENCE_COMPILER_SHAPE: ${{ inputs.compiler-shape }}
+        EVIDENCE_PYTHON_VERSION: ${{ inputs.python-version }}
+        EVIDENCE_TOOLCHAIN: ${{ inputs.toolchain }}
+        EVIDENCE_DEV_FAST: ${{ inputs.dev-fast }}
+        EVIDENCE_EXPECTS_RUSTC: ${{ inputs.expects-rustc }}
+        EVIDENCE_TARGET_PRESENT: ${{ inputs.target-present }}
+        EVIDENCE_MATCHED_KEY: ${{ inputs.matched-key }}
+        EVIDENCE_RESTORE_HIT: ${{ inputs.restore-hit }}
+        EVIDENCE_PR_NUMBER: ${{ inputs.pr-number }}
+        EVIDENCE_CHECKOUT_SHA: ${{ github.sha }}
+        EVIDENCE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVIDENCE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: python3 "${GITHUB_WORKSPACE}/scripts/compiler_cache_evidence.py" record
+
+    # One artefact per job and attempt, matching the benchmark-gate and release
+    # telemetry retention. A cancelled or re-run job leaves its earlier attempt
+    # in place because the name carries the attempt number.
+    - name: Upload the compiler-cache records
+      id: upload
+      if: ${{ always() && inputs.mode == 'upload' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: >-
+          ${{ format('compiler-cache-evidence-{0}-{1}-{2}',
+          github.job, inputs.matrix-leg || 'none', github.run_attempt) }}
+        path: ${{ runner.temp }}/compiler-cache-evidence/records.jsonl
+        retention-days: 90
+        if-no-files-found: warn
+
+    - name: Warn when the compiler-cache record is unavailable
+      continue-on-error: true
+      if: >-
+        ${{ !cancelled() && (steps.snapshot.outcome == 'failure' ||
+        steps.mark.outcome == 'failure' || steps.record.outcome == 'failure' ||
+        steps.upload.outcome == 'failure') }}
+      shell: bash
+      run: |
+        echo '::warning title=compiler-cache-evidence::Evidence write or upload failed; the build result is unchanged.'

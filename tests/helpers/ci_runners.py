@@ -268,20 +268,15 @@ MAKE_UV_PATHS: typ.Final = (".uv-cache", ".uv-tools")
 #: Every job that compiles Rust. sccache is the single owner of compiler
 #: output for every build shape in this repository, so each of these installs
 #: the wrapper and reports its counters, and none of them archives `target`.
-#: `typecheck-test` is absent: one of its legs only typechecks, so the wrapper
-#: is installed conditionally there and a job-wide contract cannot describe it.
-#: `test_the_typecheck_only_leg_installs_no_wrapper` covers that case instead.
-#: The guard every statistics step carries. With no server, `sccache
-#: --show-stats` prints empty default statistics rather than starting one, so
-#: reading statistics after the composite fell back would publish misleading
-#: zeroes; the guard prevents that.
-NOT_FALLEN_BACK: typ.Final = "steps.sccache.outputs.status != 'fallback'"
-#: The step id every `setup-sccache` call carries, which the guard above reads.
-SCCACHE_STEP_ID: typ.Final = "sccache"
+#: `typecheck-test` is included: every remaining leg runs steps that can invoke
+#: Cargo, and each leg is the sole writer of its own interpreter family. Its
+#: steps carry the `LEG_RUNS` conjunct, so a guard in that job is compared
+#: through `tests/helpers/ci_leg_gate.ungated` rather than as written.
 SCCACHE_JOBS: typ.Final = (
     ("rust-boundaries.yml", "native"),
     ("rust-boundaries.yml", "verus"),
     ("ci.yml", "lint-test"),
+    ("ci.yml", "typecheck-test"),
     ("ci.yml", "extension-tests"),
     ("ci.yml", "modern-stable"),
     ("ci.yml", "coverage"),
@@ -290,6 +285,13 @@ SCCACHE_JOBS: typ.Final = (
     ("coverage-main.yml", "coverage-upload"),
     ("loom.yml", "loom"),
 )
+#: The guard every statistics step carries. With no server, `sccache
+#: --show-stats` prints empty default statistics rather than starting one, so
+#: reading statistics after the composite fell back would publish misleading
+#: zeroes; the guard prevents that.
+NOT_FALLEN_BACK: typ.Final = "steps.sccache.outputs.status != 'fallback'"
+#: The step id every `setup-sccache` call carries, which the guard above reads.
+SCCACHE_STEP_ID: typ.Final = "sccache"
 #: Paths no cache step may ever carry. A `target` tree is invalidated far more
 #: often than the registry beside it, and sccache already holds the objects it
 #: would preserve, keyed by the flags that distinguish the debug, cranelift,

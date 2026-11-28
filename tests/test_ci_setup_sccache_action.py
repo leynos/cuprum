@@ -204,3 +204,77 @@ def test_an_unknown_backend_fails_before_anything_is_exported(tmp_path: Path) ->
     assert not result.exported, (
         f"a refused backend must export nothing, got {sorted(result.exported)}"
     )
+
+
+def test_the_actions_backend_exports_the_namespace(tmp_path: Path) -> None:
+    """A family that shares the proxy needs its own namespace."""
+    result = _run_install(
+        tmp_path,
+        {"backend": "gha", "namespace": "py3.13-debug"},
+        PROXY_CREDENTIALS,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.exported.get("SCCACHE_GHA_VERSION") == "py3.13-debug", (
+        f"the namespace must reach the server environment, got {result.exported}"
+    )
+
+
+def test_the_actions_backend_omits_an_unset_namespace(tmp_path: Path) -> None:
+    """A caller that names no namespace keeps the coverage lane's behaviour."""
+    result = _run_install(tmp_path, {"backend": "gha"}, PROXY_CREDENTIALS)
+
+    assert result.returncode == 0, result.stderr
+    assert "SCCACHE_GHA_VERSION" not in result.exported, (
+        f"an unset namespace must export nothing, got {result.exported}"
+    )
+
+
+def test_the_directory_backend_refuses_a_namespace(tmp_path: Path) -> None:
+    """The namespace names entries in a remote store, not a directory."""
+    result = _run_install(tmp_path, {"namespace": "py3.13-debug"}, {})
+
+    assert result.returncode != 0, "a local backend accepted a namespace"
+    assert "namespace is only valid with" in result.stderr, result.stderr
+    assert not DIRECTORY_VARIABLES & result.exported.keys(), (
+        f"a refused namespace must not bind a directory, got {sorted(result.exported)}"
+    )
+    assert "SCCACHE_GHA_VERSION" not in result.exported, (
+        "a refused namespace must not export a cache version"
+    )
+
+
+@pytest.mark.parametrize("namespace", ["Bad_Namespace!", "UPPER", "-leading", ""])
+def test_the_actions_backend_refuses_a_malformed_namespace(
+    tmp_path: Path, namespace: str
+) -> None:
+    """An empty value is the unset case; the rest are refusals."""
+    if not namespace:
+        result = _run_install(tmp_path, {"backend": "gha"}, PROXY_CREDENTIALS)
+        assert result.returncode == 0, result.stderr
+        assert "SCCACHE_GHA_VERSION" not in result.exported, (
+            "an unset namespace must not export a cache version"
+        )
+        return
+    result = _run_install(
+        tmp_path,
+        {"backend": "gha", "namespace": namespace},
+        PROXY_CREDENTIALS,
+    )
+    assert result.returncode != 0, f"the step accepted namespace {namespace!r}"
+    assert "namespace must match" in result.stderr, result.stderr
+    assert "SCCACHE_GHA_VERSION" not in result.exported, (
+        "a refused namespace must not export a cache version"
+    )
+
+
+def test_the_action_publishes_the_backend_it_bound() -> None:
+    """Evidence must not claim a store the action did not select."""
+    document = action_document(ACTION)
+    outputs = typ.cast("dict[str, dict[str, object]]", document["outputs"])
+    assert "backend" in outputs, "setup-sccache must expose the selected backend"
+    declared = str(outputs["backend"]["value"]).strip()
+    assert declared == "${{ steps.install.outputs.backend }}", (
+        "the backend output must be the complete expression that reads the "
+        f"step which selects it, got {declared!r}"
+    )

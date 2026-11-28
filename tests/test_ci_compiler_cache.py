@@ -32,6 +32,7 @@ from tests.helpers.ci_runners import (
     cache_paths,
     cache_steps,
     expand,
+    jobs,
     step_inputs,
     steps,
     workflow_sources,
@@ -59,6 +60,30 @@ MEASURED_STEP_PREFIXES = (
     "validate",
     "lint",
 )
+
+
+def test_the_sccache_manifest_names_every_job_that_installs_the_wrapper() -> None:
+    """Derive the manifest from the workflows, so a job cannot leave it silently.
+
+    ``SCCACHE_JOBS`` decides which jobs the rules below are asserted against,
+    so a job that installs the wrapper but is missing from the manifest is
+    exempt from every one of them. Without this test the manifest could be
+    emptied and the whole module would still pass.
+    """
+    declared = {
+        (workflow_name, job_name)
+        for workflow_name, _ in workflow_sources()
+        for job_name in jobs(workflow_name)
+        if any(
+            step.get("uses") == SCCACHE_ACTION
+            for step in steps(workflow_name, job_name)
+        )
+    }
+    assert declared == set(SCCACHE_JOBS), (
+        "SCCACHE_JOBS must name exactly the jobs that install the wrapper; "
+        f"missing from the manifest: {sorted(declared - set(SCCACHE_JOBS))}; "
+        f"named but not installing it: {sorted(set(SCCACHE_JOBS) - declared)}"
+    )
 
 
 @pytest.mark.parametrize(("workflow_name", "job_name"), SCCACHE_JOBS)
@@ -117,7 +142,8 @@ def test_every_rust_job_installs_the_wrapper_and_reports_its_counters(
     # build; the second conjunct stops it reading statistics from a server the
     # composite could not start: with no server `--show-stats` prints empty
     # default statistics, so the report would describe a job that never used
-    # the cache.
+    # the cache. The matrix job's steps each end with the leg flag, which
+    # `ungated` strips, so the remaining guard is compared as written.
     guard = ungated(workflow_name, job_name, stats.get("if"))
     expected = f"always() && {NOT_FALLEN_BACK}"
     if workflow_name == "rust-boundaries.yml" and job_name == "native":

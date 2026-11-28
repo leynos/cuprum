@@ -485,16 +485,21 @@ and reports a plausible hit rate either way:
   lanes. For the GitHub-hosted `loom`, and for every fork arm, the Actions
   cache service really is GitHub's and would compete with the Windows and macOS
   lanes for the per-repository quota.
-- `gha` exports `SCCACHE_GHA_ENABLED=true` and nothing else. It is for an
-  Ubicloud lane that has already run `export-ubicloud-cache-credentials`, which
-  republishes the runner's cache-proxy address and token through `GITHUB_ENV`
-  and clears `ACTIONS_CACHE_SERVICE_V2`, so sccache reaches Ubicloud's proxy
-  instead of GitHub's v2 results service. The step fails closed when
-  `ACTIONS_CACHE_URL` or `ACTIONS_RUNTIME_TOKEN` is empty: a server started
-  without them caches the whole build to a directory that dies with the runner
-  and stays green. Only `ci.yml`'s `coverage` and `coverage-main.yml`'s
-  `coverage-upload` use it, and a contract requires the credentials step ahead
-  of the setup step in both. `coverage` is fork-reachable, so it passes
+- `gha` exports `SCCACHE_GHA_ENABLED=true`, plus `SCCACHE_GHA_VERSION` when
+  the optional `namespace` input names one, and its install step publishes the
+  selected store as the `backend` output that the evidence record compares with
+  the store the server reports. The namespace is a fixed identifier, so two
+  build shapes sharing the repository's store cannot collide, and the action
+  refuses one with the `local` backend. The store is for an Ubicloud lane that
+  has already run `export-ubicloud-cache-credentials`, which republishes the
+  runner's cache-proxy address and token through `GITHUB_ENV` and clears
+  `ACTIONS_CACHE_SERVICE_V2`, so sccache reaches Ubicloud's proxy instead of
+  GitHub's v2 results service. The step fails closed when `ACTIONS_CACHE_URL` or
+  `ACTIONS_RUNTIME_TOKEN` is empty: a server started without them caches the
+  whole build to a directory that dies with the runner and stays green. Only
+  `ci.yml`'s `coverage` and `coverage-main.yml`'s `coverage-upload` use it, and
+  a contract requires the credentials step ahead of the setup step in both.
+  `coverage` is fork-reachable, so it passes
   `${{ github.event.pull_request.head.repo.fork && 'local' || 'gha' }}` and
   guards the credentials step with `!github.event.pull_request.head.repo.fork`:
   the fork arm runs GitHub-hosted, where there is no proxy and the credentials
@@ -571,17 +576,19 @@ matches, and the save therefore carries no cache-hit guard.
 The key also names the interpreter and the build shape, so there is one family
 per compile shape and one writer for each:
 [CI cache ownership](ci-cache-ownership.md) lists them and records the
-measurement that forced the split. In outline, `extension-tests` writes the
-3.13 unoptimized family, each `typecheck-test` leg that runs a suite writes its
-own interpreter's, `benchmark-ratchet` writes the 3.13 release family, and
-`lint-test` writes the dev-fast lint family, which moves to the Ubicloud lane
-with it. The instrumented coverage shape has no family: both coverage lanes use
-the `gha` backend described above, so there is no archive for a job to publish.
-The scheduled `loom.yml` job writes its separate model family only on
-`refs/heads/main`, and stays on the GitHub-hosted lane because its writer does,
-while manual dispatches and `loom-smoke` restore it without saving. Apart from
-that Loom family, a fork's pull request reads a `github-hosted` scope that
-nothing writes, so it compiles cold.
+measurement that forced the split, and
+[CI compiler-cache evidence](ci-compiler-cache-evidence.md) records the bounded
+per-job observations that the backend experiment reads. In outline,
+`extension-tests` writes the 3.13 unoptimized family, each `typecheck-test` leg
+that runs a suite writes its own interpreter's, `benchmark-ratchet` writes the
+3.13 release family, and `lint-test` writes the dev-fast lint family, which
+moves to the Ubicloud lane with it. The instrumented coverage shape has no
+family: both coverage lanes use the `gha` backend described above, so there is
+no archive for a job to publish. The scheduled `loom.yml` job writes its
+separate model family only on `refs/heads/main`, and stays on the GitHub-hosted
+lane because its writer does, while manual dispatches and `loom-smoke` restore
+it without saving. Apart from that Loom family, a fork's pull request reads a
+`github-hosted` scope that nothing writes, so it compiles cold.
 
 The writer has to be a job that actually compiles, or the rolling generation
 freezes: it would restore the previous entry and republish it unchanged
@@ -612,6 +619,46 @@ Cuprum's Ubicloud cache listing was empty before this migration, because
 `benchmark-ratchet` was its only Ubicloud job. Check the first `main` run's
 entries with `ubi gh leynos/cuprum list-cache-entries` to confirm the archives
 land in Ubicloud's store rather than GitHub's.
+
+#### Compiler-cache evidence tooling
+
+The backend experiment records what each bracketed compile step measured rather
+than trusting a green job. The tooling lives in small responsibility-split
+modules: `scripts/compiler_cache_schema.py` owns the closed vocabularies, the
+pure classifiers, and the ok/degraded/noncompliant record state,
+`compiler_cache_probe.py` is the only code that runs `sccache` and `rustc` (its
+reads return typed results and take an injected process runner),
+`compiler_cache_record.py` assembles one record from an already-read
+observation bundle, `compiler_cache_evidence.py` is the command edge that
+gathers the snapshots and markers and writes one redacted JSONL line per
+bracket, `compiler_cache_observations.py` classifies and groups observations,
+`compiler_cache_pairs.py` pairs control and candidate observations and decides
+provenance comparability, `compiler_cache_families.py` computes each family's
+statistics, `compiler_cache_records.py` owns the filesystem and JSON boundaries,
+`compiler_cache_cost.py` turns whole-job seconds into the family-scoped cost
+view, `compiler_cache_summary.py` evaluates the predeclared gate, and
+`compiler_cache_report.py` owns the command line and Markdown view.
+`docs/ci-compiler-cache-evidence.md` is the contract.
+
+The composite action runs the writer by file path, so it sets `PYTHONPATH` to
+the workspace root; without it Python puts `scripts/` on `sys.path` and the
+`scripts.compiler_cache_*` imports fail while `continue-on-error` keeps the job
+green. `tests/test_ci_compiler_cache_execution.py` runs the writer that way
+from another directory as a regression guard. The record carries the runner
+class (`runner.environment`), so the Ubicloud lane and the fork fallback can
+never be paired as if one cache backend explained their difference.
+
+The workflow-contract helpers that keep this wiring honest are also shared test
+support: `tests/helpers/ci_expressions.py` tokenizes and evaluates the workflow
+expression subset, `ci_expression_arms.py` reads a two-arm
+`condition && 'a' || 'b'` value, `ci_cache_wiring.py` holds the
+wrapper/namespace/privileged-workflow rules, and `ci_compiler_gate.py` scripts
+observations for the gate arithmetic. Keep workflow facts in those helpers
+rather than adding another parser to a test module.
+`tests/helpers/ci_compiler_evidence.py` holds the sccache documents, the fake
+probe and the valid record fixture those contracts share, and `reader_families`
+in `tests/helpers/ci_cache_families.py` resolves the family a restore step
+reads so it can be joined to a writer.
 
 ### Test selection
 

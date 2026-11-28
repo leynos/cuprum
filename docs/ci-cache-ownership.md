@@ -265,6 +265,184 @@ because it keeps its cache either way.
 Both are worth it against a 30 GB weekly quota, so the six families stay. On
 the numbers that were assumed rather than measured, neither would have been.
 
+## Compiler-cache backend experiment
+
+Issue [#609][issue-609] asks whether a non-coverage Rust family should move
+from an archived directory to the Actions cache service, where the coverage
+lanes already run. On Ubicloud that service is the runner's own proxy, so a
+`main` push warms a trusted baseline, a pull request reads `main` and its own
+branch, and a pull request's later pushes reuse what its earlier pushes wrote.
+The alternative, the directory backend, has exactly one writer per family, a
+`main` push, so a pull request's compiler objects never serve its next push.
+
+This section records the experiment. Creating the issue neither ran it nor
+established a saving, and no family moves without the gate below being met.
+
+### Implementation baseline
+
+The issue's source evidence was inspected at
+`24c39650e388975a9b9abdc884cdf3e237745bb9` on 10 October 2026. This section was
+written against `87de64c2cad4e970984760096faf278bd70439f3` on 22 November 2026,
+which is also `origin/main` at that time. The differences that matter to the
+inventory are:
+
+- `lint-test` moved to the Ubicloud lane with the fork fallback, so its `lint`
+  compiler family now shares the `self-hosted` lane with the other paid jobs.
+- The experimental matrix leg names the exact patch `3.15.2` and is skipped on
+  pull requests; it therefore has no pull-request consumer at all.
+- The `modern-stable` route exists with its own `1.99.1` compiler family.
+- Cranelift is disabled; the dev-fast routes use LLVM and the `mold` linker.
+- MSRV is `1.87.0`, and Dependabot pull requests take the hosted arm.
+
+### Families and their routes
+
+`make typecheck` is `uv sync --group dev` followed by `ty check`. The project
+uses `uv_build`, so that route builds no PyO3 extension. A `typecheck-test`
+leg's compiler traffic therefore comes from selected tests that invoke Cargo
+for real, principally `cuprum/unittests/test_doctest_warning_contract.py` and
+the cargo-warning fixture probes, which build scratch crates. The effective
+toolchain for that traffic is the dev-fast nightly `nightly-2026-08-23`, not the
+`1.87.0` toolchain the job installs for the repository contract.
+
+| Family                 | Job and leg             | Compile route                            | Producer (default branch) | Pull-request consumer |
+| ---------------------- | ----------------------- | ---------------------------------------- | ------------------------- | --------------------- |
+| `py3.12-debug`         | `typecheck-test` 3.12   | Scratch-crate contracts under dev-fast   | Same leg on `main` push   | Same leg              |
+| `py3.14-debug`         | `typecheck-test` 3.14   | Scratch-crate contracts under dev-fast   | Same leg on `main` push   | Same leg              |
+| `py3.15.2-debug`       | `typecheck-test` 3.15.2 | Scratch-crate contracts under dev-fast   | Same leg on `main` push   | None; leg is skipped  |
+| `py3.13-debug`         | `extension-tests`       | `maturin develop` through dev-fast       | Same job on `main` push   | Same job              |
+| `py3.13-lint`          | `lint-test`             | Rustdoc, Clippy, Whitaker, MSRV, Windows | Same job on `main` push   | Same job              |
+| `py3.13-release`       | `benchmark-ratchet`     | Optimized benchmark build                | Same job on `main` push   | Same job              |
+| `py3.13-modern-stable` | `modern-stable`         | Stable `1.99.1` validation build         | Same job on `main` push   | Same job              |
+| `loom`                 | `loom` (scheduled)      | `--cfg loom` model build                 | Scheduled `main` run      | Smoke run only        |
+
+_Table 4: The compiler families, where each is produced, and which pull request
+may read it. The first four rows are the experiment's candidates, in the order
+they are considered; `py3.13-release` and the proof families are out of scope._
+
+The runner and lane are the same for every candidate: `ubicloud-standard-2` with
+`runner.environment` rendering `self-hosted`, or `ubuntu-latest` on a fork or
+Dependabot pull request, where the lane is `github-hosted` and no writer
+exists. The fork arm consequently compiles cold, as every fork arm always has.
+
+The boundary-verification workflow is not a reader of any family in Table 4.
+`rust-boundaries.yml` calls the renderer for its Cargo registry key only and
+restores its compiler cache under the boundary-private `boundary-*` keys
+described under
+[Boundary verification cache family](#boundary-verification-cache-family).
+Those families share the GitHub-hosted lane and are out of scope here.
+
+No other job restores a family from Table 4. The orphan-reader contract in
+`tests/test_ci_cache_ownership.py` resolves every compiler-cache restore in a
+cached job and joins it to the writer manifest, so a new reader of a family
+with no writer fails rather than compiling cold unnoticed.
+
+The Cargo registry and installed-tool families are unchanged by this
+experiment. They are content-addressed and have their own writers, and a
+candidate migration removes only the compiler-directory restore and save.
+
+### The historical figures are historical
+
+`docs/ci-cache-ownership.md` records a retired coverage archive of 286 MB, a
+run with 1 hit against 562 misses, and warm-step savings of roughly 5 to 11
+seconds. Every one of those numbers belongs to the archive backend as it stood
+before the coverage lanes moved, and to the jobs that were measured then. They
+are not this experiment's baseline, and coverage's poor old archive is not
+evidence that any other family will benefit from the proxy.
+
+The baseline for a candidate family is the per-job record produced by the
+instrumentation described in
+[CI compiler-cache evidence](ci-compiler-cache-evidence.md): restore and save
+elapsed time and bytes, compile requests, hits, misses, non-cacheable reasons,
+read and write errors, and whole-job occupancy.
+
+### Adoption gate
+
+The gate is committed before any candidate data is collected. A family is
+adopted only when all of the following hold, measured over ordinary CI activity:
+
+1. At least five comparable warm control/candidate pairs have been recorded.
+2. The median whole-job saving is larger than the restore-plus-save time the
+   migration removes, and is at least 5 % of the median control occupancy.
+3. The incremental paid cost across the repository's observed
+   pull-request/default-branch workload, including cold starts, is
+   non-positive, and the console observation's billing rounding is `verified`.
+   An unverified cost is unknown, not free, so it cannot satisfy the gate.
+   Runner-seconds are labelled a proxy until the charge terms are read and
+   recorded.
+4. Cache isolation is unchanged: branch protection stays enabled, and no
+   pull-request entry reaches `main`, a sibling pull request, or a release.
+5. Test fidelity is unchanged: node IDs, parametrizations, required outcomes,
+   expected skips, native-required execution, property budgets, compile-fail
+   diagnostics, warning enforcement, and coverage settings all match the
+   control. The reviewer records this as `test_fidelity` in the dated console
+   observation, and the aggregator reports `adopt` only when it reads `matched`.
+
+A family that fails or cannot satisfy the gate keeps archived caching. A higher
+hit rate alone does not satisfy it.
+
+### Adopt/reject record
+
+The gate is evaluated per family from ordinary CI activity. No family is
+adopted by the change that introduced this record.
+
+| Family           | Decision       | Owner  | Review date | Evidence | Rollback                       |
+| ---------------- | -------------- | ------ | ----------- | -------- | ------------------------------ |
+| `py3.12-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.14-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.15.2-debug` | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.13-debug`   | Not adopted    | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+| `py3.13-lint`    | Inventory only | leynos | 22 Nov 2026 | None yet | None; the archive is unchanged |
+
+_Table 5: The experiment's decisions at this revision. "None yet" is a
+statement about this change, not about the repository's history: the
+instrumentation that produces the evidence lands with this record, so no
+comparable control/candidate pair exists at the review date._
+
+Reasons, per family:
+
+- The matrix legs and `extension-tests` are not adopted because the issue
+  forbids synthetic pushes and extra dispatches, and the gate requires at least
+  five comparable warm control/candidate pairs from ordinary activity. Those
+  pairs can only accumulate after the instrumentation has run on `main` and on
+  ordinary pull requests. Adopting first would invert the experiment.
+- `lint-test` is not a candidate yet. Its build shape spans four toolchains and
+  a Windows cross-target check, so its inventory has to be read before a gate
+  decision is meaningful.
+- `benchmark-ratchet`, the scheduled proof and model lanes, Windows, and macOS
+  remain out of scope.
+
+Rollback, for a family that is later adopted: revert the single trial commit
+that swapped the archived restore and save for the credentials export and
+`backend: gha`. The next writing run on `main` then publishes the first archive
+of the restored local family; one cold generation is accepted, and no data is
+migrated. No cache is purged.
+
+Refresh trigger: re-derive the baseline after any material change to the
+toolchain, the PyO3 or Cargo build shape, the sccache release, the runner
+image, or the cache backend, and after any change that alters which jobs
+compile.
+
+Branch protection and storage terms: Ubicloud documents 30 GB of free cache
+storage per repository, a seven-day eviction of entries not accessed in that
+window, and branch protection on by default, under which a run reads the
+current branch or the default branch. This repository's coverage lanes already
+depend on that default. A dated, redacted console observation for the
+experiment period is not available from the runner and is therefore recorded as
+`unknown`; it must be attached before any family is adopted. Disabling branch
+protection is never an option.
+
+### Storage and protection terms
+
+Ubicloud's cache store is documented at 30 GB of free storage per repository,
+with the oldest entries removed when the limit is exceeded and entries not
+accessed for seven days removed automatically. Branch protection is on by
+default. This repository's coverage lanes already depend on that protection.
+Direct console observations for the experiment period, including storage,
+transfer, eviction, and verified billing rounding, must be attached to the
+decision record; where they are missing the field is `unknown`, never zero.
+
+[issue-609]: https://github.com/leynos/cuprum/issues/609
+
 ## Rolling keys
 
 The compiler key ends in the run identifier, so it never matches exactly and
