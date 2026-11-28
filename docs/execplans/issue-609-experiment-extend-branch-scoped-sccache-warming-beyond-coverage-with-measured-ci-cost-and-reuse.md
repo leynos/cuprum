@@ -6,11 +6,11 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `71a3a3385`; this header tracks the latest gate run,
+recorded six-gate run is `d18a7f3ff`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
 the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
-`07ff587`, `68697ea`, `87bb414`, `7e228aa`, `285fded` and `71a3a33`. The
-experiment baseline remains `87de64c2c`, recorded on 22 November 2026. No
+`07ff587`, `68697ea`, `87bb414`, `7e228aa`, `285fded`, `71a3a33` and `d18a7f3`.
+The experiment baseline remains `87de64c2c`, recorded on 22 November 2026. No
 candidate family is adopted by this change; the deliverable is the
 measured-qualification apparatus plus a reviewable adopt/reject record.
 
@@ -274,6 +274,16 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `71a3a3385` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-71a3a3385.log`.
+- [x] 28 November 2026: commands check `EVIDENCE_DIR` explicitly and a
+      malformed snapshot has its own invalid-evidence warning; every nullable
+      timing and size records a `*_detail` cause in the schema. Capture and
+      the record edge take one injected edge bundle including the two write
+      paths, and the writer split into snapshot capture, commands, and a thin
+      entry module. The validation and jobs modules are named in the
+      developers' guide.
+- [x] 28 November 2026: M5 re-gates at `d18a7f3ff` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-d18a7f3ff.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
