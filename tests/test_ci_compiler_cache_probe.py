@@ -9,6 +9,7 @@ contract accepts.
 
 from __future__ import annotations
 
+import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - CompletedProcess stand-in only.
 import typing as typ
 from pathlib import Path
@@ -21,7 +22,6 @@ from tests.helpers.ci_compiler_evidence import environment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import os
 
     import pytest
 
@@ -253,17 +253,15 @@ def test_an_unreadable_cache_directory_is_unknown(
 ) -> None:
     """A directory that exists but cannot be walked is not a measured zero."""
     _sccache_files(tmp_path, (3,))
-    real_stat = Path.stat
+    real_scandir = os.scandir
 
-    def fail_on_cache_file(
-        self: Path, *, follow_symlinks: bool = True
-    ) -> os.stat_result:
-        if self.name.startswith("object-"):
+    def fail_on_cache(path: object) -> object:
+        if Path(typ.cast("str", path)).name == "sccache":
             message = "permission denied"
             raise OSError(message)
-        return real_stat(self, follow_symlinks=follow_symlinks)
+        return real_scandir(typ.cast("str", path))
 
-    monkeypatch.setattr(Path, "stat", fail_on_cache_file)
+    monkeypatch.setattr(os, "scandir", fail_on_cache)
     observed = probe.directory_bytes({"HOME": str(tmp_path)})
     assert observed.size is None, "an unreadable directory must be unknown"
     assert observed.detail == "unreadable", observed
@@ -278,3 +276,24 @@ def test_two_failed_reads_do_not_share_a_stats_mapping() -> None:
     assert not second.ok, "a missing stats map must fail the second read"
     first.stats["mutated"] = True
     assert "mutated" not in second.stats, "the results must not share state"
+
+
+def test_a_partial_walk_is_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One unreadable subtree must not become a smaller measured total."""
+    root = tmp_path / ".cache" / "sccache"
+    (root / "sub").mkdir(parents=True)
+    (root / "readable").write_bytes(b"xxx")
+    (root / "sub" / "hidden").write_bytes(b"yyyy")
+    real_scandir = os.scandir
+
+    def fail_nested(path: object) -> object:
+        if Path(typ.cast("str", path)).name == "sub":
+            message = "permission denied"
+            raise OSError(message)
+        return real_scandir(typ.cast("str", path))
+
+    monkeypatch.setattr(os, "scandir", fail_nested)
+    observed = probe.directory_bytes({"HOME": str(tmp_path)})
+    assert observed == probe.SizeProbe(None, "unreadable"), observed

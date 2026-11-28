@@ -26,6 +26,7 @@ Examples
 from __future__ import annotations
 
 import json
+import os
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - fixed argv, no shell
 import time
 import typing as typ
@@ -196,14 +197,33 @@ def directory_bytes(environ: cabc.Mapping[str, str]) -> SizeProbe:
     root = Path(environ.get("HOME", "")) / ".cache" / "sccache"
     if not root.is_dir():
         return SizeProbe(None, "absent")
-    total = 0
     try:
-        for path in root.rglob("*"):
-            if path.is_file():
-                total += path.stat().st_size
+        total = _tree_bytes(root)
     except OSError:
         return SizeProbe(None, "unreadable")
     return SizeProbe(total, "measured")
+
+
+def _tree_bytes(root: Path) -> int:
+    """Return the summed file sizes below ``root``, refusing a partial walk.
+
+    ``Path.rglob`` and ``Path.is_file`` swallow ``OSError``, which would report
+    an unreadable subtree as a smaller measured total. This traversal lets the
+    error propagate so the caller can report the measurement as unknown.
+
+    Returns
+    -------
+    int
+        The summed file sizes; an unusable entry raises ``OSError``.
+    """
+    total = 0
+    with os.scandir(root) as entries:
+        for entry in entries:
+            if entry.is_dir(follow_symlinks=False):
+                total += _tree_bytes(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                total += entry.stat(follow_symlinks=False).st_size
+    return total
 
 
 def rustc(
