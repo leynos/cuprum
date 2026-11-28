@@ -172,6 +172,19 @@ its own evidence and decision.
       `make nixie` all pass in a clean, Lody-free environment with the ambient
       tool order. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-7717d0f97.log`.
+- [x] 28 November 2026: the eleventh review round found the action's writer
+      steps could not import `scripts` at all. Python puts a script's own
+      directory on `sys.path`, so the by-path invocation failed before
+      `main()` and `continue-on-error` hid it. The action now exports
+      `PYTHONPATH` as the workspace root, an execution test runs the writer by
+      path from another directory, and the record carries the runner class so
+      two runner classes cannot be paired as one backend change. The same
+      round made counter resets reset-aware in the reason map, refused a JSON
+      `null` line, required a matching `run_attempt`, refused an undeclared
+      restore key, and closed five smaller contract gaps.
+- [x] 28 November 2026: M5 re-gates at `99aebe676` — all six gates pass in a
+      clean environment with the ambient tool order. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-99aebe676.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
