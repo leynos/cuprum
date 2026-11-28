@@ -38,7 +38,7 @@ from tests.helpers.sandbox_hygiene import purge_sandbox_generated_directories
 # below it is cleaned first.
 _MUTATION_SANDBOX_PURGE = purge_sandbox_generated_directories(Path.cwd(), os.environ)
 
-from tests.helpers.extension_requirement import (  # ruff: ignore[module-import-not-at-top-of-file]
+from tests.helpers.extension_requirement import (  # ruff: ignore[module-import-not-at-top-of-file] - the sandbox purge above must run before this import
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
