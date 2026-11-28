@@ -185,6 +185,21 @@ def test_a_collection_error_is_named(tmp_path: pth.Path) -> None:
     assert "  collection-error (1)" in output, output
 
 
+def test_a_module_level_skip_is_named(tmp_path: pth.Path) -> None:
+    """A skipped module removes cases without reporting a skipped test."""
+    (tmp_path / "test_skipped_module.py").write_text(
+        "import pytest\n\n"
+        "pytest.skip('this host cannot observe process state', "
+        "allow_module_level=True)\n",
+        encoding="utf-8",
+    )
+    completed = _run(tmp_path, _PASSES, "--required-outcome", f"{_MODULE}::test_passes")
+    output = _output(completed)
+    assert completed.returncode != 0, output
+    assert "  collection-skip (1)" in output, output
+    assert "test_skipped_module.py" in output, output
+
+
 _DESELECTION_CASES = (
     (
         "unexpected-deselection",

@@ -15,6 +15,7 @@ signal aimed at anything the test runner belongs to would take pytest with it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import os
 import signal
@@ -142,6 +143,26 @@ def _descendant_is_running(pid: int) -> bool:
     return _observed_exit(pid) is ExitObservation.RUNNING
 
 
+def _descendant_has_exited(pid: int) -> bool:
+    """Report whether *pid* has exited, counting an unreaped zombie as exited."""
+    return _observed_exit(pid) is ExitObservation.EXITED
+
+
+def _descendant_may_be_running(pid: int) -> bool:
+    """Report whether *pid* may run, for a best-effort cleanup decision.
+
+    An unobservable process counts as possibly running: cleanup must attempt
+    the kill rather than skip it because the host cannot answer.
+
+    Returns
+    -------
+    bool
+        Whether the process may still be running, including when the host
+        cannot report its state.
+    """
+    return observe_exit(pid) is not ExitObservation.EXITED
+
+
 def _wait_for_descendant_exit(
     pid: int,
     *,
@@ -162,6 +183,28 @@ def _wait_for_descendant_exit(
             return
         time.sleep(0.05)
     pytest.fail(f"Process {pid} still alive after {context}")
+
+
+async def _kill_and_wait(
+    kill_pid: int,
+    wait_pid: int,
+    *,
+    group: bool,
+    context: str,
+) -> None:
+    """Best-effort cleanup: kill *kill_pid*, then wait for *wait_pid*.
+
+    The wait is bounded and its failure suppressed. This runs in a cleanup
+    path, where an observation the host cannot make, or a process that outlives
+    the bound, must not replace the failure that entered the ``finally`` block.
+    """
+    _kill_ignoring_missing(kill_pid, group=group)
+    with contextlib.suppress(AssertionError):
+        await asyncio.to_thread(
+            _wait_for_descendant_exit,
+            wait_pid,
+            context=context,
+        )
 
 
 async def _terminate_owned_run(run: _OwnedRun) -> None:

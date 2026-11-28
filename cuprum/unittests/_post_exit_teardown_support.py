@@ -467,14 +467,33 @@ async def run_to_its_own_deadline(
     return raised.value
 
 
-def recorded_descendant_or_fail(pid_file: Path) -> int:
-    """Return the descendant's pid, failing the test when none was recorded."""
-    descendant_pid = recorded_descendant(pid_file)
-    assert descendant_pid is not None, (
+def recorded_descendant_or_fail(
+    pid_file: Path,
+    *,
+    seconds: float = 5.0,
+) -> int:
+    """Return the descendant's pid, waiting briefly for it to be recorded.
+
+    The file is written by a separate process, so its arrival is asynchronous
+    with respect to the run's return. Polling for it removes a load-sensitive
+    race without weakening the assertions that follow: a run that never
+    recorded a descendant still fails, only deterministically.
+
+    Returns
+    -------
+    int
+        The descendant's recorded pid.
+    """
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        descendant_pid = recorded_descendant(pid_file)
+        if descendant_pid is not None:
+            return descendant_pid
+        time.sleep(0.05)
+    pytest.fail(
         "the child never recorded the descendant it left behind, so this run "
         "did not reach the state under test"
     )
-    return descendant_pid
 
 
 def start_owned_run(

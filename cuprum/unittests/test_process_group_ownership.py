@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import signal
 import time
 import typing as typ
 
@@ -26,7 +24,10 @@ from cuprum._process_group import _POST_KILL_SETTLEMENT_S
 from cuprum._process_lifecycle import _terminate_all_shielded
 from cuprum._teardown_policy import _TeardownPolicy
 from cuprum.unittests._process_group_ownership_support import (
+    _descendant_has_exited,
     _descendant_is_running,
+    _descendant_may_be_running,
+    _kill_and_wait,
     _kill_ignoring_missing,
     _posix_only,
     _spawn_immune_child,
@@ -113,10 +114,10 @@ def test_owned_group_teardown_leaves_an_unrelated_process_untouched(
                 "a process outside the owned group must survive its teardown"
             )
         finally:
-            os.kill(run.unrelated_pid, signal.SIGKILL)
-            await asyncio.to_thread(
-                wait_for_process_death,
+            await _kill_and_wait(
                 run.unrelated_pid,
+                run.unrelated_pid,
+                group=False,
                 context="unrelated process cleanup",
             )
 
@@ -144,21 +145,24 @@ def test_inherited_policy_signals_only_the_direct_child(tmp_path: Path) -> None:
                 "an unowned teardown must not reach the grandchild"
             )
         finally:
-            # Guarded because the leader is already reaped: if the assertion
-            # above failed because the grandchild had gone, the group is empty
-            # and an unguarded ``killpg`` would raise ``ProcessLookupError`` and
-            # replace the assertion failure with its own report.
-            if _descendant_is_running(run.grandchild_pid):
-                _kill_ignoring_missing(run.process.pid, group=True)
-                await asyncio.to_thread(
-                    _wait_for_descendant_exit,
+            # Cleanup must not depend on a successful observation: a host that
+            # cannot answer still gets the kill attempt, and an observation
+            # failure here must not replace the assertion that entered this
+            # block. Guarded because the leader is already reaped: if the
+            # grandchild has gone, the group is empty and an unguarded
+            # ``killpg`` would raise and replace the assertion with its own
+            # report.
+            if _descendant_may_be_running(run.grandchild_pid):
+                await _kill_and_wait(
+                    run.process.pid,
                     run.grandchild_pid,
+                    group=True,
                     context="grandchild cleanup",
                 )
-            os.kill(run.unrelated_pid, signal.SIGKILL)
-            await asyncio.to_thread(
-                wait_for_process_death,
+            await _kill_and_wait(
                 run.unrelated_pid,
+                run.unrelated_pid,
+                group=False,
                 context="unrelated process cleanup",
             )
 
@@ -305,9 +309,8 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-            _wait_for_descendant_exit(
-                run.grandchild_pid,
-                context="cleanup after the caller cancels twice",
+            assert _descendant_has_exited(run.grandchild_pid), (
+                "cleanup must finish before the cancellation propagates"
             )
         finally:
             # The assertions above can fail while the teardown is still in
@@ -318,20 +321,20 @@ def test_repeated_cancellation_does_not_abandon_owned_group_cleanup(
                 await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
             # A group outlives its leader only while a member remains, and the
             # kernel keeps the pgid reserved until then — so while the
-            # grandchild is up, this is still a group the run owns. Once it is
-            # gone the group has ended and its number may have been recycled
-            # onto a stranger, which is why the probe comes first.
-            if _descendant_is_running(run.grandchild_pid):
-                os.killpg(run.process.pid, signal.SIGKILL)
-                await asyncio.to_thread(
-                    _wait_for_descendant_exit,
+            # grandchild may be up, this is still a group the run owns. Once it
+            # has exited the group has ended and its number may have been
+            # recycled onto a stranger, which is why the probe comes first.
+            if _descendant_may_be_running(run.grandchild_pid):
+                await _kill_and_wait(
+                    run.process.pid,
                     run.grandchild_pid,
+                    group=True,
                     context="grandchild cleanup",
                 )
-            os.kill(run.unrelated_pid, signal.SIGKILL)
-            await asyncio.to_thread(
-                wait_for_process_death,
+            await _kill_and_wait(
                 run.unrelated_pid,
+                run.unrelated_pid,
+                group=False,
                 context="unrelated process cleanup",
             )
 

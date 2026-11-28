@@ -10,7 +10,7 @@ pytest's own semantics.
 The guard observes the reports pytest already produces and turns the outcomes
 the leg promises never to see into named failures at session end:
 
-- an empty selection, or a collection error;
+- an empty selection, a collection error, or a module-level skip;
 - a skipped or failed phase, an xfail, or an xpass;
 - a selected case that produced no passing call phase;
 - a deselection the manifest did not predict, or a predicted one that matched
@@ -59,6 +59,7 @@ __all__ = (
 CATEGORIES: typ.Final = (
     "empty-selection",
     "collection-error",
+    "collection-skip",
     "failed",
     "skipped",
     "xfail",
@@ -98,6 +99,7 @@ class Guard:
         self.xfailed: set[str] = set()
         self.xpassed: set[str] = set()
         self.collection_errors: list[str] = []
+        self.collection_skips: set[str] = set()
         self.problems: dict[str, tuple[str, ...]] = {}
 
     def record(self, report: pytest.TestReport) -> None:
@@ -126,6 +128,7 @@ class Guard:
             category: seen
             for category, seen in (
                 ("collection-error", tuple(self.collection_errors)),
+                ("collection-skip", tuple(sorted(self.collection_skips))),
                 ("failed", tuple(sorted(self.failed))),
                 ("skipped", tuple(sorted(self.skipped))),
                 ("xfail", tuple(sorted(self.xfailed))),
@@ -262,10 +265,20 @@ def pytest_deselected(items: cabc.Sequence[pytest.Item]) -> None:
 
 
 def pytest_collectreport(report: pytest.CollectReport) -> None:
-    """Record a collection error by the collector that could not be read."""
+    """Record a collector that failed or skipped before its cases existed.
+
+    A module-level skip removes every case in that module from the run. If no
+    required outcome or predicted deselection named one of them, the removal
+    would otherwise be invisible and the leg could report success having run
+    less than it promised.
+    """
     guard = _REGISTRY.guard
-    if guard is not None and report.failed:
+    if guard is None:
+        return
+    if report.failed:
         guard.collection_errors.append(report.nodeid)
+    elif report.skipped:
+        guard.collection_skips.add(report.nodeid)
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
