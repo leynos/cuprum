@@ -208,3 +208,45 @@ def test_a_produced_session_record_reaches_the_cli(tmp_path: pth.Path) -> None:
     assert report["control_total"] == 2, (
         f"both nodes must survive the adapter, got {report['control_total']}"
     )
+
+
+def test_the_cli_reads_a_plugin_session_document(tmp_path: pth.Path) -> None:
+    """Point the CLI at the shape the plugin actually writes.
+
+    No test code adapts the document here: the CLI detects a session artefact
+    and translates it, which is the executable conversion path a reviewer
+    would use on a downloaded CI artefact.
+    """
+
+    def write(name: str, outcome: str) -> pth.Path:
+        path = tmp_path / f"{name}.json"
+        path.write_text(
+            json.dumps({
+                "invocation_id": name,
+                "collected": ["a", "b"],
+                "outcomes": {"a": outcome, "b": "passed"},
+                "skip_reasons": {},
+                "xfail_reasons": {},
+                "exit_status": 0,
+            }),
+            encoding="utf-8",
+        )
+        return path
+
+    output = tmp_path / "out"
+    status = main([
+        "fidelity",
+        "--control",
+        str(write("control", "passed")),
+        "--candidate",
+        str(write("candidate", "failed")),
+        "--output",
+        str(output),
+    ])
+
+    assert status == 0, f"the command must accept a session artefact, got {status}"
+    report = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert report["identical"] is False, (
+        "outcomes must still decide identity when the input is a session "
+        f"artefact: {report}"
+    )

@@ -19,6 +19,7 @@ explicit step, and this tool only interprets what it is given.
 
 from __future__ import annotations
 
+import json
 import pathlib as pth
 import sys
 import typing as typ
@@ -30,9 +31,15 @@ from scripts.pytest_layout_analysis import (
     write_reports,
 )
 from scripts.pytest_layout_evidence import compare
+from scripts.pytest_layout_session_adapter import (
+    SessionIdentity,
+    run_record_from_session,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from scripts.pytest_layout_records import RunRecord
 
 __all__ = ("main",)
 
@@ -95,9 +102,54 @@ def _fidelity(arguments: cabc.Sequence[str]) -> dict[str, object]:
     dict
         The report, ready to persist.
     """
-    control = load_records(pth.Path(_flag(arguments, "--control")))
-    candidate = load_records(pth.Path(_flag(arguments, "--candidate")))
+    control = _records(arguments, "--control", "baseline")
+    candidate = _records(arguments, "--candidate", "consolidated")
     return fidelity(control, candidate)
+
+
+def _records(
+    arguments: cabc.Sequence[str], flag: str, layout: str
+) -> tuple[RunRecord, ...]:
+    """Load the records named by ``flag``, accepting a session artefact.
+
+    A session document is what the pytest plugin writes, and a run record is
+    what the analysis reads. Accepting both here is the executable conversion
+    path: a reviewer points the tool at whichever artefact CI produced, and the
+    adapter translates the session shape.
+
+    Parameters
+    ----------
+    arguments : Sequence of str
+        The subcommand's arguments.
+    flag : str
+        ``--control`` or ``--candidate``.
+    layout : str
+        The layout to attribute a session document to.
+
+    Returns
+    -------
+    tuple of RunRecord
+        The records the file describes.
+    """
+    path = pth.Path(_flag(arguments, flag))
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not (isinstance(document, dict) and "collected" in document):
+        return load_records(path)
+    return (
+        run_record_from_session(
+            document,
+            SessionIdentity(
+                run_id=str(document.get("invocation_id", path.stem)),
+                layout=layout,
+                python_version=_flag(arguments, "--python-version")
+                if "--python-version" in arguments
+                else "unknown",
+                cache_state=_flag(arguments, "--cache-state")
+                if "--cache-state" in arguments
+                else "warm",
+            ),
+        ),
+    )
 
 
 def _compare(arguments: cabc.Sequence[str]) -> dict[str, object]:

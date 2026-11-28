@@ -23,7 +23,7 @@ from scripts.pytest_layout_evidence_gap import evidence_gap
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from scripts.pytest_layout_records import AdoptionThresholds, Pair
+    from scripts.pytest_layout_records import AdoptionThresholds, Pair, RunRecord
 
 __all__ = ("MINIMUM_PAIRS", "Verdict", "decide")
 
@@ -57,6 +57,7 @@ def decide(
     pairs: cabc.Sequence[Pair],
     rule: AdoptionThresholds,
     minimum_pairs: int,
+    unpaired: cabc.Sequence[RunRecord] = (),
 ) -> Verdict:
     """Apply the predeclared rule to a paired sample.
 
@@ -97,7 +98,7 @@ def decide(
             "inconclusive",
             "no pair recorded both step times, so no saving can be computed",
         )
-    gap = evidence_gap(usable, minimum_pairs, pairs)
+    gap = evidence_gap(usable, minimum_pairs, pairs, unpaired)
     if gap is not None:
         return outcome("inconclusive", gap)
     rejected = _regression_reason(usable, rule) or _minimum_reason(

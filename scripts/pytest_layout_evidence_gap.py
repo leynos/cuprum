@@ -28,6 +28,7 @@ def evidence_gap(
     pairs: cabc.Sequence[Pair],
     minimum_pairs: int,
     all_pairs: cabc.Sequence[Pair],
+    unpaired: cabc.Sequence[RunRecord] = (),
 ) -> str | None:
     """Return what the sample still lacks, or ``None`` when it is complete.
 
@@ -46,6 +47,9 @@ def evidence_gap(
     all_pairs : Sequence of Pair
         Every comparable pair, including failed and untimed ones. Cost is
         totalled over these, because failed work is still paid for.
+    unpaired : Sequence of RunRecord
+        Runs with no partner. Their job seconds are still paid for, so they
+        count toward the cost comparison.
 
     Returns
     -------
@@ -56,7 +60,8 @@ def evidence_gap(
         _thin_leg_reason(pairs, minimum_pairs),
         _fingerprint_reason(pairs),
         _collection_reason(pairs),
-        _cost_reason(all_pairs),
+        _outcome_evidence_reason(pairs),
+        _cost_reason(all_pairs, unpaired),
     ):
         if reason is not None:
             return reason
@@ -150,9 +155,45 @@ def _collection_reason(pairs: cabc.Sequence[Pair]) -> str | None:
     )
 
 
-def _cost_reason(pairs: cabc.Sequence[Pair]) -> str | None:
-    """Return why the arm's whole-job cost rose, or ``None``."""
-    if _cost_is_non_positive(pairs):
+def _outcome_evidence_reason(pairs: cabc.Sequence[Pair]) -> str | None:
+    """Return why the sample lacks executed-outcome evidence, or ``None``.
+
+    An absent outcome mapping is not an empty one. If neither side recorded
+    outcomes for a pair that collected nodes, agreement between two empty
+    mappings says nothing, so the sample cannot support a verdict.
+
+    Returns
+    -------
+    str or None
+        The reason, or ``None`` when every pair recorded outcomes.
+    """
+    missing = [
+        pair.control.run_id
+        for pair in pairs
+        if pair.control.node_ids
+        and not pair.control.outcomes
+        and not pair.candidate.outcomes
+    ]
+    return _report(
+        missing,
+        "these pairs collected nodes but recorded no executed outcomes: {offenders}",
+    )
+
+
+def _cost_reason(
+    pairs: cabc.Sequence[Pair], unpaired: cabc.Sequence[RunRecord] = ()
+) -> str | None:
+    """Return why the arm's whole-job cost rose, or ``None``.
+
+    Unpaired runs are included: a run with no partner was still billed, and
+    omitting it would let an expensive failure hide behind a tidy sample.
+
+    Returns
+    -------
+    str or None
+        The reason, or ``None`` when the candidate costs no more.
+    """
+    if _cost_is_non_positive(pairs, unpaired):
         return None
     return "the candidate's whole-job seconds exceed the control's"
 
@@ -191,7 +232,9 @@ def _results_differ(control: RunRecord, candidate: RunRecord) -> bool:
     )
 
 
-def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
+def _cost_is_non_positive(
+    pairs: cabc.Sequence[Pair], unpaired: cabc.Sequence[RunRecord] = ()
+) -> bool:
     """Return whether the candidate's whole-job seconds do not exceed the control's.
 
     A pair without both job times cannot supply the comparison, so it is
@@ -202,7 +245,7 @@ def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
     bool
         Whether the candidate's total whole-job seconds are not greater.
     """
-    totals = _job_totals(pairs)
+    totals = _job_totals(pairs, unpaired)
     if totals is None:
         return False
     return totals[1] <= totals[0]
@@ -210,6 +253,7 @@ def _cost_is_non_positive(pairs: cabc.Sequence[Pair]) -> bool:
 
 def _job_totals(
     pairs: cabc.Sequence[Pair],
+    unpaired: cabc.Sequence[RunRecord] = (),
 ) -> tuple[float, float] | None:
     """Return the control and candidate whole-job seconds, or ``None``.
 
@@ -228,10 +272,16 @@ def _job_totals(
     """
     if not _all_timed(pairs):
         return None
-    return (
-        sum(pair.control.job_seconds or 0.0 for pair in pairs),
-        sum(pair.candidate.job_seconds or 0.0 for pair in pairs),
-    )
+    if any(run.job_seconds is None for run in unpaired):
+        return None
+    control = sum(pair.control.job_seconds or 0.0 for pair in pairs)
+    candidate = sum(pair.candidate.job_seconds or 0.0 for pair in pairs)
+    for run in unpaired:
+        if run.layout == "baseline":
+            control += run.job_seconds or 0.0
+        else:
+            candidate += run.job_seconds or 0.0
+    return (control, candidate)
 
 
 def _all_timed(pairs: cabc.Sequence[Pair]) -> bool:

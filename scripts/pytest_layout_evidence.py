@@ -177,7 +177,7 @@ def compare(
     """
     rule = AdoptionThresholds() if thresholds is None else thresholds
     pairs, unpaired = pair_runs(records)
-    verdict = decide(pairs, rule, minimum_pairs)
+    verdict = decide(pairs, rule, minimum_pairs, unpaired)
     return Comparison(
         pairs=pairs,
         unpaired=unpaired,
