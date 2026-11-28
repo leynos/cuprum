@@ -2583,16 +2583,17 @@ sequenceDiagram
   handlers; the streamed route's own post-exit collection does so in
   `_settle_group_and_reconcile_consumers`; the line stream does so in
   `_run_line_stream_teardown`, which every line-stream early stop reaches, and
-  in `_discard_whole_run` for a fully built startup abandonment. Each composes
-  the release with its reconciliation under one shield, so a cancellation
-  interrupting the settling cannot skip it. The pipeline coordinator does not
-  release transports itself: `cuprum/_pipeline_collect.py` waits for every
-  stage and reconciles its readers afterwards, and its early-close behaviour is
-  tracked by issue #552. The exit wait is passed in already constructed, so
-  each caller resolves `_wait_for_exit_code_within_timeout` from its own module
-  namespace. It was split out of `_subprocess_wait`, which re-exports the name,
-  so the single-command run, the line-stream coordinator, and the timeout test
-  modules keep one import path. See the
+  in the shielded abandonment of a run whose startup failed, heartbeat stop
+  included. Each composes the release with its reconciliation under one shield,
+  so a cancellation interrupting the settling cannot skip it. The pipeline
+  coordinator does not release transports itself: `cuprum/_pipeline_collect.py`
+  waits for every stage and reconciles its readers afterwards, and its
+  early-close behaviour is tracked by issue #552. The exit wait is passed in
+  already constructed, so each caller resolves
+  `_wait_for_exit_code_within_timeout` from its own module namespace. It was
+  split out of `_subprocess_wait`, which re-exports the name, so the
+  single-command run, the line-stream coordinator, and the timeout test modules
+  keep one import path. See the
   [ADR-007](adrs/adr-0007-subprocess-execution-module-boundaries.md) addenda of
   2026-09-27, 2026-11-15, and 2026-11-27.
 - `cuprum/_subprocess_wait.py` owns the reconciliation half of *ending* a run:

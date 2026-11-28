@@ -35,6 +35,7 @@ import typing as typ
 import pytest
 
 from cuprum import sh
+from cuprum._line_stream import spawn as line_stream_spawn
 from cuprum._stream_drain import _CAPTURE_EOF_GRACE_S
 from cuprum._subprocess_stdin_reclaim import _STDIN_RECLAIM_BUDGET_S
 from cuprum.sh import (
@@ -46,7 +47,9 @@ from cuprum.sh import (
 )
 from cuprum.unittests._post_exit_teardown_support import (
     RUN_BUDGET_S,
+    Gate,
     owned_builder,
+    reach_gate_and_cancel,
     reap_descendant,
     run_to_its_own_deadline,
 )
@@ -69,6 +72,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib
 
+    from cuprum._idle_heartbeat import _IdleMonitor
     from cuprum._line_iteration import LineStream
     from cuprum.events import ExecEvent
     from cuprum.lines import LineEvent, LineHook
@@ -104,6 +108,7 @@ def _lines_kwargs(
     *,
     timeout: float | None = None,
     on_line: LineHook | None = None,
+    idle_after: float | None = None,
 ) -> _RunKwargs:
     """Build the keyword arguments every case drives ``lines()`` with.
 
@@ -118,7 +123,9 @@ def _lines_kwargs(
         The captured, inherited-group invocation this module needs.
     """
     return _RunKwargs(
-        output=RunOutputOptions(capture=True, echo=False, on_line=on_line),
+        output=RunOutputOptions(
+            capture=True, echo=False, on_line=on_line, idle_after=idle_after
+        ),
         timeout=timeout,
         context=ExecutionContext(process_group=ProcessGroupPolicy.INHERIT),
     )
@@ -494,6 +501,61 @@ def test_a_failed_start_hook_releases_both_descriptors(
             assert caught.value is sentinel, (
                 f"the hook's own error must reach the caller, got {caught.value!r}"
             )
+            descendant_pid = assert_released_before_the_descendant_ends(
+                record, pid_file, context=context
+            )
+        finally:
+            if stream is not None:
+                await stream.aclose()
+            reap_descendant(pid_file, descendant_pid)
+
+    asyncio.run(run_case())
+
+
+def test_a_cancellation_at_the_heartbeat_stop_still_releases(
+    owned_builder: cabc.Callable[..., SafeCmd],
+    spawn_backend: BackendTraversal,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cancellation during the heartbeat stop must not skip the reclaim.
+
+    ``_abandon_unstarted_run`` stops the idle heartbeat before it enters either
+    reclaim path, and that stop awaits the monitor's own cancellation. A
+    cancellation arriving there would otherwise escape with the child still
+    running and both inherited descriptors owned by nothing the caller can
+    reach, because no later route holds the abandoned run. The abandonment is
+    one shielded sequence, so it completes before the cancellation is
+    re-raised.
+
+    The gate is the heartbeat stop itself, so the cancellation is provably
+    delivered there rather than to whatever the scheduler happened to be
+    doing.
+    """
+    context = f"a cancellation at the heartbeat stop on {spawn_backend.requested}"
+    pid_file = tmp_path / "heartbeat-cancel.pid"
+    command = _holder_command(owned_builder, pid_file)
+    sentinel = _StartHookError("the start hook failed")
+    record = record_spawn(monkeypatch, "cuprum._line_stream.spawn")
+    gate = Gate()
+    real_stop = line_stream_spawn._stop_idle_monitor
+
+    async def gated_stop(idle: _IdleMonitor | None) -> None:
+        """Hold the heartbeat stop open so the cancellation lands on it."""
+        await gate.hold()
+        await real_stop(idle)
+
+    monkeypatch.setattr(line_stream_spawn, "_stop_idle_monitor", gated_stop)
+
+    async def run_case() -> None:
+        """Fail the start hook, cancel at the heartbeat stop, read the fds."""
+        descendant_pid: int | None = None
+        stream: LineStream | None = None
+        try:
+            with sh.observe(_failing_start_hook(sentinel, pid_file)):
+                stream = command.lines(**_lines_kwargs(idle_after=30.0))
+                task = asyncio.ensure_future(anext(stream))
+                await reach_gate_and_cancel(task, gate, context=context)
             descendant_pid = assert_released_before_the_descendant_ends(
                 record, pid_file, context=context
             )

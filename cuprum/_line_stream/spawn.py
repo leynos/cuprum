@@ -247,21 +247,34 @@ async def _abandon_unstarted_run(
     run's would be. Before that the builder failed partway, so there is no run
     to drain: the record of tasks it had already started is the only handle the
     reclaim has, and those are cancelled and settled instead.
+
+    The whole abandonment is one shielded sequence, starting with the heartbeat
+    stop. That stop awaits the monitor's own cancellation, so a cancellation
+    arriving there would otherwise escape before either reclaim path was
+    entered — leaving the child running and its inherited output descriptors
+    owned by nothing the caller can reach. The order is unchanged: the
+    heartbeat stops, the started boundary is published, the reclaim runs, and
+    completion is published last.
     """
-    setup.settlement_started.set()
-    await _stop_idle_monitor(execution.idle)
-    setup.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
-    run = progress.run
-    if run is not None:
-        await _discard_whole_run(run, execution)
-    else:
-        await _abandon_started_process(
-            progress.process,
-            execution,
-            progress.recorded,
-            captures=progress.captures,
-        )
-    setup.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+
+    async def abandon() -> None:
+        """Stop the heartbeat, reclaim whatever was built, and report it."""
+        setup.settlement_started.set()
+        await _stop_idle_monitor(execution.idle)
+        setup.telemetry.emit(LineStreamPhase.TEARDOWN_STARTED)
+        run = progress.run
+        if run is not None:
+            await _discard_whole_run(run, execution)
+        else:
+            await _abandon_started_process(
+                progress.process,
+                execution,
+                progress.recorded,
+                captures=progress.captures,
+            )
+        setup.telemetry.emit(LineStreamPhase.TEARDOWN_COMPLETED)
+
+    await _shielded_cleanup(abandon())
 
 
 async def _discard_whole_run(

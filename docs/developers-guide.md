@@ -9661,7 +9661,11 @@ the release as one shielded sequence:
 - the line stream's fully built startup abandonment, in `_discard_whole_run`,
   where the termination and the discard are one shielded sequence whose
   `finally` releases the pipes. The discard is skipped when the termination
-  raises, because nothing is left settled to drain; the release is not.
+  raises, because nothing is left settled to drain; the release is not. The
+  abandonment's heartbeat stop is inside a shield as well: it awaits the idle
+  monitor's own cancellation, so a cancellation arriving there would otherwise
+  escape before either reclaim path was entered, leaving the child and its
+  inherited descriptors owned by nothing the caller can reach.
 
 The pipeline coordinator is deliberately outside this guarantee.
 `cuprum/_pipeline_collect.py` waits for every stage and reconciles its readers
