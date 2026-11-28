@@ -374,60 +374,30 @@ def test_an_unreapable_group_member_does_not_stall_the_escalation(
 
 
 @pytest.mark.parametrize(
-    ("observed", "is_leader_running", "expected"),
+    ("is_leader_unreaped", "expected"),
     [
-        pytest.param(
-            ExitObservation.RUNNING,
-            True,
-            ((4242, True),),
-            id="running-group",
-        ),
-        pytest.param(
-            ExitObservation.EXITED,
-            True,
-            ((4242, False), (4243, False)),
-            id="exited-leader-live",
-        ),
-        pytest.param(
-            ExitObservation.EXITED,
-            False,
-            ((4243, False),),
-            id="exited-leader-reaped",
-        ),
-        pytest.param(
-            ExitObservation.UNOBSERVABLE,
-            True,
-            ((4242, False), (4243, False)),
-            id="unobservable-leader-live",
-        ),
+        pytest.param(True, ((4242, True),), id="anchored-leader"),
+        pytest.param(False, (), id="reaped-leader-reuse-window"),
     ],
 )
-def test_cleanup_never_signals_a_group_it_cannot_anchor(
-    monkeypatch: pytest.MonkeyPatch,
-    observed: ExitObservation,
-    is_leader_running: bool,
+def test_cleanup_signals_only_an_anchored_group(
+    is_leader_unreaped: bool,
     expected: tuple[tuple[int, bool], ...],
 ) -> None:
-    """Only a running descendant anchors a group signal.
+    """A reaped leader leaves no anchor, so its identifier is never signalled.
 
-    A group probe cannot attribute a group identifier to this run: once the
-    descendant has exited, that identifier may already name a stranger's
-    group. So an exited or unobservable descendant is reclaimed through the
-    recorded pids, and the group is left alone.
+    An unreaped leader holds its pid, and therefore its process group
+    identifier, so the group is provably the one this run created. Once the
+    leader has been reaped, that identifier may name a stranger's group, and
+    a recorded descendant cannot anchor it either. The decision is exercised
+    here without signalling any real process.
     """
-    monkeypatch.setattr(
-        _ownership_support,
-        "observe_exit",
-        lambda _pid: observed,
-    )
     selected = _ownership_support._cleanup_targets(
         4242,
-        4243,
-        is_leader_running=is_leader_running,
+        is_leader_unreaped=is_leader_unreaped,
     )
     assert selected == expected, (
-        f"a {observed.name} descendant with leader running="
-        f"{is_leader_running} must select {expected}, got {selected}"
+        f"a leader unreaped={is_leader_unreaped} must select {expected}, got {selected}"
     )
 
 
@@ -452,32 +422,25 @@ def test_cleanup_still_kills_its_target_when_observation_is_unavailable(
     asyncio.run(run_case())
 
 
-def test_the_cleanup_path_reclaims_an_unobservable_run(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_cleanup_path_reclaims_a_provably_owned_group(
     tmp_path: Path,
 ) -> None:
-    """The real cleanup path reclaims both children when observation is lost."""
+    """The real cleanup path signals the group while the leader anchors it."""
 
     async def run_case() -> None:
-        """Clean up an owned run while the host cannot observe the descendant."""
+        """Clean up an owned run whose leader this process has not reaped."""
         run = await _spawn_owned_run(tmp_path)
-        with monkeypatch.context() as scoped_patch:
-            scoped_patch.setattr(
-                _ownership_support,
-                "observe_exit",
-                lambda _pid: ExitObservation.UNOBSERVABLE,
-            )
-            await _cleanup_owned_run(run)
+        await _cleanup_owned_run(run)
         await run.process.wait()
         await asyncio.to_thread(
             _wait_for_descendant_exit,
             run.grandchild_pid,
-            context="group cleanup with observation unavailable",
+            context="owned group cleanup",
         )
         await asyncio.to_thread(
             _wait_for_descendant_exit,
             run.unrelated_pid,
-            context="unrelated cleanup with observation unavailable",
+            context="unrelated cleanup",
         )
 
     asyncio.run(run_case())

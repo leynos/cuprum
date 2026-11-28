@@ -150,38 +150,32 @@ def _descendant_has_exited(pid: int) -> bool:
 
 def _cleanup_targets(
     pgid: int | None,
-    descendant_pid: int,
     *,
-    is_leader_running: bool,
+    is_leader_unreaped: bool,
 ) -> tuple[tuple[int, bool], ...]:
-    """Return the ``(pid, is_group)`` signals that reclaim one owned run.
+    """Return the ``(pid, is_group)`` signals this cleanup may deliver.
 
-    A group signal is issued only when the recorded descendant is observed
-    running. That observation is the only anchor this process has: it names
-    the descendant the run started, and a running descendant keeps its group
-    identifier alive, so the group being signalled is the group it belongs to.
+    The only stable anchor this process has is a child it has not reaped.
+    While the leader is unreaped — running or a zombie — the kernel holds its
+    pid, so its process group identifier cannot have been reused, and the
+    group it names is the group this run created. Signalling that group is
+    then safe and reaches any descendant still in it.
 
-    Where the host cannot report the descendant — or reports it exited — the
-    group identifier may already have been reused, and the production probe
-    cannot attribute it to this run (see :mod:`cuprum._process_group`). The
-    group is then not signalled at all, and both recorded pids are killed
-    directly instead: the leader, while this process still holds it unreaped,
-    and the descendant. That reclaims the tree without aiming at a group this
-    run cannot prove is still its own.
+    Once the leader has been reaped, its pid and group identifier may already
+    name a stranger. A recorded descendant is not this process's child, so it
+    cannot be waited for and provides no anchor of its own, and the host
+    offers no portable way to signal a group by identity rather than by
+    identifier. Cleanup therefore delivers nothing in that case rather than
+    risk an unrelated process.
 
     Returns
     -------
     tuple of (int, bool)
         The signals to deliver, in order.
     """
-    is_anchored = observe_exit(descendant_pid) is ExitObservation.RUNNING
-    if pgid is not None and is_anchored:
+    if pgid is not None and is_leader_unreaped:
         return ((pgid, True),)
-    targets: list[tuple[int, bool]] = []
-    if pgid is not None and is_leader_running:
-        targets.append((pgid, False))
-    targets.append((descendant_pid, False))
-    return tuple(targets)
+    return ()
 
 
 async def _cleanup_owned_run(
@@ -195,14 +189,18 @@ async def _cleanup_owned_run(
     given the post-kill settlement window to stop. Neither that wait nor the
     kills can raise a test failure, so cleanup never replaces the failure that
     entered the block.
+
+    A descendant left behind after its group's leader has been reaped is left
+    to the host. It is not this process's child, so it cannot be waited for,
+    and the host offers no portable way to signal it by identity rather than
+    by a pid or group identifier that may already have been reused.
     """
     if task is not None and not task.done():
         task.cancel()
         await asyncio.wait({task}, timeout=_POST_KILL_SETTLEMENT_S)
     targets = _cleanup_targets(
         run.process.pid,
-        run.grandchild_pid,
-        is_leader_running=run.process.returncode is None,
+        is_leader_unreaped=run.process.returncode is None,
     )
     for pid, is_group in targets:
         await _kill_and_wait(pid, pid, group=is_group)
