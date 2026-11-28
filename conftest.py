@@ -29,11 +29,19 @@ from pathlib import Path
 import pytest
 from hypothesis import HealthCheck, settings
 
-from tests.helpers.extension_requirement import (
+from tests.helpers.sandbox_hygiene import purge_sandbox_generated_directories
+
+# Run the purge at import, before the project modules imported after this line
+# are loaded: a copied ``__pycache__`` is otherwise eligible to supply their
+# bytecode. ``sandbox_hygiene`` imports only the standard library, so the one
+# module this import can load from a cache is the purger itself; everything
+# below it is cleaned first.
+_MUTATION_SANDBOX_PURGE = purge_sandbox_generated_directories(Path.cwd(), os.environ)
+
+from tests.helpers.extension_requirement import (  # ruff: ignore[module-import-not-at-top-of-file]
     REQUIRE_EXTENSION_ENV,
     missing_extension_message,
 )
-from tests.helpers.sandbox_hygiene import purge_sandbox_generated_directories
 
 # Property tests assert behaviour, while pytest-timeout retains the suite-wide
 # bound for tests that hang. Hypothesis's per-example runtime is host-sensitive.
@@ -172,8 +180,10 @@ pytest_plugins = (
 
 
 def _purge_mutation_sandbox() -> None:
-    """Remove host-generated directories from mutmut's statistics phase."""
-    removed = purge_sandbox_generated_directories(Path.cwd(), os.environ)
+    """Report the import-time purge, re-running it for anything created since."""
+    removed = _MUTATION_SANDBOX_PURGE or purge_sandbox_generated_directories(
+        Path.cwd(), os.environ
+    )
     if removed:
         print(f"mutation sandbox: purged {len(removed)} generated directories")
 

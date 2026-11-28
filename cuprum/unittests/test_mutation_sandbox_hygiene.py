@@ -159,9 +159,11 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
 
     probe = (
         "import importlib.util\n"
+        "import os\n"
         "import sys\n"
         "import types\n"
         "repo = sys.argv[1]\n"
+        "cache = sys.argv[2]\n"
         "sys.path.insert(0, repo)\n"
         "fake = types.ModuleType('cuprum')\n"
         "backend = types.ModuleType('cuprum._rust_backend')\n"
@@ -174,6 +176,7 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
         ")\n"
         "module = importlib.util.module_from_spec(spec)\n"
         "spec.loader.exec_module(module)\n"
+        "print('gone_after_import', not os.path.exists(cache))\n"
         "module.pytest_configure(None)\n"
     )
     environment = {
@@ -184,7 +187,7 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv: the
     # running interpreter and a literal probe script, with no shell.
     result = subprocess.run(
-        [sys.executable, "-I", "-c", probe, str(repo_root())],
+        [sys.executable, "-I", "-c", probe, str(repo_root()), str(cache)],
         cwd=sandbox,
         env=environment,
         capture_output=True,
@@ -194,6 +197,11 @@ def test_pytest_configure_purges_the_statistics_sandbox(tmp_path: Path) -> None:
     assert result.returncode == 0, (
         f"the root conftest must run pytest_configure, got exit "
         f"{result.returncode}: {result.stderr}"
+    )
+    assert "gone_after_import True" in result.stdout, (
+        "the copied cache must already be gone when the root conftest finishes "
+        "importing: the purge has to run before any project module is loaded, "
+        "or the sandbox can execute the host's bytecode"
     )
     assert not cache.exists(), (
         "pytest_configure must purge the sandbox's copied caches: mutmut's "
