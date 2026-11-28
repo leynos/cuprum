@@ -5,12 +5,12 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS — M1–M4 are committed, the branch is rebased onto
-`f62a510a1`, and all six commit gates pass at `93d5ead0a`. The experiment
-baseline remains `87de64c2c`, recorded on 22 November 2026. Delivery (push and
-draft pull request) is the remaining step. No candidate family is adopted by
-this change; the deliverable is the measured-qualification apparatus plus a
-reviewable adopt/reject record.
+Status: COMPLETE — pull request #743 is open and ready for review. All six
+commit gates pass at `fb1da7d8b`; the later commits are documentation-only and
+carry their own formatting, Markdown and Mermaid runs. The experiment baseline
+remains `87de64c2c`, recorded on 22 November 2026. No candidate family is
+adopted by this change; the deliverable is the measured-qualification apparatus
+plus a reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -331,7 +331,7 @@ Obligations and their evidence:
    rules; the decision record cites the observations or records insufficiency.
 8. Existing fidelity is intact. Evidence: `make check-fmt`, `make lint`,
    `make typecheck`, `make test`, `make markdownlint` and `make nixie` pass at
-   `93d5ead0a` in a clean environment, and the test-selection contract collects
+   `fb1da7d8b` in a clean environment, and the test-selection contract collects
    the new modules.
 
 ## Milestones
@@ -353,13 +353,13 @@ fails with a message naming the family or the arm.
 
 ### M2: evidence instrumentation
 
-End state: `scripts/compiler_cache_evidence.py` provides `snapshot`, `record`,
-and `aggregate`; `.github/actions/compiler-cache-evidence/action.yml` wraps
-them with `continue-on-error`; `ci.yml` brackets `typecheck-test`,
-`extension-tests`, and `lint-test`; `docs/ci-compiler-cache-evidence.md`
-documents schema, privacy, failure policy, retention, and limits.
+End state: `scripts/compiler_cache_evidence.py` provides `snapshot`, `mark`, and
+`record`; `.github/actions/compiler-cache-evidence/action.yml` wraps them with
+`continue-on-error`; `ci.yml` brackets `typecheck-test`, `extension-tests`, and
+`lint-test`; `docs/ci-compiler-cache-evidence.md` documents schema, privacy,
+failure policy, retention, and limits.
 
-Acceptance: the new tests pass, a sample aggregate yields the required summary
+Acceptance: the new tests pass, a sample record set yields the required summary
 fields, and the wiring contract refuses a `post` before its `pre`.
 
 ### M3: direct-backend qualification

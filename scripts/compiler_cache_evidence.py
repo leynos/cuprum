@@ -20,11 +20,10 @@ record can charge the transfer a migration would remove.
 The inputs arrive as environment variables so the composite action's ``env``
 block is the whole contract:
 
-- ``EVIDENCE_DIR``: directory holding ``snapshots/``, ``marks/`` and
-  ``records.jsonl``.
+- ``EVIDENCE_DIR``: holds ``snapshots/``, ``marks/`` and ``records.jsonl``.
 - ``EVIDENCE_BRACKET``: the bracketed step's label, such as ``typecheck``.
-- ``EVIDENCE_PHASE``: ``pre`` or ``post`` for ``snapshot``.
-- ``EVIDENCE_MARKER``: ``restore`` or ``save`` for ``mark``.
+- ``EVIDENCE_PHASE``: ``pre`` or ``post``; ``EVIDENCE_MARKER``: ``restore``
+  or ``save``.
 - ``EVIDENCE_EXPECTS_RUSTC``: ``true`` when the bracket should compile;
   ``EVIDENCE_TARGET_PRESENT``: ``true`` when a Cargo ``target`` already existed.
 - ``EVIDENCE_FAMILY``, ``EVIDENCE_MATRIX_LEG``, ``EVIDENCE_RUNNER_CLASS``,
@@ -38,13 +37,13 @@ block is the whole contract:
 - ``RUSTC_WRAPPER`` is read for presence only, and ``ACTIONS_CACHE_URL`` is
   read to classify its host, never to record it.
 
-The schema and pure classifiers live in ``scripts.compiler_cache_schema``; the
-direct probes live in ``scripts.compiler_cache_probe``; the validating reader
-lives in ``scripts.compiler_cache_summary``.
+The schema and classifiers live in ``scripts.compiler_cache_schema``, the
+probes in ``scripts.compiler_cache_probe``, the reader in ``..._summary``.
 """
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import json
 import os
 import sys
@@ -55,13 +54,13 @@ from scripts import compiler_cache_probe as probe
 from scripts import compiler_cache_schema as schema
 from scripts.compiler_cache_validation import validate_record
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
 _WARNING = "::warning title=compiler-cache-evidence::"
+type Clock = cabc.Callable[[], str]
 
 
-def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
+def capture(
+    environ: cabc.Mapping[str, str], *, clock: Clock = schema.now
+) -> dict[str, object]:
     """Build one snapshot from sccache and the bracket's declared identity.
 
     Parameters
@@ -94,7 +93,7 @@ def capture(environ: cabc.Mapping[str, str]) -> dict[str, object]:
         "schema_version": schema.SCHEMA_VERSION,
         "bracket": bracket,
         "phase": phase,
-        "captured_at": schema.now(),
+        "captured_at": clock(),
         "available": available,
         "restore_seconds": probe.elapsed_between(environ, "restore", "restore-end"),
         "restore_bytes": probe.directory_bytes(environ),
@@ -234,7 +233,6 @@ def _identity_fields(
         "workflow": schema.workflow_name(environ.get("GITHUB_WORKFLOW_REF")),
         "event_class": schema.event_class(environ.get("GITHUB_EVENT_NAME")),
         "pr_number": schema.bounded(environ.get("EVIDENCE_PR_NUMBER"), schema.DECIMAL),
-        "recorded_at": schema.now(),
         "setup_status": schema.bounded(environ.get("EVIDENCE_SETUP_STATUS")),
         "backend": schema.bounded(post.get("cache_backend")),
         "selected_backend": schema.bounded(environ.get("EVIDENCE_SELECTED_BACKEND")),
@@ -320,7 +318,9 @@ def _observed_fields(
     }
 
 
-def build_record(environ: cabc.Mapping[str, str]) -> dict[str, object]:
+def build_record(
+    environ: cabc.Mapping[str, str], *, clock: Clock = schema.now
+) -> dict[str, object]:
     """Combine a bracket's snapshots and identity into one evidence record.
 
     Parameters
@@ -336,12 +336,12 @@ def build_record(environ: cabc.Mapping[str, str]) -> dict[str, object]:
     Raises
     ------
     ValueError
-        If a snapshot is missing, the run identity is malformed, or a declared
-        closed-vocabulary field is outside its vocabulary.
+        If a snapshot is missing or the run identity is malformed.
     """  # ruff: ignore[docstring-extraneous-exception] - `_load_bracket` and `_run_identity` raise ValueError.
     bracket, pre, post = _load_bracket(environ)
     identity = _run_identity(environ)
     record = _identity_fields(environ, bracket, identity, post)
+    record["recorded_at"] = clock()
     record.update(_observed_fields(environ, pre, post))
     _normalize(record)
     record["state"] = _state(record)

@@ -195,6 +195,9 @@ def test_the_markdown_output_directory_is_created(tmp_path: Path) -> None:
     ])
     assert status == 0, f"the report command must succeed, got {status}"
     assert markdown.is_file(), "the report must be written where it was asked"
+    stamped = json.loads(output.read_text(encoding="utf-8"))["generated_at"]
+    assert "T" in stamped, f"the summary needs a timestamp, got {stamped!r}"
+    assert stamped.endswith("Z"), f"the timestamp must be UTC, got {stamped!r}"
 
 
 def test_a_malformed_console_number_is_rejected(tmp_path: Path) -> None:

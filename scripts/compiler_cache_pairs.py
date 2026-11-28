@@ -264,7 +264,14 @@ def _comparable(
         "compiler_shape",
         "python_version",
     )
-    return all(control.get(field) == candidate.get(field) for field in fields)
+    for field in fields:
+        value = control.get(field)
+        # An unknown provenance value matches nothing: two records that both
+        # failed to identify their compiler are not evidence of one compiler.
+        known = value is not None and value != "unknown"
+        if not known or value != candidate.get(field):
+            return False
+    return True
 
 
 def _paired_savings(

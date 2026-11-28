@@ -43,6 +43,9 @@ class Observation:
     toolchain: str = "nightly-2026-08-23"
     family: str = "py3.13-debug"
     runner_class: str = "self-hosted"
+    compiler_shape: str = "debug"
+    python_version: str = "3.13"
+    rustc_release: str = "1.87.0"
 
     def as_record(self) -> dict[str, object]:
         """Return the observation as a record the validator accepts."""
@@ -66,6 +69,13 @@ class Observation:
             toolchain=self.toolchain,
             family=self.family,
             runner_class=self.runner_class,
+            compiler_shape=self.compiler_shape,
+            python_version=self.python_version,
+            rustc={
+                "release": self.rustc_release,
+                "commit": "unknown",
+                "host": "unknown",
+            },
         )
 
 
@@ -86,6 +96,25 @@ def jobs(
         }
         for run in run_ids
     ]
+
+
+def five_pairs(
+    *, save: float | None = 20.0, candidate_seconds: int = 195
+) -> tuple[list[Observation], list[dict[str, object]]]:
+    """Return five control/candidate pairs and their API jobs."""
+    records = [
+        Observation(run_id=str(100 + index), backend="local", hits=4, save=save)
+        for index in range(5)
+    ]
+    records += [
+        Observation(
+            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
+        )
+        for index in range(5)
+    ]
+    job_documents = jobs([*range(100, 105)], 240)
+    job_documents += jobs([*range(200, 205)], candidate_seconds)
+    return records, job_documents
 
 
 def console(**overrides: object) -> dict[str, object]:

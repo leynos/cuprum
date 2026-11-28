@@ -87,6 +87,26 @@ def test_the_cache_location_is_classified_not_recorded(
     )
 
 
+def test_capture_uses_the_injected_clock(evidence_environment: dict[str, str]) -> None:
+    """The snapshot timestamp is supplied by the caller, not read inside."""
+    state = writer.capture(evidence_environment, clock=lambda: "2026-01-01T00:00:00Z")
+    assert state["captured_at"] == "2026-01-01T00:00:00Z", (
+        f"the injected clock must stamp the snapshot, got {state['captured_at']!r}"
+    )
+
+
+def test_write_mark_uses_the_injected_clock(tmp_path: Path) -> None:
+    """The marker is timed by the supplied clock, so a test can pin it."""
+    environ = {"EVIDENCE_DIR": str(tmp_path)}
+    assert probe.write_mark(environ, "restore", clock=lambda: 1000.0), (
+        "the marker must be written"
+    )
+    observed = (tmp_path / "marks" / "restore-start").read_text(encoding="utf-8")
+    assert observed.strip() == "1000.000000", (
+        f"the clock must time the mark, got {observed!r}"
+    )
+
+
 def test_an_absent_server_is_unknown_rather_than_zero(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

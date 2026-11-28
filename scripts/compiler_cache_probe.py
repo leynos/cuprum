@@ -193,16 +193,6 @@ def _marker_file(environ: cabc.Mapping[str, str], name: str) -> Path:
     return Path(environ["EVIDENCE_DIR"]) / "marks" / name
 
 
-def seconds_since(environ: cabc.Mapping[str, str], marker: str) -> float | None:
-    """Return seconds elapsed since a marker, or ``None`` when it is absent."""
-    try:
-        started = float(mark_path(environ, marker).read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        return None
-    elapsed = time.time() - started
-    return round(elapsed, 3) if elapsed >= 0 else None
-
-
 def elapsed_between(
     environ: cabc.Mapping[str, str], start: str, end: str
 ) -> float | None:
@@ -225,8 +215,13 @@ def elapsed_between(
     return round(elapsed, 3) if elapsed >= 0 else None
 
 
-def write_mark(environ: cabc.Mapping[str, str], marker: str) -> bool:
-    """Write one wall-clock marker.
+def write_mark(
+    environ: cabc.Mapping[str, str],
+    marker: str,
+    *,
+    clock: cabc.Callable[[], float] = time.time,
+) -> bool:
+    """Write one wall-clock marker, timed by ``clock``.
 
     Returns
     -------
@@ -241,7 +236,7 @@ def write_mark(environ: cabc.Mapping[str, str], marker: str) -> bool:
     )
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{time.time():.6f}\n", encoding="utf-8")
+        path.write_text(f"{clock():.6f}\n", encoding="utf-8")
     except OSError:
         return False
     return True

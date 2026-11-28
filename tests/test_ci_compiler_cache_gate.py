@@ -8,16 +8,26 @@ family the evidence does not support, and each asserts against that.
 
 from __future__ import annotations
 
+import doctest
+
 import pytest
 
+from scripts import compiler_cache_summary as summary_reader
 from tests.helpers.ci_compiler_gate import (
     Observation,
     console,
     decisions,
     family,
+    five_pairs,
     jobs,
     summary,
 )
+
+
+def test_the_summary_module_examples_run() -> None:
+    """The `_worth_it` examples are executable contracts, not prose."""
+    result = doctest.testmod(summary_reader, verbose=False)
+    assert result.failed == 0, f"{result.failed} module examples failed"
 
 
 def test_failed_jobs_are_counted_but_never_pair_savings() -> None:
@@ -78,45 +88,9 @@ def test_two_brackets_in_one_job_are_one_independent_pair() -> None:
     )
 
 
-def test_a_negative_incremental_cost_is_accepted() -> None:
-    """The gate requires non-positive cost, not exactly zero."""
-    records, job_documents = _five_pairs()
-    built = summary(
-        records,
-        job_documents,
-        console(
-            incremental_cost_seconds=-10,
-            test_fidelity="matched",
-            billing_rounding="verified",
-        ),
-    )
-    decision = decisions(built)[0]
-    assert decision["incremental_cost_seconds"] == pytest.approx(-10.0), decision
-    assert decision["verdict"] == "adopt", decision
-
-
-def _five_pairs(
-    *, save: float | None = 20.0, candidate_seconds: int = 195
-) -> tuple[list[Observation], list[dict[str, object]]]:
-    """Return five control/candidate pairs and their API jobs."""
-    records = [
-        Observation(run_id=str(100 + index), backend="local", hits=4, save=save)
-        for index in range(5)
-    ]
-    records += [
-        Observation(
-            run_id=str(200 + index), backend="gha", hits=6, restore=None, save=None
-        )
-        for index in range(5)
-    ]
-    job_documents = jobs([*range(100, 105)], 240)
-    job_documents += jobs([*range(200, 205)], candidate_seconds)
-    return records, job_documents
-
-
 def test_an_unknown_threshold_is_insufficient_not_a_rejection() -> None:
     """A missing transfer measurement is not evidence of a small saving."""
-    records, job_documents = _five_pairs(save=None)
+    records, job_documents = five_pairs(save=None)
     built = summary(records, job_documents, console())
     decision = decisions(built)[0]
     assert decision["minimum_worthwhile_seconds"] is None, decision
@@ -127,7 +101,7 @@ def test_an_unknown_threshold_is_insufficient_not_a_rejection() -> None:
 
 def test_break_even_stays_unknown_until_billing_is_verified() -> None:
     """An unverified rounding rule cannot support a consumer count."""
-    records, job_documents = _five_pairs()
+    records, job_documents = five_pairs()
     unknown = summary(records, job_documents, console(billing_rounding="unknown"))
     assert decisions(unknown)[0]["break_even_consumers"] is None, (
         "break-even must stay unknown while billing is unverified"
@@ -141,7 +115,7 @@ def test_break_even_stays_unknown_until_billing_is_verified() -> None:
 
 def test_unknown_test_fidelity_blocks_adoption() -> None:
     """The gate cannot adopt a candidate whose tests were not compared."""
-    records, job_documents = _five_pairs()
+    records, job_documents = five_pairs()
     matched = summary(
         records,
         job_documents,
@@ -201,8 +175,41 @@ def test_a_family_with_only_cold_records_still_reports_a_decision() -> None:
                 runner_class="github-hosted",
             ),
         ),
+        (
+            Observation(run_id="100", backend="local", hits=4, rustc_release="1.87.0"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                rustc_release="1.87.1",
+            ),
+        ),
+        (
+            Observation(run_id="100", backend="local", hits=4, compiler_shape="debug"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                compiler_shape="release",
+            ),
+        ),
+        (
+            Observation(run_id="100", backend="local", hits=4, python_version="3.13"),
+            Observation(
+                run_id="200",
+                backend="gha",
+                hits=6,
+                restore=None,
+                save=None,
+                python_version="3.14",
+            ),
+        ),
     ],
-    ids=["toolchain", "runner-class"],
+    ids=["toolchain", "runner-class", "rustc", "compiler-shape", "python-version"],
 )
 def test_an_incomparable_pair_is_excluded(
     control: Observation, candidate: Observation
@@ -214,6 +221,29 @@ def test_an_incomparable_pair_is_excluded(
     observed = family(built)
     assert observed["pairs"] == 0, (
         f"an incomparable pair must not count, got {observed}"
+    )
+    assert observed["incomparable_pairs"] == 1, (
+        f"the excluded pair must be visible, got {observed}"
+    )
+
+
+def test_a_pair_with_an_unknown_provenance_value_is_excluded() -> None:
+    """Two records that both failed to identify a field are not comparable."""
+    records = [
+        Observation(run_id="100", backend="local", hits=4, runner_class="unknown"),
+        Observation(
+            run_id="200",
+            backend="gha",
+            hits=6,
+            restore=None,
+            save=None,
+            runner_class="unknown",
+        ),
+    ]
+    built = summary(records, jobs([100, 200], 240))
+    observed = family(built)
+    assert observed["pairs"] == 0, (
+        f"an unknown provenance value must not pair, got {observed}"
     )
     assert observed["incomparable_pairs"] == 1, (
         f"the excluded pair must be visible, got {observed}"
@@ -268,7 +298,7 @@ def test_a_failed_fallback_is_counted_even_though_it_cannot_pair() -> None:
 
 def test_unverified_billing_blocks_adoption() -> None:
     """A paid cost is unestablished while its rounding rule is unknown."""
-    records, job_documents = _five_pairs()
+    records, job_documents = five_pairs()
     built = summary(
         records,
         job_documents,

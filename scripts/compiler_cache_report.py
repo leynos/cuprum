@@ -44,6 +44,7 @@ import typing as typ
 from pathlib import Path
 
 from scripts import compiler_cache_records as records_reader
+from scripts import compiler_cache_schema as schema
 from scripts import compiler_cache_summary as summary_reader
 
 if typ.TYPE_CHECKING:
@@ -57,7 +58,7 @@ def render_markdown(summary: cabc.Mapping[str, object]) -> str:
         "# Compiler-cache evidence summary",
         "",
         (
-            f"Generated at {summary['generated_at']}. Paid time is a "
+            f"Generated at {summary.get('generated_at', 'unknown')}. Paid time is a "
             f"{cost['billing']} label; see docs/ci-cache-ownership.md."
         ),
         "",
@@ -105,6 +106,9 @@ def main(argv: cabc.Sequence[str]) -> int:
             records_reader.load_names(arguments.job_names),
             records_reader.load_console(arguments.console),
         )
+        # The clock is an edge concern: the summary is otherwise a pure
+        # function of the evidence, the joins, and the console observation.
+        summary["generated_at"] = schema.now()
     except records_reader.InvalidEvidenceError as error:
         print(f"compiler-cache evidence: {error}", file=sys.stderr)
         return 1

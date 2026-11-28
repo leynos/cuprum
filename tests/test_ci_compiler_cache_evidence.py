@@ -183,6 +183,21 @@ def test_an_invalid_record_is_reported_not_appended(
     assert not path.exists(), "an invalid record must never be appended"
 
 
+def test_build_record_stamps_with_the_injected_clock(
+    evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The record timestamp is a caller-supplied edge value."""
+    _two_snapshots(
+        evidence_environment, monkeypatch, (stats_document(), stats_document())
+    )
+    record = writer.build_record(
+        evidence_environment, clock=lambda: "2026-01-01T00:00:00Z"
+    )
+    assert record["recorded_at"] == "2026-01-01T00:00:00Z", (
+        f"the injected clock must stamp the record, got {record['recorded_at']!r}"
+    )
+
+
 def test_the_record_carries_the_runner_class(
     evidence_environment: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

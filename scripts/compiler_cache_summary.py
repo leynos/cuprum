@@ -293,7 +293,6 @@ def build_summary(
     ]
     return {
         "schema_version": schema.SCHEMA_VERSION,
-        "generated_at": schema.now(),
         "records": {
             "total": len(records),
             "by_state": {

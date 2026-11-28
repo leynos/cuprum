@@ -642,6 +642,10 @@ expression subset, `ci_expression_arms.py` reads a two-arm
 wrapper/namespace/privileged-workflow rules, and `ci_compiler_gate.py` scripts
 observations for the gate arithmetic. Keep workflow facts in those helpers
 rather than adding another parser to a test module.
+`tests/helpers/ci_compiler_evidence.py` holds the sccache documents, the fake
+probe and the valid record fixture those contracts share, and `reader_families`
+in `tests/helpers/ci_cache_families.py` resolves the family a restore step
+reads so it can be joined to a writer.
 
 ### Test selection
 
