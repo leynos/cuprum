@@ -6,13 +6,13 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `285fded37`; this header tracks the latest gate run,
+recorded six-gate run is `71a3a3385`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
 the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2`,
-`07ff587`, `68697ea`, `87bb414`, `7e228aa` and `285fded`. The experiment
-baseline remains `87de64c2c`, recorded on 22 November 2026. No candidate family
-is adopted by this change; the deliverable is the measured-qualification
-apparatus plus a reviewable adopt/reject record.
+`07ff587`, `68697ea`, `87bb414`, `7e228aa`, `285fded` and `71a3a33`. The
+experiment baseline remains `87de64c2c`, recorded on 22 November 2026. No
+candidate family is adopted by this change; the deliverable is the
+measured-qualification apparatus plus a reviewable adopt/reject record.
 
 ## Purpose / big picture
 
@@ -265,6 +265,15 @@ its own evidence and decision.
 - [x] 28 November 2026: M5 re-gates at `285fded37` — all six gates pass in a
       clean environment. Recorded in
       `/tmp/final-gate-clean-cuprum-issue-609-285fded37.log`.
+- [x] 28 November 2026: the writer now reports a missing `EVIDENCE_DIR` as an
+      `omitted` result in all three modes, carries the probe detail into the
+      snapshot and the observation bundle, and exposes `stat_path`/`read`
+      seams. `compiler_cache_pairs.py` split into observation classification,
+      pairing/provenance, and family statistics, and `_decision` split into
+      context, policy terms, and row rendering.
+- [x] 28 November 2026: M5 re-gates at `71a3a3385` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-71a3a3385.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
