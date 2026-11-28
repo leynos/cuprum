@@ -78,36 +78,35 @@ def decide(
     """
     usable = _usable(pairs)
     seconds, fraction = _medians(usable)
+
+    def outcome(state: str, reason: str) -> Verdict:
+        """Return a verdict carrying this sample's medians."""
+        return Verdict(state, reason, seconds, fraction)
+
     if len(usable) < minimum_pairs:
-        return Verdict(
+        return outcome(
             "inconclusive",
             f"{len(usable)} usable pairs is fewer than the {minimum_pairs} "
             "needed for a median; a pair counts only when both sides are warm "
             "and neither failed, and report the sample rather than a threshold",
-            seconds,
-            fraction,
         )
     if seconds is None or fraction is None:
-        return Verdict(
+        return outcome(
             "inconclusive",
             "no pair recorded both step times, so no saving can be computed",
-            seconds,
-            fraction,
         )
     gap = _evidence_gap(usable, minimum_pairs)
     if gap is not None:
-        return Verdict("inconclusive", gap, seconds, fraction)
+        return outcome("inconclusive", gap)
     rejected = _regression_reason(usable, rule) or _minimum_reason(
         seconds, fraction, rule
     )
     if rejected is not None:
-        return Verdict("rejected", rejected, seconds, fraction)
-    return Verdict(
+        return outcome("rejected", rejected)
+    return outcome(
         "adopted",
         f"median saving {seconds:.1f}s ({fraction:.1%}) clears the predeclared "
         "minimum with no pair beyond the regression tolerance",
-        seconds,
-        fraction,
     )
 
 
@@ -172,6 +171,24 @@ def _evidence_gap(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
     return None
 
 
+def _report(offenders: object, template: str) -> str | None:
+    """Return the refusal text for a non-empty offender set, or ``None``.
+
+    Parameters
+    ----------
+    offenders : object
+        The offenders to report. Any empty sequence or mapping is falsy.
+    template : str
+        Text with an ``{offenders}`` placeholder.
+
+    Returns
+    -------
+    str or None
+        The rendered reason, or ``None`` when there is nothing to report.
+    """
+    return template.format(offenders=offenders) if offenders else None
+
+
 def _thin_leg_reason(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | None:
     """Return why an interpreter leg is under-sampled, or ``None``."""
     counts: dict[str, int] = {}
@@ -179,36 +196,50 @@ def _thin_leg_reason(pairs: cabc.Sequence[Pair], minimum_pairs: int) -> str | No
         leg = pair.control.python_version
         counts[leg] = counts.get(leg, 0) + 1
     thin = {leg: count for leg, count in counts.items() if count < minimum_pairs}
-    if not thin:
-        return None
-    return (
+    return _report(
+        thin,
         f"these interpreter legs have fewer than {minimum_pairs} warm pairs: "
-        f"{thin}; a median per leg is what the plan requires"
+        "{offenders}; a median per leg is what the plan requires",
     )
+
+
+def _offending_runs(
+    pairs: cabc.Sequence[Pair],
+    predicate: cabc.Callable[[RunRecord, RunRecord], bool],
+) -> list[str]:
+    """Return the control run IDs of pairs that fail ``predicate``.
+
+    Parameters
+    ----------
+    pairs : Sequence of Pair
+        The pairs to test.
+    predicate : Callable
+        Called with a control and a candidate run; true means they disagree.
+
+    Returns
+    -------
+    list of str
+        Control run IDs, so a reported pair names the run a reviewer can open.
+    """
+    return [
+        pair.control.run_id for pair in pairs if predicate(pair.control, pair.candidate)
+    ]
 
 
 def _fingerprint_reason(pairs: cabc.Sequence[Pair]) -> str | None:
     """Return why a pair ran on an incomparable runner, or ``None``."""
-    mismatched = [
-        pair.control.run_id
-        for pair in pairs
-        if _fingerprints_differ(pair.control, pair.candidate)
-    ]
-    if not mismatched:
-        return None
-    return f"these pairs compare different runners or toolchains: {mismatched}"
+    return _report(
+        _offending_runs(pairs, _fingerprints_differ),
+        "these pairs compare different runners or toolchains: {offenders}",
+    )
 
 
 def _collection_reason(pairs: cabc.Sequence[Pair]) -> str | None:
     """Return why a pair collected a different suite, or ``None``."""
-    divergent = [
-        pair.control.run_id
-        for pair in pairs
-        if _collections_differ(pair.control, pair.candidate)
-    ]
-    if not divergent:
-        return None
-    return f"these pairs collected different suites: {divergent}"
+    return _report(
+        _offending_runs(pairs, _collections_differ),
+        "these pairs collected different suites: {offenders}",
+    )
 
 
 def _cost_reason(pairs: cabc.Sequence[Pair]) -> str | None:
