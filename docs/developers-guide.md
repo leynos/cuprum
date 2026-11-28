@@ -8577,11 +8577,11 @@ identity.
 
 The omitted modules keep running in every `make test`, pull-request gate, and
 direct `uv run pytest` invocation; only the mutation harness omits them.
-`test_mutmut_config_contract.py` pins the exclusion list, so widening it fails
-the contract, and it asserts each ignored module still exists under a selected
-suite root so the exclusion cannot hide a deletion. Do not add a behavioural
-test to this list: a test that fails only because of the sandbox environment
-belongs here, but a test that can catch a mutant must run.
+`test_mutmut_selection_contract.py` pins the exclusion list, so widening it
+fails the contract, and it asserts each ignored module still exists under a
+selected suite root so the exclusion cannot hide a deletion. Do not add a
+behavioural test to this list: a test that fails only because of the sandbox
+environment belongs here, but a test that can catch a mutant must run.
 
 ### Hypothesis in the sandbox
 
@@ -8593,9 +8593,9 @@ though the test is correct. The root `conftest.py` registers a `mutmut-sandbox`
 Hypothesis profile that inherits the suite profile (`deadline=None`) and
 suppresses only that check; `[tool.mutmut]. pytest_add_cli_args` selects it with
 `--hypothesis-profile=mutmut-sandbox`, so every ordinary run keeps the check
-enabled. `test_mutmut_config_contract.py` pins both the flag and the profile's
-contents, including the inherited deadline, so the relaxation cannot widen into
-the normal suite and cannot silently drop the suite's own settings.
+enabled. `test_mutmut_selection_contract.py` pins both the flag and the
+profile's contents, including the inherited deadline, so the relaxation cannot
+widen into the normal suite and cannot silently drop the suite's own settings.
 
 Suppress a health check this way only when the harness, not the test, creates
 the condition. A check that a real test defect triggers must still fail.
@@ -8652,8 +8652,9 @@ the shared workflow uploads `mutation-failure-diagnostics-mutmut` with
 `stdout.log`, `stderr.log` and `metadata.json`, independently of whether the
 results or statistics files exist, keeping each stream's first 512 KiB so the
 earliest error survives. `tests/test_ci_mutation_workflow_contract.py` pins the
-`preflight: true` input, and `cuprum/unittests/test_mutmut_config_contract.py`
-pins the declaration to the audited `also_copy` inventory.
+`preflight: true` input, and
+`cuprum/unittests/test_mutation_preflight_contract.py` pins the declaration to
+the audited `also_copy` inventory.
 
 ### The forced-fail probe
 
@@ -8670,8 +8671,8 @@ pytest reports as a usage error, so mutmut never reaches the first mutant. Keep
 `cuprum` imports inside the fixtures that need them, and declare fixture-only
 modules under `pytest_plugins` rather than importing them: in the sandbox the
 probe then fails where the mutated package actually runs, which is the
-condition mutmut tests for. `test_mutmut_config_contract.py` imports the root
-conftest in a fresh interpreter and asserts `cuprum` was not imported.
+condition mutmut tests for. `test_mutmut_selection_contract.py` imports the
+root conftest in a fresh interpreter and asserts `cuprum` was not imported.
 
 An ordinary run is unchanged: the fixtures import the same modules when they
 first run.
