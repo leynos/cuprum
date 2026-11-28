@@ -20,16 +20,21 @@ import typing as typ
 
 import pytest
 
-from cuprum import RunOutputOptions, StdinStream, observe_line_stream
+from cuprum import (
+    ConsumerCancelledError,
+    RunOutputOptions,
+    StdinStream,
+    observe_line_stream,
+)
 from cuprum._line_stream.reader_wait import _await_consumers
+from cuprum._stream_drain_finish import _CapturedDrain
 from cuprum.line_stream_events import LineStreamEvent, LineStreamPhase
-from cuprum.unittests._rendezvous_support import record_rendezvous
+from cuprum.unittests._rendezvous_support import record_rendezvous, retrieve
 from tests.helpers.catalogue import python_builder as build_python_builder
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from cuprum._stream_drain_finish import _CapturedDrain
     from cuprum.lines import LineEvent, LineHook
     from cuprum.sh import SafeCmd
 
@@ -289,6 +294,28 @@ _RENDEZVOUS_SEAMS = {
 _READER_WATCHDOG_S = 10.0
 
 
+def _cancelled_reader_hook(handoff: asyncio.Event) -> LineHook:
+    """Build a hook whose consumer ends cancelled after the exit settles.
+
+    Waiting for *handoff* is what places the cancellation in the post-exit
+    wait: the rendezvous has returned, so the consumer's task is settled while
+    the supervisor is still collecting its output.
+
+    Returns
+    -------
+    LineHook
+        A hook that waits for the exit hand-off, then ends its consumer
+        cancelled.
+    """
+
+    async def cancel_reader(_event: LineEvent) -> None:
+        """End the consumer as cancelled once the exit has settled."""
+        await handoff.wait()
+        raise asyncio.CancelledError
+
+    return typ.cast("LineHook", cancel_reader)
+
+
 def _failing_reader_hook(
     handoff: asyncio.Event,
     sentinel: BaseException,
@@ -406,3 +433,110 @@ def test_reader_timeout_is_not_reported_as_the_run_deadline(
     )
     if entry_point == "lines":
         _assert_lines_observations(seen, phases)
+
+
+@pytest.mark.parametrize("entry_point", ["run", "lines"])
+def test_cancelled_reader_after_exit_is_a_labelled_failure(
+    python_builder: cabc.Callable[..., SafeCmd],
+    entry_point: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A consumer cancelled after the exit is published, not waited on.
+
+    The hook waits for the exit rendezvous to return before raising, so the
+    cancellation reaches the post-exit wait rather than the rendezvous. Both
+    entry points must publish a ``ConsumerCancelledError`` naming stdout, and
+    neither may hand the caller a ``CancelledError`` it did not issue.
+    """
+    command = python_builder("-c", _CHILD_SCRIPTS["after-exit"])
+    handoff = record_rendezvous(monkeypatch, _RENDEZVOUS_SEAMS[entry_point])
+    output = RunOutputOptions(on_line=_cancelled_reader_hook(handoff))
+
+    async def drive() -> ConsumerCancelledError:
+        """Drive the selected entry point to the reader's cancellation."""
+        if entry_point == "run":
+            with pytest.raises(ConsumerCancelledError) as caught:
+                await command.run(output=output)
+            return caught.value
+        iterator = command.lines(output=output)
+        try:
+            with pytest.raises(ConsumerCancelledError) as caught:
+                async for _event in iterator:
+                    pass
+            return caught.value
+        finally:
+            # A bare ``aclose()`` after the failure must not surface an
+            # unrequested ``CancelledError``.
+            await iterator.aclose()
+
+    error = asyncio.run(asyncio.wait_for(drive(), _READER_WATCHDOG_S))
+    assert error.stream == "stdout", (
+        f"{entry_point} must name the cancelled stream, got {error.stream!r}"
+    )
+    assert not isinstance(error, asyncio.CancelledError), (
+        f"{entry_point} must not hand the caller a cancellation it did not issue"
+    )
+    assert handoff.is_set(), (
+        f"{entry_point} must reach the post-exit wait, or this case does not "
+        "test the route its name claims"
+    )
+
+
+def _parked_consumer() -> asyncio.Task[_CapturedDrain]:
+    """Return a consumer task that never settles, typed as a real reader."""
+
+    async def never_settles() -> _CapturedDrain:
+        """Park until the test cancels the task."""
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    return asyncio.create_task(never_settles())
+
+
+def test_cancelled_reader_is_returned_before_a_pending_sibling() -> None:
+    """A settled cancellation ends the wait instead of spending the budget."""
+
+    async def scenario() -> ConsumerCancelledError:
+        """Cancel stdout while stderr is still pending."""
+        cancelled = _parked_consumer()
+        cancelled.cancel()
+        await retrieve(cancelled)
+        sibling = _parked_consumer()
+        try:
+            failure = await _await_consumers((cancelled, sibling), None)
+        finally:
+            sibling.cancel()
+            await retrieve(sibling)
+        assert isinstance(failure, ConsumerCancelledError), (
+            f"the cancelled reader must be returned, got {failure!r}"
+        )
+        return failure
+
+    failure = asyncio.run(scenario())
+    assert failure.stream == "stdout", (
+        f"the failure must name stdout, got {failure.stream!r}"
+    )
+
+
+def test_cancelled_stderr_reader_is_labelled_after_a_successful_stdout() -> None:
+    """A successful sibling does not hide the cancelled stream's label."""
+
+    async def scenario() -> ConsumerCancelledError:
+        """Succeed on stdout and cancel stderr."""
+        stdout = asyncio.create_task(asyncio.sleep(0, result=_CapturedDrain()))
+        cancelled = _parked_consumer()
+        cancelled.cancel()
+        await retrieve(cancelled)
+        failure = await _await_consumers((stdout, cancelled), None)
+        assert isinstance(failure, ConsumerCancelledError), (
+            f"the cancelled reader must be returned, got {failure!r}"
+        )
+        return failure
+
+    failure = asyncio.run(scenario())
+    assert failure.stream == "stderr", (
+        f"the failure must name stderr, got {failure.stream!r}"
+    )
+    assert isinstance(failure.__cause__, asyncio.CancelledError), (
+        f"the reader's cancellation must be chained, got {failure.__cause__!r}"
+    )

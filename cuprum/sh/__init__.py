@@ -59,6 +59,9 @@ from cuprum._process_handle_errors import (
 )
 from cuprum._sink_lifecycle import _outcome_for_error as _outcome_for_error
 from cuprum._sink_lifecycle import _SinkBracket as _SinkBracket
+from cuprum._stream_consumer_errors import (
+    ConsumerCancelledError as ConsumerCancelledError,
+)
 from cuprum._subprocess_context import _resolve_timeout as _resolve_timeout
 from cuprum.capture_policy import (
     BoundedCapture,
@@ -135,6 +138,7 @@ __all__ = [
     "CapturedResult",
     "CapturedStream",
     "CommandResult",
+    "ConsumerCancelledError",
     "DetachedLaunch",
     "ExecutionContext",
     "FileBackedCapture",

@@ -49,6 +49,7 @@ from cuprum._capture_cleanup import _finalize_capture_handles
 from cuprum._idle_heartbeat import _stop_idle_monitor
 from cuprum._process_lifecycle import _shielded_cleanup
 from cuprum._stream_drain import _decode_consumer_drains
+from cuprum._subprocess_rendezvous import _await_consumer_outcomes
 from cuprum._subprocess_startup_abandon import _abandon_started_process
 from cuprum._subprocess_stream_exit import (
     # Re-exported under this module's name as well as imported for use: the
@@ -145,6 +146,15 @@ async def _settle_group_and_reconcile_consumers(
     return await _shielded_cleanup(settle_then_reconcile())
 
 
+def _raise_consumer_failure(failure: BaseException) -> typ.NoReturn:
+    """Raise the failure the consumer wait selected.
+
+    Kept out of the deadline scope's own body so the raise is read as the run's
+    selected outcome rather than as a repair of the awaited call's failure.
+    """
+    raise failure
+
+
 async def _collect_stream_output(
     process: asyncio.subprocess.Process,
     execution: _SubprocessExecution,
@@ -174,6 +184,14 @@ async def _collect_stream_output(
         async with deadline:
             await _stop_idle_monitor(execution.idle)
             await _await_stdin_writer(tasks)
+            # Classify each completion before gathering: a cancelled consumer
+            # or a short-stopped drain is a failure even though the task is
+            # settled, and the gather below would read it as an ordinary
+            # result. The gather is reached only once every consumer ended
+            # quietly.
+            failure = await _await_consumer_outcomes(tasks.consumers)
+            if failure is not None:
+                _raise_consumer_failure(failure)
             # The awaitables, not the tasks: a stream cuprum holds no pipe for
             # has ``None`` in its slot, and gathering that would raise instead
             # of settling the slot to nothing. A settled ``None`` then decodes

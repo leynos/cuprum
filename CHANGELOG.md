@@ -50,6 +50,22 @@
   whatever escaped a supplied payload's write: the writer publishes its failure
   before its own teardown runs, so the caller receives that failure rather than
   the one it caused ([#551](https://github.com/leynos/cuprum/issues/551)).
+- **A cancelled stream consumer ends a single command's run instead of waiting
+  on a blocked child:** a consumer that ends cancelled — a callback that raises
+  `asyncio.CancelledError`, or a consumer task cancelled from outside — or that
+  returns while preserving a partial capture used to be dropped from the exit
+  race, so a child that kept writing filled its undrained pipe and a run with no
+  `timeout=` waited indefinitely. Both entry points now classify that outcome
+  as an early failure, terminate and reap the child, and raise the new
+  `ConsumerCancelledError` naming the stream. It is an ordinary exception,
+  deliberately not an `asyncio.CancelledError` or `TimeoutError`, so a caller
+  cancelling the run itself still receives `CancelledError` and neither
+  `except asyncio.CancelledError` nor `asyncio.timeout` can mistake the
+  consumer's ending for its own. Precedence is unchanged: a settled exit, then
+  the stdin writer, then the consumers in stream order; a cancelled stdin
+  writer remains quiet teardown. Pipelines and running-command handles keep
+  their existing behaviour and settle readers at finalization
+  ([#733](https://github.com/leynos/cuprum/issues/733)).
 - **A streamed run that stops before end-of-file releases its output
   descriptors:** the consumer-failure, deadline and cancellation routes now
   close the child's parent-side output pipes once their readers are settled.

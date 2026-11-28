@@ -20,8 +20,9 @@ Four invariants are checked:
 - The pure selection, the full race and the stated precedence agree on which
   failure the run reports, and identity distinguishes it from a lookalike.
 - A settled exit outranks every failed slot, whichever slot failed.
-- A run whose slots all succeed, are cancelled, are absent or are still
-  running selects nothing and returns the exit's own result.
+- A run whose writer is quiet and whose consumers succeed, are absent or are
+  still running selects nothing and returns the exit's own result. A cancelled
+  consumer is not quiet: it is a stream-labelled failure.
 - Every case leaves no task behind: each task it created is retrieved.
 """
 
@@ -36,6 +37,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from cuprum._stream_consumer_errors import ConsumerCancelledError
 from cuprum._subprocess_rendezvous import (
     _await_exit_or_writer_failure,
     _first_early_failure,
@@ -75,11 +77,19 @@ _CONSUMER_STATES = (
 _WRITER_STATES = (*_CONSUMER_STATES, _State.PUBLISHED)
 
 #: The states that contribute no failure, for the no-failure property. A writer
-#: may fail or publish, so those two are excluded here rather than reused.
-_QUIET_STATES = (
+#: may fail or publish, so those two are excluded here rather than reused. A
+#: cancelled *writer* is quiet teardown, while a cancelled *consumer* is a
+#: labelled early failure, which is why the two slot kinds have separate quiet
+#: sets.
+_WRITER_QUIET_STATES = (
     _State.ABSENT,
     _State.SUCCEEDS,
     _State.CANCELLED,
+    _State.RUNNING,
+)
+_CONSUMER_QUIET_STATES = (
+    _State.ABSENT,
+    _State.SUCCEEDS,
     _State.RUNNING,
 )
 
@@ -212,31 +222,62 @@ def _published(writer: _SlotSpec, sentinel: CallbackError) -> _StdinWriterLog | 
     return _StdinWriterLog(error=sentinel) if writer[0] is _State.PUBLISHED else None
 
 
-def _slot_contributes(state: _State, rank: int) -> bool:
-    """Return whether the slot at *rank* contributes a failure in *state*."""
-    if state is _State.FAILS:
-        return True
-    return rank == 0 and state is _State.PUBLISHED
+@dc.dataclass(frozen=True, slots=True)
+class _ExpectedFailure:
+    """What the fixed precedence must select for one generated case.
+
+    A failing writer or consumer contributes its own sentinel, compared by
+    identity. A cancelled consumer contributes a synthesized
+    ``ConsumerCancelledError`` instead, so it is compared by type and stream:
+    the query builds a new object for every reading, and the requirement is
+    that both readings name the same stream.
+    """
+
+    sentinel: CallbackError | None = None
+    stream: str | None = None
+
+    def matches(self, error: BaseException) -> bool:
+        """Return whether *error* is the failure this case selected.
+
+        Returns
+        -------
+        bool
+            Whether *error* is the expected sentinel, or the expected
+            stream-labelled cancellation.
+        """
+        if self.sentinel is not None:
+            return error is self.sentinel
+        return isinstance(error, ConsumerCancelledError) and error.stream == self.stream
 
 
-def _expected_failure(slots: _Slots, specs: _SlotsSpec) -> CallbackError | None:
+def _expected_failure(
+    slots: _Slots,
+    specs: _SlotsSpec,
+) -> _ExpectedFailure | None:
     """Name the failure the fixed precedence must select.
 
     The order is stated here rather than read off the implementation: a settled
-    writer outranks stdout, which outranks stderr, and a slot that is absent,
-    succeeded, was cancelled or is still running contributes nothing. A writer
-    that has *published* its failure contributes it even while its task runs,
-    because that publication is the window it exists for.
+    writer outranks stdout, which outranks stderr. A slot that is absent,
+    succeeded, or is still running contributes nothing, and a cancelled writer
+    is quiet teardown. A writer that has *published* its failure contributes it
+    even while its task runs, because that publication is the window it exists
+    for. A cancelled consumer contributes a stream-labelled
+    ``ConsumerCancelledError``.
 
     Returns
     -------
-    CallbackError | None
-        The sentinel of the highest-precedence failed slot, or ``None`` when no
-        slot contributes a failure.
+    _ExpectedFailure | None
+        The highest-precedence failure, or ``None`` when no slot contributes
+        one.
     """
+    streams = ("stdout", "stderr")
     for rank, (state, _ticks) in enumerate(specs):
-        if _slot_contributes(state, rank):
-            return slots.sentinels[rank]
+        if state is _State.FAILS:
+            return _ExpectedFailure(sentinel=slots.sentinels[rank])
+        if rank == 0 and state is _State.PUBLISHED:
+            return _ExpectedFailure(sentinel=slots.sentinels[0])
+        if rank > 0 and state is _State.CANCELLED:
+            return _ExpectedFailure(stream=streams[rank - 1])
     return None
 
 
@@ -281,13 +322,20 @@ def _cases_with_a_failure(draw: st.DrawFn) -> _SlotsSpec:
 def _cases_without_a_failure(draw: st.DrawFn) -> _SlotsSpec:
     """Generate three slots none of which fails.
 
+    Consumer cancellation is excluded here because it is a failure now; the
+    writer's cancel remains quiet and is drawn for the writer alone.
+
     Returns
     -------
     _SlotsSpec
         The writer's slot and both consumers', in precedence order.
     """
-    specs = [(draw(st.sampled_from(_QUIET_STATES)), draw(_STEPS)) for _ in _RANKS]
-    return typ.cast("_SlotsSpec", tuple(specs))
+    writer = (draw(st.sampled_from(_WRITER_QUIET_STATES)), draw(_STEPS))
+    consumers = [
+        (draw(st.sampled_from(_CONSUMER_QUIET_STATES)), draw(_STEPS))
+        for _ in _RANKS[1:]
+    ]
+    return typ.cast("_SlotsSpec", (writer, *consumers))
 
 
 @given(specs=_cases_with_a_failure())
@@ -319,18 +367,21 @@ async def _check_precedence(specs: _SlotsSpec) -> None:
             slots.consumers,
             stdin_log=slots.stdin_log,
         )
-        assert selected is expected, (
+        assert selected is not None, (
+            f"a generated case with a forced failure must select one, for {specs!r}"
+        )
+        assert expected.matches(selected), (
             "the pure selection must name the highest-precedence failed slot, "
             f"got {selected!r} rather than {expected!r} for {specs!r}"
         )
-        with pytest.raises(CallbackError) as caught:
+        with pytest.raises((CallbackError, ConsumerCancelledError)) as caught:
             await _await_exit_or_writer_failure(
                 probe.wait(),
                 slots.stdin_task,
                 consumers=slots.consumers,
                 stdin_log=slots.stdin_log,
             )
-        assert caught.value is expected, (
+        assert expected.matches(caught.value), (
             "the race must raise the selected failure itself, got "
             f"{caught.value!r} rather than {expected!r} for {specs!r}"
         )
@@ -338,22 +389,33 @@ async def _check_precedence(specs: _SlotsSpec) -> None:
             "a reported failure must cancel the exit wait, which is what "
             f"terminates the child, for {specs!r}"
         )
-        assert _is_early_failure(
-            expected,
-            slots.stdin_task,
-            slots.consumers,
-            stdin_log=slots.stdin_log,
-        ), f"the selected failure must be recognized as monitored, for {specs!r}"
-        lookalike = CallbackError(str(expected))
-        assert not _is_early_failure(
-            lookalike,
-            slots.stdin_task,
-            slots.consumers,
-            stdin_log=slots.stdin_log,
-        ), (
-            "an equal-looking exception from elsewhere must not be taken for a "
-            f"monitored failure, for {specs!r}"
-        )
+        if expected.sentinel is None:
+            # The synthesized cancellation error is not a task's own exception,
+            # so the identity-based provenance predicate must not claim it. It
+            # never reaches that predicate: it is not a ``TimeoutError``.
+            assert not _is_early_failure(
+                caught.value,
+                slots.stdin_task,
+                slots.consumers,
+                stdin_log=slots.stdin_log,
+            ), f"a synthesized cancellation is not a task's own error, for {specs!r}"
+        else:
+            assert _is_early_failure(
+                expected.sentinel,
+                slots.stdin_task,
+                slots.consumers,
+                stdin_log=slots.stdin_log,
+            ), f"the selected failure must be recognized as monitored, for {specs!r}"
+            lookalike = CallbackError(str(expected.sentinel))
+            assert not _is_early_failure(
+                lookalike,
+                slots.stdin_task,
+                slots.consumers,
+                stdin_log=slots.stdin_log,
+            ), (
+                "an equal-looking exception from elsewhere must not be taken for "
+                f"a monitored failure, for {specs!r}"
+            )
     finally:
         await _settle_every_task(slots)
 

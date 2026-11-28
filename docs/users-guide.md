@@ -464,6 +464,19 @@ own teardown runs — for a payload, before the pipe close that can leave that
 teardown waiting — so a run that ends during the teardown still reports it
 rather than the callback's error; the callback's error is then not reported.
 
+A consumer can also end **cancelled** rather than failed: an output callback
+may raise `asyncio.CancelledError`, or something may cancel the consumer task
+while the run is still live. That ending leaves the child's pipe undrained
+exactly as a failure does, so the run ends there too. It reports
+`ConsumerCancelledError`, which carries the affected stream in its `stream`
+attribute and is deliberately not an `asyncio.CancelledError`: a caller
+cancelling the run itself still receives `CancelledError`, and neither
+`except asyncio.CancelledError` nor `asyncio.timeout` can mistake the
+consumer's ending for its own. Cuprum terminates and reaps the child on this
+route as well. Pipelines and running-command handles differ: they settle their
+readers only after the process, or every stage, has exited, so a consumer
+cancellation there is reported at finalization rather than ending the run early.
+
 A child that never terminates a line would otherwise grow the retained text
 without limit, and rescan it for every read. Observation therefore keeps at most
 `max_line_chars` decoded characters (64 Ki by default) for one line, and
@@ -1535,25 +1548,26 @@ upgrading from Cuprum 0.1 should also read the
 
 ## Troubleshoot a run
 
-| Symptom                                                    | Check                                                                                                 |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `ImportError` or `AttributeError` for a name in this guide | An older Cuprum may be installed; see [Install Cuprum](#install-cuprum).                              |
-| `UnknownProgramError`                                      | Register the exact program in the builder's catalogue, or in the active `scoped(catalogue=...)`.      |
-| `ForbiddenProgramError`                                    | Inspect the active scope and parent allowlist; see [Two enforcement points](#two-enforcement-points). |
-| `TypeError` while building a command                       | The message names the problem: an unsupported value type, `None`, or a reserved execution option.     |
-| `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                      |
-| `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                   |
-| `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                              |
-| `ValueError` naming a redirected stream                    | See the rejected combinations in [Send a stream to a file](#send-a-stream-to-a-file-or-the-parent).   |
-| `StdinSourceError`                                         | The stdin producer failed; its own exception is chained as `__cause__`.                               |
-| `RedactionError`                                           | A redaction rule failed; nothing was exported unredacted. Check the rule it names.                    |
-| `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                     |
-| `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                  |
-| Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                             |
-| No visible output                                          | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`.             |
-| No heartbeat                                               | Supply a positive `idle_after`; output activity resets its clock.                                     |
-| Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.     |
-| No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                           |
+| Symptom                                                    | Check                                                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `ImportError` or `AttributeError` for a name in this guide | An older Cuprum may be installed; see [Install Cuprum](#install-cuprum).                                                  |
+| `UnknownProgramError`                                      | Register the exact program in the builder's catalogue, or in the active `scoped(catalogue=...)`.                          |
+| `ForbiddenProgramError`                                    | Inspect the active scope and parent allowlist; see [Two enforcement points](#two-enforcement-points).                     |
+| `TypeError` while building a command                       | The message names the problem: an unsupported value type, `None`, or a reserved execution option.                         |
+| `FileNotFoundError`                                        | Confirm the executable path or inherited `PATH`.                                                                          |
+| `ExecutableResolutionError`                                | An executable-binding resolver failed; its own exception is chained as `__cause__`.                                       |
+| `TimeoutExpired`                                           | Set an appropriate deadline; inspect the child for slow or blocked work.                                                  |
+| `ValueError` naming a redirected stream                    | See the rejected combinations in [Send a stream to a file](#send-a-stream-to-a-file-or-the-parent).                       |
+| `StdinSourceError`                                         | The stdin producer failed; its own exception is chained as `__cause__`.                                                   |
+| `ConsumerCancelledError`                                   | An output consumer ended cancelled before end of stream; inspect `.stream`, and do not treat it as your own cancellation. |
+| `RedactionError`                                           | A redaction rule failed; nothing was exported unredacted. Check the rule it names.                                        |
+| `SignalAfterExitError`                                     | The child has already exited; treat the recorded outcome as the command's ending.                                         |
+| `UnsupportedSignalError`                                   | Use `terminate()` or `kill()`, which use the platform's own signals.                                                      |
+| Non-zero `exit_code`                                       | Use captured stderr and the tool's documented exit codes.                                                                 |
+| No visible output                                          | Capture is silent by default; pass `RunOutputOptions(echo=True)` or read `result.stdout`.                                 |
+| No heartbeat                                               | Supply a positive `idle_after`; output activity resets its clock.                                                         |
+| Descendant processes outlive a timeout                     | Opt in to [process-group ownership](#reclaim-a-descendant-with-process-group-ownership) on POSIX.                         |
+| No native speed-up                                         | The optional extension may be unavailable or this operation may use Python.                                               |
 
 _Table 6: First checks for common execution outcomes._
 
