@@ -154,8 +154,9 @@ deferred. Retaining the current layout is a valid, expected outcome.
 - [x] (2026-11-23) Implemented the opt-in evidence plugin, the `wrap`
   subcommand and the layout driver.
 - [x] (2026-11-23) Proved the `baseline` layout is selection-identical to the
-  legacy loop: 31 groups, 681 unique files, identical order, verified against
-  `make -n test-python`.
+  legacy loop: 31 groups, 681 files across groups (679 distinct; the deselected
+  module appears in its glob group and again in the grouped one), identical
+  order, verified against `make -n test-python`.
 - [ ] Stage 2A: qualify the consolidated group locally.
 - [ ] Stage 2A: accumulate matched CI pairs and decide.
 - [ ] Stage 2B: attempt only if Stage 2A names an independent subset; otherwise
@@ -553,8 +554,14 @@ the commit.
 
 ## Artefacts and notes
 
-- Baseline selector resolution: 32 entries; 30 loop invocations, all finding
-  files; 1 grouped invocation; 31 pytest processes; 679 files.
+- Baseline selector resolution at `87de64c2c`: 32 entries; 30 loop
+  invocations, all finding files; 1 grouped invocation; 31 pytest processes;
+  679 files. That figure counts each file once across the whole run. An earlier
+  note in this plan said 681; that number came from summing per-group
+  expansions, which counts the deselected module once per individual group and
+  again in the grouped invocation. 679 is the deduplicated count and is the one
+  this plan treats as authoritative; neither figure has been re-derived at a
+  later head.
 - Batch provenance: the three `tests/behaviour/test_[a-h]*`, `[i-r]*` and
   `[s-z]*` batches were introduced by commit `02b8a3461` (2026-07-16, PR #153)
   in the "Stabilize local validation gates" section of that change, whose

@@ -17,7 +17,7 @@ that.
 
 Issue #607 asks whether `make test-python` pays for process boundaries it does
 not need. At the implementation baseline `87de64c2c` the selector expands to 32
-entries, which the recipe runs as 31 pytest processes over 681 files. Every
+entries, which the recipe runs as 31 pytest processes over 679 files. Every
 process re-imports the interpreter, `pytest`, its plugins and the `conftest.py`
 chain, and re-collects what it will run.
 

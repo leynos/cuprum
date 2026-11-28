@@ -270,18 +270,31 @@ def _job_totals(
     tuple of float or None
         ``(control_total, candidate_total)``, or ``None`` when incomplete.
     """
-    if not _all_timed(pairs):
-        return None
-    if any(run.job_seconds is None for run in unpaired):
+    if not _all_timed(pairs) or any(run.job_seconds is None for run in unpaired):
         return None
     control = sum(pair.control.job_seconds or 0.0 for pair in pairs)
     candidate = sum(pair.candidate.job_seconds or 0.0 for pair in pairs)
-    for run in unpaired:
-        if run.layout == "baseline":
-            control += run.job_seconds or 0.0
-        else:
-            candidate += run.job_seconds or 0.0
+    control += _unpaired_total(unpaired, "baseline")
+    candidate += _unpaired_total(unpaired, "consolidated")
     return (control, candidate)
+
+
+def _unpaired_total(runs: cabc.Sequence[RunRecord], layout: str) -> float:
+    """Return the whole-job seconds of the unpaired runs on one layout.
+
+    Parameters
+    ----------
+    runs : Sequence of RunRecord
+        The unpaired runs.
+    layout : str
+        ``baseline`` or ``consolidated``.
+
+    Returns
+    -------
+    float
+        Total job seconds attributed to that layout.
+    """
+    return sum(run.job_seconds or 0.0 for run in runs if run.layout == layout)
 
 
 def _all_timed(pairs: cabc.Sequence[Pair]) -> bool:

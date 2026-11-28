@@ -87,3 +87,44 @@ def test_a_job_cost_increase_is_inconclusive() -> None:
     assert "whole-job seconds" in comparison.reason, (
         f"the cost increase must be named, got {comparison.reason}"
     )
+
+
+def test_an_expensive_unpaired_failure_blocks_adoption() -> None:
+    """Refuse adoption when an unpaired run's cost is not accounted for.
+
+    Five qualifying pairs can look like a healthy sample while an expensive
+    unpaired failure sits outside it. That work was billed, so it counts.
+    """
+    records = _warm_pairs(MINIMUM_PAIRS)
+    records.append(
+        dataclasses.replace(
+            _run("n-expensive", "consolidated", _Spec(seconds=90.0)),
+            job_seconds=50_000.0,
+            exit_status=1,
+            failed=True,
+        )
+    )
+
+    comparison = compare(records)
+
+    assert comparison.state == "inconclusive", comparison.reason
+    assert "whole-job seconds" in comparison.reason, (
+        f"the unaccounted cost must be named, got {comparison.reason}"
+    )
+
+
+def test_pairs_without_recorded_outcomes_are_inconclusive() -> None:
+    """Refuse a verdict when no executed outcomes were recorded.
+
+    Two empty outcome mappings agree trivially. If the runs collected nodes and
+    neither side recorded what happened to them, that agreement is not evidence.
+    """
+    records = _warm_pairs(MINIMUM_PAIRS)
+    records = [dataclasses.replace(record, outcomes=()) for record in records]
+
+    comparison = compare(records)
+
+    assert comparison.state == "inconclusive", comparison.reason
+    assert "no executed outcomes" in comparison.reason, (
+        f"the missing evidence must be named, got {comparison.reason}"
+    )
