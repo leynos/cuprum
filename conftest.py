@@ -141,9 +141,14 @@ if typ.TYPE_CHECKING:
 
 
 # Pytest 9 only accepts plugin declarations in the repository-root conftest.
+# `tests.helpers.pytest_session_evidence` is listed here so its module-level
+# `pytest_configure` runs; that hook registers the plugin only when
+# `CUPRUM_PYTEST_EVIDENCE_DIR` names a directory, so a run that does not ask
+# for evidence pays one small import and nothing else.
 pytest_plugins = (
     "cuprum.unittests._safe_cmd_lines_support",
     "cuprum.unittests._safe_cmd_lines_authorization_support",
+    "tests.helpers.pytest_session_evidence",
 )
 
 

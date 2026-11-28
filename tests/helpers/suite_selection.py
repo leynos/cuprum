@@ -16,6 +16,12 @@ that checks the claim is what makes the claim worth reading.
 `tests/test_ci_test_selection_contract.py` is the consumer, and its module
 docstring records why the guard reads the tree and the selector rather than
 the test results.
+
+Which batches may share a process is a separate claim about the modules
+themselves, so the classification lives in
+`tests/helpers/suite_classification.py` and is re-exported here for callers
+that already reach for the selector. It is not defined here because this
+module is at the 400-line ceiling the Pylint gate enforces on `tests/`.
 """
 
 from __future__ import annotations
@@ -33,6 +39,12 @@ from tests.helpers.makefile import (
 from tests.helpers.recipe_flow import (
     require_selector_is_consumed,
 )
+from tests.helpers.suite_classification import (
+    COMPILER_INVOKING_MODULES,
+    FRESH_PROCESS_MODULES,
+    require_classification_is_well_formed,
+    require_modules_exist,
+)
 from tests.helpers.suite_selector_coverage import require_test_python_selector_coverage
 from tests.helpers.workflow_shell import script_runs_command
 
@@ -40,7 +52,9 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = (
+    "COMPILER_INVOKING_MODULES",
     "EXCEPTIONS",
+    "FRESH_PROCESS_MODULES",
     "ROOT_MODULE_GLOB",
     "SCENARIO_SELECTOR",
     "SELECTOR",
@@ -49,6 +63,8 @@ __all__ = (
     "exceptions_verified",
     "remedy",
     "require",
+    "require_classification_is_well_formed",
+    "require_modules_exist",
     "root_modules",
     "selected_paths",
     "uncovered",
