@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - starts a real session leader for the reclaim test.
 import sys
 import typing as typ
 
@@ -32,9 +34,15 @@ from cuprum import (
     scoped,
     sh,
 )
-from tests.helpers.supervised_scenario import ScenarioResult, run_scenario
+from tests.helpers.supervised_scenario import (
+    ScenarioResult,
+    _reclaim_owned_group,
+    run_scenario,
+)
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cuprum.sh import BytesCommandResult, SafeCmdBuilder
 
 _PORTABLE_SCENARIOS = (
@@ -45,12 +53,14 @@ _PORTABLE_SCENARIOS = (
     "stalled_then_wait",
     "cancel_while_blocked",
     "close_one_stream",
-    "live_failure_stops_held_child",
 )
 
 _POSIX_SCENARIOS = (
     "descendant_own_group",
     "descendant_inherit",
+    # This scenario observes the child's raw PID to prove it was reaped, and
+    # the standard library offers no non-signalling liveness probe on Windows.
+    "live_failure_stops_held_child",
 )
 
 _CATALOGUE = ProgramCatalogue.from_programs(sys.executable, name="live-bytes")
@@ -76,8 +86,8 @@ def test_real_child_scenario_succeeds(name: str) -> None:
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
 @pytest.mark.timeout(25)
 @pytest.mark.parametrize("name", _POSIX_SCENARIOS)
-def test_posix_descendant_scenario_succeeds(name: str) -> None:
-    """The POSIX descendant scenarios settle and clean up within the watchdog."""
+def test_posix_scenario_succeeds(name: str) -> None:
+    """The POSIX-only scenarios settle and clean up within the watchdog."""
     _assert_ok(run_scenario(name))
 
 
@@ -146,3 +156,24 @@ def test_start_bytes_accepts_a_complete_stdin_payload() -> None:
         assert result.stdout == bytes(received), "capture must equal the live bytes"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are required")
+@pytest.mark.timeout(15)
+def test_supervisor_reclaims_a_recorded_owned_group(tmp_path: Path) -> None:
+    """A rescued timeout kills the group the scenario recorded."""
+    with subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    ) as process:
+        (tmp_path / "owned-group.pid").write_text(str(process.pid), encoding="utf-8")
+        try:
+            _reclaim_owned_group(tmp_path)
+            process.wait(timeout=5)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+        assert process.returncode == -signal.SIGKILL, (
+            f"the recorded group must be killed, got {process.returncode}"
+        )

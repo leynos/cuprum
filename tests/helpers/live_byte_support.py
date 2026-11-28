@@ -30,6 +30,7 @@ __all__ = [
     "is_alive",
     "kill_and_reap",
     "require",
+    "require_posix_probe",
     "wait_dead",
 ]
 
@@ -57,8 +58,29 @@ def require(
         raise RuntimeError(message)
 
 
+def require_posix_probe() -> None:
+    """Refuse a PID-based liveness check on a platform without one.
+
+    The signal-zero probe is a POSIX operation. On Windows the standard library
+    routes ``os.kill(pid, 0)`` to ``GenerateConsoleCtrlEvent``, which sends
+    Ctrl+C to the child's console group instead of asking whether it exists,
+    and it provides no non-signalling replacement. Scenarios that must observe
+    a raw PID are therefore POSIX-only, and this refuses rather than silently
+    signalling an unrelated process.
+
+    Raises
+    ------
+    RuntimeError
+        If the platform is not POSIX.
+    """
+    if os.name != "posix":
+        message = "a raw-PID liveness probe is only available on POSIX"
+        raise RuntimeError(message)
+
+
 def is_alive(pid: int) -> bool:
-    """Return whether *pid* still exists."""
+    """Return whether *pid* still exists, without signalling it."""
+    require_posix_probe()
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -80,6 +102,7 @@ def wait_dead(pid: int, timeout: float) -> bool:
 
 def kill_and_reap(pid: int) -> None:
     """Kill a surviving descendant and wait for it to disappear."""
+    require_posix_probe()
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:

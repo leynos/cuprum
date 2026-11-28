@@ -26,6 +26,7 @@ import os
 import signal
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - runs the repository's own scenario module.
 import sys
+import tempfile
 from pathlib import Path
 
 __all__ = ["ROOT", "ScenarioResult", "run_scenario"]
@@ -35,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 #: The scenario module the supervisor runs in the child interpreter.
 _SCENARIO_MODULE = "tests.helpers.live_byte_scenarios"
+#: The directory a scenario may use to publish a process group for reclaim.
+_SCENARIO_DIR_ENV = "CUPRUM_LIVE_SCENARIO_DIR"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -76,23 +79,30 @@ def run_scenario(name: str, *, timeout: float = 20.0) -> ScenarioResult:
     """
     command = [sys.executable, "-m", _SCENARIO_MODULE, name]
     session = {"start_new_session": True} if os.name == "posix" else {}
-    with subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
-        command,
-        cwd=ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        **session,
-    ) as process:
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_session(process)
-            stdout, stderr = process.communicate()
+    with tempfile.TemporaryDirectory(prefix="cuprum-live-supervisor-") as marker_dir:
+        env = dict(os.environ)
+        env[_SCENARIO_DIR_ENV] = marker_dir
+        with subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed argv, no shell
+            command,
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+            **session,
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_session(process)
+                _reclaim_owned_group(Path(marker_dir))
+                stdout, stderr = process.communicate()
+                return ScenarioResult(
+                    name, process.returncode or -1, stdout, stderr, timed_out=True
+                )
             return ScenarioResult(
-                name, process.returncode or -1, stdout, stderr, timed_out=True
+                name, process.returncode, stdout, stderr, timed_out=False
             )
-        return ScenarioResult(name, process.returncode, stdout, stderr, timed_out=False)
 
 
 def _kill_session(process: subprocess.Popen[str]) -> None:
@@ -104,3 +114,23 @@ def _kill_session(process: subprocess.Popen[str]) -> None:
             return
         return
     process.kill()
+
+
+def _reclaim_owned_group(marker_dir: Path) -> None:
+    """Kill a process group the scenario created outside its own session.
+
+    A scenario that exercises ``OWN_GROUP`` makes its child the leader of a new
+    session, which the supervisor's session kill cannot reach. The scenario
+    publishes that group's identifier in the marker directory before it waits,
+    so a rescued timeout does not leave the group running.
+    """
+    marker = marker_dir / "owned-group.pid"
+    if os.name != "posix" or not marker.is_file():
+        return
+    text = marker.read_text(encoding="utf-8").strip()
+    if not text.isdigit():
+        return
+    try:
+        os.killpg(int(text), signal.SIGKILL)
+    except ProcessLookupError:
+        return

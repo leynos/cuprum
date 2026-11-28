@@ -13,6 +13,7 @@ accordingly.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import time
@@ -60,6 +61,8 @@ async def descendant_scenario(*, own_group: bool) -> None:
         )
         context = ExecutionContext(process_group=policy, cancel_grace=0.2)
         handle = await PYTHON("-c", code).start_bytes(context=context)
+        if own_group:
+            publish_owned_group(handle.pid)
         started = time.monotonic()
         result = await handle.wait(timeout=HANDLE_DEADLINE_S)
         elapsed = time.monotonic() - started
@@ -90,6 +93,20 @@ async def descendant_scenario(*, own_group: bool) -> None:
         # settlement cannot leave a 30-second sleeper or a scratch directory.
         kill_marker_descendant(marker)
         shutil.rmtree(directory, ignore_errors=True)
+
+
+def publish_owned_group(pid: int | None) -> None:
+    """Publish an owned group's identifier for a supervisor timeout reclaim.
+
+    ``OWN_GROUP`` makes the child the leader of a new session, so the
+    supervisor's own session kill cannot reach it. Writing the identifier once
+    the child exists lets a rescued timeout still kill that group.
+    """
+    if pid is None:
+        return
+    directory = os.environ.get("CUPRUM_LIVE_SCENARIO_DIR")
+    if directory:
+        Path(directory, "owned-group.pid").write_text(str(pid), encoding="utf-8")
 
 
 def kill_marker_descendant(marker: Path) -> None:
