@@ -6,10 +6,10 @@ This ExecPlan is a living document. The sections `Constraints`, `Tolerances`,
 be kept up to date as work proceeds.
 
 Status: COMPLETE — pull request #743 is open and ready for review. The latest
-recorded six-gate run is `60bf7f227`; this header tracks the latest gate run,
+recorded six-gate run is `07ff5872f`; this header tracks the latest gate run,
 and the full commit history is in `Progress`. The code-changing commits since
-the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e` and
-`60bf7f2`. The experiment baseline remains `87de64c2c`, recorded on
+the first gate run are `7717d0f`, `99aebe6`, `fb1da7d`, `389583e`, `60bf7f2` and
+`07ff587`. The experiment baseline remains `87de64c2c`, recorded on
 22 November 2026. No candidate family is adopted by this change; the
 deliverable is the measured-qualification apparatus plus a reviewable
 adopt/reject record.
@@ -228,6 +228,9 @@ its own evidence and decision.
       `subprocess.run`. Classification moved to `compiler_cache_schema`, and
       the pairing provenance rule now treats an all-unknown `rustc` mapping as
       unidentified.
+- [x] 28 November 2026: M5 re-gates at `07ff5872f` — all six gates pass in a
+      clean environment. Recorded in
+      `/tmp/final-gate-clean-cuprum-issue-609-07ff5872f.log`.
 - [ ] M5 delivery: push the refreshed head and merge the pull request.
 
 ## Surprises & Discoveries
