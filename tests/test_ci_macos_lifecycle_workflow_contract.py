@@ -48,6 +48,7 @@ SUPPORT_PATHS = frozenset({
     "cuprum/unittests/_process_signal_identity_support.py",
     "cuprum/unittests/_start_ownership_support.py",
     "cuprum/unittests/_startup_abandon_support.py",
+    "cuprum/unittests/_wait4_process_support.py",
 })
 PRODUCTION_PATHS = frozenset({
     "cuprum/_process*.py",
@@ -60,6 +61,18 @@ PRODUCTION_PATHS = frozenset({
     "cuprum/_line_stream/**",
     "cuprum/line_stream_events.py",
     "cuprum/line_stream_observation.py",
+    "cuprum/__init__.py",
+    "cuprum/_backend.py",
+    "cuprum/_observability.py",
+    "cuprum/_teardown_policy.py",
+    "cuprum/_testing.py",
+    "cuprum/adapters/metrics_adapter.py",
+    "cuprum/catalogue.py",
+    "cuprum/context/**",
+    "cuprum/events.py",
+    "cuprum/lines.py",
+    "cuprum/program.py",
+    "cuprum/sh/**",
 })
 
 
